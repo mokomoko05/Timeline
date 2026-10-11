@@ -22,8 +22,11 @@ struct TaskInput: View {
     /// Enter 换行，⌥Enter 提交；点击框外失焦也会提交（和 Esc 取消区分开）。
     var minHeight: CGFloat?
     var maxLines = 10
-    /// 能不能有多行。待办标题这种单行内容为 false：粘贴进来的换行会变成空格（仍然会自动换行显示）；回车始终提交。
+    /// 能不能有多行：回车是换行（true）还是始终提交（false）。待办标题、添加待办这种一行一条内容为 false。
     var allowsNewlines = true
+    /// 粘贴进来的换行要不要变成空格。默认跟 `allowsNewlines` 相反（标题这类场景粘贴多行会变成一行空格分隔）；
+    /// 添加待办框单独设成 false：粘贴多行是批量加好几条待办，保留换行给 `commitDraft` 按行拆。
+    var collapsesPastedNewlines: Bool?
     /// 设置后，在开头或空白之后输入 `@`（待办）或 `#`（标签）会弹出候选（见 `MentionList`）：↑ ↓ 选择，回车 / Tab 确认，Esc 只关掉候选。
     var mention: MentionState?
 
@@ -43,7 +46,8 @@ struct TaskInput: View {
         } else {
             SingleLineTaskInput(text: $text, focused: $focused, placeholder: placeholder, fontSize: fontSize, submit: submit,
                                  cancel: cancel, previous: previous, monospaced: monospaced, onPasteImages: onPasteImages,
-                                 minHeight: minHeight, maxLines: maxLines, allowsNewlines: allowsNewlines)
+                                 minHeight: minHeight, maxLines: maxLines, allowsNewlines: allowsNewlines,
+                                 collapsesPastedNewlines: collapsesPastedNewlines ?? !allowsNewlines)
         }
     }
 }
@@ -63,6 +67,9 @@ struct SingleLineTaskInput: NSViewRepresentable {
     var minHeight: CGFloat?
     var maxLines = 10
     var allowsNewlines = true
+    /// 粘贴进来的换行要不要变成空格。省略时跟 `allowsNewlines` 相反。
+    var collapsesPastedNewlines: Bool?
+    private var collapsesNewlines: Bool { collapsesPastedNewlines ?? !allowsNewlines }
 
     private var growing: Bool { minHeight != nil }
 
@@ -141,7 +148,7 @@ struct SingleLineTaskInput: NSViewRepresentable {
         }
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }
-            if !parent.allowsNewlines, field.stringValue.contains(where: \.isNewline),
+            if parent.collapsesNewlines, field.stringValue.contains(where: \.isNewline),
                let editor = field.currentEditor() as? NSTextView {
                 // 粘贴进来的换行变成空格，光标位置不变。
                 let selection = editor.selectedRange()
@@ -160,8 +167,8 @@ struct SingleLineTaskInput: NSViewRepresentable {
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             guard !textView.hasMarkedText() else { return false }
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                if parent.growing, parent.allowsNewlines,
-                   NSApp.currentEvent?.modifierFlags.intersection([.shift, .option]).isEmpty == false {
+                let modifiers = (textView as? ImagePasteFieldEditorView)?.lastKeyDownEvent?.modifierFlags ?? []
+                if parent.growing, parent.allowsNewlines, modifiers.intersection([.shift, .option]).isEmpty == false {
                     textView.insertNewlineIgnoringFieldEditor(nil)
                     return true
                 }
@@ -374,7 +381,8 @@ struct GrowingTaskInput: NSViewRepresentable {
             }
             if selector == #selector(NSResponder.insertTab(_:)), let complete = parent.complete { complete(); return true }
             if selector == #selector(NSResponder.insertNewline(_:)) {
-                if NSApp.currentEvent?.modifierFlags.contains(.option) == true {
+                let modifiers = (textView as? ImagePasteTextView)?.lastKeyDownEvent?.modifierFlags ?? []
+                if modifiers.contains(.option) {
                     parent.text = textView.string
                     parent.submit()
                     return true
@@ -395,6 +403,14 @@ struct GrowingTaskInput: NSViewRepresentable {
 /// 字段编辑器：⌘V 时如果剪贴板是图片，交给输入框的 onPasteImages，而不是粘贴成乱码或什么都不做。
 final class ImagePasteTextView: NSTextView {
     var onPasteImages: (([Data]) -> Void)?
+    /// 这次 `doCommandBy` 是哪个按键事件触发的：判断 ⌥Enter 要用触发事件本身的修饰键，
+    /// 而不是 `NSApp.currentEvent`（在组词、候选框等场景下不一定是这同一个事件）。单测会直接赋值模拟按键，不走 `keyDown`。
+    var lastKeyDownEvent: NSEvent?
+
+    override func keyDown(with event: NSEvent) {
+        lastKeyDownEvent = event
+        super.keyDown(with: event)
+    }
 
     override func paste(_ sender: Any?) {
         if let handler = onPasteImages {
@@ -438,6 +454,14 @@ final class TaskTextField: NSTextField {
 
 /// 单行输入框（`SingleLineTaskInput`）的字段编辑器：同样支持 ⌘V 粘贴图片。
 final class ImagePasteFieldEditorView: NSTextView {
+    /// 这次 `doCommandBy` 是哪个按键事件触发的，见 `ImagePasteTextView.lastKeyDownEvent`。
+    var lastKeyDownEvent: NSEvent?
+
+    override func keyDown(with event: NSEvent) {
+        lastKeyDownEvent = event
+        super.keyDown(with: event)
+    }
+
     override func paste(_ sender: Any?) {
         if let field = delegate as? TaskTextField, let handler = field.onPasteImages {
             let images = ImageTools.images(from: .general)

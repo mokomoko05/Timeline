@@ -11,7 +11,7 @@ struct LogTextEditor: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
-        let editor = NSTextView(frame: .zero)
+        let editor = KeyTrackingTextView(frame: .zero)
         editor.delegate = context.coordinator
         editor.font = .monospacedSystemFont(ofSize: UIScale.pt(13), weight: .regular)
         editor.isRichText = false
@@ -61,7 +61,8 @@ struct LogTextEditor: NSViewRepresentable {
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             guard !textView.hasMarkedText() else { return false }
             if selector == #selector(NSResponder.insertNewline(_:)) {
-                if NSApp.currentEvent?.modifierFlags.contains(.option) == true {
+                let modifiers = (textView as? KeyTrackingTextView)?.lastKeyDownEvent?.modifierFlags ?? []
+                if modifiers.contains(.option) {
                     parent.text = textView.string
                     parent.commit()
                     return true
@@ -74,5 +75,16 @@ struct LogTextEditor: NSViewRepresentable {
             }
             return false
         }
+    }
+}
+
+/// 记录触发 `doCommandBy` 的按键事件：⌥Enter 判断要用这个事件本身的修饰键，而不是
+/// `NSApp.currentEvent`（在组词、候选框等场景下不一定是同一个事件）。
+final class KeyTrackingTextView: NSTextView {
+    var lastKeyDownEvent: NSEvent?
+
+    override func keyDown(with event: NSEvent) {
+        lastKeyDownEvent = event
+        super.keyDown(with: event)
     }
 }

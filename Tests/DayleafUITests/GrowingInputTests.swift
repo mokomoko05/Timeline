@@ -65,7 +65,8 @@ final class GrowingInputTests: XCTestCase {
     }
 
     func testPastedNewlinesBecomeSpacesOnlyForSingleLineContent() {
-        // 只有单行（标题，allowsNewlines: false）才会把粘贴进来的换行变成空格；日志、笔记走的是 GrowingTaskInput，原样保留换行。
+        // 待办标题这种一行一条的场景（allowsNewlines: false，没单独说 collapsesPastedNewlines）才会把粘贴进来的换行变成空格；
+        // 日志、笔记走的是 GrowingTaskInput，原样保留换行。
         var text = ""
         let todo = singleLine(allowsNewlines: false, text: Binding(get: { text }, set: { text = $0 }))
         let field = TaskTextField()
@@ -80,8 +81,25 @@ final class GrowingInputTests: XCTestCase {
         XCTAssertEqual(text, "甲 乙 丙", "待办标题里粘贴的换行变成空格")
     }
 
+    /// 添加待办框：外观是单行、回车直接提交，但 `collapsesPastedNewlines: false` 让粘贴的多行原样保留，
+    /// 这样 `JournalStore.commitDraft` 才能把它们拆成好几条独立待办（见 QuickAddTests）。
+    func testAddTodoInputKeepsPastedNewlinesSoEachLineBecomesItsOwnTask() {
+        var text = ""
+        let input = SingleLineTaskInput(text: Binding(get: { text }, set: { text = $0 }), focused: .constant(true),
+                                         submit: {}, minHeight: 22, maxLines: 6, allowsNewlines: false, collapsesPastedNewlines: false)
+        let field = TaskTextField()
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = field
+        Self.keepAlive += [window]
+        window.makeFirstResponder(field)
+        field.stringValue = "明天 开会\n买牛奶"
+        if let editor = field.currentEditor() { editor.string = "明天 开会\n买牛奶" }
+        input.makeCoordinator().controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        XCTAssertEqual(text, "明天 开会\n买牛奶", "添加待办框粘贴多行不会被压成一行")
+    }
+
     /// 日志、笔记这类多行输入框：普通 Enter 不拦截（交给系统换行），失焦（点击别处）当成提交保存。
-    /// ⌥Enter 提交依赖 `NSApp.currentEvent` 的修饰键，单测环境发不出真实按键事件，这条由人工验证。
     func testGrowingInputPlainEnterIsNotInterceptedAndBlurSaves() {
         var submitted = 0
         var text = ""
@@ -96,6 +114,51 @@ final class GrowingInputTests: XCTestCase {
 
         coordinator.textDidEndEditing(Notification(name: NSText.didEndEditingNotification, object: editor))
         XCTAssertEqual(submitted, 1, "失焦（点击别处）当成提交保存")
+    }
+
+    private func keyEvent(modifiers: NSEvent.ModifierFlags) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: 0, context: nil,
+                         characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!
+    }
+
+    /// ⌥Enter 真正按下时（判断依据是触发这次命令的事件本身，不是全局 `NSApp.currentEvent`）才提交；普通 Enter 仍然换行。
+    /// `lastKeyDownEvent` 模拟的是 `keyDown` 在真实按键时记录下的事件；这里不直接调用 `keyDown`
+    /// 是因为脱离 window 的 `NSTextView` 走 `interpretKeyEvents` 行为不稳定，和真机不一致。
+    func testGrowingInputOptionReturnSubmitsBasedOnTheTriggeringKeyEvent() {
+        var submitted = 0
+        var text = ""
+        let input = GrowingTaskInput(text: Binding(get: { text }, set: { text = $0 }), focused: .constant(true),
+                                      submit: { submitted += 1 }, minHeight: 24, maxLines: 10)
+        let editor = ImagePasteTextView()
+        let coordinator = input.makeCoordinator()
+        editor.delegate = coordinator
+        editor.string = "第一行"
+
+        editor.lastKeyDownEvent = keyEvent(modifiers: [])
+        XCTAssertFalse(coordinator.textView(editor, doCommandBy: #selector(NSResponder.insertNewline(_:))), "普通 Enter 不提交")
+        XCTAssertEqual(submitted, 0)
+
+        editor.lastKeyDownEvent = keyEvent(modifiers: .option)
+        XCTAssertTrue(coordinator.textView(editor, doCommandBy: #selector(NSResponder.insertNewline(_:))), "⌥Enter 提交")
+        XCTAssertEqual(submitted, 1)
+    }
+
+    /// 待办标题这类单行场景（`allowsNewlines: false`）：Enter 始终提交，不受修饰键影响。
+    func testSingleLineInputReturnAlwaysSubmitsRegardlessOfModifiers() {
+        var submitted = 0
+        var text = ""
+        let input = SingleLineTaskInput(text: Binding(get: { text }, set: { text = $0 }), focused: .constant(true),
+                                         submit: { submitted += 1 }, minHeight: 22, maxLines: 6, allowsNewlines: false)
+        let editor = ImagePasteFieldEditorView()
+        let coordinator = input.makeCoordinator()
+        let field = TaskTextField()
+        field.delegate = coordinator
+        coordinator.field = field
+        editor.string = "标题"
+
+        editor.lastKeyDownEvent = keyEvent(modifiers: .option)
+        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))), "单行场景 ⌥Enter 也提交")
+        XCTAssertEqual(submitted, 1)
     }
 
     private static var keepAlive: [AnyObject] = []

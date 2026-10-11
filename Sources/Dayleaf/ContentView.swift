@@ -534,7 +534,7 @@ struct ContentView: View {
                             addingTodo = false
                             requestedEdit = newest.id
                         }
-                    }, minHeight: UIScale.pt(22), maxLines: 6, allowsNewlines: false)
+                    }, minHeight: UIScale.pt(22), maxLines: 6, allowsNewlines: false, collapsesPastedNewlines: false)
                         .help("回车添加。先创建，之后再用日历按钮或拖到日历上分配截止日期；也可以直接写「明天 15:00 开会」「每周一」「提前30分钟」，加 #标签 归类。支持 [别名](https://网址)，⌘K 插入链接")
                     Button(action: addTodo) {
                         Image(systemName: "arrow.turn.down.left")

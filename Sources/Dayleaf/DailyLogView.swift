@@ -400,6 +400,9 @@ struct DailyLogView: View {
                     .padding(.horizontal, 4).padding(.vertical, 5)
                     // 内容比窗口短时顶对齐，不会被滚到下面留出一片空白。
                     .frame(maxWidth: .infinity, minHeight: geometry.size.height, alignment: .topLeading)
+                    .contentShape(Rectangle())
+                    // 点日志之间、列表下方的空白处：如果正在编辑一条日志，当成点击别处失焦保存。
+                    .onTapGesture { if editingLogID != nil { NSApp.keyWindow?.makeFirstResponder(nil) } }
                 }
                 .background(TerminalPalette.surface)
                 // 打开时不滚动，停在顶部。只有自己刚写了一条新日志时，才跟到那一条。

@@ -18,6 +18,7 @@ struct NotesView: View {
     @State private var newTagMessage: String?
     @State private var tagFocused = false
     @State private var editingNoteID: UUID?
+    @State private var editingNoteDate: Date?
     @State private var noteEditText = ""
     @State private var noteEditFocused = false
     @State private var focused = false
@@ -238,12 +239,14 @@ struct NotesView: View {
     }
 
     private func select(task id: UUID) {
+        commitNoteEditIfAny()
         selection = id
         tagSelection = nil
         error = nil
     }
 
     private func select(tag: String) {
+        commitNoteEditIfAny()
         tagSelection = tag
         selection = nil
         error = nil
@@ -366,6 +369,9 @@ struct NotesView: View {
                             Color.clear.frame(height: 1).id("end")
                         }.padding(20)
                     }
+                    .contentShape(Rectangle())
+                    // 点笔记之间、列表下方的空白处：如果正在编辑一条笔记，当成点击别处失焦保存。
+                    .onTapGesture { if editingNoteID != nil { NSApp.keyWindow?.makeFirstResponder(nil) } }
                     .onAppear { proxy.scrollTo("end", anchor: .bottom) }
                     .onChange(of: notes.count) { _ in withAnimation(Motion.quick) { proxy.scrollTo("end", anchor: .bottom) } }
                     .onChange(of: selection) { _ in proxy.scrollTo("end", anchor: .bottom) }
@@ -507,7 +513,7 @@ struct NotesView: View {
                 noteAction("doc.on.doc", log.copyText == nil ? "这条只有图片，没有文字可复制" : "复制这条的文字（不含图片）") { copy(log) }
                     .disabled(log.copyText == nil)
                 if !store.isReadOnly {
-                    noteAction("pencil", "编辑这条笔记") { beginNoteEdit(log) }
+                    noteAction("pencil", "编辑这条笔记") { beginNoteEdit(item) }
                     noteAction(log.tags.isEmpty ? "tag" : "tag.fill", "这条笔记的标签") { taggingNoteID = log.id }
                         .popover(isPresented: Binding(get: { taggingNoteID == log.id }, set: { if !$0 { taggingNoteID = nil } }), arrowEdge: .leading) {
                             LogBatchTagView(store: store, logIDs: [log.id])
@@ -532,25 +538,38 @@ struct NotesView: View {
         .help(help).accessibilityLabel(help)
     }
 
-    private func beginNoteEdit(_ log: DailyLogEntry) {
-        editingNoteID = log.id
-        noteEditText = log.text
+    private func beginNoteEdit(_ item: JournalStore.LoggedLog) {
+        // 换到编辑另一条之前，先把手头正在编辑的那条保存掉，不然内容会直接丢。
+        commitNoteEditIfAny()
+        editingNoteID = item.log.id
+        editingNoteDate = item.date
+        noteEditText = item.log.text
         noteEditFocused = true
     }
 
     private func cancelNoteEdit() {
         editingNoteID = nil
+        editingNoteDate = nil
         noteEditFocused = false
+    }
+
+    /// 点击别处、切到另一条笔记、切换左侧选择等场景下，把正在编辑的笔记当成保存，而不是丢弃。
+    private func commitNoteEditIfAny() {
+        guard let id = editingNoteID, let date = editingNoteDate else { return }
+        editingNoteID = nil
+        editingNoteDate = nil
+        store.updateLog(id, text: noteEditText, on: date)
     }
 
     private func saveNoteEdit(_ item: JournalStore.LoggedLog) {
         guard editingNoteID == item.log.id else { return }
         editingNoteID = nil
+        editingNoteDate = nil
         store.updateLog(item.log.id, text: noteEditText, on: item.date)
     }
 
     private func deleteNote(_ item: JournalStore.LoggedLog) {
-        if editingNoteID == item.log.id { editingNoteID = nil }
+        if editingNoteID == item.log.id { editingNoteID = nil; editingNoteDate = nil }
         store.deleteLog(item.log.id, on: item.date)
         error = "已删除这条笔记，⌘Z 可撤销"
     }
@@ -591,6 +610,9 @@ struct NotesView: View {
                                 Color.clear.frame(height: 1).id("end")
                             }.padding(20)
                         }
+                        .contentShape(Rectangle())
+                        // 点笔记之间、列表下方的空白处：如果正在编辑一条笔记，当成点击别处失焦保存。
+                        .onTapGesture { if editingNoteID != nil { NSApp.keyWindow?.makeFirstResponder(nil) } }
                         .onAppear { proxy.scrollTo("end", anchor: .bottom) }
                         .onChange(of: tagSelection) { _ in proxy.scrollTo("end", anchor: .bottom) }
                         .onChange(of: notes.count) { _ in withAnimation(Motion.quick) { proxy.scrollTo("end", anchor: .bottom) } }
