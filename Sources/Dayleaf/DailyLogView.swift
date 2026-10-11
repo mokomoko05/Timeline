@@ -161,7 +161,7 @@ struct DailyLogView: View {
                         .help("取消编辑 · Esc")
                     Button("保存") { saveLogEdit() }
                         .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: UIScale.pt(12), weight: .semibold))
-                        .foregroundStyle(TerminalPalette.blue).help("保存 · ⌥Enter")
+                        .foregroundStyle(TerminalPalette.blue).help("保存 · ⌘Enter")
                 } else {
                     Image(systemName: "doc.text").foregroundStyle(TerminalPalette.amber)
                     Text("复盘").font(.system(size: UIScale.pt(12), weight: .semibold))
@@ -216,7 +216,7 @@ struct DailyLogView: View {
     }
 
     private func editHint(for log: DailyLogEntry) -> String {
-        var hint = "Enter 换行 · ⌥Enter 保存 · 点击别处保存 · Esc 取消"
+        var hint = "Enter 换行 · ⌘Enter 保存 · 点击别处保存 · Esc 取消"
         if !log.images.isEmpty { hint += " · 含 \(log.images.count) 张图片，不受影响" }
         else { hint += " · 清空后保存会删除这条记录，可撤销" }
         return hint
@@ -468,9 +468,9 @@ struct DailyLogView: View {
                     .foregroundStyle(TerminalPalette.green)
                 TaskInput(text: draft, focused: $focused, placeholder: "记录…  @ 待办 · # 标签 · / 命令 · ⌘V 贴图", fontSize: 12, submit: submit,
                           monospaced: true, historyUp: historyUp, historyDown: historyDown, complete: completeCommand,
-                          onPasteImages: addImages, minHeight: 24, maxLines: 10, mention: mention)
+                          onPasteImages: addImages, minHeight: 24, maxLines: 10, mention: mention, returnSubmits: true)
                     .disabled(store.isReadOnly)
-                    .accessibilityLabel("日志命令输入，⌥回车提交")
+                    .accessibilityLabel("日志命令输入，回车提交，Shift+回车换行")
                     .onChange(of: focused) { if $0 { interaction.activePane = .summary } }
                 taskMenu
                 Button(action: submit) { Image(systemName: "arrow.turn.down.left") }

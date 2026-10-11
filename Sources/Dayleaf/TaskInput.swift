@@ -19,7 +19,7 @@ struct TaskInput: View {
     /// 设置后，粘贴图片会交给它处理（文字照常粘贴）。
     var onPasteImages: (([Data]) -> Void)?
     /// 设置后输入框自动换行、随内容向下增高：这是单行时的高度，最多长到 `maxLines` 行，到顶后框内自己滚动。
-    /// Enter 换行，⌥Enter 提交；点击框外失焦也会提交（和 Esc 取消区分开）。
+    /// Enter 换行，⌘Enter 提交；点击框外失焦也会提交（和 Esc 取消区分开）。
     var minHeight: CGFloat?
     var maxLines = 10
     /// 能不能有多行：回车是换行（true）还是始终提交（false）。待办标题、添加待办这种一行一条内容为 false。
@@ -29,6 +29,10 @@ struct TaskInput: View {
     var collapsesPastedNewlines: Bool?
     /// 设置后，在开头或空白之后输入 `@`（待办）或 `#`（标签）会弹出候选（见 `MentionList`）：↑ ↓ 选择，回车 / Tab 确认，Esc 只关掉候选。
     var mention: MentionState?
+    /// 只在 `allowsNewlines` 为 true 时有意义：true 时回车直接提交（Shift+Enter 换行），而不是回车换行、⌘Enter 提交。
+    /// 快速日志命令行这种「主要是单行命令，偶尔需要在框内滚动」的场景用它：既要保留 `GrowingTaskInput`
+    /// 的框内滚动、mention 候选等能力，又要回车直接提交。
+    var returnSubmits = false
 
     private var growing: Bool { minHeight != nil && allowsNewlines }
 
@@ -42,7 +46,7 @@ struct TaskInput: View {
             GrowingTaskInput(text: $text, focused: $focused, placeholder: placeholder, fontSize: fontSize, submit: submit,
                               cancel: cancel, monospaced: monospaced, historyUp: historyUp, historyDown: historyDown,
                               complete: complete, onPasteImages: onPasteImages, minHeight: minHeight ?? 24, maxLines: maxLines,
-                              mention: mention)
+                              returnSubmits: returnSubmits, mention: mention)
         } else {
             SingleLineTaskInput(text: $text, focused: $focused, placeholder: placeholder, fontSize: fontSize, submit: submit,
                                  cancel: cancel, previous: previous, monospaced: monospaced, onPasteImages: onPasteImages,
@@ -166,12 +170,9 @@ struct SingleLineTaskInput: NSViewRepresentable {
         }
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             guard !textView.hasMarkedText() else { return false }
+            // 这里走到的都是 allowsNewlines == false 的单行场景（`allowsNewlines == true` 时 `TaskInput.body`
+            // 选的是 `GrowingTaskInput`），回车始终提交，不需要考虑换行。
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                let modifiers = (textView as? ImagePasteFieldEditorView)?.lastKeyDownEvent?.modifierFlags ?? []
-                if parent.growing, parent.allowsNewlines, modifiers.intersection([.shift, .option]).isEmpty == false {
-                    textView.insertNewlineIgnoringFieldEditor(nil)
-                    return true
-                }
                 parent.text = textView.string
                 parent.submit()
                 return true
@@ -192,7 +193,8 @@ struct SingleLineTaskInput: NSViewRepresentable {
 }
 
 /// 多行自动增高场景：`NSScrollView` + `NSTextView`，封顶高度后框内滚动。
-/// Enter 换行，⌥Enter 提交，点击框外失焦也提交，Esc 取消。
+/// Enter 换行，⌘Enter 提交（`returnSubmits` 为 true 时反过来：Enter 直接提交，Shift+Enter 换行）；
+/// 点击框外失焦也提交，Esc 取消。
 struct GrowingTaskInput: NSViewRepresentable {
     @Environment(\.isEnabled) private var enabled
     @Binding var text: String
@@ -208,6 +210,8 @@ struct GrowingTaskInput: NSViewRepresentable {
     var onPasteImages: (([Data]) -> Void)?
     var minHeight: CGFloat
     var maxLines = 10
+    /// true 时回车直接提交（Shift+Enter 换行），而不是回车换行、⌘Enter 提交。
+    var returnSubmits = false
     var mention: MentionState?
 
     private var resolvedFont: NSFont {
@@ -271,6 +275,13 @@ struct GrowingTaskInput: NSViewRepresentable {
         editor.font = resolvedFont
         editor.textColor = .labelColor
         editor.onPasteImages = onPasteImages
+        editor.returnSubmits = returnSubmits
+        editor.mentionActive = { [weak mention = self.mention] in mention?.isActive == true }
+        editor.onSubmitShortcut = { [weak editor, weak coordinator = context.coordinator] in
+            guard let editor, let coordinator else { return }
+            coordinator.parent.text = editor.string
+            coordinator.parent.submit()
+        }
         editor.isEditable = enabled
         if editor.string != text, !editor.hasMarkedText() { editor.string = text }
         context.coordinator.placeholderField.stringValue = placeholder
@@ -380,15 +391,7 @@ struct GrowingTaskInput: NSViewRepresentable {
                 historyDown(); return true
             }
             if selector == #selector(NSResponder.insertTab(_:)), let complete = parent.complete { complete(); return true }
-            if selector == #selector(NSResponder.insertNewline(_:)) {
-                let modifiers = (textView as? ImagePasteTextView)?.lastKeyDownEvent?.modifierFlags ?? []
-                if modifiers.contains(.option) {
-                    parent.text = textView.string
-                    parent.submit()
-                    return true
-                }
-                return false
-            }
+            // 普通 Enter 换行，交给系统处理；提交走 ⌘Enter（`ImagePasteTextView.onSubmitShortcut`，在 keyDown 里直接拦截）。
             if selector == #selector(NSResponder.cancelOperation(_:)) {
                 parent.cancel()
                 parent.focused = false
@@ -403,13 +406,31 @@ struct GrowingTaskInput: NSViewRepresentable {
 /// 字段编辑器：⌘V 时如果剪贴板是图片，交给输入框的 onPasteImages，而不是粘贴成乱码或什么都不做。
 final class ImagePasteTextView: NSTextView {
     var onPasteImages: (([Data]) -> Void)?
-    /// 这次 `doCommandBy` 是哪个按键事件触发的：判断 ⌥Enter 要用触发事件本身的修饰键，
-    /// 而不是 `NSApp.currentEvent`（在组词、候选框等场景下不一定是这同一个事件）。单测会直接赋值模拟按键，不走 `keyDown`。
-    var lastKeyDownEvent: NSEvent?
+    /// ⌘Enter 提交（`returnSubmits == false` 时）；`returnSubmits == true` 时普通 Enter 也提交，Shift+Enter 换行。
+    /// 在 `keyDown` 里直接拦截，不走 `doCommandBy`（`insertNewline` 这个 selector 在输入法组词、候选框等场景下
+    /// 的派发时机不可靠，`NSApp.currentEvent` 和「记录上一次 keyDown 再在 doCommandBy 里读」都验证过不准）。
+    /// `keyDown` 拿到的 `event` 就是这次按键本身，修饰键判断不会错。
+    var onSubmitShortcut: (() -> Void)?
+    var returnSubmits = false
+    /// 设置后，`@`/`#` 候选激活时普通 Enter 要让 `doCommandBy` 去确认候选，这里不能抢先拦截提交。
+    var mentionActive: (() -> Bool)?
 
     override func keyDown(with event: NSEvent) {
-        lastKeyDownEvent = event
+        if shouldInterceptReturn(event), let onSubmitShortcut {
+            onSubmitShortcut()
+            return
+        }
         super.keyDown(with: event)
+    }
+
+    /// 这次按键要不要当成提交拦截掉（不交给 `super.keyDown` 走 `insertNewline`）。拆出来是因为脱离 window 的
+    /// `NSTextView` 调用 `super.keyDown` 走 `interpretKeyEvents` 行为不稳定，单测只验证这个判断本身。
+    func shouldInterceptReturn(_ event: NSEvent) -> Bool {
+        guard event.keyCode == 36, !hasMarkedText(), mentionActive?() != true else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        if returnSubmits, modifiers.isEmpty { return true }
+        if !returnSubmits, modifiers == .command { return true }
+        return false
     }
 
     override func paste(_ sender: Any?) {
@@ -454,14 +475,6 @@ final class TaskTextField: NSTextField {
 
 /// 单行输入框（`SingleLineTaskInput`）的字段编辑器：同样支持 ⌘V 粘贴图片。
 final class ImagePasteFieldEditorView: NSTextView {
-    /// 这次 `doCommandBy` 是哪个按键事件触发的，见 `ImagePasteTextView.lastKeyDownEvent`。
-    var lastKeyDownEvent: NSEvent?
-
-    override func keyDown(with event: NSEvent) {
-        lastKeyDownEvent = event
-        super.keyDown(with: event)
-    }
-
     override func paste(_ sender: Any?) {
         if let field = delegate as? TaskTextField, let handler = field.onPasteImages {
             let images = ImageTools.images(from: .general)

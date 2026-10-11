@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// 复盘区里编辑单条日志的文本框：Enter 换行，⌥Enter 保存，点击别处失焦也保存，Esc 取消；输入法组词时不拦截。
+/// 复盘区里编辑单条日志的文本框：Enter 换行，⌘Enter 保存，点击别处失焦也保存，Esc 取消；输入法组词时不拦截。
 struct LogTextEditor: NSViewRepresentable {
     @Binding var text: String
     let commit: () -> Void
@@ -37,10 +37,15 @@ struct LogTextEditor: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
-        guard let editor = scroll.documentView as? NSTextView else { return }
+        guard let editor = scroll.documentView as? KeyTrackingTextView else { return }
         scroll.appearance = NSAppearance(named: .darkAqua)
         editor.textColor = .labelColor
         if editor.string != text, !editor.hasMarkedText() { editor.string = text }
+        editor.onSubmitShortcut = { [weak editor, weak coordinator = context.coordinator] in
+            guard let editor, let coordinator else { return }
+            coordinator.parent.text = editor.string
+            coordinator.parent.commit()
+        }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -60,15 +65,7 @@ struct LogTextEditor: NSViewRepresentable {
 
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             guard !textView.hasMarkedText() else { return false }
-            if selector == #selector(NSResponder.insertNewline(_:)) {
-                let modifiers = (textView as? KeyTrackingTextView)?.lastKeyDownEvent?.modifierFlags ?? []
-                if modifiers.contains(.option) {
-                    parent.text = textView.string
-                    parent.commit()
-                    return true
-                }
-                return false
-            }
+            // 普通 Enter 换行，交给系统处理；保存走 ⌘Enter（`KeyTrackingTextView.onSubmitShortcut`，在 keyDown 里直接拦截）。
             if selector == #selector(NSResponder.cancelOperation(_:)) {
                 parent.cancel()
                 return true
@@ -78,13 +75,23 @@ struct LogTextEditor: NSViewRepresentable {
     }
 }
 
-/// 记录触发 `doCommandBy` 的按键事件：⌥Enter 判断要用这个事件本身的修饰键，而不是
-/// `NSApp.currentEvent`（在组词、候选框等场景下不一定是同一个事件）。
+/// ⌘Enter 保存：在 `keyDown` 里直接拦截，不走 `doCommandBy`（`insertNewline` 这个 selector 在输入法组词、
+/// 候选框等场景下的派发时机不可靠，`NSApp.currentEvent` 和「记录上一次 keyDown 再在 doCommandBy 里读」
+/// 都验证过不准）。`keyDown` 拿到的 `event` 就是这次按键本身，修饰键判断不会错。
 final class KeyTrackingTextView: NSTextView {
-    var lastKeyDownEvent: NSEvent?
+    var onSubmitShortcut: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
-        lastKeyDownEvent = event
+        if shouldInterceptReturn(event), let onSubmitShortcut {
+            onSubmitShortcut()
+            return
+        }
         super.keyDown(with: event)
+    }
+
+    /// 这次按键要不要当成提交拦截掉。拆出来是因为脱离 window 的 `NSTextView` 调用 `super.keyDown`
+    /// 走 `interpretKeyEvents` 行为不稳定，单测只验证这个判断本身。
+    func shouldInterceptReturn(_ event: NSEvent) -> Bool {
+        event.keyCode == 36 && event.modifierFlags.contains(.command) && !hasMarkedText()
     }
 }

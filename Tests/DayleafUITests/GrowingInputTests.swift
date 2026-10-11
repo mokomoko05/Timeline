@@ -121,30 +121,46 @@ final class GrowingInputTests: XCTestCase {
                          characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!
     }
 
-    /// ⌥Enter 真正按下时（判断依据是触发这次命令的事件本身，不是全局 `NSApp.currentEvent`）才提交；普通 Enter 仍然换行。
-    /// `lastKeyDownEvent` 模拟的是 `keyDown` 在真实按键时记录下的事件；这里不直接调用 `keyDown`
-    /// 是因为脱离 window 的 `NSTextView` 走 `interpretKeyEvents` 行为不稳定，和真机不一致。
-    func testGrowingInputOptionReturnSubmitsBasedOnTheTriggeringKeyEvent() {
+    /// 默认（`returnSubmits == false`，笔记/标签这类）：⌘Enter 提交，判断用触发这次按键的 `event` 本身
+    /// （在 `keyDown` 里直接拦截，不走 `doCommandBy`：`NSApp.currentEvent`、「记录上一次 keyDown 再在
+    /// doCommandBy 里读」都验证过不准，只有在真正触发按键的那次 `keyDown` 调用里判断才可靠）。普通 Enter 不拦截。
+    /// 不断言 `super.keyDown` 之后的真实换行效果：脱离 window 的 `NSTextView` 走 `interpretKeyEvents`
+    /// 行为不稳定，和真机不一致（这也是放弃「记录上一次按键再在 doCommandBy 里判断」这个方案的原因之一）。
+    func testGrowingInputCommandReturnSubmitsPlainReturnDoesNot() {
         var submitted = 0
-        var text = ""
-        let input = GrowingTaskInput(text: Binding(get: { text }, set: { text = $0 }), focused: .constant(true),
+        let input = GrowingTaskInput(text: .constant("第一行"), focused: .constant(true),
                                       submit: { submitted += 1 }, minHeight: 24, maxLines: 10)
         let editor = ImagePasteTextView()
         let coordinator = input.makeCoordinator()
         editor.delegate = coordinator
+        editor.onSubmitShortcut = { submitted += 1 }
         editor.string = "第一行"
 
-        editor.lastKeyDownEvent = keyEvent(modifiers: [])
-        XCTAssertFalse(coordinator.textView(editor, doCommandBy: #selector(NSResponder.insertNewline(_:))), "普通 Enter 不提交")
-        XCTAssertEqual(submitted, 0)
+        XCTAssertFalse(editor.shouldInterceptReturn(keyEvent(modifiers: [])), "普通 Enter 不拦截，交给系统换行")
+        XCTAssertTrue(editor.shouldInterceptReturn(keyEvent(modifiers: .command)), "⌘Enter 拦截去提交")
+    }
 
-        editor.lastKeyDownEvent = keyEvent(modifiers: .option)
-        XCTAssertTrue(coordinator.textView(editor, doCommandBy: #selector(NSResponder.insertNewline(_:))), "⌥Enter 提交")
-        XCTAssertEqual(submitted, 1)
+    /// 快速日志命令行用 `returnSubmits: true`：Enter 直接提交，Shift+Enter 换行（不拦截）。
+    func testGrowingInputReturnSubmitsModeFlipsEnterAndShiftEnter() {
+        let editor = ImagePasteTextView()
+        editor.returnSubmits = true
+        editor.mentionActive = { false }
+
+        XCTAssertFalse(editor.shouldInterceptReturn(keyEvent(modifiers: .shift)), "Shift+Enter 不拦截，交给系统换行")
+        XCTAssertTrue(editor.shouldInterceptReturn(keyEvent(modifiers: [])), "普通 Enter 拦截去提交")
+    }
+
+    /// `returnSubmits: true` 时，@/# 候选激活中按 Enter 要让 `doCommandBy` 去确认候选，不能被 `keyDown` 抢先提交。
+    func testGrowingInputReturnSubmitsModeYieldsToActiveMention() {
+        let editor = ImagePasteTextView()
+        editor.returnSubmits = true
+        editor.mentionActive = { true }
+
+        XCTAssertFalse(editor.shouldInterceptReturn(keyEvent(modifiers: [])), "候选激活时不拦截，交给 doCommandBy 确认候选")
     }
 
     /// 待办标题这类单行场景（`allowsNewlines: false`）：Enter 始终提交，不受修饰键影响。
-    func testSingleLineInputReturnAlwaysSubmitsRegardlessOfModifiers() {
+    func testSingleLineInputReturnAlwaysSubmits() {
         var submitted = 0
         var text = ""
         let input = SingleLineTaskInput(text: Binding(get: { text }, set: { text = $0 }), focused: .constant(true),
@@ -156,8 +172,7 @@ final class GrowingInputTests: XCTestCase {
         coordinator.field = field
         editor.string = "标题"
 
-        editor.lastKeyDownEvent = keyEvent(modifiers: .option)
-        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))), "单行场景 ⌥Enter 也提交")
+        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))), "单行场景 Enter 始终提交")
         XCTAssertEqual(submitted, 1)
     }
 
