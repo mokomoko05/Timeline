@@ -86,23 +86,23 @@ final class MentionTests: XCTestCase {
 
     // MARK: - 真实输入框
 
-    private func makeField(text: String, mention: MentionState, onSubmit: @escaping () -> Void = {}) -> (TaskTextField, TaskInput.Coordinator, () -> String) {
+    /// mention（@ # 补全）只接在多行输入框上，走的是 `GrowingTaskInput`：这里直接用它的 `NSTextView` 当「输入框」。
+    private func makeField(text: String, mention: MentionState, onSubmit: @escaping () -> Void = {}) -> (ImagePasteTextView, GrowingTaskInput.Coordinator, () -> String) {
         var value = text
-        let input = TaskInput(text: Binding(get: { value }, set: { value = $0 }), focused: .constant(true), submit: onSubmit,
-                              minHeight: 24, maxLines: 6, mention: mention)
-        let field = TaskTextField()
-        field.cell?.isEditable = true
+        let input = GrowingTaskInput(text: Binding(get: { value }, set: { value = $0 }), focused: .constant(true), submit: onSubmit,
+                                     minHeight: 24, maxLines: 6, mention: mention)
+        let editor = ImagePasteTextView()
         let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = field
+        window.contentView = editor
         Self.keepAlive += [window]
         let coordinator = input.makeCoordinator()
-        field.delegate = coordinator
-        coordinator.field = field
-        window.makeFirstResponder(field)
-        field.stringValue = text
-        if let editor = field.currentEditor() { editor.string = text; editor.selectedRange = NSRange(location: (text as NSString).length, length: 0) }
-        return (field, coordinator, { value })
+        editor.delegate = coordinator
+        coordinator.editor = editor
+        window.makeFirstResponder(editor)
+        editor.string = text
+        editor.selectedRange = NSRange(location: (text as NSString).length, length: 0)
+        return (editor, coordinator, { value })
     }
 
     func testTypingAtOpensListAndAcceptingRemovesTheTokenAndPicksTheTask() throws {
@@ -111,8 +111,8 @@ final class MentionTests: XCTestCase {
         state.provider = MentionProviders.make(store: store)
         var picked: UUID?
         state.onPick = { if case .task(let t) = $0 { picked = t.id } }
-        let (field, coordinator, value) = makeField(text: "今天读了 @zb", mention: state)
-        coordinator.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        let (editor, coordinator, value) = makeField(text: "今天读了 @zb", mention: state)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
         XCTAssertTrue(state.isActive)
         XCTAssertEqual(numbers(state).first, 2)
 
@@ -122,28 +122,27 @@ final class MentionTests: XCTestCase {
         XCTAssertFalse(state.isActive)
     }
 
-    func testEnterAcceptsWhileListIsOpenAndSubmitsOtherwise() throws {
+    func testEnterAcceptsWhileListIsOpenAndIsOtherwiseJustANewline() throws {
         let store = makeStore()
         let state = MentionState()
         state.provider = MentionProviders.make(store: store)
         var picked: UUID?
         state.onPick = { if case .task(let t) = $0 { picked = t.id } }
         var submitted = 0
-        let (field, coordinator, value) = makeField(text: "@", mention: state, onSubmit: { submitted += 1 })
-        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
-        coordinator.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        let (editor, coordinator, value) = makeField(text: "@", mention: state, onSubmit: { submitted += 1 })
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
         XCTAssertTrue(state.isActive)
 
-        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.moveDown(_:))))
+        XCTAssertTrue(coordinator.textView(editor, doCommandBy: #selector(NSResponder.moveDown(_:))))
         XCTAssertEqual(state.selection, 1, "↑ ↓ 在列表里移动，不翻历史")
-        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        XCTAssertTrue(coordinator.textView(editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
         XCTAssertEqual(submitted, 0, "列表打开时回车是选择，不是提交")
         XCTAssertNotNil(picked)
         XCTAssertEqual(value(), "")
 
         editor.string = "写好了"
-        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
-        XCTAssertEqual(submitted, 1, "没有 @ 时回车照常提交")
+        XCTAssertFalse(coordinator.textView(editor, doCommandBy: #selector(NSResponder.insertNewline(_:))), "没有 @ 时回车只是换行，不拦截、不提交")
+        XCTAssertEqual(submitted, 0)
     }
 
     func testEscapeClosesOnlyTheListAndTabAlsoAccepts() throws {
@@ -152,11 +151,10 @@ final class MentionTests: XCTestCase {
         state.provider = MentionProviders.make(store: store)
         var picked = 0
         state.onPick = { _ in picked += 1 }
-        let (field, coordinator, value) = makeField(text: "@", mention: state)
-        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
-        coordinator.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        let (editor, coordinator, value) = makeField(text: "@", mention: state)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
 
-        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.cancelOperation(_:))))
+        XCTAssertTrue(coordinator.textView(editor, doCommandBy: #selector(NSResponder.cancelOperation(_:))))
         XCTAssertFalse(state.isActive)
         XCTAssertEqual(value(), "@", "Esc 只关列表，文字保留（窗口不会跟着关）")
         XCTAssertEqual(picked, 0)
@@ -164,8 +162,8 @@ final class MentionTests: XCTestCase {
         editor.string = "@"
         editor.selectedRange = NSRange(location: 1, length: 0)
         state.update(nil)
-        coordinator.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
-        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:))))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+        XCTAssertTrue(coordinator.textView(editor, doCommandBy: #selector(NSResponder.insertTab(_:))))
         XCTAssertEqual(picked, 1, "Tab 也确认")
     }
 
@@ -175,10 +173,10 @@ final class MentionTests: XCTestCase {
         state.provider = MentionProviders.make(store: store)
         var picked: UUID?
         state.onPick = { if case .task(let t) = $0 { picked = t.id } }
-        let (field, coordinator, value) = makeField(text: "读 @fp", mention: state)
-        coordinator.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        let (editor, coordinator, value) = makeField(text: "读 @fp", mention: state)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
         coordinator.bindMention()
-        field.window?.makeFirstResponder(nil)
+        editor.window?.makeFirstResponder(nil)
         state.choose(0)
         XCTAssertEqual(picked, store.locate(number: 3)?.id, "点到「整理发票」")
         XCTAssertEqual(value(), "读 ", "输入框没有焦点时也把 @fp 删掉")
@@ -240,8 +238,8 @@ final class MentionTests: XCTestCase {
         state.provider = MentionProviders.make(store: store)
         var tags: [String] = []
         state.onPick = { if case .tag(let tag) = $0 { tags.append(tag.name) } }
-        let (field, coordinator, value) = makeField(text: "今天读了 #论", mention: state)
-        coordinator.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        let (editor, coordinator, value) = makeField(text: "今天读了 #论", mention: state)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
         XCTAssertTrue(state.isActive)
         XCTAssertEqual(state.token?.trigger, .tag)
         XCTAssertTrue(coordinator.acceptMention())

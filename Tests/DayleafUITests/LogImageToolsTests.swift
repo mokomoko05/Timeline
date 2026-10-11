@@ -42,7 +42,7 @@ final class LogImageToolsTests: XCTestCase {
     func testInputFieldUsesImageAwareFieldEditor() {
         let field = TaskTextField()
         XCTAssertTrue(field.cell is ImagePasteCell)
-        XCTAssertTrue((field.cell as? NSTextFieldCell)?.fieldEditor(for: field) is ImagePasteTextView)
+        XCTAssertTrue((field.cell as? NSTextFieldCell)?.fieldEditor(for: field) is ImagePasteFieldEditorView)
     }
 
     func testTextInImagesCanBeRecognizedLocally() throws {

@@ -16,23 +16,22 @@ final class EditingInteractionTests: XCTestCase {
         var submitted = false
         var cancelled = false
         var recalled = false
-        let input = TaskInput(text: .constant(""), focused: .constant(true),
-                              submit: { submitted = true }, cancel: { cancelled = true },
-                              historyUp: { recalled = true })
+        let input = GrowingTaskInput(text: .constant(""), focused: .constant(true),
+                                     submit: { submitted = true }, cancel: { cancelled = true },
+                                     historyUp: { recalled = true }, minHeight: 24)
         let coordinator = input.makeCoordinator()
-        let field = NSTextField()
-        let editor = NSTextView()
+        let editor = ImagePasteTextView()
         editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
         XCTAssertTrue(editor.hasMarkedText())
         for selector in [#selector(NSResponder.insertNewline(_:)), #selector(NSResponder.cancelOperation(_:)), #selector(NSResponder.moveUp(_:))] {
-            XCTAssertFalse(coordinator.control(field, textView: editor, doCommandBy: selector))
+            XCTAssertFalse(coordinator.textView(editor, doCommandBy: selector))
         }
         XCTAssertFalse(submitted)
         XCTAssertFalse(cancelled)
         XCTAssertFalse(recalled)
         editor.unmarkText()
-        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
-        XCTAssertTrue(submitted)
+        XCTAssertFalse(coordinator.textView(editor, doCommandBy: #selector(NSResponder.insertNewline(_:))), "组词结束后，普通 Enter 换行，不提交")
+        XCTAssertFalse(submitted)
     }
 
     @MainActor

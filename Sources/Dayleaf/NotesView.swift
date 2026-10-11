@@ -484,7 +484,7 @@ struct NotesView: View {
                             .background(Palette.card, in: RoundedRectangle(cornerRadius: 6))
                             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Palette.accent.opacity(0.6)))
                             .onAppear { noteEditFocused = true }
-                        Text("回车保存 · ⇧回车换行 · Esc 取消 · 清空后保存会删除这条（可撤销）").font(.system(size: 10)).foregroundStyle(Palette.muted)
+                        Text("回车换行 · ⌥回车或点击别处保存 · Esc 取消 · 清空后保存会删除这条（可撤销）").font(.system(size: 10)).foregroundStyle(Palette.muted)
                     }
                 } else if !log.text.isEmpty {
                     Text(TaskText.rendered(log.text)).font(.system(size: 13)).textSelection(.enabled)
@@ -759,7 +759,7 @@ struct NotesView: View {
             HStack(spacing: 8) {
                 Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent)
                 TaskInput(text: textBinding(key), focused: $tagFocused,
-                          placeholder: "写进 #\(tag)，回车保存 · @ 关联待办 · # 加标签 · ⌘V 贴图",
+                          placeholder: "写进 #\(tag)，⌥回车保存 · @ 关联待办 · # 加标签 · ⌘V 贴图",
                           fontSize: 13, submit: { submitTag(tag) }, onPasteImages: { datas in
                     addImages(ImageTools.save(datas, in: store), to: key)
                     tagFocused = true
@@ -829,7 +829,7 @@ struct NotesView: View {
             HStack(spacing: 8) {
                 Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent)
                 TaskInput(text: textBinding(key), focused: $focused,
-                          placeholder: topic.deleted ? "任务已删除，无法追加笔记" : "给 \(topic.number.map { "#\($0)" } ?? "这个任务") 追加笔记，回车保存 · # 加标签 · ⌘V 贴图",
+                          placeholder: topic.deleted ? "任务已删除，无法追加笔记" : "给 \(topic.number.map { "#\($0)" } ?? "这个任务") 追加笔记，⌥回车保存 · # 加标签 · ⌘V 贴图",
                           fontSize: 13, submit: { submit(topic) }, onPasteImages: { datas in
                     addImages(ImageTools.save(datas, in: store), to: key)
                     focused = true

@@ -49,20 +49,20 @@ final class LogInputTests: XCTestCase {
 
     @MainActor
     func testTerminalHistoryAndTabAreHandledOnlyWhenProvided() async {
+        // 历史上下翻、Tab 补全只在日志命令输入框（多行、growing）里接的，走 GrowingTaskInput。
         var events: [String] = []
-        let input = TaskInput(text: .constant(""), focused: .constant(true), submit: {}, monospaced: true,
-                              historyUp: { events.append("up") }, historyDown: { events.append("down") },
-                              complete: { events.append("tab") })
+        let input = GrowingTaskInput(text: .constant(""), focused: .constant(true), submit: {}, monospaced: true,
+                                     historyUp: { events.append("up") }, historyDown: { events.append("down") },
+                                     complete: { events.append("tab") }, minHeight: 24)
         let coordinator = input.makeCoordinator()
-        let field = NSTextField()
-        let editor = NSTextView()
-        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.moveUp(_:))))
-        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.moveDown(_:))))
-        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:))))
+        let editor = ImagePasteTextView()
+        XCTAssertTrue(coordinator.textView(editor, doCommandBy: #selector(NSResponder.moveUp(_:))))
+        XCTAssertTrue(coordinator.textView(editor, doCommandBy: #selector(NSResponder.moveDown(_:))))
+        XCTAssertTrue(coordinator.textView(editor, doCommandBy: #selector(NSResponder.insertTab(_:))))
         XCTAssertEqual(events, ["up", "down", "tab"])
-        let taskInput = TaskInput(text: .constant(""), focused: .constant(true), submit: {})
-        XCTAssertFalse(taskInput.makeCoordinator().control(field, textView: editor, doCommandBy: #selector(NSResponder.moveUp(_:))))
-        XCTAssertFalse(taskInput.makeCoordinator().control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:))))
+        let plain = GrowingTaskInput(text: .constant(""), focused: .constant(true), submit: {}, minHeight: 24)
+        XCTAssertFalse(plain.makeCoordinator().textView(editor, doCommandBy: #selector(NSResponder.moveUp(_:))), "没提供就不处理，交回系统")
+        XCTAssertFalse(plain.makeCoordinator().textView(editor, doCommandBy: #selector(NSResponder.insertTab(_:))))
     }
 
     @MainActor

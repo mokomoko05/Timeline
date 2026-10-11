@@ -12,6 +12,11 @@ final class GrowingInputTests: XCTestCase {
         TaskInput(text: .constant(text), focused: .constant(false), submit: {}, minHeight: minHeight, maxLines: maxLines, allowsNewlines: allowsNewlines)
     }
 
+    /// 粘贴进来的换行是否变成空格，只有单行（标题）场景才会发生，走的是 `SingleLineTaskInput`。
+    private func singleLine(allowsNewlines: Bool, text: Binding<String>) -> SingleLineTaskInput {
+        SingleLineTaskInput(text: text, focused: .constant(false), submit: {}, minHeight: 22, maxLines: 6, allowsNewlines: allowsNewlines)
+    }
+
     func testHeightGrowsWithWrappedAndExplicitLinesUpToTheCap() {
         let one = TaskInput.height(for: "一行", font: font, width: 400, minHeight: 24, maxLines: 10)
         XCTAssertEqual(one, 24, accuracy: 0.5, "单行时就是原来的高度")
@@ -60,23 +65,37 @@ final class GrowingInputTests: XCTestCase {
     }
 
     func testPastedNewlinesBecomeSpacesOnlyForSingleLineContent() {
-        func run(allowsNewlines: Bool) -> String {
-            var text = ""
-            let todo = TaskInput(text: Binding(get: { text }, set: { text = $0 }), focused: .constant(false), submit: {},
-                                 minHeight: 22, maxLines: 6, allowsNewlines: allowsNewlines)
-            let field = TaskTextField()
-            let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            window.contentView = field
-            Self.keepAlive += [window]
-            window.makeFirstResponder(field)
-            field.stringValue = "甲\n乙\n丙"
-            if let editor = field.currentEditor() { editor.string = "甲\n乙\n丙" }
-            todo.makeCoordinator().controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
-            return text
-        }
-        XCTAssertEqual(run(allowsNewlines: false), "甲 乙 丙", "待办标题里粘贴的换行变成空格")
-        XCTAssertEqual(run(allowsNewlines: true), "甲\n乙\n丙", "日志、笔记保留换行")
+        // 只有单行（标题，allowsNewlines: false）才会把粘贴进来的换行变成空格；日志、笔记走的是 GrowingTaskInput，原样保留换行。
+        var text = ""
+        let todo = singleLine(allowsNewlines: false, text: Binding(get: { text }, set: { text = $0 }))
+        let field = TaskTextField()
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = field
+        Self.keepAlive += [window]
+        window.makeFirstResponder(field)
+        field.stringValue = "甲\n乙\n丙"
+        if let editor = field.currentEditor() { editor.string = "甲\n乙\n丙" }
+        todo.makeCoordinator().controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        XCTAssertEqual(text, "甲 乙 丙", "待办标题里粘贴的换行变成空格")
+    }
+
+    /// 日志、笔记这类多行输入框：普通 Enter 不拦截（交给系统换行），失焦（点击别处）当成提交保存。
+    /// ⌥Enter 提交依赖 `NSApp.currentEvent` 的修饰键，单测环境发不出真实按键事件，这条由人工验证。
+    func testGrowingInputPlainEnterIsNotInterceptedAndBlurSaves() {
+        var submitted = 0
+        var text = ""
+        let input = GrowingTaskInput(text: Binding(get: { text }, set: { text = $0 }), focused: .constant(true),
+                                      submit: { submitted += 1 }, minHeight: 24, maxLines: 10)
+        let editor = ImagePasteTextView()
+        let coordinator = input.makeCoordinator()
+        editor.delegate = coordinator
+        editor.string = "第一行"
+        XCTAssertFalse(coordinator.textView(editor, doCommandBy: #selector(NSResponder.insertNewline(_:))), "普通 Enter 不拦截，交给系统换行")
+        XCTAssertEqual(submitted, 0)
+
+        coordinator.textDidEndEditing(Notification(name: NSText.didEndEditingNotification, object: editor))
+        XCTAssertEqual(submitted, 1, "失焦（点击别处）当成提交保存")
     }
 
     private static var keepAlive: [AnyObject] = []
