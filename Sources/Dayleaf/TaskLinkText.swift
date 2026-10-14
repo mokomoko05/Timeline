@@ -13,6 +13,7 @@ struct TaskLinkText: NSViewRepresentable {
     var displayName: String?
     var monospaced = false
     var dragTaskID: UUID?
+    var markdown = false
     var compactLines = false
     var select: () -> Void = {}
     /// 单击正文（非链接）时调用。
@@ -52,7 +53,7 @@ struct TaskLinkText: NSViewRepresentable {
         view.dragTaskID = dragTaskID
         view.textContainerInset = NSSize(width: compactLines ? 2 : 5, height: compactLines ? 0 : 4)
         let foreground = NSColor(completed ? Palette.muted : color)
-        if view.source != source || view.displayName != displayName || view.completed != completed || view.pointSize != fontSize || view.foreground != foreground || view.monospaced != monospaced || view.compactLines != compactLines {
+        if view.source != source || view.displayName != displayName || view.completed != completed || view.pointSize != fontSize || view.foreground != foreground || view.monospaced != monospaced || view.compactLines != compactLines || view.markdown != markdown {
             view.source = source
             view.displayName = displayName
             view.completed = completed
@@ -60,7 +61,8 @@ struct TaskLinkText: NSViewRepresentable {
             view.foreground = foreground
             view.monospaced = monospaced
             view.compactLines = compactLines
-            let styled = Self.styledText(source, completed: completed, color: foreground, fontSize: fontSize, displayName: displayName, monospaced: monospaced, compactLines: compactLines)
+            view.markdown = markdown
+            let styled = markdown ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced) : Self.styledText(source, completed: completed, color: foreground, fontSize: fontSize, displayName: displayName, monospaced: monospaced, compactLines: compactLines)
             view.textStorage?.setAttributedString(styled)
             view.measurer.update(styled, maxLines: maxLines)
             view.toolTip = source
@@ -170,6 +172,7 @@ extension NSMenu {
 }
 
 final class InteractiveTaskText: NSTextView {
+    var markdown = false
     let measurer = TextMeasurer()
     var menuItems: [TextMenuItem] = []
     var source: String?
@@ -192,7 +195,7 @@ final class InteractiveTaskText: NSTextView {
 
     /// 有自定义操作时，右键菜单用它们；选中了文字就在最前面加「拷贝所选文字」。
     override func menu(for event: NSEvent) -> NSMenu? {
-        guard !menuItems.isEmpty else { return nil }
+        guard !menuItems.isEmpty else { return markdown ? super.menu(for: event) : nil }
         var items = menuItems
         if selectedRange().length > 0 {
             items.insert(TextMenuItem(title: "拷贝所选文字", symbol: "text.cursor", action: { [weak self] in self?.copy(nil) }), at: 0)
@@ -291,6 +294,14 @@ final class InteractiveTaskText: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if markdown {
+            let point = convert(event.locationInWindow, from: nil)
+            if event.clickCount == 2 || link(at: point) != nil { activate(at: point, clickCount: event.clickCount); return }
+            onSelect?()
+            onClick?()
+            super.mouseDown(with: event)
+            return
+        }
         mouseDownEvent = event
         dragged = false
     }

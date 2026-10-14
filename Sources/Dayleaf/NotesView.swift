@@ -493,8 +493,10 @@ struct NotesView: View {
                         Text("回车换行 · ⌘回车或点击别处保存 · Esc 取消 · 清空后保存会删除这条（可撤销）").font(.system(size: 10)).foregroundStyle(Palette.muted)
                     }
                 } else if !log.text.isEmpty {
-                    Text(TaskText.rendered(log.text)).font(.system(size: 13)).textSelection(.enabled)
-                        .environment(\.openURL, OpenURLAction { url in SafariLinks.open(url); return .handled })
+                    TaskLinkText(source: log.text, completed: false, color: Palette.ink, fontSize: 13,
+                                 edit: { guard !store.isReadOnly else { return }; beginNoteEdit(item) }, open: SafariLinks.open,
+                                 maxLines: 0, markdown: true, compactLines: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if !log.images.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {

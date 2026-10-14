@@ -10,12 +10,13 @@ let package = Package(
         .executable(name: "sched", targets: ["sched"]),
     ],
     dependencies: [
-        // 内置 zsh 窗口的终端模拟器和 PTY；其余部分仍然没有第三方依赖。
+        // 内置终端与 Markdown 语法解析；正文使用 AppKit 原生排版。
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.9.0"),
+        .package(url: "https://github.com/swiftlang/swift-markdown.git", .upToNextMinor(from: "0.5.0")),
     ],
     targets: [
         .target(name: "DayleafCore"),
-        .executableTarget(name: "Dayleaf", dependencies: ["DayleafCore", .product(name: "SwiftTerm", package: "SwiftTerm")]),
+        .executableTarget(name: "Dayleaf", dependencies: ["DayleafCore", .product(name: "SwiftTerm", package: "SwiftTerm"), .product(name: "Markdown", package: "swift-markdown")]),
         .target(name: "SchedKit", dependencies: ["DayleafCore"]),
         .executableTarget(name: "sched", dependencies: ["SchedKit"]),
         .testTarget(name: "DayleafCoreTests", dependencies: ["DayleafCore"]),

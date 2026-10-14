@@ -672,7 +672,7 @@ private struct DailyLogRow: View {
                 } else {
                     TaskLinkText(source: log.text, completed: false, color: TerminalPalette.text, fontSize: 12,
                                  edit: { guard !store.isReadOnly else { return }; edit(log, date) }, open: SafariLinks.open,
-                                 maxLines: 0, monospaced: true, compactLines: true,
+                                 maxLines: 0, monospaced: true, markdown: true, compactLines: true,
                                  click: log.images.isEmpty ? nil : toggleImages, menuItems: menuItems)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
