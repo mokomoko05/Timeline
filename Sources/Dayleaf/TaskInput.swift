@@ -56,6 +56,30 @@ struct TaskInput: View {
     }
 }
 
+/// 只测量可见行数，按正文、字体和行数上限更新独立排版栈，复用宽度缓存。
+/// 编辑器仍保留全文，不改变其文本容器或滚动范围。
+final class InputHeightMeasurer {
+    private let measurer = TextMeasurer()
+    private var source: String?
+    private var font: NSFont?
+    private var lineLimit = 0
+
+    func height(for text: String, font: NSFont, width: CGFloat, minHeight: CGFloat, maxLines: Int) -> CGFloat {
+        let limit = max(1, maxLines)
+        if source != text || self.font != font || lineLimit != limit {
+            source = text
+            self.font = font
+            lineLimit = limit
+            let measuredText = text.isEmpty ? " " : (text.hasSuffix("\n") ? text + " " : text)
+            measurer.update(NSAttributedString(string: measuredText, attributes: [.font: font]), maxLines: limit)
+        }
+        let lineHeight = ceil(font.ascender - font.descender + font.leading)
+        let measured = measurer.height(forWidth: max(20, width - 8))
+        let lines = min(CGFloat(limit), max(1, ceil(measured / lineHeight)))
+        return lines * lineHeight + max(0, minHeight - lineHeight)
+    }
+}
+
 /// 单行（标题）场景：原来的 `NSTextField` 实现，回车提交，不支持框内滚动（本来也用不到）。
 struct SingleLineTaskInput: NSViewRepresentable {
     @Environment(\.isEnabled) private var enabled
@@ -83,18 +107,13 @@ struct SingleLineTaskInput: NSViewRepresentable {
 
     /// 内容需要的高度：行数（按宽度折行）乘行高，再加上单行时上下的留白；到 `maxLines` 行为止。
     static func height(for text: String, font: NSFont, width: CGFloat, minHeight: CGFloat, maxLines: Int) -> CGFloat {
-        let lineHeight = ceil(font.ascender - font.descender + font.leading)
-        let source = text.isEmpty ? " " : (text.hasSuffix("\n") ? text + " " : text)
-        let rect = (source as NSString).boundingRect(with: NSSize(width: max(20, width - 8), height: .greatestFiniteMagnitude),
-                                                     options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font])
-        let lines = min(CGFloat(max(1, maxLines)), max(1, ceil(rect.height / lineHeight)))
-        return lines * lineHeight + max(0, minHeight - lineHeight)
+        InputHeightMeasurer().height(for: text, font: font, width: width, minHeight: minHeight, maxLines: maxLines)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextField, context: Context) -> CGSize? {
         guard let minHeight else { return nil }
         let width = proposal.width ?? max(nsView.bounds.width, 200)
-        return CGSize(width: width, height: Self.height(for: text, font: resolvedFont, width: width, minHeight: minHeight, maxLines: maxLines))
+        return CGSize(width: width, height: context.coordinator.heightMeasurer.height(for: text, font: resolvedFont, width: width, minHeight: minHeight, maxLines: maxLines))
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -138,6 +157,7 @@ struct SingleLineTaskInput: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: SingleLineTaskInput
+        let heightMeasurer = InputHeightMeasurer()
         var focusRequested = false
         weak var field: NSTextField?
         init(_ parent: SingleLineTaskInput) { self.parent = parent }
@@ -219,17 +239,12 @@ struct GrowingTaskInput: NSViewRepresentable {
     }
 
     static func height(for text: String, font: NSFont, width: CGFloat, minHeight: CGFloat, maxLines: Int) -> CGFloat {
-        let lineHeight = ceil(font.ascender - font.descender + font.leading)
-        let source = text.isEmpty ? " " : (text.hasSuffix("\n") ? text + " " : text)
-        let rect = (source as NSString).boundingRect(with: NSSize(width: max(20, width - 8), height: .greatestFiniteMagnitude),
-                                                     options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font])
-        let lines = min(CGFloat(max(1, maxLines)), max(1, ceil(rect.height / lineHeight)))
-        return lines * lineHeight + max(0, minHeight - lineHeight)
+        InputHeightMeasurer().height(for: text, font: font, width: width, minHeight: minHeight, maxLines: maxLines)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
         let width = proposal.width ?? max(nsView.bounds.width, 200)
-        return CGSize(width: width, height: Self.height(for: text, font: resolvedFont, width: width, minHeight: minHeight, maxLines: maxLines))
+        return CGSize(width: width, height: context.coordinator.heightMeasurer.height(for: text, font: resolvedFont, width: width, minHeight: minHeight, maxLines: maxLines))
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -296,6 +311,7 @@ struct GrowingTaskInput: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: GrowingTaskInput
+        let heightMeasurer = InputHeightMeasurer()
         var focusRequested = false
         weak var editor: NSTextView?
         let placeholderField = NSTextField(labelWithString: "")
