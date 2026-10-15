@@ -65,7 +65,6 @@ struct TaskLinkText: NSViewRepresentable {
             let styled = markdown ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced) : Self.styledText(source, completed: completed, color: foreground, fontSize: fontSize, displayName: displayName, monospaced: monospaced, compactLines: compactLines)
             view.textStorage?.setAttributedString(styled)
             view.measurer.update(styled, maxLines: maxLines)
-            view.toolTip = source
             view.invalidateIntrinsicContentSize()
             view.needsDisplay = true
             view.window?.invalidateCursorRects(for: view)
