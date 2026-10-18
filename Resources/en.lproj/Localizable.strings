@@ -676,3 +676,6 @@
 "修改截止时间" = "Edit deadline";
 "%@ 前" = "By %@";
 "修改优先级" = "Change priority";
+
+"%@ · 点击切换" = "%@ · Click to change";
+"点击切换优先级" = "Click to change priority";

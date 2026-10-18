@@ -3,41 +3,43 @@ import DayleafCore
 
 struct PriorityMark: View {
     let priority: TaskPriority
-    var body: some View {
-        if priority != .normal {
-            Image(systemName: priority == .high ? "arrow.up" : "arrow.down")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(priority == .high ? Color.orange : Palette.muted)
-                .help(LocalizedStringKey(priority.title))
-                .accessibilityLabel(LocalizedStringKey(priority.title))
+    private var color: Color {
+        switch priority {
+        case .high: return .orange
+        case .normal: return Palette.muted
+        case .low: return .blue
         }
+    }
+
+    var body: some View {
+        Circle().fill(color).frame(width: 7, height: 7)
+            .help(LocalizedStringKey(priority.title))
+            .accessibilityLabel(LocalizedStringKey(priority.title))
     }
 }
 
 struct TaskPriorityButton: View {
     @ObservedObject var store: JournalStore
     let task: Todo
-    @State private var showing = false
     var body: some View {
-        Button { showing = true } label: {
-            PriorityMark(priority: task.priority)
-                .frame(width: 14, height: 18).contentShape(Rectangle())
-        }
-            .buttonStyle(.plain).disabled(store.isReadOnly)
-            .help("优先级").accessibilityLabel(LocalizedStringKey(task.priority.title))
-            .popover(isPresented: $showing, arrowEdge: .bottom) {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(TaskPriority.allCases) { priority in
-                        Button { store.setPriority(priority, for: task.id); showing = false } label: {
-                            HStack {
-                                Text(LocalizedStringKey(priority.title))
-                                Spacer()
-                                if task.priority == priority { Image(systemName: "checkmark") }
-                            }.padding(6).contentShape(Rectangle())
-                        }.buttonStyle(.plain).raisedOnHover(radius: 5)
-                    }
-                }.padding(8).frame(width: 150)
+        Button {
+            guard let current = store.locate(task.id)?.task else { return }
+            let next: TaskPriority
+            switch current.priority {
+            case .normal: next = .high
+            case .high: next = .low
+            case .low: next = .normal
             }
+            store.setPriority(next, for: task.id)
+        } label: {
+            PriorityMark(priority: task.priority)
+                .frame(width: 18, height: 22).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).disabled(store.isReadOnly)
+        .raisedOnHover(radius: 4, enabled: !store.isReadOnly)
+        .help(AppLocalizedFormat("%@ · 点击切换", AppLocalized(task.priority.title)))
+        .accessibilityLabel(LocalizedStringKey(task.priority.title))
+        .accessibilityHint("点击切换优先级")
     }
 }
 

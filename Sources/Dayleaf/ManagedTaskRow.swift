@@ -42,7 +42,7 @@ struct ManagedTaskRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .top, spacing: 1) {
                     TaskPriorityButton(store: store, task: task)
-                        .frame(width: 16, height: 26)
+                        .frame(width: 18, height: 26)
                     if let number = task.number {
                         Text("#\(number)").font(.system(size: typography.pt(10), design: .monospaced))
                             .foregroundStyle(Palette.muted).padding(.top, 7).fixedSize()

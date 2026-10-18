@@ -97,12 +97,10 @@ struct DeadlineDayCell: View {
                             Color.clear.preference(key: CheckboxFramesKey.self, value: [item.id.uuidString: proxy.frame(in: .named(Self.space))])
                         })
                         .accessibilityLabel((item.task.isDropped ? "恢复已放弃的待办：" : (item.task.completed ? "标记未完成：" : "标记完成：")) + item.task.title)
-                    if item.task.priority != .normal {
-                        TaskPriorityButton(store: store, task: item.task)
+                    TaskPriorityButton(store: store, task: item.task)
                         .background(GeometryReader { proxy in
                             Color.clear.preference(key: CheckboxFramesKey.self, value: [item.id.uuidString + "-priority": proxy.frame(in: .named(Self.space))])
                         })
-                    }
                     if item.task.dueHasTime {
                         TaskDeadlineButton(store: store, task: item.task, compact: true)
                             .background(GeometryReader { proxy in
