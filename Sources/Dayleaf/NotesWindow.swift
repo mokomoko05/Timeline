@@ -188,13 +188,28 @@ private struct UnifiedJournalView: View {
     @State private var editingID: UUID?
     @State private var editText = ""
     @State private var editFocused = false
+    /// 日记侧栏和笔记侧栏共用同一套搜索入口；日期、星期和日志正文都可检索。
+    @State private var query = ""
 
     private var entry: DayEntry { store.entry(for: date) }
-    private var dates: [Date] {
+    private var allDates: [Date] {
         var result = store.days.keys.compactMap(JournalDates.date(for:))
             .filter { !store.entry(for: $0).logs.isEmpty }
         if !result.contains(where: { JournalDates.calendar.isDate($0, inSameDayAs: date) }) { result.append(date) }
         return result.sorted(by: >)
+    }
+
+    private var dates: [Date] {
+        let sorted = allDates
+        guard !query.isEmpty else { return sorted }
+        return sorted.filter { item in
+            let entry = store.entry(for: item)
+            let dateText = item.formatted(.dateTime.year().month(.wide).day())
+            let weekday = item.formatted(.dateTime.weekday(.wide))
+            return dateText.localizedStandardContains(query)
+                || weekday.localizedStandardContains(query)
+                || entry.logs.contains { $0.text.localizedStandardContains(query) || $0.tags.contains { $0.localizedStandardContains(query) } }
+        }
     }
 
     var body: some View {
@@ -218,34 +233,58 @@ private struct UnifiedJournalView: View {
                 Image(systemName: "book.pages").foregroundStyle(Palette.accent)
                 Text("日记").font(.system(size: 16, weight: .semibold))
                 Spacer()
-                Text("\(dates.count) 天").font(.system(size: 11)).foregroundStyle(Palette.muted)
+                let key = HotKeyStore.binding(for: .notes).label
+                Text("\(key) 关闭").font(.system(size: 11)).foregroundStyle(Palette.muted)
+                    .help("\(key) 或 Esc 关闭笔记；窗口没有标题栏按钮，拖动空白处可移动")
             }
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 3) {
-                    ForEach(dates, id: \.self) { item in dateRow(item) }
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(Palette.muted)
+                TextField("搜索日期或日志", text: $query).textFieldStyle(.plain)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Palette.card, in: RoundedRectangle(cornerRadius: 7))
+
+            if dates.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "book.pages").font(.system(size: 26, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
+                    Text(query.isEmpty ? "还没有日记" : "没有匹配的日期").font(.system(size: 13, weight: .medium))
+                    if query.isEmpty {
+                        Text("在右侧输入框写下今天的日志，它会按日期出现在这里。")
+                            .font(.system(size: 12)).foregroundStyle(Palette.muted).multilineTextAlignment(.center)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 8)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        Text("日期（\(allDates.count) 天）").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)
+                            .padding(.horizontal, 10).padding(.top, 6)
+                        ForEach(dates, id: \.self) { item in dateRow(item) }
+                    }
                 }
             }
-            Spacer(minLength: 0)
         }
-        .padding(12)
-        .background(Palette.card)
+        .padding(16)
     }
 
     private func dateRow(_ item: Date) -> some View {
         let selected = JournalDates.calendar.isDate(item, inSameDayAs: date)
         let logs = store.entry(for: item).logs
         return Button { date = item } label: {
-            HStack(spacing: 8) {
-                Image(systemName: JournalDates.calendar.isDateInToday(item) ? "calendar" : "calendar.badge.clock")
-                    .foregroundStyle(selected ? Palette.accent : Palette.muted)
-                VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    Image(systemName: "calendar").font(.system(size: 11)).foregroundStyle(selected ? Palette.accent : Palette.muted)
                     Text(item.formatted(.dateTime.year().month(.wide).day()))
                         .font(.system(size: 13, weight: selected ? .semibold : .regular))
-                    Text(JournalDates.calendar.isDateInToday(item) ? "今天" : item.formatted(.dateTime.weekday(.abbreviated)))
-                        .font(.system(size: 10)).foregroundStyle(Palette.muted)
+                        .lineLimit(1)
                 }
-                Spacer(minLength: 4)
-                Text("\(logs.count)").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.muted)
+                HStack(spacing: 8) {
+                    Text(JournalDates.calendar.isDateInToday(item) ? "今天" : item.formatted(.dateTime.weekday(.abbreviated)))
+                    Text("\(logs.count) 条日志").monospacedDigit()
+                    Spacer(minLength: 4)
+                }
+                .font(.system(size: 11)).foregroundStyle(Palette.muted)
             }
             .padding(.horizontal, 10).padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -253,7 +292,6 @@ private struct UnifiedJournalView: View {
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
-        .raisedOnHover(radius: 8)
         .accessibilityLabel("\(item.formatted(.dateTime.year().month().day()))，\(logs.count) 条日志")
     }
 
