@@ -6,8 +6,8 @@ struct PriorityMark: View {
     private var color: Color {
         switch priority {
         case .high: return .orange
-        case .normal: return Palette.muted
-        case .low: return .blue
+        case .normal: return .blue
+        case .low: return Palette.muted
         }
     }
 
