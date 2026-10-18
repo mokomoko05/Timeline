@@ -533,7 +533,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
         window.delegate = self
         window.onNewTab = { [weak self] in self?.newTab() }
         // 工具条放在窗口自己的内容区顶部（不用标题栏附件：标签页组会把各页的附件合并共享，会叠出多条工具条）。
-        let toolbar = NSHostingView(rootView: ShellToolbar(
+        let toolbar = NSHostingView(rootView: LocalizedRoot { ShellToolbar(
             newTab: { [weak self, weak window] in window?.makeKeyAndOrderFront(nil); self?.newTab() },
             newWindow: { [weak self, weak window] in window?.makeKeyAndOrderFront(nil); self?.newWindow() },
             splitRight: { [weak self, weak window] in window?.makeKeyAndOrderFront(nil); self?.splitPane(sideBySide: true) },
@@ -541,7 +541,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
             close: { [weak self, weak window] in
                 guard let self, let window, windowShouldClose(window) else { return }
                 window.close()
-            }))
+            }) })
         // 三窗格：左边上下两格，右边一整栏。
         let body: NSView
         var leftSplit: PaneSplitView?

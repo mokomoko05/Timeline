@@ -666,7 +666,8 @@ struct NotesView: View {
             if folded { nav.setCollapsed(false, tag: tag, chapter: chapter.id) }
             let anchor = Self.chapterAnchor(chapter)
             // 刚展开时先等布局更新，再滚过去。
-            DispatchQueue.main.async { withAnimation(Motion.quick) { proxy.scrollTo(anchor, anchor: .top) } }
+            // 目录跳转是定位操作，直接落到目标位置，避免长列表滚动动画造成拖沓感。
+            DispatchQueue.main.async { proxy.scrollTo(anchor, anchor: .top) }
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Image(systemName: chapter.taskID == nil ? "square.and.pencil" : (chapter.dropped ? "xmark.circle.fill" : (chapter.completed ? "checkmark.circle.fill" : "circle")))

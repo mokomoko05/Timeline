@@ -441,12 +441,20 @@ struct DailyLogView: View {
                         .buttonStyle(HitAreaButtonStyle(compact: true)).disabled(store.isReadOnly)
                 }.font(.system(size: UIScale.pt(10))).foregroundStyle(TerminalPalette.muted)
             }
-            if entry.logTaskID == nil, let task = store.focusTask {
+            if entry.logTaskID == nil, let task = store.focusTask, !store.focusPaused {
                 HStack(spacing: 4) {
                     Image(systemName: "timer")
                     Text("专注中：日志会关联到 \(FocusHint.label(task))").lineLimit(1)
                     Spacer(minLength: 0)
                 }.font(.system(size: UIScale.pt(10))).foregroundStyle(TerminalPalette.green)
+            }
+            if entry.logTaskID == nil, let task = store.focusTask, store.focusPaused {
+                HStack(spacing: 4) {
+                    Image(systemName: "pause.circle")
+                    Text("专注已暂停：日志不会关联到 \(FocusHint.label(task))")
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }.font(.system(size: UIScale.pt(10))).foregroundStyle(TerminalPalette.muted)
             }
             if entry.logTaskID == nil, store.focusTask == nil, let task = store.pinnedTask {
                 HStack(spacing: 4) {
@@ -456,7 +464,6 @@ struct DailyLogView: View {
                     Button("取消固定") { store.pinTask(nil) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
                 }.font(.system(size: UIScale.pt(10))).foregroundStyle(TerminalPalette.muted)
             }
-            MentionList(state: mention, store: store)
             if !entry.logDraftTags.isEmpty {
                 LogChipsBar(store: store, link: .constant(nil), unlinked: .constant(false),
                             tags: Binding(get: { entry.logDraftTags }, set: { new in
@@ -476,7 +483,12 @@ struct DailyLogView: View {
                 Button(action: submit) { Image(systemName: "arrow.turn.down.left") }
                     .buttonStyle(HitAreaButtonStyle(compact: true)).help("提交日志")
                     .disabled(store.isReadOnly || (entry.logDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && entry.logDraftImages.isEmpty))
-            }.padding(.horizontal, 6).padding(.vertical, 3).background(TerminalPalette.surface)
+            }
+            .padding(.horizontal, 6).padding(.vertical, 3)
+            .background(TerminalPalette.surface)
+            .popover(isPresented: Binding(get: { mention.isActive }, set: { if !$0 { mention.dismiss() } }), arrowEdge: .bottom) {
+                MentionList(state: mention, store: store).frame(width: 340)
+            }
         }
         .onAppear(perform: configureMention)
         .onChange(of: date) { _ in configureMention() }

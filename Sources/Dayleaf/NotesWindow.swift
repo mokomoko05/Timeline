@@ -17,6 +17,8 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
     private(set) var window: NSWindow?
     /// 上次停留的位置，存进偏好；窗口关闭后视图和里面没发送的草稿也留着。
     let nav: NotesNavigation
+    /// 合并窗口当前的工作区；日志仍复用原有 DailyLogView，保留编辑、复盘和图片能力。
+    private(set) var journalDate = JournalDates.calendar.startOfDay(for: Date())
 
     init(nav: NotesNavigation? = nil) {
         self.nav = nav ?? NotesNavigation(defaults: .standard)
@@ -32,15 +34,38 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
               reveal: @escaping (UUID) -> Void, openDay: @escaping (Date) -> Void) {
         let window = self.window ?? makeWindow()
         self.window = window
-        let view = NotesView(store: store, initialSelection: taskID, initialTag: tag, nav: nav,
-                             close: { [weak self] in self?.close() },
-                             reveal: reveal, openDay: openDay)
+        if let taskID { nav.open(task: taskID) }
+        if let tag { nav.open(tag: tag) }
+        let view = UnifiedNotesView(store: store, mode: .notes, date: journalDate, nav: nav,
+                                    close: { [weak self] in self?.close() },
+                                    reveal: reveal, openDay: openDay,
+                                    selectDate: { [weak self] date in self?.journalDate = date })
         // 不再给视图换新的 id：保持同一个视图，里面的草稿、编辑状态和滚动位置都留着。
         if let host = window.contentViewController as? NSHostingController<AnyView> {
-            host.rootView = AnyView(view)
+            host.rootView = AnyView(LocalizedRoot { view })
         }
         window.makeKeyAndOrderFront(nil)
     }
+
+    /// 打开合并窗口的日记模式。日期列表和右侧日志视图共用同一个窗口及窗口状态。
+    func showJournal(store: JournalStore, date: Date,
+                     reveal: @escaping (UUID) -> Void = { _ in }, openDay: @escaping (Date) -> Void = { _ in }) {
+        let window = self.window ?? makeWindow()
+        self.window = window
+        journalDate = JournalDates.calendar.startOfDay(for: date)
+        let view = UnifiedNotesView(store: store, mode: .journal, date: journalDate, nav: nav,
+                                    close: { [weak self] in self?.close() },
+                                    reveal: reveal, openDay: openDay,
+                                    selectDate: { [weak self] date in self?.journalDate = date })
+        if let host = window.contentViewController as? NSHostingController<AnyView> {
+            host.rootView = AnyView(LocalizedRoot { view })
+        }
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func setDate(_ date: Date) { journalDate = JournalDates.calendar.startOfDay(for: date) }
+    func shift(_ days: Int) { setDate(JournalDates.calendar.date(byAdding: .day, value: days, to: journalDate) ?? journalDate) }
+    var isKey: Bool { window?.isKeyWindow == true }
 
     func close() { window?.close() }
 
@@ -51,9 +76,9 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeWindow() -> NSWindow {
-        let host = NSHostingController(rootView: AnyView(EmptyView()))
+        let host = NSHostingController(rootView: AnyView(LocalizedRoot { EmptyView() }))
         let window = NotesWindow(contentViewController: host)
-        window.title = "笔记"
+        window.title = "笔记 / 日记"
         // 没有红绿灯：用 Esc 或快捷键关闭。标题栏透明，整个窗口背景都可以拖动。
         window.styleMask = [.titled, .resizable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
@@ -80,5 +105,321 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
             guard let self, NSApplication.shared.isActive else { return }
             PreviousApp.restore(handoff: handoffWindow())
         }
+    }
+}
+
+enum UnifiedNotesMode { case notes, journal }
+
+/// 笔记与日记的统一工作区：左上角切换模式，日记模式左侧按日期导航。
+struct UnifiedNotesView: View {
+    @ObservedObject var store: JournalStore
+    let initialMode: UnifiedNotesMode
+    let date: Date
+    let nav: NotesNavigation
+    let close: () -> Void
+    let reveal: (UUID) -> Void
+    let openDay: (Date) -> Void
+    let selectDate: (Date) -> Void
+    @State private var selectedDate: Date
+    @State private var currentMode: UnifiedNotesMode
+    @StateObject private var interaction = WorkspaceInteraction()
+    @StateObject private var toast = ToastCenter()
+
+    init(store: JournalStore, mode: UnifiedNotesMode, date: Date, nav: NotesNavigation,
+         close: @escaping () -> Void, reveal: @escaping (UUID) -> Void,
+         openDay: @escaping (Date) -> Void, selectDate: @escaping (Date) -> Void) {
+        self.store = store; self.initialMode = mode; self.date = date; self.nav = nav
+        self.close = close; self.reveal = reveal; self.openDay = openDay; self.selectDate = selectDate
+        _selectedDate = State(initialValue: date)
+        _currentMode = State(initialValue: mode)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            modeBar
+            Divider()
+            if currentMode == .notes {
+                NotesView(store: store, nav: nav, close: close, reveal: reveal, openDay: openDay)
+            } else {
+                journalBody
+            }
+        }
+        .background(Palette.background)
+        .foregroundStyle(Palette.ink)
+        .environmentObject(interaction)
+        .environmentObject(toast)
+        .onChange(of: selectedDate) { selectDate($0) }
+    }
+
+    private var modeBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: currentMode == .notes ? "note.text" : "book.pages").foregroundStyle(Palette.accent)
+            Picker("", selection: Binding(get: { currentMode == .notes ? 0 : 1 }, set: { currentMode = $0 == 0 ? .notes : .journal })) {
+                Text("笔记").tag(0)
+                Text("日记").tag(1)
+            }
+            .pickerStyle(.segmented).labelsHidden().frame(width: 126)
+            Spacer()
+            Button(action: close) { Image(systemName: "xmark") }
+                .buttonStyle(HitAreaButtonStyle(compact: true)).foregroundStyle(Palette.muted)
+        }
+        .padding(.horizontal, 16).padding(.top, 5).padding(.bottom, 6)
+    }
+
+    private var journalDates: [Date] {
+        var dates = store.days.keys.compactMap(JournalDates.date(for:)).filter { !store.entry(for: $0).logs.isEmpty }
+        if !dates.contains(where: { JournalDates.calendar.isDate($0, inSameDayAs: selectedDate) }) { dates.append(selectedDate) }
+        return dates.sorted(by: >)
+    }
+
+    private var journalBody: some View {
+        UnifiedJournalView(store: store, date: $selectedDate)
+    }
+
+}
+
+/// 笔记窗口里的日记模式：沿用笔记的侧栏、卡片和编辑器，不再嵌入带复盘区的 DayLogView。
+private struct UnifiedJournalView: View {
+    @ObservedObject var store: JournalStore
+    @Binding var date: Date
+    @StateObject private var mention = MentionState()
+    @State private var focused = false
+    @State private var error: String?
+    @State private var editingID: UUID?
+    @State private var editText = ""
+    @State private var editFocused = false
+
+    private var entry: DayEntry { store.entry(for: date) }
+    private var dates: [Date] {
+        var result = store.days.keys.compactMap(JournalDates.date(for:))
+            .filter { !store.entry(for: $0).logs.isEmpty }
+        if !result.contains(where: { JournalDates.calendar.isDate($0, inSameDayAs: date) }) { result.append(date) }
+        return result.sorted(by: >)
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            sidebar.frame(width: 250)
+            Divider()
+            detail.frame(maxWidth: .infinity)
+        }
+        .frame(minWidth: 640, minHeight: 420)
+        .background(Palette.background)
+        .foregroundStyle(Palette.ink)
+        .onAppear { configureMention() }
+        .onChange(of: date) { _ in configureMention(); editingID = nil }
+        .onReceive(NotificationCenter.default.publisher(for: .dayleafCommitEditing)) { _ in saveEdit() }
+        .onDisappear { saveEdit() }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "book.pages").foregroundStyle(Palette.accent)
+                Text("日记").font(.system(size: 16, weight: .semibold))
+                Spacer()
+                Text("\(dates.count) 天").font(.system(size: 11)).foregroundStyle(Palette.muted)
+            }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 3) {
+                    ForEach(dates, id: \.self) { item in dateRow(item) }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Palette.card)
+    }
+
+    private func dateRow(_ item: Date) -> some View {
+        let selected = JournalDates.calendar.isDate(item, inSameDayAs: date)
+        let logs = store.entry(for: item).logs
+        return Button { date = item } label: {
+            HStack(spacing: 8) {
+                Image(systemName: JournalDates.calendar.isDateInToday(item) ? "calendar" : "calendar.badge.clock")
+                    .foregroundStyle(selected ? Palette.accent : Palette.muted)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.formatted(.dateTime.year().month(.wide).day()))
+                        .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                    Text(JournalDates.calendar.isDateInToday(item) ? "今天" : item.formatted(.dateTime.weekday(.abbreviated)))
+                        .font(.system(size: 10)).foregroundStyle(Palette.muted)
+                }
+                Spacer(minLength: 4)
+                Text("\(logs.count)").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.muted)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(selected ? Palette.soft : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .raisedOnHover(radius: 8)
+        .accessibilityLabel("\(item.formatted(.dateTime.year().month().day()))，\(logs.count) 条日志")
+    }
+
+    private var detail: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    if entry.logsInTimeOrder.isEmpty {
+                        VStack(spacing: 8) {
+                            Image(systemName: "book.pages").font(.system(size: 30, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
+                            Text("这一天还没有日志").font(.system(size: 14, weight: .medium))
+                            Text("在下面写下今天的进展、想法或卡点").font(.system(size: 12)).foregroundStyle(Palette.muted)
+                        }
+                        .frame(maxWidth: .infinity).padding(.vertical, 60)
+                    } else {
+                        ForEach(entry.logsInTimeOrder) { log in journalRow(log) }
+                    }
+                }
+                .padding(20)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { if editingID != nil { NSApp.keyWindow?.makeFirstResponder(nil) } }
+            Divider()
+            composer
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(date.formatted(.dateTime.year().month(.wide).day()))
+                    .font(.system(size: 18, weight: .semibold))
+                HStack(spacing: 10) {
+                    Text(date.formatted(.dateTime.weekday(.wide))).foregroundStyle(Palette.muted)
+                    Text("\(entry.logs.count) 条日志").foregroundStyle(Palette.muted)
+                }.font(.system(size: 12))
+            }
+            Spacer()
+            if let error {
+                Text(error).font(.system(size: 11)).foregroundStyle(error.hasPrefix("已") ? Palette.success : Palette.deadline)
+            }
+        }
+        .padding(.horizontal, 20).padding(.vertical, 14)
+    }
+
+    private func journalRow(_ log: DailyLogEntry) -> some View {
+        let editing = editingID == log.id
+        return HStack(alignment: .top, spacing: 10) {
+            Text(Self.time(log.createdAt)).font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted).padding(.top, 3)
+            Text(log.kind.label).font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background(kindColor(log.kind).opacity(0.16), in: RoundedRectangle(cornerRadius: 4))
+                .foregroundStyle(kindColor(log.kind)).padding(.top, 1)
+            VStack(alignment: .leading, spacing: 6) {
+                if let label = LogTaskLabel.saved(log, store: store, logDate: date) {
+                    Text(label).font(.system(size: 11)).foregroundStyle(Palette.accent)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Palette.soft, in: RoundedRectangle(cornerRadius: 4))
+                }
+                if editing {
+                    TaskInput(text: $editText, focused: $editFocused, fontSize: 13,
+                              submit: { saveEdit() }, cancel: { editingID = nil }, minHeight: 24, maxLines: 12)
+                        .padding(.horizontal, 8).padding(.vertical, 2)
+                        .background(Palette.card, in: RoundedRectangle(cornerRadius: 6))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Palette.accent.opacity(0.6)))
+                } else if !log.text.isEmpty {
+                    TaskLinkText(source: log.text, completed: false, color: Palette.ink, fontSize: 13,
+                                 edit: { beginEdit(log) }, open: SafariLinks.open, maxLines: 0,
+                                 markdown: true, compactLines: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if !log.images.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(Array(log.images.enumerated()), id: \.element) { index, name in
+                                Button { ImageViewerController.shared.show(store: store, around: log, index: index) } label: {
+                                    ImageFit(url: store.imageURL(name), maxWidth: 360, maxHeight: 190)
+                                }.buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+                if !log.tags.isEmpty { TaskTagLine(tags: log.tags) }
+            }
+            Spacer(minLength: 0)
+            if !store.isReadOnly {
+                HStack(spacing: 0) {
+                    journalAction("pencil", "编辑这条日志") { beginEdit(log) }
+                    journalAction("trash", "删除这条日志 · ⌘Z 撤销", destructive: true) {
+                        store.deleteLog(log.id, on: date); error = "已删除这条日志，⌘Z 可撤销"
+                    }
+                }.fixedSize()
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func journalAction(_ symbol: String, _ help: String, destructive: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol).font(.system(size: 11)).frame(width: 24, height: 22).contentShape(Rectangle()) }
+            .buttonStyle(.plain).foregroundStyle(destructive ? Palette.deadline : Palette.muted)
+            .raisedOnHover(radius: 5).help(help).accessibilityLabel(help)
+    }
+
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !entry.logDraftImages.isEmpty {
+                PendingImagesStrip(store: store, names: entry.logDraftImages,
+                                   remove: { store.removeDraftImage($0, on: date) },
+                                   preview: { ImageViewerController.shared.show(store: store, names: entry.logDraftImages, index: $0) })
+            }
+            HStack(spacing: 8) {
+                Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent)
+                TaskInput(text: Binding(get: { store.entry(for: date).logDraft }, set: { store.setLogDraft($0, on: date) }),
+                          focused: $focused, placeholder: "写下今天的日志 · @ 待办 · # 标签 · ⌘V 贴图", fontSize: 13,
+                          submit: submit, onPasteImages: { datas in
+                    for name in ImageTools.save(datas, in: store) { store.addDraftImage(name, on: date) }
+                    focused = true
+                }, minHeight: 24, maxLines: 10, mention: mention)
+                .disabled(store.isReadOnly)
+                Button(action: submit) { Image(systemName: "arrow.turn.down.left") }
+                    .buttonStyle(HitAreaButtonStyle())
+                    .disabled(store.isReadOnly || (entry.logDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && entry.logDraftImages.isEmpty))
+            }
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .popover(isPresented: Binding(get: { mention.isActive }, set: { if !$0 { mention.dismiss() } }), arrowEdge: .bottom) {
+            MentionList(state: mention, store: store).frame(width: 340)
+        }
+    }
+
+    private func configureMention() {
+        mention.triggers = [.task, .tag]
+        mention.provider = MentionProviders.make(store: store, chosenTags: { store.entry(for: date).logDraftTags })
+        mention.onPick = { item in
+            switch item {
+            case .task(let task): store.setLogTask(task.id, on: date)
+            case .tag(let tag): store.addDraftTag(tag.name, on: date)
+            }
+        }
+    }
+
+    private func submit() {
+        let draft = entry.logDraft
+        guard !store.isReadOnly, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !entry.logDraftImages.isEmpty else { return }
+        do {
+            let command = try store.commitLog(on: date)
+            if case .entry = command { error = nil; focused = true; ImageIndexer.run(store: store) }
+            else if case .help = command { store.setLogDraft("", on: date); error = "日志命令：/link、/done、/filter、/help" }
+        } catch let issue { error = issue.localizedDescription }
+    }
+
+    private func beginEdit(_ log: DailyLogEntry) { saveEdit(); editingID = log.id; editText = log.text; editFocused = true }
+    private func saveEdit() {
+        guard let id = editingID else { return }
+        editingID = nil; editFocused = false; store.updateLog(id, text: editText, on: date)
+    }
+
+    private func kindColor(_ kind: DailyLogKind) -> Color {
+        switch kind { case .note: return Palette.muted; case .done: return Palette.success; case .block: return Palette.deadline; case .plan: return Palette.accent }
+    }
+    private static func time(_ date: Date) -> String {
+        let c = JournalDates.calendar.dateComponents([.hour, .minute], from: date)
+        return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
     }
 }

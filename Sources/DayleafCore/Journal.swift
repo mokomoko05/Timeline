@@ -200,6 +200,8 @@ public final class JournalStore: ObservableObject {
     @Published public private(set) var lastAction: ActionEvent?
     /// 正在专注计时的任务。专注期间，没有明确指定任务的日志都记到它名下。
     @Published public private(set) var focusTaskID: UUID?
+    /// 专注暂停时保留任务状态，但普通日志不再自动关联到该任务。
+    @Published public private(set) var focusPaused = false
     /// 显式创建的标签，包括还没有内容的空标签。
     @Published public internal(set) var tagRegistry: [String] = []
     /// 固定关联的待办（不计时）。读 `pinnedTask` 才会排除已删除、已完成的。
@@ -705,6 +707,12 @@ public final class JournalStore: ObservableObject {
 
     public func setFocusTask(_ id: UUID?) {
         if focusTaskID != id { focusTaskID = id }
+        if id == nil { focusPaused = false }
+    }
+
+    public func setFocusPaused(_ paused: Bool) {
+        guard focusTaskID != nil else { focusPaused = false; return }
+        focusPaused = paused
     }
 
     /// 专注中的任务；任务已被删除时为 nil（日志照常记录，只是不再关联）。
@@ -714,7 +722,7 @@ public final class JournalStore: ObservableObject {
     public var pinnedTask: ScheduledTask? { pinnedTaskID.flatMap(locate).flatMap { $0.task.completed ? nil : $0 } }
 
     /// 没有明确指定任务时，新日志默认记到哪：专注中的任务优先，其次是固定关联的。
-    public var defaultLinkTask: ScheduledTask? { focusTask ?? pinnedTask }
+    public var defaultLinkTask: ScheduledTask? { focusPaused ? nil : (focusTask ?? pinnedTask) }
 
     /// 固定 / 取消固定一个待办。只有未完成的待办能固定；返回是否生效。固定不进撤销栈。
     @discardableResult
@@ -741,13 +749,13 @@ public final class JournalStore: ObservableObject {
     /// 关联哪个待办：明确传入的 `taskID` > 正文开头写的 `#N` > （`linkDefault` 为 true 时）专注中的 / 固定关联的待办。
     /// `linkDefault: false` 表示明确要「不关联」，比如在笔记本里写一条直接记录。
     @discardableResult
-    public func quickLog(_ text: String, images: [String] = [], taskID: UUID? = nil, linkDefault: Bool = true, tags: [String] = [], on date: Date, now: Date = Date()) throws -> LogCommand {
-        try quickLogEntry(text, images: images, taskID: taskID, linkDefault: linkDefault, tags: tags, on: date, now: now).command
+    public func quickLog(_ text: String, images: [String] = [], taskID: UUID? = nil, linkDefault: Bool = true, tags: [String] = [], allowInlineTaskReference: Bool = true, on date: Date, now: Date = Date()) throws -> LogCommand {
+        try quickLogEntry(text, images: images, taskID: taskID, linkDefault: linkDefault, tags: tags, allowInlineTaskReference: allowInlineTaskReference, on: date, now: now).command
     }
 
     /// 同 `quickLog`，同时返回写入的那条日志（命令不是普通记录时为 nil），界面据此告诉用户最终关联到了哪个待办。
     @discardableResult
-    public func quickLogEntry(_ text: String, images: [String] = [], taskID: UUID? = nil, linkDefault: Bool = true, tags: [String] = [], on date: Date, now: Date = Date()) throws -> (command: LogCommand, entry: DailyLogEntry?) {
+    public func quickLogEntry(_ text: String, images: [String] = [], taskID: UUID? = nil, linkDefault: Bool = true, tags: [String] = [], allowInlineTaskReference: Bool = true, on date: Date, now: Date = Date()) throws -> (command: LogCommand, entry: DailyLogEntry?) {
         guard !isReadOnly else { throw LogInputError.readOnly }
         let command = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !images.isEmpty
             ? LogCommand.entry(.note, "") : try LogCommand.parse(text)
@@ -755,7 +763,7 @@ public final class JournalStore: ObservableObject {
         // 没有明确传入任务时，开头的 #N 指向第 N 号任务（后面没有内容时当作普通文字，不吞掉）。
         var inline: ScheduledTask?
         let split = LogCommand.splitTaskReference(body)
-        if taskID == nil, let number = split.number, !split.rest.isEmpty, let located = locate(number: number) {
+        if allowInlineTaskReference, taskID == nil, let number = split.number, !split.rest.isEmpty, let located = locate(number: number) {
             inline = located
             body = split.rest
         }

@@ -31,6 +31,7 @@ struct RaisedSurface: ViewModifier {
     var pressed: Bool
     var enabled = true
     var radius: CGFloat = 6
+    var pressedScale: CGFloat = 0.94
     @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
@@ -47,10 +48,10 @@ struct RaisedSurface: ViewModifier {
                 }
             }
             .shadow(color: .black.opacity(lifted ? (dark ? 0.55 : 0.22) : 0), radius: lifted ? 3 : 0, x: 0, y: lifted ? 1.5 : 0)
-            .scaleEffect(pressed && enabled ? 0.94 : 1)
+            .scaleEffect(pressed && enabled ? pressedScale : 1)
             .offset(y: lifted ? -0.5 : 0)
-            .animation(Motion.quick, value: hovered)
-            .animation(Motion.quick, value: pressed)
+            .animation(Motion.reduced ? nil : .easeOut(duration: 0.09), value: hovered)
+            .animation(Motion.reduced ? nil : .easeOut(duration: 0.09), value: pressed)
             .pointerLink(enabled)
     }
 }
@@ -78,13 +79,15 @@ struct RaisedHover: ViewModifier {
 
 struct HitAreaButtonStyle: ButtonStyle {
     var compact = false
+    var pressedScale: CGFloat = 0.94
     func makeBody(configuration: Configuration) -> some View {
-        Surface(configuration: configuration, compact: compact)
+        Surface(configuration: configuration, compact: compact, pressedScale: pressedScale)
     }
 
     private struct Surface: View {
         let configuration: ButtonStyle.Configuration
         let compact: Bool
+        let pressedScale: CGFloat
         @Environment(\.isEnabled) private var enabled
         @State private var hovered = false
 
@@ -93,7 +96,7 @@ struct HitAreaButtonStyle: ButtonStyle {
                 .padding(.horizontal, compact ? 3 : 6)
                 .padding(.vertical, compact ? 2 : 4)
                 .frame(minWidth: compact ? 22 : 30, minHeight: compact ? 22 : 30)
-                .modifier(RaisedSurface(hovered: hovered, pressed: configuration.isPressed, enabled: enabled))
+                .modifier(RaisedSurface(hovered: hovered, pressed: configuration.isPressed, enabled: enabled, pressedScale: pressedScale))
                 .contentShape(RoundedRectangle(cornerRadius: 6))
                 .opacity(enabled ? 1 : 0.45)
                 .onHover { hovered = $0 }

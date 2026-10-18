@@ -3,8 +3,26 @@ import Combine
 import SwiftUI
 import DayleafCore
 
+/// AppKit 菜单和窗口标题使用的本地化入口；SwiftUI 的 Text/Button 字面量会自动使用同一份 strings。
+func AppLocalized(_ key: String) -> String {
+    let language = UserDefaults.standard.string(forKey: Prefs.language).flatMap(AppLanguage.init(rawValue:)) ?? .system
+    let identifier: String
+    switch language {
+    case .english: identifier = "en"
+    case .chinese: identifier = "zh-Hans"
+    case .system: identifier = Locale.current.language.languageCode?.identifier == "en" ? "en" : "zh-Hans"
+    }
+    let bundle = Bundle(path: Bundle.main.path(forResource: identifier, ofType: "lproj") ?? "") ?? .main
+    return NSLocalizedString(key, bundle: bundle, comment: "")
+}
+
+extension Notification.Name {
+    static let appLanguageDidChange = Notification.Name("DayleafLanguageDidChange")
+}
+
 /// 偏好设置的存储键；设置窗口、菜单栏和主界面共用。
 enum Prefs {
+    static let language = "appLanguage"
     static let hideCompleted = "hideCompleted"
     static let clickExpands = "clickExpandsTasks"
     static let weekStartsSunday = "weekStartsSunday"
@@ -24,6 +42,60 @@ enum Prefs {
         let defaults = UserDefaults.standard
         let minutes = defaults.object(forKey: focusMinLogMinutes) == nil ? defaultFocusMinLogMinutes : defaults.integer(forKey: focusMinLogMinutes)
         return TimeInterval(max(0, minutes) * 60)
+    }
+}
+
+/// 界面语言：系统会跟随 macOS 首选语言，中文和 English 可在设置中强制指定。
+enum AppLanguage: String, CaseIterable, Identifiable {
+    case system, chinese, english
+    var id: String { rawValue }
+    var title: String {
+        switch self { case .system: return "跟随系统 / System"; case .chinese: return "中文"; case .english: return "English" }
+    }
+    var locale: Locale {
+        switch self {
+        case .system: return Locale.current
+        case .chinese: return Locale(identifier: "zh-Hans")
+        case .english: return Locale(identifier: "en")
+        }
+    }
+}
+
+@MainActor
+final class LanguageStore: ObservableObject {
+    static let shared = LanguageStore()
+    @Published private(set) var language: AppLanguage
+    private var localeObserver: NSObjectProtocol?
+
+    init(defaults: UserDefaults = .standard) {
+        language = AppLanguage(rawValue: defaults.string(forKey: Prefs.language) ?? "system") ?? .system
+        localeObserver = NotificationCenter.default.addObserver(forName: NSLocale.currentLocaleDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.language == .system else { return }
+                self.objectWillChange.send()
+                NotificationCenter.default.post(name: .appLanguageDidChange, object: nil)
+            }
+        }
+    }
+
+    deinit { if let localeObserver { NotificationCenter.default.removeObserver(localeObserver) } }
+
+    var locale: Locale { language.locale }
+
+    func set(_ value: AppLanguage) {
+        guard value != language else { return }
+        language = value
+        UserDefaults.standard.set(value.rawValue, forKey: Prefs.language)
+        NotificationCenter.default.post(name: .appLanguageDidChange, object: nil)
+    }
+}
+
+struct LocalizedRoot<Content: View>: View {
+    @ObservedObject private var languages = LanguageStore.shared
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content().environment(\.locale, languages.locale)
     }
 }
 

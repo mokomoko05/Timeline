@@ -25,12 +25,17 @@ final class FocusSession: ObservableObject {
         /// 任务里的链接；没有链接的任务为 nil：只计时，不打开页面、也不检测是否离开。
         let url: URL?
         let started: Date
+        /// 本轮计划时长；计时不会在到点时强制结束，只用于显示剩余时间。
+        let plannedSeconds: TimeInterval
+        /// 本轮专注目标（可为空）。
+        let goal: String
         /// 「开始专注」那条日志；专注太短时要把它撤掉。
         var startLogID: UUID?
     }
 
     @Published private(set) var active: Active?
     @Published private(set) var elapsed: TimeInterval = 0
+    @Published private(set) var isPaused = false
     var store: JournalStore?
     var onActiveChange: ((Bool) -> Void)?
     /// 专注不足这么长（秒）就不在日志里留记录；默认读设置，测试里可替换。
@@ -49,6 +54,8 @@ final class FocusSession: ObservableObject {
     private var checking = false
     private var learnedBundle: String?
     private var automationDenied = false
+    private var pausedAt: Date?
+    private var pausedSeconds: TimeInterval = 0
 
     /// 刚打开页面时留出加载和重定向的时间，期间不判定离开。
     static let grace: TimeInterval = 6
@@ -79,12 +86,18 @@ final class FocusSession: ObservableObject {
 
     // MARK: - 开始与结束
 
-    func start(task: ScheduledTask, url: URL?, now: Date = Date()) {
+    func start(task: ScheduledTask, url: URL?, plannedSeconds: TimeInterval = 25 * 60,
+               goal: String = "", now: Date = Date()) {
         guard let store, !store.isReadOnly else { return }
         if active != nil { stop(reason: "切换到了另一个任务", now: now) }
         let number = task.task.number
-        active = Active(taskID: task.id, number: number, title: String(TaskText.rendered(task.task.title).characters), url: url, started: now)
+        active = Active(taskID: task.id, number: number, title: String(TaskText.rendered(task.task.title).characters), url: url,
+                        started: now, plannedSeconds: max(60, plannedSeconds), goal: goal.trimmingCharacters(in: .whitespacesAndNewlines))
         elapsed = 0
+        isPaused = false
+        pausedAt = nil
+        pausedSeconds = 0
+        store.setFocusPaused(false)
         awayStreak = 0
         learnedBundle = nil
         automationDenied = false
@@ -114,7 +127,7 @@ final class FocusSession: ObservableObject {
         timer?.invalidate()
         timer = nil
         storeSink = nil
-        let seconds = max(0, now.timeIntervalSince(session.started))
+        let seconds = effectiveElapsed(at: now)
         if seconds < minLoggedSeconds() {
             // 太短：不留日志（撤掉开始那条、不写结束那条），时间照常累加。
             store?.discardShortFocus(startLogID: session.startLogID, taskID: session.taskID, seconds: seconds, now: now)
@@ -126,8 +139,50 @@ final class FocusSession: ObservableObject {
         store?.setFocusTask(nil)
         active = nil
         elapsed = 0
+        isPaused = false
+        pausedAt = nil
+        pausedSeconds = 0
         baseline = nil
         onActiveChange?(false)
+    }
+
+    /// 暂停本轮专注。暂停期间不累加有效专注时间，但任务仍保持专注关联。
+    func pause(now: Date = Date()) {
+        guard active != nil, !isPaused else { return }
+        elapsed = effectiveElapsed(at: now)
+        pausedAt = now
+        isPaused = true
+        store?.setFocusPaused(true)
+    }
+
+    /// 继续本轮专注，并扣除暂停期间的时间。
+    func resume(now: Date = Date()) {
+        guard active != nil, isPaused else { return }
+        if let pausedAt {
+            pausedSeconds += max(0, now.timeIntervalSince(pausedAt))
+        }
+        self.pausedAt = nil
+        isPaused = false
+        elapsed = effectiveElapsed(at: now)
+        store?.setFocusPaused(false)
+    }
+
+    func togglePause(now: Date = Date()) {
+        if isPaused { resume(now: now) } else { pause(now: now) }
+    }
+
+    private func effectiveElapsed(at now: Date) -> TimeInterval {
+        guard let session = active else { return 0 }
+        let currentlyPaused = pausedAt.map { max(0, now.timeIntervalSince($0)) } ?? 0
+        return max(0, now.timeIntervalSince(session.started) - pausedSeconds - currentlyPaused)
+    }
+
+    /// 延长当前专注轮次；不改变已经累计的时间。
+    func extend(by seconds: TimeInterval) {
+        guard let current = active, seconds > 0 else { return }
+        active = Active(taskID: current.taskID, number: current.number, title: current.title, url: current.url,
+                        started: current.started, plannedSeconds: current.plannedSeconds + seconds, goal: current.goal,
+                        startLogID: current.startLogID)
     }
 
     static func duration(_ seconds: TimeInterval) -> String {
@@ -166,22 +221,10 @@ final class FocusSession: ObservableObject {
     }
 
     private func tick() {
-        guard let session = active else { return }
+        guard active != nil else { return }
         if stopIfTaskClosed() { return }
-        elapsed = Date().timeIntervalSince(session.started)
-        // 没有链接：只计时，不检测窗口，也就不会因为「离开」而自动结束，只能手动结束。
-        guard let target = session.url else { return }
-        guard !checking else { return }
-        checking = true
-        let inGrace = elapsed < Self.grace
-        let currentBaseline = baseline
-        let learned = learnedBundle
-        Task { @MainActor in
-            let result = await FocusProbe.check(target: target, baseline: currentBaseline, learnedBundle: learned)
-            checking = false
-            guard let session = active, session.taskID == self.active?.taskID else { return }
-            apply(result, inGrace: inGrace)
-        }
+        if !isPaused { elapsed = effectiveElapsed(at: Date()) }
+        // 专注期间允许自由查资料、切换网页、终端和笔记窗口；链接只负责开始时打开，不再检测前台页面。
     }
 
     func apply(_ result: FocusProbe.Result, inGrace: Bool) {
@@ -367,10 +410,7 @@ enum FocusPanelStyle: String, CaseIterable, Identifiable {
     /// 浮动窗口的大小；菜单栏样式没有浮动窗口。
     var panelSize: NSSize? {
         switch self {
-        case .card: return NSSize(width: 254, height: 56)
-        case .pill: return NSSize(width: 152, height: 40)
-        case .digits: return NSSize(width: 108, height: 30)
-        case .dot: return NSSize(width: 132, height: 32)
+        case .card, .pill, .digits, .dot: return NSSize(width: 340, height: 158)
         case .menuBar: return nil
         }
     }
@@ -396,7 +436,7 @@ enum FocusPanelStyle: String, CaseIterable, Identifiable {
 }
 
 private final class FocusPanel: NSPanel {
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { true }
 }
 
 @MainActor
@@ -407,12 +447,16 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
     private var observers: [NSObjectProtocol] = []
     private var elapsedSink: AnyCancellable?
     private let defaults: UserDefaults
+    private var workspaceShown = false
 
     init(session: FocusSession, defaults: UserDefaults = .standard) {
         self.session = session
         self.defaults = defaults
         super.init()
-        session.onActiveChange = { [weak self] _ in self?.refresh() }
+        session.onActiveChange = { [weak self] active in
+            self?.workspaceShown = active
+            self?.refresh()
+        }
         // 设置里改了样式、按了隐藏快捷键，立刻生效。
         observers.append(NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
@@ -426,17 +470,25 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         defaults.string(forKey: Prefs.focusPanelStyle).flatMap(FocusPanelStyle.init(rawValue:)) ?? .card
     }
 
-    /// 按「是否专注中 / 是否隐藏 / 样式」让窗口和菜单栏项目处于正确的状态。
+    /// 专注工作台：未专注时显示任务选择器，专注中显示目标与输入栏。
     func refresh() {
-        let active = session.active != nil
         let hidden = defaults.bool(forKey: Prefs.focusPanelHidden)
-        let style = style
-        if FocusPanelStyle.floatingVisible(active: active, hidden: hidden, style: style), let size = style.panelSize {
-            showPanel(size: size)
+        if workspaceShown && !hidden {
+            showPanel(size: Self.workspaceSize)
         } else {
             panel?.orderOut(nil)
         }
-        if FocusPanelStyle.menuBarVisible(active: active, hidden: hidden, style: style) { showStatusItem() } else { removeStatusItem() }
+        removeStatusItem()
+    }
+
+    // 工作台本身始终保持轻量；任务列表通过 popover 独立出现，不改变工作台大小。
+    private static let workspaceSize = NSSize(width: 340, height: 158)
+
+    /// 全局快捷键入口：打开 / 收起工作台。专注中再次按下只收起面板，不结束专注。
+    func toggleWorkspace() {
+        workspaceShown.toggle()
+        if workspaceShown { defaults.set(false, forKey: Prefs.focusPanelHidden) }
+        refresh()
     }
 
     /// 当前显示着什么（测试用）。
@@ -447,7 +499,12 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
     private func showPanel(size: NSSize) {
         let created = panel == nil
         if panel == nil {
-            let host = NSHostingView(rootView: FocusPanelView(session: session))
+            let host = NSHostingView(rootView: LocalizedRoot {
+                FocusPanelView(session: self.session, close: { [weak self] in
+                    self?.workspaceShown = false
+                    self?.refresh()
+                })
+            })
             host.setFrameSize(size)
             // 不激活的浮动窗口：点它不会抢走前台，否则会被判定为离开目标页面。
             let panel = FocusPanel(contentRect: NSRect(origin: .zero, size: size),
@@ -465,7 +522,7 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
             self.panel = panel
         }
         guard let panel else { return }
-        // 换样式只改大小，保持左上角不动；第一次显示用上次拖到的位置，没有就放左上角。
+        // 第一次显示默认放在当前屏幕右下角；用户拖动后位置会被记住。
         let topLeft: NSPoint
         if created || !panel.isVisible {
             topLeft = savedTopLeft(for: size) ?? defaultTopLeft(for: size)
@@ -479,7 +536,7 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
 
     private func defaultTopLeft(for size: NSSize) -> NSPoint {
         let frame = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
-        return NSPoint(x: frame.minX + 14, y: frame.maxY - 14)
+        return NSPoint(x: frame.maxX - size.width - 18, y: frame.minY + size.height + 18)
     }
 
     private func savedTopLeft(for size: NSSize) -> NSPoint? {
@@ -529,107 +586,348 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
     }
 
     @objc private func stopFocus() { session.stop(reason: "手动结束") }
-    @objc private func hideTimer() { defaults.set(true, forKey: Prefs.focusPanelHidden) }
+    @objc private func hideTimer() { workspaceShown = false; refresh() }
 }
 
 struct FocusPanelView: View {
     @ObservedObject var session: FocusSession
-    @AppStorage(Prefs.focusPanelStyle) private var styleName = FocusPanelStyle.card.rawValue
-    @State private var hovering = false
+    let close: () -> Void
+    @State private var selectedTaskID: UUID?
+    @State private var minutes = "25"
+    @State private var goal = ""
+    @State private var note = ""
+    @State private var query = ""
+    @State private var showingTaskPicker = false
+    @State private var noteImages: [String] = []
+    @State private var noteLink: UUID?
+    @State private var noteTags: [String] = []
+    @State private var focused = true
+    @StateObject private var mention = MentionState()
 
-    private var style: FocusPanelStyle { FocusPanelStyle(rawValue: styleName) ?? .card }
+    init(session: FocusSession, close: @escaping () -> Void = {}) {
+        self.session = session
+        self.close = close
+    }
+
+    private var store: JournalStore? { session.store }
+    private var tasks: [ScheduledTask] {
+        let all = store?.sortedTasks().filter { !$0.task.completed } ?? []
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return Array(all.prefix(12)) }
+        return all.filter { item in
+            let title = String(TaskText.rendered(item.task.title).characters)
+            return title.localizedCaseInsensitiveContains(q) || "#\(item.task.number ?? 0)".contains(q)
+        }.prefix(12).map { $0 }
+    }
 
     var body: some View {
-        if let active = session.active {
-            Group {
-                switch style {
-                case .card, .menuBar: card(active)
-                case .pill: pill
-                case .digits: digits
-                case .dot: dot
-                }
-            }
-            .onHover { hovering = $0 }
-            .animation(.easeOut(duration: 0.12), value: hovering)
+        VStack(alignment: .leading, spacing: 0) {
+            Capsule().fill(Palette.line).frame(width: 36, height: 4).frame(maxWidth: .infinity)
+                .padding(.bottom, 12)
+            if let active = session.active { activeView(active) } else { pickerView }
+        }
+        .padding(11)
+        .frame(width: 340, height: panelHeight, alignment: .topLeading)
+        .background(Palette.card, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.line))
+        .foregroundStyle(Palette.ink)
+        .tint(Palette.accent)
+        .onAppear {
+            configureMention()
+            if selectedTaskID == nil { selectedTaskID = tasks.first?.id }
         }
     }
 
     private var clock: String { FocusSession.clock(session.elapsed) }
 
-    private func stopButton(size: CGFloat) -> some View {
-        Button { session.stop(reason: "手动结束") } label: { Image(systemName: "stop.circle.fill").font(.system(size: size)) }
-            .buttonStyle(.plain).foregroundStyle(Color.red).help("结束专注").accessibilityLabel("结束专注")
-    }
+    private var panelHeight: CGFloat { 158 }
 
-    private func hideButton(size: CGFloat) -> some View {
-        Button { UserDefaults.standard.set(true, forKey: Prefs.focusPanelHidden) } label: { Image(systemName: "eye.slash").font(.system(size: size)) }
-            .buttonStyle(.plain).foregroundStyle(.secondary)
-            .help("隐藏计时（专注照常进行，\(HotKeyStore.binding(for: .focusPanel).label) 再次显示）").accessibilityLabel("隐藏计时")
-    }
-
-    private func card(_ active: FocusSession.Active) -> some View {
-        HStack(spacing: 10) {
-            Text(clock).font(.system(size: 20, weight: .semibold, design: .monospaced)).monospacedDigit()
-            Text("\(active.number.map { "#\($0) " } ?? "")\(active.title)")
-                .font(.system(size: 12)).lineLimit(1).truncationMode(.tail)
-            Spacer(minLength: 2)
-            hideButton(size: 14)
-            stopButton(size: 20)
-        }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .frame(width: 250)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.14)))
-        .padding(2)
-    }
-
-    private var pill: some View {
-        HStack(spacing: 8) {
-            Text(clock).font(.system(size: 15, weight: .medium, design: .monospaced)).monospacedDigit()
-            Spacer(minLength: 0)
-            hideButton(size: 11)
-            stopButton(size: 15)
-        }
-        .padding(.horizontal, 12).frame(width: 148, height: 36)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.white.opacity(0.12)))
-        .padding(2)
-    }
-
-    /// 没有底板的一行淡淡的数字；鼠标移上去才清晰，并出现按钮。
-    private var digits: some View {
-        HStack(spacing: 6) {
-            Text(clock).font(.system(size: 13, weight: .regular, design: .monospaced)).monospacedDigit()
-            if hovering {
-                hideButton(size: 11)
-                stopButton(size: 13)
+    private var pickerView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 7) {
+                Image(systemName: "timer.circle.fill").font(.system(size: 17)).foregroundStyle(Palette.success)
+                Text("开始专注").font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Button(action: close) { Image(systemName: "xmark") }
+                    .buttonStyle(HitAreaButtonStyle(compact: true))
+                    .foregroundStyle(Palette.muted)
             }
-        }
-        .foregroundStyle(.primary).opacity(hovering ? 0.95 : 0.4)
-        .shadow(color: .black.opacity(0.35), radius: 1.5)
-        .padding(.horizontal, 8).frame(width: 108, height: 30, alignment: .leading)
-        .contentShape(Rectangle())
-    }
-
-    /// 平时只是一个小圆点；鼠标移上去展开成胶囊。
-    private var dot: some View {
-        ZStack(alignment: .leading) {
-            if hovering {
-                HStack(spacing: 8) {
-                    Text(clock).font(.system(size: 13, weight: .medium, design: .monospaced)).monospacedDigit()
-                    hideButton(size: 11)
-                    stopButton(size: 13)
+            Button { showingTaskPicker = true } label: {
+                HStack(spacing: 7) {
+                    if let selected = selectedTask {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.success)
+                        Text("#\(selected.task.number ?? 0)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
+                        Text(String(TaskText.rendered(selected.task.title).characters)).lineLimit(1)
+                        Spacer(minLength: 0)
+                        dueText(for: selected)
+                    } else {
+                        Image(systemName: "circle").foregroundStyle(Palette.muted)
+                        Text("选择一个任务").foregroundStyle(Palette.muted)
+                        Spacer()
+                    }
+                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.muted)
                 }
-                .padding(.horizontal, 10).frame(height: 26)
-                .background(.regularMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(Color.white.opacity(0.12)))
-                .transition(.opacity)
-            } else {
-                Circle().fill(Palette.success).frame(width: 7, height: 7).opacity(0.7).padding(.leading, 8)
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                .background(Palette.background, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line))
+            }
+            .buttonStyle(.plain)
+            .raisedOnHover(radius: 8)
+            .popover(isPresented: $showingTaskPicker, arrowEdge: .bottom) {
+                taskPicker
+            }
+            HStack(spacing: 7) {
+                Label("时长", systemImage: "clock").font(.system(size: 11)).foregroundStyle(Palette.muted)
+                TextField("25", text: $minutes).textFieldStyle(.roundedBorder).frame(width: 52)
+                Text("分钟").font(.system(size: 11)).foregroundStyle(Palette.muted)
+                TextField("本轮目标（可选）", text: $goal).textFieldStyle(.roundedBorder)
+            }
+            HStack {
+                Spacer()
+                Button("开始专注") { startFocus() }
+                    .buttonStyle(HitAreaButtonStyle())
+                    .foregroundStyle(Palette.accent)
+                    .keyboardShortcut(.return)
+                    .disabled(selectedTaskID == nil || positiveMinutes == nil)
             }
         }
-        .frame(width: 132, height: 32, alignment: .leading)
-        .contentShape(Rectangle())
+    }
+
+    private var selectedTask: ScheduledTask? {
+        guard let selectedTaskID else { return nil }
+        return store?.locate(selectedTaskID)
+    }
+
+    private var taskPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "checklist").foregroundStyle(Palette.accent)
+                Text("选择专注任务").font(.headline)
+                Spacer()
+                Text("点击任务可切换选择").font(.caption).foregroundStyle(.secondary)
+            }
+            TextField("搜索标题或编号…", text: $query)
+                .textFieldStyle(.roundedBorder)
+            if tasks.isEmpty {
+                Text(query.isEmpty ? "没有未完成的待办" : "没有匹配的任务")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 60)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(tasks) { item in taskButton(item) }
+                    }
+                }
+                .frame(height: min(CGFloat(tasks.count) * 34 + 4, 260))
+            }
+        }
+        .padding(14)
+        .frame(width: 360)
+    }
+
+    private func taskButton(_ item: ScheduledTask) -> some View {
+        Button {
+            selectedTaskID = selectedTaskID == item.id ? nil : item.id
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: selectedTaskID == item.id ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selectedTaskID == item.id ? Palette.success : Palette.muted)
+                Text("#\(item.task.number ?? 0)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
+                Text(String(TaskText.rendered(item.task.title).characters)).lineLimit(1)
+                Spacer(minLength: 0)
+                dueText(for: item)
+                if item.id == store?.pinnedTask?.id { Image(systemName: "pin.fill").font(.system(size: 10)).foregroundStyle(Palette.accent) }
+            }
+            .padding(.horizontal, 7).padding(.vertical, 4)
+            .background(selectedTaskID == item.id ? Palette.soft : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .raisedOnHover(radius: 8)
+    }
+
+    @ViewBuilder
+    private func dueText(for item: ScheduledTask) -> some View {
+        if let due = item.task.dueDate {
+            Text(dueLabel(for: item.task, due: due))
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(isOverdue(item.task) ? Palette.deadline : (JournalDates.calendar.isDateInToday(due) ? Palette.accent : Palette.muted))
+                .lineLimit(1).fixedSize()
+        }
+    }
+
+    private func activeView(_ active: FocusSession.Active) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "timer.circle.fill").font(.system(size: 17)).foregroundStyle(Palette.success)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(session.isPaused ? "Paused" : "专注中").font(.system(size: 10, weight: .medium)).foregroundStyle(session.isPaused ? Palette.deadline : Palette.success)
+                    Text(active.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                }
+                Spacer()
+                Text(FocusSession.clock(max(0, active.plannedSeconds - session.elapsed)))
+                    .font(.system(size: 18, weight: .semibold, design: .monospaced)).monospacedDigit()
+                Button(action: close) { Image(systemName: "xmark") }
+                    .buttonStyle(HitAreaButtonStyle(compact: true))
+                    .foregroundStyle(Palette.muted)
+            }
+            if !active.goal.isEmpty {
+                HStack(alignment: .top, spacing: 6) { Image(systemName: "flag.fill"); Text(active.goal).lineLimit(2) }
+                    .font(.system(size: 11)).foregroundStyle(Palette.accent).lineLimit(1)
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                Image(systemName: "chevron.right.2").foregroundStyle(Palette.accent).padding(.bottom, 7)
+                HStack(spacing: 5) {
+                    if !noteImages.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 4) {
+                                ForEach(noteImages, id: \.self) { name in
+                                    PastedImageToken {
+                                        noteImages.removeAll { $0 == name }
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 2)
+                        }
+                        .frame(maxWidth: 124, minHeight: 28, maxHeight: 28)
+                    }
+                    TaskInput(text: $note, focused: $focused,
+                              placeholder: "记下想法…  @ 待办 · # 标签 · ⌘V 贴图",
+                              fontSize: 12, submit: saveNote, cancel: close,
+                              onPasteImages: addNoteImages, minHeight: 42, maxLines: 4,
+                              mention: mention)
+                        .frame(minWidth: 0, maxWidth: .infinity)
+                }
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(Palette.background, in: RoundedRectangle(cornerRadius: 9))
+                .popover(isPresented: Binding(get: { mention.isActive }, set: { if !$0 { mention.dismiss() } }), arrowEdge: .bottom) {
+                    if let store { MentionList(state: mention, store: store, contextTags: noteTags).frame(width: 320) }
+                }
+                Button { saveNote() } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 18)) }
+                    .buttonStyle(HitAreaButtonStyle(compact: true))
+                    .foregroundStyle(Palette.accent)
+                    .disabled(note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && noteImages.isEmpty)
+            }
+            if noteLink != nil || !noteTags.isEmpty {
+                HStack(spacing: 6) {
+                    if let noteLink, let linked = store?.locate(noteLink) {
+                        Label(FocusHint.label(linked), systemImage: "link")
+                            .font(.system(size: 11)).foregroundStyle(Palette.accent)
+                        Button { self.noteLink = nil } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(HitAreaButtonStyle(compact: true)).foregroundStyle(Palette.muted)
+                    }
+                    ForEach(noteTags, id: \.self) { tag in
+                        Text("#" + tag).font(.system(size: 11)).foregroundStyle(Palette.accent)
+                    }
+                }
+            }
+            HStack {
+                Text("已用 \(FocusSession.clock(session.elapsed))").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.muted)
+                Spacer()
+                Button {
+                    session.togglePause()
+                } label: {
+                    Label(session.isPaused ? "继续" : "暂停", systemImage: session.isPaused ? "play.fill" : "pause.fill")
+                        .frame(minWidth: 48, minHeight: 22)
+                }
+                    .buttonStyle(HitAreaButtonStyle(compact: false, pressedScale: 0.98))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Palette.accent)
+                Button {
+                    session.extend(by: 5 * 60)
+                } label: {
+                    Text("+5")
+                        .frame(minWidth: 48, minHeight: 22)
+                }
+                    .buttonStyle(HitAreaButtonStyle(compact: false, pressedScale: 0.98))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Palette.accent)
+                Button(role: .destructive) {
+                    session.stop(reason: "手动结束")
+                } label: {
+                    Text("结束")
+                        .frame(minWidth: 48, minHeight: 22)
+                }
+                    .buttonStyle(HitAreaButtonStyle(compact: false, pressedScale: 0.98))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    private var positiveMinutes: Double? { Double(minutes.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0 > 0 ? $0 : nil } }
+
+    private func isOverdue(_ task: Todo) -> Bool {
+        !task.completed && task.effectiveDeadline.map { $0 < Date() } == true
+    }
+
+    private func dueLabel(for task: Todo, due: Date) -> String {
+        if isOverdue(task) { return "逾期" }
+        var label = due.relativeLabel
+        if task.dueHasTime {
+            let parts = JournalDates.calendar.dateComponents([.hour, .minute], from: due)
+            label += String(format: " %02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
+        }
+        return label
+    }
+
+    private func startFocus() {
+        guard let id = selectedTaskID, let task = store?.locate(id), let value = positiveMinutes else { return }
+        session.start(task: task, url: FocusSession.link(in: task.task.title), plannedSeconds: value * 60, goal: goal)
+        focused = true
+    }
+
+    private func configureMention() {
+        mention.triggers = [.task, .tag]
+        guard let store else { return }
+        mention.provider = MentionProviders.make(store: store)
+        mention.onPick = { item in
+            switch item {
+            case .task(let task): noteLink = task.id
+            case .tag(let tag): noteTags = TagText.merge(noteTags, [tag.name])
+            }
+        }
+    }
+
+    private func addNoteImages(_ datas: [Data]) {
+        guard let store else { return }
+        noteImages += ImageTools.save(datas, in: store)
+        focused = true
+    }
+
+    private func saveNote() {
+        let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (!text.isEmpty || !noteImages.isEmpty), let store, let active = session.active else { return }
+        let taskID = session.isPaused ? nil : (noteLink ?? active.taskID)
+        let tags = session.isPaused ? [] : noteTags
+        try? store.quickLog(text, images: noteImages, taskID: taskID, linkDefault: false, tags: tags, on: Date())
+        ImageIndexer.run(store: store)
+        note = ""
+        noteImages = []
+        noteLink = nil
+        noteTags = []
+    }
+}
+
+/// 专注输入框里的紧凑图片占位符：图片仍保存在草稿中，但不渲染缩略图，避免撑高固定面板。
+private struct PastedImageToken: View {
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "photo.fill").font(.system(size: 10, weight: .semibold))
+            Text("[Pasted Image]").font(.system(size: 10, weight: .semibold, design: .monospaced))
+            Button(action: remove) {
+                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .help("移除已粘贴的图片")
+        }
+        .foregroundStyle(Palette.accent)
+        .padding(.horizontal, 6)
+        .frame(height: 22)
+        .background(Palette.soft, in: Capsule())
+        .overlay(Capsule().strokeBorder(Palette.accent.opacity(0.25), lineWidth: 0.7))
     }
 }
 
@@ -644,7 +942,7 @@ struct FocusPlayButton: View {
 
     var body: some View {
         ItemActionButton(symbol: running ? "stop.circle.fill" : "play.circle",
-                         title: running ? "结束专注计时" : (url == nil ? "专注计时：开始计时，不检测窗口，需要手动结束" : "专注计时：打开链接并开始计时；离开页面自动停止")) {
+                         title: running ? "结束专注计时" : (url == nil ? "专注计时：开始计时，需要手动结束" : "专注计时：打开链接并开始计时，可自由切换页面")) {
             if running { session.stop(reason: "手动结束") } else { session.start(task: task, url: url) }
         }
         .foregroundStyle(running ? Color.red : Palette.success)

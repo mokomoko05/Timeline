@@ -14,6 +14,8 @@
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
+    <key>CFBundleLocalizations</key>
+    <array><string>zh-Hans</string><string>en</string></array>
     <key>NSAppleEventsUsageDescription</key><string>专注计时需要读取 Safari 当前页面的地址，以判断你是否离开了任务里的链接页面。只读取地址，不会修改或上传。</string>
     <key>UTExportedTypeDeclarations</key>
     <array><dict>

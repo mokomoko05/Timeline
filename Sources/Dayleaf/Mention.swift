@@ -171,6 +171,7 @@ struct MentionList: View {
             .padding(.vertical, 3)
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line))
+            .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
             .accessibilityElement(children: .contain).accessibilityLabel(state.token?.trigger == .tag ? "标签候选" : "关联待办候选")
         }
     }

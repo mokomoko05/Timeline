@@ -50,7 +50,7 @@ final class DayLogWindowController: NSObject, NSWindowDelegate {
             let view = DayLogView(store: store, day: day, close: { [weak self] in self?.close() },
                                   showMain: { [weak self] in self?.showMainWindow() })
                 .environmentObject(interaction).environmentObject(toast)
-            host.rootView = AnyView(view)
+            host.rootView = AnyView(LocalizedRoot { view })
         }
         window.makeKeyAndOrderFront(nil)
     }
@@ -79,7 +79,7 @@ final class DayLogWindowController: NSObject, NSWindowDelegate {
     static let minSize = NSSize(width: 760, height: 480)
 
     private func makeWindow() -> NSWindow {
-        let host = NSHostingController(rootView: AnyView(EmptyView()))
+        let host = NSHostingController(rootView: AnyView(LocalizedRoot { EmptyView() }))
         let window = DayLogWindow(contentViewController: host)
         window.title = "当天日志"
         // 和笔记窗口一样没有红绿灯：用 Esc、⌘J 或「完成」关闭；标题栏透明，空白处可以拖动窗口。

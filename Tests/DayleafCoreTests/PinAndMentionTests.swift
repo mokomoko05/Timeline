@@ -37,6 +37,19 @@ final class PinAndMentionTests: XCTestCase {
         XCTAssertEqual(store.pinnedTask?.task.number, 2, "不关联不会取消固定")
     }
 
+    func testPausedFocusDoesNotProvideAnAutomaticLogLink() throws {
+        let store = makeStore()
+        let focused = id(store, 3)
+        store.setFocusTask(focused)
+        store.setFocusPaused(true)
+        _ = try store.quickLog("暂停期间的日志", on: day, now: day.addingTimeInterval(5))
+        XCTAssertNil(store.allLogs().last?.log.taskID)
+        XCTAssertNil(store.defaultLinkTask)
+        store.setFocusPaused(false)
+        _ = try store.quickLog("恢复后的日志", on: day, now: day.addingTimeInterval(6))
+        XCTAssertEqual(store.allLogs().last?.log.taskID, focused)
+    }
+
     func testPinSurvivesReloadAndClearsWhenTaskCompletesOrIsDeleted() throws {
         let store = makeStore()
         store.pinTask(id(store, 2))

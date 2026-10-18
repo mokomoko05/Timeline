@@ -9,6 +9,8 @@ cp .build/release/Dayleaf "$APP/Contents/MacOS/Scheduler"
 mkdir -p "$APP/Contents/Resources/bin"
 cp .build/release/sched "$APP/Contents/Resources/bin/sched"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+if [ -d Resources/en.lproj ]; then cp -R Resources/en.lproj "$APP/Contents/Resources/"; fi
+if [ -d Resources/zh-Hans.lproj ]; then cp -R Resources/zh-Hans.lproj "$APP/Contents/Resources/"; fi
 swift scripts/make-icon.swift .build/icon.png
 for SIZE in 16 32 128 256 512; do
     sips -z "$SIZE" "$SIZE" .build/icon.png --out ".build/AppIcon.iconset/icon_${SIZE}x${SIZE}.png" >/dev/null

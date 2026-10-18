@@ -306,6 +306,32 @@ final class FocusSessionTests: XCTestCase {
         XCTAssertEqual(FocusSession.brief(40), "40 秒")
     }
 
+    func testPausingFreezesElapsedUntilResumed() throws {
+        let (session, store, task) = try makeSession()
+        let start = JournalDates.calendar.date(bySettingHour: 12, minute: 0, second: 0, of: Date())!
+        session.start(task: task, url: nil, now: start)
+        session.pause(now: start.addingTimeInterval(120))
+        XCTAssertTrue(session.isPaused)
+        XCTAssertEqual(session.elapsed, 120, accuracy: 0.01)
+        session.pause(now: start.addingTimeInterval(180))
+        XCTAssertEqual(session.elapsed, 120, accuracy: 0.01, "重复暂停不会改变已用时间")
+        session.resume(now: start.addingTimeInterval(300))
+        XCTAssertFalse(session.isPaused)
+        XCTAssertEqual(session.elapsed, 120, accuracy: 0.01, "恢复时扣除暂停的 3 分钟")
+        session.stop(reason: "手动结束", now: start.addingTimeInterval(360))
+        XCTAssertEqual(store.locate(task.id)?.task.focusSeconds ?? 0, 180, accuracy: 0.01)
+    }
+
+    func testStoppingWhilePausedExcludesThePausedTime() throws {
+        let (session, store, task) = try makeSession()
+        let start = JournalDates.calendar.date(bySettingHour: 12, minute: 0, second: 0, of: Date())!
+        session.start(task: task, url: nil, now: start)
+        session.pause(now: start.addingTimeInterval(90))
+        session.stop(reason: "手动结束", now: start.addingTimeInterval(600))
+        XCTAssertFalse(session.isPaused)
+        XCTAssertEqual(store.locate(task.id)?.task.focusSeconds ?? 0, 90, accuracy: 0.01)
+    }
+
     func testQuickLogsDuringFocusLinkToTheFocusedTaskAndStopWhenItEnds() throws {
         let (session, store, task) = try makeSession()
         let day = Date()
@@ -411,9 +437,7 @@ final class FocusPanelStyleTests: XCTestCase {
         XCTAssertEqual(Set(FocusPanelStyle.allCases.map(\.title)).count, 5)
         XCTAssertNil(FocusPanelStyle.menuBar.panelSize)
         for style in FocusPanelStyle.allCases where style != .menuBar {
-            let size = style.panelSize
-            XCTAssertNotNil(size)
-            XCTAssertLessThanOrEqual(size!.width, FocusPanelStyle.card.panelSize!.width, "\(style.title) 不比卡片大")
+            XCTAssertEqual(style.panelSize, NSSize(width: 340, height: 158), "工作台样式统一使用固定尺寸")
         }
     }
 
@@ -424,7 +448,7 @@ final class FocusPanelStyleTests: XCTestCase {
             XCTAssertFalse(FocusPanelStyle.menuBarVisible(active: true, hidden: true, style: style))
         }
         XCTAssertTrue(FocusPanelStyle.floatingVisible(active: true, hidden: false, style: .pill))
-        XCTAssertFalse(FocusPanelStyle.floatingVisible(active: true, hidden: false, style: .menuBar), "菜单栏样式不开浮窗")
+        XCTAssertFalse(FocusPanelStyle.floatingVisible(active: true, hidden: false, style: .menuBar), "菜单栏样式没有独立面板")
         XCTAssertTrue(FocusPanelStyle.menuBarVisible(active: true, hidden: false, style: .menuBar))
         XCTAssertFalse(FocusPanelStyle.menuBarVisible(active: true, hidden: false, style: .card))
     }
@@ -449,8 +473,8 @@ final class FocusPanelStyleTests: XCTestCase {
 
         defaults.set(FocusPanelStyle.menuBar.rawValue, forKey: Prefs.focusPanelStyle)
         controller.refresh()
-        XCTAssertFalse(controller.isPanelVisible, "菜单栏样式不开浮窗")
-        XCTAssertTrue(controller.showsMenuBarTimer)
+        XCTAssertTrue(controller.isPanelVisible, "工作台在不同显示偏好下仍保持统一尺寸")
+        XCTAssertFalse(controller.showsMenuBarTimer, "统一工作台不再额外创建菜单栏计时")
 
         defaults.set(true, forKey: Prefs.focusPanelHidden)
         controller.refresh()

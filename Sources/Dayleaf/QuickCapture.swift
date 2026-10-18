@@ -209,12 +209,12 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
         model.mode = mode
         let view = QuickCaptureView(store: store, model: model, close: { [weak self] in self?.panel?.close() },
                                     resize: { [weak self] height in self?.resize(height: height) })
-        let host = NSHostingView(rootView: view)
+        let host = NSHostingView(rootView: LocalizedRoot { view })
         // 一开始就按内容的真实高度创建，不先给个临时高度再长出来。
-        host.setFrameSize(NSSize(width: 520, height: 160))
+        host.setFrameSize(NSSize(width: 340, height: 158))
         host.layoutSubtreeIfNeeded()
         let fitted = host.fittingSize
-        if fitted.height > 60 { host.setFrameSize(NSSize(width: 520, height: fitted.height)) }
+        if fitted.height > 60 { host.setFrameSize(NSSize(width: 340, height: fitted.height)) }
         let panel = QuickPanel(contentRect: NSRect(origin: .zero, size: host.frame.size),
                                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.contentView = host
@@ -322,13 +322,15 @@ struct QuickCaptureView: View {
                 Image(systemName: mode == .todo ? "plus.circle" : "chevron.right.2").foregroundStyle(Palette.accent)
                 TaskInput(text: $model.text, focused: $focused,
                           placeholder: mode == .todo ? "添加待办，例如：明天 15:00 开会 #项目A" : "记录…  @ 待办 · # 标签 · /done /block /plan · ⌘V 贴图",
-                          fontSize: 16, submit: submit, cancel: close, complete: { mode = mode == .todo ? .log : .todo },
+                          fontSize: 12, submit: submit, cancel: close, complete: { mode = mode == .todo ? .log : .todo },
                           onPasteImages: mode == .log ? addImages : nil,
-                          minHeight: 28, maxLines: 12, allowsNewlines: mode == .log, mention: mode == .log ? mention : nil)
+                          minHeight: 42, maxLines: 4, allowsNewlines: mode == .log, mention: mode == .log ? mention : nil)
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
             .background(Palette.background, in: RoundedRectangle(cornerRadius: 10))
-            if mode == .log { MentionList(state: mention, store: store, contextTags: model.tags) }
+            if mode == .log {
+                Color.clear.frame(height: 0)
+            }
             if mode == .log, !images.isEmpty {
                 PendingImagesStrip(store: store, names: images,
                                    remove: { name in images.removeAll { $0 == name } },
@@ -358,7 +360,7 @@ struct QuickCaptureView: View {
             }.font(.system(size: UIScale.pt(12))).frame(height: LogChipsBar.height, alignment: .leading)
         }
         .padding(16)
-        .frame(width: 520)
+        .frame(width: 340)
         .background(Palette.card, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.line))
         .foregroundStyle(Palette.ink)
@@ -380,6 +382,9 @@ struct QuickCaptureView: View {
                 }
             }
         }
+        .popover(isPresented: Binding(get: { mention.isActive && mode == .log }, set: { if !$0 { mention.dismiss() } }), arrowEdge: .bottom) {
+            MentionList(state: mention, store: store, contextTags: model.tags).frame(width: 320)
+        }
     }
 
     private func addImages(_ datas: [Data]) {
@@ -398,11 +403,16 @@ struct QuickCaptureView: View {
             message = added.task.dueDate.map { "已添加 #\(added.task.number ?? 0)，截止\($0.relativeLabel)" } ?? "已添加 #\(added.task.number ?? 0)，还没有截止日期"
         case .log:
             do {
-                let result = try store.quickLogEntry(value, images: images, taskID: model.link, linkDefault: !model.unlinked, tags: tags, on: Date())
+                let paused = store.focusPaused
+                let result = try store.quickLogEntry(value, images: images,
+                                                     taskID: paused ? nil : model.link,
+                                                     linkDefault: paused ? false : !model.unlinked,
+                                                     tags: paused ? [] : tags,
+                                                     allowInlineTaskReference: !paused, on: Date())
                 guard case .entry = result.command else { failure = "快速记录只支持普通文字和 /note /done /block /plan。"; return }
                 let linked = result.entry.flatMap(FocusHint.label(of:)).map { "，已关联 " + $0 } ?? ""
                 message = (images.isEmpty ? "已记录" : "已记录，含 \(images.count) 张图片") + linked
-                    + (tags.isEmpty ? "" : "，标签 " + tags.map { "#" + $0 }.joined(separator: " "))
+                    + (paused ? " · 专注暂停，未关联任务或标签" : (tags.isEmpty ? "" : "，标签 " + tags.map { "#" + $0 }.joined(separator: " ")))
                 images = []
                 tags = []
                 model.link = nil

@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var loginItem: LoginItem
     @ObservedObject private var themes = ThemeStore.shared
+    @ObservedObject private var languages = LanguageStore.shared
     let failedHotKeys: () -> Set<HotKeyAction>?
     @AppStorage(Prefs.hideCompleted) private var hideCompleted = false
     @AppStorage(Prefs.clickExpands) private var clickExpands = true
@@ -39,17 +40,21 @@ struct SettingsView: View {
                 }
             }
             Section("专注计时") {
-                FocusStylePicker(selection: $focusPanelStyle)
-                Toggle("隐藏计时（专注照常进行，只是不显示）", isOn: $focusPanelHidden)
-                Text("快捷键 \(HotKeyStore.binding(for: .focusPanel).label) 随时显示 / 隐藏。隐藏时仍会记录时间和日志；要结束专注，点任务行上的结束键，或先显示计时。浮窗可以拖到喜欢的位置，会被记住。")
+                Toggle("隐藏专注工作台", isOn: $focusPanelHidden)
+                Text("快捷键 \(HotKeyStore.binding(for: .focusPanel).label) 打开任务选择器。选择任务后，右下角会常驻显示本轮倒计时、目标和笔记输入；时长默认为 25 分钟，也可以在开始前自定义。")
                     .font(.caption).foregroundStyle(.secondary)
                 Stepper(value: $focusMinLogMinutes, in: 0...120) {
                     Text(focusMinLogMinutes == 0 ? "所有专注都记入日志" : "专注不足 \(focusMinLogMinutes) 分钟不记日志")
                 }
-                Text("手滑点了播放键、很快就结束的专注，不会在日志里留下「开始 / 结束」记录；用过的时间仍然累加到任务上。设为 0 则每次都记录。")
+                Text("专注期间可以自由切换网页、终端和笔记，不会因为离开任务链接而自动停止。手滑点了播放键、很快就结束的专注，不会在日志里留下记录；用过的时间仍然累加到任务上。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("通用") {
+                Picker("界面语言", selection: Binding(get: { languages.language }, set: { languages.set($0) })) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.title).tag(language)
+                    }
+                }
                 Toggle("登录时自动启动", isOn: Binding(get: { loginItem.enabled }, set: loginItem.setEnabled))
                 Toggle("切到别的应用时自动收起窗口", isOn: $autoHideOnResign)
                 Text("主窗口、笔记、日志、终端、设置在 Scheduler 失去前台时立刻收起（里面的内容、草稿、终端里的程序都保留）；快速日志和专注计时窗口不受影响，失焦也留在屏幕上。用全局快捷键或点 Dock 图标再唤起。在 Scheduler 自己的窗口之间切换不算离开。")
@@ -80,19 +85,27 @@ final class SettingsWindowController {
     private(set) var window: NSWindow?
     private let loginItem: LoginItem
     private let failedHotKeys: () -> Set<HotKeyAction>?
+    private var languageObserver: NSObjectProtocol?
 
     init(loginItem: LoginItem, failedHotKeys: @escaping () -> Set<HotKeyAction>?) {
         self.loginItem = loginItem
         self.failedHotKeys = failedHotKeys
+        languageObserver = NotificationCenter.default.addObserver(forName: .appLanguageDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.window?.title = AppLocalized("设置") }
+        }
     }
+
+    deinit { if let languageObserver { NotificationCenter.default.removeObserver(languageObserver) } }
 
     func show() {
         if window == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 780),
                                   styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.title = "设置"
+            window.title = AppLocalized("设置")
             window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: SettingsView(loginItem: loginItem, failedHotKeys: failedHotKeys))
+            window.contentView = NSHostingView(rootView: LocalizedRoot {
+                SettingsView(loginItem: self.loginItem, failedHotKeys: self.failedHotKeys)
+            })
             window.center()
             self.window = window
         }

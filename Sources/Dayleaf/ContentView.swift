@@ -45,7 +45,6 @@ struct ContentView: View {
     @State private var currentDayKey = JournalDates.key(Date())
     @State private var addingTodo = false
     @AppStorage("tasksPaneExpanded") private var tasksVisible = false
-    private let dayLogWindow = DayLogWindowController.shared
     private let dayTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     private var entry: DayEntry { store.entry(for: selectedDate) }
     /// 全部任务（不属于某一天），按截止时间排序；隐藏已完成时过滤掉已完成的。
@@ -102,7 +101,7 @@ struct ContentView: View {
                 reveal(date: date, taskID: id)
                 // 点中的是某天的日志或总结（不是待办）：关掉搜索后打开那天的日志。
                 if id == nil, date != nil {
-                    dayLogWindow.show(store: store, date: date ?? selectedDate)
+                    notesWindow.showJournal(store: store, date: date ?? selectedDate)
                 }
             }, filter: filter)
         }
@@ -153,7 +152,7 @@ struct ContentView: View {
         let target = taskID ?? (followSelection && tag == nil ? interaction.selectedTaskID.flatMap { store.locate($0)?.id } : nil)
         notesWindow.show(store: store, taskID: target, tag: tag,
                          reveal: { id in reveal(date: store.locate(id)?.task.dueDate, taskID: id) },
-                         openDay: { date in select(date); dayLogWindow.show(store: store, date: date) })
+                         openDay: { date in select(date); notesWindow.showJournal(store: store, date: date) })
     }
 
     /// 这些命令的结果在主窗口里（清单、日历、搜索面板……）：主窗口被收起了就先把它调出来，不然点了什么都看不到。
@@ -193,7 +192,7 @@ struct ContentView: View {
             addingTodo = true
         case .newLog:
             // 写日志：打开当天日志，光标直接在输入框里。
-            dayLogWindow.show(store: store, date: selectedDate)
+            notesWindow.showJournal(store: store, date: selectedDate)
         case .insertLink:
             guard !store.isReadOnly else { return }
             linkInsertion = LinkInsertion()
@@ -213,7 +212,7 @@ struct ContentView: View {
         case .shiftMonth(let amount): shiftMonth(amount)
         case .toggleTasks: toggleTasks()
         case .toggleDayLog:
-            dayLogWindow.toggle(store: store, date: selectedDate)
+            if notesWindow.isVisible { notesWindow.close() } else { notesWindow.showJournal(store: store, date: selectedDate) }
         case .rollover: rolloverToday()
         case .selectAdjacent(let amount): moveSelection(amount)
         case .toggleSelected:
@@ -337,7 +336,7 @@ struct ContentView: View {
             HStack(spacing: 12) {
                 navigationButton("chevron.left", help: "前一天 · ⌥⌘←") { shiftDay(-1) }
                 navigationButton("chevron.right", help: "后一天 · ⌥⌘→") { shiftDay(1) }
-                navigationButton("text.alignleft", help: "当天日志 · ⌘J") { dayLogWindow.show(store: store, date: selectedDate) }
+                navigationButton("text.alignleft", help: "当天日志 · ⌘J") { notesWindow.showJournal(store: store, date: selectedDate) }
                 navigationButton("sidebar.left", help: "收起待办清单 · ⌘\\") { toggleTasks() }
             }
         }
@@ -506,7 +505,7 @@ struct ContentView: View {
                     }
                     .onChange(of: selectedDate) { date in
                         // 日志窗口开着：跟着主窗口换到同一天。
-                        if dayLogWindow.isVisible { dayLogWindow.setDate(date) }
+                        if notesWindow.isVisible { notesWindow.showJournal(store: store, date: date) }
                     }
                     .onChange(of: scrollGroup) { id in
                         if let id { withAnimation(Motion.quick) { proxy.scrollTo("group-" + id, anchor: .top) }; scrollGroup = nil }
@@ -642,7 +641,7 @@ struct ContentView: View {
                                             items: previews[index],
                                             select: { selectFromCalendar(date) },
                                             open: { selectFromCalendar(date, forceExpand: true); addingTodo = true },
-                                            openLog: { selectFromCalendar(date); dayLogWindow.show(store: store, date: date) },
+                                            openLog: { selectFromCalendar(date); notesWindow.showJournal(store: store, date: date) },
                                             editTask: { item in
                                 interaction.activePane = .calendar
                                 NotificationCenter.default.post(name: .dayleafCommitEditing, object: nil)

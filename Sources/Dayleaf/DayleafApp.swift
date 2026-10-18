@@ -62,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private let focus = FocusSession()
     private var focusPanel: FocusPanelController?
     private var autoHide: AutoHideOnResign?
+    private var languageObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
@@ -77,15 +78,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         settings = SettingsWindowController(loginItem: loginItem, failedHotKeys: { [weak self] in self?.failedHotKeys })
         // 切到别的应用就把工作窗口收起来；快速面板和专注计时窗口不在其中。
         autoHide = AutoHideOnResign(windows: { [weak self] in
-            [self?.window, NotesWindowController.shared.window, DayLogWindowController.shared.window, ImageViewerController.shared.window, self?.settings.window]
+            [self?.window, NotesWindowController.shared.window, ImageViewerController.shared.window, self?.settings.window]
         }, extraHide: { [weak self] in self?.shell.hideForAppDeactivation() })
         shell.handoffWindow = { [unowned self] in otherWindowForHandoff(excluding: nil) }
         NotesWindowController.shared.handoffWindow = { [unowned self] in otherWindowForHandoff(excluding: NotesWindowController.shared.window) }
         _ = ThemeStore.shared   // 读取已保存的配色和外观并应用
-        let dayLog = DayLogWindowController.shared
-        dayLog.interaction = interaction
-        dayLog.handoffWindow = { [unowned self] in otherWindowForHandoff(excluding: DayLogWindowController.shared.window) }
-        dayLog.showMainWindow = { [unowned self] in showMainWindowSoftly() }
+        _ = LanguageStore.shared
+        languageObserver = NotificationCenter.default.addObserver(forName: .appLanguageDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.buildMenu()
+                self?.window?.title = "Scheduler"
+            }
+        }
+        NotesWindowController.shared.handoffWindow = { [unowned self] in otherWindowForHandoff(excluding: NotesWindowController.shared.window) }
         AppRouter.presentMain = { [unowned self] in if !(window.isVisible && !window.isMiniaturized) || NSApp.keyWindow !== window { showMainWindowSoftly() } }
         AppRouter.mainIsKey = { [unowned self] in NSApp.keyWindow === window }
         AppRouter.showSettings = { [unowned self] in settings.show() }
@@ -100,7 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false
         )
-        window.title = "Scheduler"
+        window.title = AppLocalized("Scheduler")
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         // 去掉红绿灯；关闭 / 最小化仍可用 ⌘W、⌘M，也可以用全局快捷键隐藏。
@@ -110,17 +115,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // 在当前桌面（Space）打开，而不是切到窗口原来所在的桌面。
         window.collectionBehavior.insert(.moveToActiveSpace)
         window.delegate = self
-        window.contentView = NSHostingView(rootView: ContentView(store: store, loginItem: loginItem)
-            .environmentObject(reminders).environmentObject(interaction)
-            .environmentObject(commands).environmentObject(toast).environment(\.focusSession, focus).environment(\.appCommands, commands))
+        window.contentView = NSHostingView(rootView: LocalizedRoot {
+            ContentView(store: self.store, loginItem: self.loginItem)
+                .environmentObject(self.reminders).environmentObject(self.interaction)
+                .environmentObject(self.commands).environmentObject(self.toast).environment(\.focusSession, self.focus).environment(\.appCommands, self.commands)
+        })
         window.center()
         window.setFrameAutosaveName("DayleafMainWindow")
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         reminders.onComplete = { [weak self] in self?.toast.show("已从通知完成「\($0)」") }
-        focus.onDegraded = { [weak self] in
-            self?.toast.show("没有授权 Scheduler 控制 Safari，专注计时只能检测是否离开 Safari。可在系统设置 → 隐私与安全性 → 自动化 里开启。", duration: 10)
-        }
+        // 专注期间允许自由切换网页和应用；任务链接只用于开始时打开，不再需要 Safari 自动化权限。
         if CommandLine.arguments.contains("--enable-login") { loginItem.setEnabled(true) }
         if !snapshotRun {
             ImageIndexer.run(store: store)
@@ -129,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             quickCapture.installStatusItem()
             logHotKey.onPress = { [weak self] in self?.quickCapture.toggle(.log) }
             notesHotKey.onPress = { [weak self] in self?.toggleNotesGlobally() }
-            focusHotKey.onPress = { FocusPanelStyle.toggleHidden() }
+            focusHotKey.onPress = { [weak self] in self?.focusPanel?.toggleWorkspace() }
             mainHotKey.onPress = { [weak self] in self?.toggleMainWindow() }
             shellHotKey.onPress = { [weak self] in self?.shell.toggle() }
             applyHotKeyPreference()
@@ -152,8 +157,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             var target: NSWindow = window
             switch option("--snapshot-window") {
             case "daylog":
-                DayLogWindowController.shared.show(store: store, date: Date())
-                target = DayLogWindowController.shared.window ?? window
+                NotesWindowController.shared.showJournal(store: store, date: Date())
+                target = NotesWindowController.shared.window ?? window
             case "notes":
                 NotesWindowController.shared.show(store: store, taskID: nil, reveal: { _ in }, openDay: { _ in })
                 target = NotesWindowController.shared.window ?? window
@@ -235,7 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// 一组窗口收起后，焦点可以交给的 Scheduler 别的可见窗口：主窗口、笔记、终端各自独立，谁还开着就交给谁。
     private func otherWindowForHandoff(excluding: NSWindow?) -> NSWindow? {
-        let candidates: [NSWindow?] = [window, visibleNotesWindow, DayLogWindowController.shared.window]
+        let candidates: [NSWindow?] = [window, visibleNotesWindow]
         for case let candidate? in candidates where candidate !== excluding && candidate.isVisible && !candidate.isMiniaturized { return candidate }
         return shell.visibleWindow
     }
@@ -440,11 +445,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let binding = HotKeyStore.binding(for: .notes)
         let globalWorks = hotKeysAttempted && !failedHotKeys.contains(.notes)
         if globalWorks {
-            notesMenuItem.title = "笔记（开 / 关）    \(binding.label)"
+            notesMenuItem.title = AppLocalized("笔记（开 / 关）") + "    \(binding.label)"
             notesMenuItem.keyEquivalent = ""
         } else {
             let equivalent = binding.menuEquivalent
-            notesMenuItem.title = "笔记（开 / 关）"
+            notesMenuItem.title = AppLocalized("笔记（开 / 关）")
             notesMenuItem.keyEquivalent = equivalent.key
             notesMenuItem.keyEquivalentModifierMask = equivalent.mask
         }
@@ -462,7 +467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func menuItem(_ title: String, key: String = "", modifiers: NSEvent.ModifierFlags = [.command],
                           typingSensitive: Bool = false, toggle: (key: String, defaultOn: Bool)? = nil,
                           _ run: @escaping () -> Void = {}) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: #selector(runMenuAction(_:)), keyEquivalent: key)
+        let item = NSMenuItem(title: AppLocalized(title), action: #selector(runMenuAction(_:)), keyEquivalent: key)
         if !key.isEmpty { item.keyEquivalentModifierMask = modifiers }
         let action = MenuAction(run)
         action.disabledWhileTyping = typingSensitive
@@ -473,9 +478,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     private func submenu(_ title: String, _ items: [NSMenuItem]) -> NSMenuItem {
-        let menu = NSMenu(title: title)
+        let menu = NSMenu(title: AppLocalized(title))
         items.forEach { menu.addItem($0) }
-        let holder = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let holder = NSMenuItem(title: AppLocalized(title), action: nil, keyEquivalent: "")
         holder.submenu = menu
         return holder
     }
@@ -492,19 +497,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             guard NSApp.keyWindow is TerminalWindow else { return }
             action(shell)
         } }
-        let dayLog = DayLogWindowController.shared
-        /// 换日期：日志窗口是当前窗口就换它看的那一天，否则换主窗口选中的日期。
-        let shiftDay = { [commands] (amount: Int) in { if dayLog.isKey { dayLog.shift(amount) } else { commands.send(.shiftDay(amount)) } } }
+        let notes = NotesWindowController.shared
+        /// 换日期：合并窗口是当前窗口就换日记日期，否则换主窗口选中的日期。
+        let shiftDay = { [commands] (amount: Int) in { if notes.isKey { notes.shift(amount) } else { commands.send(.shiftDay(amount)) } } }
         let arrow = { (scalar: Int) in String(UnicodeScalar(scalar)!) }
         let left = arrow(NSLeftArrowFunctionKey), right = arrow(NSRightArrowFunctionKey)
 
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "关于 Scheduler", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: AppLocalized("关于 Scheduler"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(menuItem("设置…", key: ",") { [weak self] in self?.settings.show() })
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "隐藏 Scheduler", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
-        appMenu.addItem(withTitle: "退出 Scheduler", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: AppLocalized("隐藏 Scheduler"), action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: AppLocalized("退出 Scheduler"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let appItem = NSMenuItem()
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
@@ -522,20 +527,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         ])
         mainMenu.addItem(file)
 
-        let editMenu = NSMenu(title: "编辑")
-        let undo = editMenu.addItem(withTitle: "撤销", action: #selector(undoAction(_:)), keyEquivalent: "z")
+        let editMenu = NSMenu(title: AppLocalized("编辑"))
+        let undo = editMenu.addItem(withTitle: AppLocalized("撤销"), action: #selector(undoAction(_:)), keyEquivalent: "z")
         undo.target = self
-        let redo = NSMenuItem(title: "重做", action: #selector(redoAction(_:)), keyEquivalent: "z")
+        let redo = NSMenuItem(title: AppLocalized("重做"), action: #selector(redoAction(_:)), keyEquivalent: "z")
         redo.target = self
         redo.keyEquivalentModifierMask = [.command, .shift]
         editMenu.addItem(redo)
         editMenu.addItem(.separator())
         for (title, selector, key) in [("剪切", "cut:", "x"), ("复制", "copy:", "c"), ("粘贴", "paste:", "v"), ("全选", "selectAll:", "a")] {
-            editMenu.addItem(withTitle: title, action: Selector(selector), keyEquivalent: key)
+            editMenu.addItem(withTitle: AppLocalized(title), action: Selector(selector), keyEquivalent: key)
         }
         editMenu.addItem(.separator())
         editMenu.addItem(menuItem("搜索任务、日志与总结…", key: "f", send(.search)))
-        let editItem = NSMenuItem(title: "编辑", action: nil, keyEquivalent: "")
+        let editItem = NSMenuItem(title: AppLocalized("编辑"), action: nil, keyEquivalent: "")
         editItem.submenu = editMenu
         mainMenu.addItem(editItem)
 
@@ -549,7 +554,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             },
             // ⌘T：终端里新建标签页；其他窗口里回到今天。
             menuItem("新建标签页（终端）/ 回到今天", key: "t", either({ $0.newTab() }, { [commands] in
-                if dayLog.isKey { dayLog.setDate(Date()) } else { commands.send(.today) }
+                if notes.isKey { notes.setDate(Date()) } else { commands.send(.today) }
             })),
             menuItem("关闭标签页 / 窗口", key: "w") { [weak self] in self?.closeKeyWindow() },
             .separator(),
@@ -595,7 +600,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         notesMenuItem = menuItem("笔记（开 / 关）", send(.toggleNotes))
         applyNotesShortcut()
         let view = submenu("视图", [
-            menuItem("回到今天    ⌘T", { [commands] in if dayLog.isKey { dayLog.setDate(Date()) } else { commands.send(.today) } }),
+            menuItem("回到今天    ⌘T", { [commands] in if notes.isKey { notes.setDate(Date()) } else { commands.send(.today) } }),
             menuItem("前一天", key: left, modifiers: [.command, .option], typingSensitive: true, shiftDay(-1)),
             menuItem("后一天", key: right, modifiers: [.command, .option], typingSensitive: true, shiftDay(1)),
             menuItem("上个月", send(.shiftMonth(-1))),
@@ -614,11 +619,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         ])
         mainMenu.addItem(view)
 
-        let windowMenu = NSMenu(title: "窗口")
-        windowMenu.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
-        windowMenu.addItem(withTitle: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        let windowMenu = NSMenu(title: AppLocalized("窗口"))
+        windowMenu.addItem(withTitle: AppLocalized("最小化"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: AppLocalized("缩放"), action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         windowMenu.addItem(menuItem("显示 / 隐藏 Scheduler") { [weak self] in self?.toggleMainWindow() })
-        let windowItem = NSMenuItem(title: "窗口", action: nil, keyEquivalent: "")
+        let windowItem = NSMenuItem(title: AppLocalized("窗口"), action: nil, keyEquivalent: "")
         windowItem.submenu = windowMenu
         mainMenu.addItem(windowItem)
         NSApp.mainMenu = mainMenu

@@ -211,7 +211,7 @@ final class RadialMenuController {
         self.model = model
         hubScreen = center
         let size = RadialLayout.panelSize
-        let host = NSHostingView(rootView: RadialMenuView(model: model))
+        let host = NSHostingView(rootView: LocalizedRoot { RadialMenuView(model: model) })
         host.setFrameSize(size)
         let panel = RadialPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.contentView = host
