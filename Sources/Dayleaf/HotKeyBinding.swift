@@ -154,17 +154,17 @@ struct HotKeyRecorder: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: 3) {
             HStack(spacing: 8) {
-                Text(action.title)
+                Text(LocalizedStringKey(action.title))
                 Spacer()
-                Button(recording ? "请按下新的组合…" : binding.label) { recording ? stop() : start() }
+                Button(recording ? AppLocalized("请按下新的组合…") : binding.label) { recording ? stop() : start() }
                     .buttonStyle(.bordered)
                     .frame(minWidth: 120)
-                    .help("点击后按下想要的组合键，需要至少一个 ⌃ ⌥ ⌘")
+                    .help("录入快捷键")
                 Button { reset() } label: { Image(systemName: "arrow.counterclockwise") }
                     .buttonStyle(.borderless).disabled(binding == action.defaultBinding)
                     .help("恢复默认 \(action.defaultBinding.label)").accessibilityLabel("恢复默认")
             }
-            if let message { Text(message).font(.caption).foregroundStyle(.orange) }
+            if let message { Text(LocalizedStringKey(message)).font(.caption).foregroundStyle(.orange) }
         }
         .onDisappear { stop() }
     }

@@ -31,6 +31,7 @@ enum LogTaskLabel {
 }
 
 struct DailyLogView: View {
+    @Environment(\.typography) private var typography
     @ObservedObject var store: JournalStore
     let date: Date
     var collapse: (() -> Void)?
@@ -100,13 +101,13 @@ struct DailyLogView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "terminal").foregroundStyle(TerminalPalette.green)
-                Text("\(filtering ? filteredLogs.count : entry.logs.count)").font(.system(size: UIScale.pt(11), design: .monospaced)).foregroundStyle(TerminalPalette.muted)
+                Text("\(filtering ? filteredLogs.count : entry.logs.count)").font(.system(size: typography.pt(11), design: .monospaced)).foregroundStyle(TerminalPalette.muted)
                 Spacer(minLength: 4)
                 Button { showingFilter = true } label: {
                     Image(systemName: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                         .foregroundStyle(filtering ? TerminalPalette.blue : TerminalPalette.text)
                 }
-                .buttonStyle(HitAreaButtonStyle(compact: true)).help("按任务筛选日志 · 也可输入 /filter #1")
+                .buttonStyle(HitAreaButtonStyle(compact: true)).help("按任务筛选日志")
                 .accessibilityLabel("按任务筛选日志")
                 .popover(isPresented: $showingFilter) {
                     LogFilterPopover(store: store, date: date, selection: $interaction.logFilter)
@@ -153,21 +154,21 @@ struct DailyLogView: View {
             HStack(spacing: 6) {
                 if let log = editingLog {
                     Image(systemName: "pencil").foregroundStyle(TerminalPalette.blue)
-                    Text("编辑记录").font(.system(size: UIScale.pt(12), weight: .semibold))
-                    Text(Self.time(log.createdAt)).font(.system(size: UIScale.pt(11), design: .monospaced)).foregroundStyle(TerminalPalette.muted)
+                    Text("编辑记录").font(.system(size: typography.pt(12), weight: .semibold))
+                    Text(Self.time(log.createdAt)).font(.system(size: typography.pt(11), design: .monospaced)).foregroundStyle(TerminalPalette.muted)
                     Spacer(minLength: 4)
                     Button("取消") { cancelLogEdit() }
-                        .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: UIScale.pt(12)))
+                        .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: typography.pt(12)))
                         .help("取消编辑 · Esc")
                     Button("保存") { saveLogEdit() }
-                        .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: UIScale.pt(12), weight: .semibold))
+                        .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: typography.pt(12), weight: .semibold))
                         .foregroundStyle(TerminalPalette.blue).help("保存 · ⌘Enter")
                 } else {
                     Image(systemName: "doc.text").foregroundStyle(TerminalPalette.amber)
-                    Text("复盘").font(.system(size: UIScale.pt(12), weight: .semibold))
+                    Text("复盘").font(.system(size: typography.pt(12), weight: .semibold))
                     Spacer(minLength: 4)
                     Button { openReview() } label: { Image(systemName: "text.badge.plus") }
-                        .buttonStyle(HitAreaButtonStyle(compact: true)).help("按进展、卡点、明日计划整理复盘草稿")
+                        .buttonStyle(HitAreaButtonStyle(compact: true)).help("整理复盘草稿")
                         .accessibilityLabel("整理复盘草稿")
                 }
                 if let collapse {
@@ -183,15 +184,15 @@ struct DailyLogView: View {
                     .background(TerminalPalette.surface)
                     .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(TerminalPalette.blue.opacity(0.6)))
                     .accessibilityLabel("编辑日志文字")
-                Text(editHint(for: log)).font(.system(size: UIScale.pt(11))).foregroundStyle(TerminalPalette.muted)
+                Text("⌘Enter 保存 · Esc 取消").font(.system(size: typography.pt(11))).foregroundStyle(TerminalPalette.muted)
             } else {
                 SummaryEditor(text: Binding(get: { entry.summary }, set: { store.setSummary($0, on: date) }), readOnly: store.isReadOnly)
                     .padding(.horizontal, 4)
                     .background(TerminalPalette.surface)
                     .overlay(alignment: .topLeading) {
                         if entry.summary.isEmpty {
-                            Text("单击这里写今天的复盘，\n或点右上角按钮，按进展、卡点、明日计划自动整理。")
-                                .font(.system(size: UIScale.pt(12))).foregroundStyle(TerminalPalette.muted)
+                            Text("写下复盘…")
+                                .font(.system(size: typography.pt(12))).foregroundStyle(TerminalPalette.muted)
                                 .padding(10).allowsHitTesting(false)
                         }
                     }
@@ -208,18 +209,11 @@ struct DailyLogView: View {
         let logDate = editingLogDate
         return LinkPickerButton(store: store, current: log.taskID, pick: { store.setLogTask($0, forLog: log.id, on: logDate) }) {
             Label(LogTaskLabel.saved(log, store: store, logDate: logDate).map { "关联：" + $0 } ?? "关联任务…", systemImage: "link")
-                .font(.system(size: UIScale.pt(11))).lineLimit(1)
+                .font(.system(size: typography.pt(11))).lineLimit(1)
                 .foregroundStyle(log.taskID == nil ? TerminalPalette.muted : TerminalPalette.blue)
         }
         .fixedSize()
-        .help("给这条日志打上任务标签；之后可以按任务筛选")
-    }
-
-    private func editHint(for log: DailyLogEntry) -> String {
-        var hint = "Enter 换行 · ⌘Enter 保存 · 点击别处保存 · Esc 取消"
-        if !log.images.isEmpty { hint += " · 含 \(log.images.count) 张图片，不受影响" }
-        else { hint += " · 清空后保存会删除这条记录，可撤销" }
-        return hint
+        .help("关联任务")
     }
 
     private static func time(_ date: Date) -> String {
@@ -296,29 +290,29 @@ struct DailyLogView: View {
         let ids = validSelection
         let all = visibleLogIDs
         return HStack(spacing: 8) {
-            Text("已选 \(ids.count) / \(all.count) 条").font(.system(size: UIScale.pt(11), design: .monospaced)).foregroundStyle(TerminalPalette.muted)
+            Text("已选 \(ids.count) / \(all.count) 条").font(.system(size: typography.pt(11), design: .monospaced)).foregroundStyle(TerminalPalette.muted)
             Button(ids.count == all.count && !all.isEmpty ? "全不选" : "全选") {
                 selectedLogs = ids.count == all.count ? [] : Set(all)
             }
-            .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: UIScale.pt(11)))
+            .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: typography.pt(11)))
             Spacer(minLength: 4)
             Button { copyLogs(ids) } label: { Label("复制", systemImage: "doc.on.doc") }
-                .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: UIScale.pt(12)))
-                .disabled(ids.isEmpty).help("复制所选日志的文字（不含图片），按时间每条一行")
+                .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: typography.pt(12)))
+                .disabled(ids.isEmpty).help("复制文字")
             Button { showingBatchTags = true } label: { Label("加标签", systemImage: "tag") }
-                .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: UIScale.pt(12)))
+                .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: typography.pt(12)))
                 .disabled(ids.isEmpty || store.isReadOnly)
                 .popover(isPresented: $showingBatchTags) { LogBatchTagView(store: store, logIDs: ids) }
             LinkPickerButton(store: store, pick: { store.setLogTask($0, forLogs: ids) }) {
-                Label("关联待办", systemImage: "link").font(.system(size: UIScale.pt(12))).padding(.horizontal, 5).frame(height: 26).contentShape(Rectangle())
+                Label("关联待办", systemImage: "link").font(.system(size: typography.pt(12))).padding(.horizontal, 5).frame(height: 26).contentShape(Rectangle())
             }
             .fixedSize().disabled(ids.isEmpty || store.isReadOnly)
             Button(role: .destructive) { deleteSelected(ids) } label: { Label("删除", systemImage: "trash") }
-                .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: UIScale.pt(12)))
+                .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: typography.pt(12)))
                 .foregroundStyle(TerminalPalette.amber)
                 .disabled(ids.isEmpty || store.isReadOnly).help("删除所选日志 · ⌘Z 整批撤销")
             Button("取消选择") { selectedLogs = [] }
-                .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: UIScale.pt(12), weight: .semibold))
+                .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: typography.pt(12), weight: .semibold))
                 .foregroundStyle(TerminalPalette.blue)
         }
         .padding(.horizontal, 6).frame(minHeight: 30)
@@ -340,7 +334,7 @@ struct DailyLogView: View {
                                 Text(task.title).lineLimit(1)
                                 Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
                             }
-                            .font(.system(size: UIScale.pt(11)))
+                            .font(.system(size: typography.pt(11)))
                             .padding(.horizontal, 7).frame(height: 22)
                             .background(TerminalPalette.blue.opacity(0.16), in: Capsule())
                         }
@@ -350,7 +344,7 @@ struct DailyLogView: View {
             }
             Spacer(minLength: 0)
             Button("清除筛选") { interaction.logFilter = [] }
-                .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: UIScale.pt(11))).foregroundStyle(TerminalPalette.blue)
+                .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: typography.pt(11))).foregroundStyle(TerminalPalette.blue)
         }
     }
 
@@ -366,11 +360,11 @@ struct DailyLogView: View {
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if logs.isEmpty {
-                    Text("所选任务还没有笔记。输入 /link #1 或 /done #1 内容，即可把日志记到任务名下。")
-                        .font(.system(size: UIScale.pt(12))).foregroundStyle(TerminalPalette.muted).padding(10)
+                    Text("没有匹配的日志")
+                        .font(.system(size: typography.pt(12))).foregroundStyle(TerminalPalette.muted).padding(10)
                 }
                 ForEach(groups, id: \.key) { group in
-                    Text("── \(group.key) ──").font(.system(size: UIScale.pt(11), design: .monospaced))
+                    Text("── \(group.key) ──").font(.system(size: typography.pt(11), design: .monospaced))
                         .foregroundStyle(TerminalPalette.muted).padding(.top, 8).padding(.bottom, 2)
                     ForEach(group.value) { item in
                         DailyLogRow(store: store, date: item.date, log: item.log, highlighted: editingLogID == item.log.id, next: { focused = true },
@@ -415,13 +409,13 @@ struct DailyLogView: View {
 
     private var input: some View {
         VStack(alignment: .leading, spacing: 3) {
-            if let error { Text(error).font(.system(size: UIScale.pt(10), design: .monospaced)).foregroundStyle(TerminalPalette.amber) }
+            if let error { Text(error).font(.system(size: typography.pt(10), design: .monospaced)).foregroundStyle(TerminalPalette.amber) }
             if !completions.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 2) {
                         ForEach(completions, id: \.self) { command in
                             Button(command) { store.setLogDraft(command + " ", on: date); focused = true }
-                                .font(.system(size: UIScale.pt(10), design: .monospaced)).buttonStyle(HitAreaButtonStyle(compact: true))
+                                .font(.system(size: typography.pt(10), design: .monospaced)).buttonStyle(HitAreaButtonStyle(compact: true))
                         }
                     }
                 }
@@ -439,14 +433,14 @@ struct DailyLogView: View {
                     Spacer(minLength: 0)
                     Button { store.setLogTask(nil, on: date) } label: { Image(systemName: "xmark") }
                         .buttonStyle(HitAreaButtonStyle(compact: true)).disabled(store.isReadOnly)
-                }.font(.system(size: UIScale.pt(10))).foregroundStyle(TerminalPalette.muted)
+                }.font(.system(size: typography.pt(10))).foregroundStyle(TerminalPalette.muted)
             }
             if entry.logTaskID == nil, let task = store.focusTask, !store.focusPaused {
                 HStack(spacing: 4) {
                     Image(systemName: "timer")
                     Text("专注中：日志会关联到 \(FocusHint.label(task))").lineLimit(1)
                     Spacer(minLength: 0)
-                }.font(.system(size: UIScale.pt(10))).foregroundStyle(TerminalPalette.green)
+                }.font(.system(size: typography.pt(10))).foregroundStyle(TerminalPalette.green)
             }
             if entry.logTaskID == nil, let task = store.focusTask, store.focusPaused {
                 HStack(spacing: 4) {
@@ -454,7 +448,7 @@ struct DailyLogView: View {
                     Text("专注已暂停：日志不会关联到 \(FocusHint.label(task))")
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                }.font(.system(size: UIScale.pt(10))).foregroundStyle(TerminalPalette.muted)
+                }.font(.system(size: typography.pt(10))).foregroundStyle(TerminalPalette.muted)
             }
             if entry.logTaskID == nil, store.focusTask == nil, let task = store.pinnedTask {
                 HStack(spacing: 4) {
@@ -462,7 +456,7 @@ struct DailyLogView: View {
                     Text("固定关联：日志会记到 \(FocusHint.label(task))").lineLimit(1)
                     Spacer(minLength: 0)
                     Button("取消固定") { store.pinTask(nil) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
-                }.font(.system(size: UIScale.pt(10))).foregroundStyle(TerminalPalette.muted)
+                }.font(.system(size: typography.pt(10))).foregroundStyle(TerminalPalette.muted)
             }
             if !entry.logDraftTags.isEmpty {
                 LogChipsBar(store: store, link: .constant(nil), unlinked: .constant(false),
@@ -471,9 +465,9 @@ struct DailyLogView: View {
                             }), showsLink: false)
             }
             HStack(spacing: 5) {
-                Text("❯").font(.system(size: UIScale.pt(15), weight: .semibold, design: .monospaced))
+                Text("❯").font(.system(size: typography.pt(15), weight: .semibold, design: .monospaced))
                     .foregroundStyle(TerminalPalette.green)
-                TaskInput(text: draft, focused: $focused, placeholder: "记录…  @ 待办 · # 标签 · / 命令 · ⌘V 贴图", fontSize: 12, submit: submit,
+                TaskInput(text: draft, focused: $focused, placeholder: "记录…  @ 待办 · # 标签", fontSize: 12, submit: submit,
                           monospaced: true, historyUp: historyUp, historyDown: historyDown, complete: completeCommand,
                           onPasteImages: addImages, minHeight: 24, maxLines: 10, mention: mention, returnSubmits: true)
                     .disabled(store.isReadOnly)
@@ -510,9 +504,9 @@ struct DailyLogView: View {
     private var taskMenu: some View {
         LinkPickerButton(store: store, current: entry.logTaskID, pick: { store.setLogTask($0, on: date); focused = true }) {
             Label("关联任务", systemImage: "link")
-                .font(.system(size: UIScale.pt(11))).padding(.horizontal, 5).frame(height: 26).contentShape(Rectangle())
+                .font(.system(size: typography.pt(11))).padding(.horizontal, 5).frame(height: 26).contentShape(Rectangle())
         }.fixedSize()
-            .disabled(store.isReadOnly).help("选择任务编号，下一条日志会显示对应任务；/done 同时完成任务")
+            .disabled(store.isReadOnly).help("选择关联的待办")
     }
 
     private var commandHelp: some View {
@@ -520,12 +514,12 @@ struct DailyLogView: View {
             Text("日志命令").font(.headline)
             ForEach(DailyLogKind.allCases) { kind in
                 HStack {
-                    Text("/\(kind.rawValue)").font(.system(size: UIScale.pt(12), design: .monospaced)).frame(width: 84, alignment: .leading)
-                    Text(kind.title)
+                    Text("/\(kind.rawValue)").font(.system(size: typography.pt(12), design: .monospaced)).frame(width: 84, alignment: .leading)
+                    Text(LocalizedStringKey(kind.title))
                 }
             }
             Text("/link #1   关联任务 #1（之后的日志都记在它名下）\n/unlink    取消关联\n/filter #1 #3  只看这些任务的日志\n/filter    清除筛选\n/summary   整理复盘\n/help      显示命令")
-                .font(.system(size: UIScale.pt(12), design: .monospaced))
+                .font(.system(size: typography.pt(12), design: .monospaced))
             Text("普通文字直接记录。↑ ↓ 调取历史，Tab 补全命令。\n#编号是任务的永久编号（显示在任务行左边）。命令里可直接写：/done #1 完成了方法部分，或 #2 卡在配置，只关联这一条。\n/done 关联任务后同时勾选完成。")
                 .font(.caption).foregroundStyle(Palette.muted)
         }.padding(18)
@@ -605,6 +599,7 @@ struct LogSelection {
 }
 
 private struct DailyLogRow: View {
+    @Environment(\.typography) private var typography
     @ObservedObject var store: JournalStore
     let date: Date
     let log: DailyLogEntry
@@ -654,7 +649,7 @@ private struct DailyLogRow: View {
     private var line: some View {
         HStack(alignment: .top, spacing: 3) {
             Text(timestamp).foregroundStyle(color)
-                .font(.system(size: UIScale.pt(11), design: .monospaced)).padding(.top, 1)
+                .font(.system(size: typography.pt(11), design: .monospaced)).padding(.top, 1)
                 .fixedSize()
                 .help("\(log.kind.title) · \(log.createdAt.formatted(date: .abbreviated, time: .standard))")
             if let label = LogTaskLabel.saved(log, store: store, logDate: date) {
@@ -665,7 +660,7 @@ private struct DailyLogRow: View {
                         NotificationCenter.default.post(name: .dayleafReveal, object: id)
                     }
                 } label: {
-                    Text("[\(label)]").font(.system(size: UIScale.pt(11), design: .monospaced)).lineLimit(1)
+                    Text("[\(label)]").font(.system(size: typography.pt(11), design: .monospaced)).lineLimit(1)
                         .padding(.horizontal, 3).frame(height: 22)
                         .contentShape(Rectangle())
                 }
@@ -678,7 +673,7 @@ private struct DailyLogRow: View {
                 if log.text.isEmpty, !log.images.isEmpty {
                     Button(action: toggleImages) {
                         Text(expanded ? "收起图片" : "图片 · 点击查看")
-                            .font(.system(size: UIScale.pt(12), design: .monospaced)).foregroundStyle(TerminalPalette.muted)
+                            .font(.system(size: typography.pt(12), design: .monospaced)).foregroundStyle(TerminalPalette.muted)
                             .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading).contentShape(Rectangle())
                     }.buttonStyle(.plain)
                 } else {
@@ -691,7 +686,7 @@ private struct DailyLogRow: View {
             if !log.images.isEmpty {
                 Button(action: toggleImages) {
                     Label("\(log.images.count)", systemImage: expanded ? "photo.fill" : "photo")
-                        .font(.system(size: UIScale.pt(11), design: .monospaced))
+                        .font(.system(size: typography.pt(11), design: .monospaced))
                         .padding(.horizontal, 5).frame(height: 22).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).foregroundStyle(TerminalPalette.blue)
@@ -715,7 +710,7 @@ private struct DailyLogRow: View {
             ForEach(Array(menuItems.enumerated()), id: \.offset) { _, item in
                 if item.separator { Divider() } else {
                     Button(role: item.destructive ? .destructive : nil, action: item.action) {
-                        if let symbol = item.symbol { Label(item.title, systemImage: symbol) } else { Text(item.title) }
+                        if let symbol = item.symbol { Label(LocalizedStringKey(item.title), systemImage: symbol) } else { Text(LocalizedStringKey(item.title)) }
                     }
                 }
             }
@@ -735,7 +730,7 @@ private struct DailyLogRow: View {
         ] + (log.taskID.flatMap { store.locate($0) }.map { task in
             [TextMenuItem(title: "打开「\(FocusHint.label(task))」的笔记", symbol: "note.text", action: { AppRouter.openNotes(task.id) })]
         } ?? []) + [
-            TextMenuItem(title: selection.selected ? "取消选中" : "选中（可批量加标签、关联待办）", symbol: selection.selected ? "checkmark.circle" : "circle", action: selection.toggle),
+            TextMenuItem(title: selection.selected ? "取消选中" : "选中这条日志", symbol: selection.selected ? "checkmark.circle" : "circle", action: selection.toggle),
             .divider,
             TextMenuItem(title: "删除（可撤销）", symbol: "trash", destructive: true, action: delete),
         ]
@@ -749,19 +744,19 @@ private struct DailyLogRow: View {
         if showsButtons || showsSelect {
             HStack(spacing: 0) {
                 if showsButtons {
-                    ItemActionButton(symbol: "doc.on.doc", title: log.copyText == nil ? "这条只有图片，没有文字可复制" : "复制这条日志的文字（不含图片）", compact: true) { copy(log) }
+                    ItemActionButton(symbol: "doc.on.doc", title: log.copyText == nil ? "没有可复制的文字（只有图片）" : "复制文字", compact: true) { copy(log) }
                         .disabled(log.copyText == nil)
-                    ItemActionButton(symbol: "pencil", title: "在右侧编辑这条记录 · 右键还有删除", compact: true) { edit(log, date) }
+                    ItemActionButton(symbol: "pencil", title: "编辑这条日志", compact: true) { edit(log, date) }
                 }
                 if showsSelect {
                     Button(action: selection.toggle) {
                         Image(systemName: selection.selected ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: UIScale.pt(13)))
+                            .font(.system(size: typography.pt(13)))
                             .frame(width: 22, height: 22).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(selection.selected ? TerminalPalette.blue : TerminalPalette.muted)
-                    .help(selection.selected ? "取消选中" : "选中这条日志，可批量加标签、关联待办")
+                    .help(selection.selected ? "取消选中" : "选中这条日志")
                     .accessibilityLabel(selection.selected ? "取消选中这条日志" : "选中这条日志")
                 }
             }

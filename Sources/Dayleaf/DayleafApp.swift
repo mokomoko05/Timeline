@@ -380,10 +380,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.makeFirstResponder(nil)
         if shell.busyCount > 0 {
             let alert = NSAlert()
-            alert.messageText = "有 \(shell.busyCount) 个终端正在运行程序"
-            alert.informativeText = "退出 Scheduler 会结束它们（比如正在进行的 agent 对话）。"
-            alert.addButton(withTitle: "取消")
-            alert.addButton(withTitle: "仍然退出")
+            alert.messageText = AppLocalizedFormat("有 %lld 个终端正在运行程序", shell.busyCount)
+            alert.informativeText = AppLocalized("退出 Scheduler 会结束它们（比如正在进行的 agent 对话）。")
+            alert.addButton(withTitle: AppLocalized("取消"))
+            alert.addButton(withTitle: AppLocalized("仍然退出"))
             if alert.runModal() == .alertFirstButtonReturn { return .terminateCancel }
         }
         shell.terminateAll()
@@ -392,10 +392,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         store.save()
         guard store.errorMessage != nil else { return .terminateNow }
         let alert = NSAlert()
-        alert.messageText = "还有未保存的修改"
-        alert.informativeText = "请返回 Scheduler 重试保存，或使用「文件」菜单导出备份。直接退出会丢失未保存的修改。"
-        alert.addButton(withTitle: "返回 Scheduler")
-        alert.addButton(withTitle: "仍然退出")
+        alert.messageText = AppLocalized("还有未保存的修改")
+        alert.informativeText = AppLocalized("请返回 Scheduler 重试保存，或使用「文件」菜单导出备份。直接退出会丢失未保存的修改。")
+        alert.addButton(withTitle: AppLocalized("返回 Scheduler"))
+        alert.addButton(withTitle: AppLocalized("仍然退出"))
         return alert.runModal() == .alertFirstButtonReturn ? .terminateCancel : .terminateNow
     }
 
@@ -568,7 +568,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             menuItem("上一个标签页", key: "[", modifiers: [.command, .shift], onlyInTerminal { $0.selectAdjacentTab(-1) }),
             menuItem("下一个标签页", key: "]", modifiers: [.command, .shift], onlyInTerminal { $0.selectAdjacentTab(1) }),
         ] + (1...9).map { number in
-            menuItem("切换到第 \(number) 个标签页", key: String(number), onlyInTerminal { $0.selectTab(at: number - 1) })
+            menuItem(AppLocalizedFormat("切换到第 %lld 个标签页", number), key: String(number), onlyInTerminal { $0.selectTab(at: number - 1) })
         } + [
             .separator(),
             // ⌘K：终端里清屏；其他窗口里插入链接。

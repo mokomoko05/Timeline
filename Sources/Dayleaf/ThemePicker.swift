@@ -8,13 +8,11 @@ struct ThemePicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Picker("外观", selection: Binding(get: { themes.appearance }, set: themes.setAppearance)) {
-                ForEach(AppearanceMode.allCases) { Text($0.title).tag($0) }
+                ForEach(AppearanceMode.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
             }.pickerStyle(.segmented)
             LazyVGrid(columns: columns, spacing: 10) {
                 ForEach(AppTheme.all) { theme in card(theme) }
             }
-            Text("\(themes.theme.name)：\(themes.theme.subtitle)。每套配色都有浅色和深色两个版本，随上面的外观切换。")
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -30,7 +28,7 @@ struct ThemePicker: View {
                 .clipShape(RoundedRectangle(cornerRadius: 7))
                 .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.primary.opacity(0.12)))
                 HStack(spacing: 4) {
-                    Text(theme.name).font(.system(size: 12, weight: chosen ? .semibold : .regular))
+                    Text(LocalizedStringKey(theme.name)).font(.system(size: 12, weight: chosen ? .semibold : .regular))
                     Spacer(minLength: 0)
                     if chosen { Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor) }
                 }
@@ -41,7 +39,7 @@ struct ThemePicker: View {
             .contentShape(RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .help(theme.subtitle)
+        .help(LocalizedStringKey(theme.subtitle))
         .accessibilityLabel("配色：\(theme.name)")
         .accessibilityAddTraits(chosen ? [.isSelected, .isButton] : .isButton)
     }

@@ -52,7 +52,7 @@ struct Arguments {
         "t": "task", "d": "date", "k": "kind", "g": "grep", "n": "last", "f": "format", "i": "image",
         "a": "all", "r": "reverse", "h": "help", "p": "print",
     ]
-    static let valueOptions: Set<String> = ["task", "date", "since", "until", "kind", "grep", "last", "format", "dir", "socket", "color", "image", "tag"]
+    static let valueOptions: Set<String> = ["task", "date", "since", "until", "kind", "grep", "last", "format", "dir", "socket", "color", "image", "tag", "priority"]
 
     init(_ arguments: [String]) {
         var index = 0
@@ -109,6 +109,7 @@ public enum CLI {
       sched done <N>             完成任务 #N
       sched undone <N>           取消完成任务 #N（放弃的也用它恢复）
       sched drop <N>             放弃任务 #N（不用做了，留着记录；再来一次恢复）
+      sched priority <N> <high|normal|low>  设置任务优先级；todo 可加 --priority high
 
     筛选（logs / pick / notes 通用）
       -t, --task N[,N]           只看这些任务的日志        -d, --date D       只看某一天
@@ -207,6 +208,7 @@ public enum CLI {
             case "done": return write(.done, rest)
             case "undone": return write(.undone, rest)
             case "drop": return write(.drop, rest)
+            case "priority": return write(.priority, rest)
             default: return fail("不认识的命令「\(command)」。运行 sched help 查看用法。", code: 2)
             }
         }
@@ -407,6 +409,8 @@ public enum CLI {
                 let items: [[String: Any]] = rows.map { row in
                     var item: [String: Any] = ["number": row.number, "title": row.title, "completed": row.completed, "dropped": row.dropped, "notes": row.noteCount, "focus_seconds": Int(row.focusSeconds), "tags": row.tags]
                     if let due = row.due { item["due"] = ISO8601DateFormatter().string(from: due) }
+                    item["priority"] = row.priority.rawValue
+                    item["due_has_time"] = row.dueHasTime
                     return item
                 }
                 let data = (try? JSONSerialization.data(withJSONObject: items, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])) ?? Data("[]".utf8)
@@ -488,6 +492,17 @@ public enum CLI {
                 let text = rest.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { return fail("用法：sched todo <内容>，例如 sched todo 明天 15:00 开会", code: 2) }
                 request.text = text
+                if let value = args.value("priority") {
+                    guard let priority = TaskPriority(rawValue: value) else { return fail("优先级应为 high、normal 或 low", code: 2) }
+                    request.priority = priority
+                }
+            case .priority:
+                guard rest.count == 2, let number = LogCommand.taskNumber(rest[0]),
+                      let priority = TaskPriority(rawValue: rest[1]) else {
+                    return fail("用法：sched priority <N> <high|normal|low>", code: 2)
+                }
+                request.task = number
+                request.priority = priority
             case .done, .undone, .drop:
                 guard let token = rest.first, let number = LogCommand.taskNumber(token) else { return fail("用法：sched \(op.rawValue) <任务编号>", code: 2) }
                 request.task = number

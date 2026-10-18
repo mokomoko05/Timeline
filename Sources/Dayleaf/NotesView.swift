@@ -4,6 +4,7 @@ import DayleafCore
 
 /// 笔记视图：每个 TODO 是一个主题，它名下（/link、/done #N 等）的日志按日期汇成笔记；每个标签也是一个主题，汇总带这个标签的所有待办的笔记。专注计时记录不在这里显示。
 struct NotesView: View {
+    @ObservedObject private var languages = LanguageStore.shared
     @ObservedObject var store: JournalStore
     let initialSelection: UUID?
     let initialTag: String?
@@ -156,7 +157,6 @@ struct NotesView: View {
                 Spacer()
                 let key = HotKeyStore.binding(for: .notes).label
                 Text("\(key) 关闭").font(.system(size: 11)).foregroundStyle(Palette.muted)
-                    .help("\(key) 或 Esc 关闭笔记；窗口没有标题栏按钮，拖动空白处可移动")
             }
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(Palette.muted)
@@ -170,17 +170,13 @@ struct NotesView: View {
                 VStack(spacing: 8) {
                     Image(systemName: "note.text").font(.system(size: 26, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
                     Text("没有匹配的任务或标签").font(.system(size: 13, weight: .medium))
-                    if query.isEmpty {
-                        Text("在日志输入框写 /link #1 把日志记到某个任务名下，或直接写 /done #1 内容。笔记按任务汇总在这里；给待办打上标签，还能按标签汇总。")
-                            .font(.system(size: 12)).foregroundStyle(Palette.muted).multilineTextAlignment(.center)
-                    }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(.horizontal, 8)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 4) {
                         tagSectionHeader
                         if tagList.isEmpty {
-                            Text("还没有标签。点右上角 + 新建一个笔记本，或给待办打上 #标签。")
+                            Text("还没有标签")
                                 .font(.system(size: 11)).foregroundStyle(Palette.muted).padding(.horizontal, 10).padding(.bottom, 4)
                         }
                         ForEach(tagList) { tagRow($0) }
@@ -196,7 +192,7 @@ struct NotesView: View {
     }
 
     private func sectionTitle(_ text: String) -> some View {
-        Text(text).font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)
+        Text(LocalizedStringKey(text)).font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)
             .padding(.horizontal, 10).padding(.top, 6)
     }
 
@@ -209,7 +205,7 @@ struct NotesView: View {
                 Image(systemName: "plus").font(.system(size: 11, weight: .semibold)).frame(width: 24, height: 22).contentShape(Rectangle())
             }
             .buttonStyle(.plain).foregroundStyle(Palette.accent).padding(.top, 6)
-            .help("新建标签：可以先建一个空的笔记本，以后再往里写").accessibilityLabel("新建标签")
+            .help("新建标签").accessibilityLabel("新建标签")
             .disabled(store.isReadOnly)
             .popover(isPresented: $creatingTag, arrowEdge: .trailing) { newTagPopover }
         }
@@ -218,9 +214,9 @@ struct NotesView: View {
     private var newTagPopover: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("新建标签").font(.headline)
-            TextField("标签名，例如 读书笔记 或 项目/子项", text: $newTagName).textFieldStyle(.roundedBorder).onSubmit(createTag)
-            if let newTagMessage { Text(newTagMessage).font(.caption).foregroundStyle(.orange) }
-            Text("标签不含空格；用 / 分层，`论文/方法` 属于 `论文`。").font(.caption).foregroundStyle(.secondary)
+            TextField("标签名称", text: $newTagName).textFieldStyle(.roundedBorder).onSubmit(createTag)
+            if let newTagMessage { Text(LocalizedStringKey(newTagMessage)).font(.caption).foregroundStyle(.orange) }
+            Text("用 / 分层").font(.caption).foregroundStyle(.secondary)
             HStack {
                 Spacer()
                 Button("取消") { creatingTag = false }.keyboardShortcut(.cancelAction)
@@ -298,8 +294,8 @@ struct NotesView: View {
         return VStack(alignment: .leading, spacing: 10) {
             Text("重命名 #\(old)").font(.headline)
             TextField("新名字", text: $renameText).textFieldStyle(.roundedBorder).onSubmit { commitRename(old) }
-            if let renameMessage { Text(renameMessage).font(.caption).foregroundStyle(.orange) }
-            Text(merging ? "#\(target ?? "") 已经存在：会把两个标签合并，内容汇到一起。" : "所有待办、日志里的 #\(old)（包括它的子标签）都会改成新名字。可以 ⌘Z 撤销。")
+            if let renameMessage { Text(LocalizedStringKey(renameMessage)).font(.caption).foregroundStyle(.orange) }
+            Text(merging ? AppLocalizedFormat("#%@ 已经存在：会把两个标签合并，内容汇到一起。", target ?? "") : AppLocalizedFormat("所有待办、日志里的 #%@（包括它的子标签）都会改成新名字。可以 ⌘Z 撤销。", old))
                 .font(.caption).foregroundStyle(merging ? Palette.accent : .secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
@@ -331,7 +327,7 @@ struct NotesView: View {
                     if topic.dropped { Image(systemName: "xmark.circle.fill").font(.system(size: 11)).foregroundStyle(Palette.muted) } else if topic.completed { Image(systemName: "checkmark.circle.fill").font(.system(size: 11)).foregroundStyle(Palette.success) }
                 }
                 HStack(spacing: 8) {
-                    Text(topic.count == 0 ? "还没有笔记" : "\(topic.count) 条").monospacedDigit()
+                    Text(topic.count == 0 ? AppLocalized("还没有笔记") : AppLocalizedFormat("%lld 条", topic.count)).monospacedDigit()
                     if topic.imageCount > 0 { Label("\(topic.imageCount)", systemImage: "photo") }
                     if topic.deleted { Text("任务已删除") }
                     Spacer(minLength: 4)
@@ -383,7 +379,6 @@ struct NotesView: View {
             VStack(spacing: 10) {
                 Image(systemName: "text.book.closed").font(.system(size: 34, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
                 Text("从左侧选择一个任务或标签").font(.system(size: 14, weight: .medium))
-                Text("它名下的所有日志会按日期汇总成笔记，包括图片；标签会汇总带它的所有待办的笔记。").font(.system(size: 12)).foregroundStyle(Palette.muted)
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
@@ -425,7 +420,7 @@ struct NotesView: View {
                     Button { store.dropTodo(task.id, on: task.date) } label: {
                         Label(task.task.isDropped ? "恢复" : "放弃", systemImage: task.task.isDropped ? "arrow.uturn.backward.circle" : "nosign")
                     }
-                    .help(task.task.isDropped ? "恢复成未完成" : "不用做了，但留着记录（笔记都在） · ⌘Z 撤销")
+                    .help(task.task.isDropped ? "恢复" : "放弃")
                 }
                 Button { editingTopicTags = true } label: { Label("标签", systemImage: task.task.tags.isEmpty ? "tag" : "tag.fill") }
                     .help("给这个待办加、去标签")
@@ -437,11 +432,11 @@ struct NotesView: View {
                     Label(pinned ? "取消固定" : "固定", systemImage: pinned ? "pin.slash" : "pin")
                 }
                 .foregroundStyle(pinned ? Palette.accent : Palette.ink)
-                .help(pinned ? "取消固定：新日志不再默认记到这个待办" : "固定为当前待办：新日志（快速日志、笔记、日志窗口）没有指定时默认记到它名下，不计时")
+                .help(pinned ? "取消固定" : "固定为当前待办")
             }
             if !topic.deleted {
                 Button { close(); reveal(topic.id) } label: { Label("在清单中显示", systemImage: "list.bullet") }
-                    .help("关闭笔记，回到清单并选中这个任务")
+                    .help("在清单中显示")
             }
             Button {
                 NSPasteboard.general.clearContents()
@@ -490,7 +485,7 @@ struct NotesView: View {
                             .background(Palette.card, in: RoundedRectangle(cornerRadius: 6))
                             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Palette.accent.opacity(0.6)))
                             .onAppear { noteEditFocused = true }
-                        Text("回车换行 · ⌘回车或点击别处保存 · Esc 取消 · 清空后保存会删除这条（可撤销）").font(.system(size: 10)).foregroundStyle(Palette.muted)
+                        Text("⌘Enter 保存 · Esc 取消").font(.system(size: 10)).foregroundStyle(Palette.muted)
                     }
                 } else if !log.text.isEmpty {
                     TaskLinkText(source: log.text, completed: false, color: Palette.ink, fontSize: 13,
@@ -504,7 +499,7 @@ struct NotesView: View {
                             ForEach(Array(log.images.enumerated()), id: \.element) { index, name in
                                 Button { ImageViewerController.shared.show(store: store, around: log, index: index) } label: {
                                     ImageFit(url: store.imageURL(name), maxWidth: 440, maxHeight: 280)
-                                }.buttonStyle(.plain).help("点击查看大图；同一个任务的笔记里的图片可以 ← → 切换")
+                                }.buttonStyle(.plain).help("点击查看大图")
                             }
                         }
                     }
@@ -537,7 +532,7 @@ struct NotesView: View {
             Image(systemName: symbol).font(.system(size: 11)).frame(width: 24, height: 22).contentShape(Rectangle())
         }
         .buttonStyle(.plain).foregroundStyle(destructive ? Palette.deadline : Palette.muted)
-        .help(help).accessibilityLabel(help)
+        .help(LocalizedStringKey(help)).accessibilityLabel(LocalizedStringKey(help))
     }
 
     private func beginNoteEdit(_ item: JournalStore.LoggedLog) {
@@ -605,7 +600,7 @@ struct NotesView: View {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 4) {
                                 if notes.isEmpty && tasks.isEmpty {
-                                    Text("这个笔记本还是空的。在下面直接写一条，或给待办打上 #\(tag)。")
+                                    Text("还没有笔记")
                                         .font(.system(size: 12)).foregroundStyle(Palette.muted).padding(.vertical, 12)
                                 }
                                 if chapterView { chapterList(tag, chapters) } else { dateList(notes) }
@@ -784,7 +779,7 @@ struct NotesView: View {
             HStack(spacing: 8) {
                 Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent)
                 TaskInput(text: textBinding(key), focused: $tagFocused,
-                          placeholder: "写进 #\(tag)，⌘回车保存 · @ 关联待办 · # 加标签 · ⌘V 贴图",
+                          placeholder: AppLocalizedFormat("写进 #%@…", tag),
                           fontSize: 13, submit: { submitTag(tag) }, onPasteImages: { datas in
                     addImages(ImageTools.save(datas, in: store), to: key)
                     tagFocused = true
@@ -797,7 +792,7 @@ struct NotesView: View {
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
             LogChipsBar(store: store, link: link, unlinked: unlinked, tags: tags, contextTags: [tag])
             if let error {
-                Text(error).font(.system(size: 11)).foregroundStyle(error.hasPrefix("已") ? Palette.success : Palette.deadline)
+                Text(LocalizedStringKey(error)).font(.system(size: 11)).foregroundStyle(error.hasPrefix("已") ? Palette.success : Palette.deadline)
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 12)
@@ -810,12 +805,12 @@ struct NotesView: View {
         guard !text.isEmpty || !draft.images.isEmpty else { return }
         do {
             let command = try store.quickLog(text, images: draft.images, taskID: draft.link, linkDefault: !draft.unlinked, tags: TagText.merge([tag], draft.tags), on: Date())
-            guard case .entry = command else { error = "这里只能写笔记，不支持 \(text) 这类命令。"; return }
+            guard case .entry = command else { error = AppLocalizedFormat("这里只能写笔记，不支持 %@ 这类命令。", text); return }
             nav.clearDraft(key)
             error = nil
             tagFocused = true
             ImageIndexer.run(store: store)
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = AppErrorDescription(error) }
     }
 
     /// 标签的笔记导出为 Markdown：先列出待办，再按日期分组，每条标明来自哪个待办。
@@ -854,7 +849,7 @@ struct NotesView: View {
             HStack(spacing: 8) {
                 Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent)
                 TaskInput(text: textBinding(key), focused: $focused,
-                          placeholder: topic.deleted ? "任务已删除，无法追加笔记" : "给 \(topic.number.map { "#\($0)" } ?? "这个任务") 追加笔记，⌘回车保存 · # 加标签 · ⌘V 贴图",
+                          placeholder: topic.deleted ? AppLocalized("任务已删除，无法追加笔记") : AppLocalized("追加笔记…"),
                           fontSize: 13, submit: { submit(topic) }, onPasteImages: { datas in
                     addImages(ImageTools.save(datas, in: store), to: key)
                     focused = true
@@ -869,7 +864,7 @@ struct NotesView: View {
                 LogChipsBar(store: store, link: .constant(nil), unlinked: .constant(false), tags: tags, showsLink: false)
             }
             if let error {
-                Text(error).font(.system(size: 11)).foregroundStyle(error.hasPrefix("已") ? Palette.success : Palette.deadline)
+                Text(LocalizedStringKey(error)).font(.system(size: 11)).foregroundStyle(error.hasPrefix("已") ? Palette.success : Palette.deadline)
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 12)
@@ -882,12 +877,12 @@ struct NotesView: View {
         guard !text.isEmpty || !draft.images.isEmpty else { return }
         do {
             let command = try store.quickLog(text, images: draft.images, taskID: topic.id, tags: draft.tags, on: Date())
-            guard case .entry = command else { error = "这里只能写笔记，不支持 \(text) 这类命令。"; return }
+            guard case .entry = command else { error = AppLocalizedFormat("这里只能写笔记，不支持 %@ 这类命令。", text); return }
             nav.clearDraft(key)
             error = nil
             focused = true
             ImageIndexer.run(store: store)
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = AppErrorDescription(error) }
     }
 
     private func kindColor(_ kind: DailyLogKind) -> Color {

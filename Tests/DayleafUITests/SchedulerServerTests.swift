@@ -20,6 +20,24 @@ final class SchedulerServiceTests: XCTestCase {
 
     private func todayLogs(_ store: JournalStore) -> [DailyLogEntry] { store.entry(for: Date()).logs.filter { !$0.focus } }
 
+    func testPriorityRequestsPersistAndRejectMissingArguments() throws {
+        let (service, store, _) = try make()
+        var request = WireRequest(op: .priority, task: 1)
+        XCTAssertFalse(service.handle(request).ok)
+        request.priority = .high
+        XCTAssertTrue(service.handle(request).ok)
+        XCTAssertEqual(JournalStore(directory: store.directory, readOnlySnapshot: true).locate(number: 1)?.task.priority, .high)
+        request.task = 999
+        XCTAssertFalse(service.handle(request).ok)
+        var create = WireRequest(op: .todo, text: "明天 15:00 Review")
+        create.priority = .low
+        let response = service.handle(create)
+        XCTAssertTrue(response.ok)
+        let item = try XCTUnwrap(store.locate(number: try XCTUnwrap(response.number)))
+        XCTAssertEqual(item.task.priority, .low)
+        XCTAssertTrue(item.task.dueHasTime)
+    }
+
     func testLogLinksByExplicitTaskInlineReferenceAndFocusFallbackWithPrecedence() throws {
         let (service, store, _) = try make()
         var response = service.handle(WireRequest(op: .log, text: "读到第三节", task: 1))
@@ -503,8 +521,19 @@ final class SchedEndToEndTests: XCTestCase {
         XCTAssertEqual(result.code, 0, result.err)
         XCTAssertEqual(rig.store.allLogs().last?.log.text, "来自标准输入\n第二行")
 
-        result = try await sched(["todo", "明天", "15:00", "开会"], directory: rig.directory)
+        result = try await sched(["todo", "--priority", "high", "明天", "15:00", "开会"], directory: rig.directory)
         XCTAssertTrue(result.out.contains("已添加 #3 开会，截止 明天 15:00"), result.out)
+        XCTAssertEqual(rig.store.locate(number: 3)?.task.priority, .high)
+        result = try await sched(["priority", "3", "low"], directory: rig.directory)
+        XCTAssertEqual(result.code, 0, result.err)
+        XCTAssertEqual(rig.store.locate(number: 3)?.task.priority, .low)
+        result = try await sched(["priority", "3", "invalid"], directory: rig.directory)
+        XCTAssertEqual(result.code, 2)
+        result = try await sched(["tasks", "--json"], directory: rig.directory)
+        let rows = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(result.out.utf8)) as? [[String: Any]])
+        let row = try XCTUnwrap(rows.first { $0["number"] as? Int == 3 })
+        XCTAssertEqual(row["priority"] as? String, "low")
+        XCTAssertEqual(row["due_has_time"] as? Bool, true)
         result = try await sched(["done", "1"], directory: rig.directory)
         XCTAssertTrue(result.out.contains("已完成 #1"), result.out)
         XCTAssertTrue(rig.store.locate(number: 1)!.task.completed)

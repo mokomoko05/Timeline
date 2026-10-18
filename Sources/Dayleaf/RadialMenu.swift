@@ -93,7 +93,7 @@ struct RadialMenuView: View {
                 itemView(item, index: index)
             }
             if let hovered = model.hovered, model.items.indices.contains(hovered) {
-                Text(model.items[hovered].title)
+                Text(LocalizedStringKey(model.items[hovered].title))
                     .font(.system(size: 11, weight: .medium)).lineLimit(1)
                     .padding(.horizontal, 9).padding(.vertical, 4)
                     .background(.regularMaterial, in: Capsule())
@@ -293,13 +293,14 @@ final class RadialMenuController {
 
 /// 一行右边的「三点」按钮：鼠标停上去展开环形菜单，点一下也展开；右键有同样的操作。
 struct RadialMenuButton: View {
+    @Environment(\.typography) private var typography
     let items: () -> [RadialItem]
     var help = "更多操作"
     @State private var anchor: AnchorBox = AnchorBox()
 
     var body: some View {
         Button { RadialMenuController.shared.present(items: items(), anchor: anchor.view ?? NSView()) } label: {
-            Image(systemName: "ellipsis").font(.system(size: UIScale.pt(12), weight: .bold)).frame(width: 18, height: 18)
+            Image(systemName: "ellipsis").font(.system(size: typography.pt(12), weight: .bold)).frame(width: 18, height: 18)
         }
         .buttonStyle(HitAreaButtonStyle())
         .foregroundStyle(Palette.muted)

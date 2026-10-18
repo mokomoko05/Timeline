@@ -43,6 +43,7 @@ struct ImageFit: View {
 
 /// 输入框上方：已粘贴、还没提交的图片。
 struct PendingImagesStrip: View {
+    @Environment(\.typography) private var typography
     let store: JournalStore
     let names: [String]
     let remove: (String) -> Void
@@ -66,7 +67,7 @@ struct PendingImagesStrip: View {
                         .accessibilityLabel("待发送图片 \(index + 1)")
                 }
                 Text("\(names.count) 张图片，回车随日志一起保存")
-                    .font(.system(size: UIScale.pt(11))).foregroundStyle(TerminalPalette.muted)
+                    .font(.system(size: typography.pt(11))).foregroundStyle(TerminalPalette.muted)
             }
             .padding(.vertical, 6).padding(.horizontal, 4)
         }
@@ -109,10 +110,10 @@ struct LogFilterPopover: View {
                 Spacer()
                 Button("清除") { selection = [] }.disabled(selection.isEmpty)
             }
-            Text("勾选后，日志区会跨日期只显示这些任务相关的记录。")
+            Text("勾选任务以筛选日志")
                 .font(.caption).foregroundStyle(.secondary)
             if summaries.isEmpty {
-                Text("还没有任务。先添加待办，再用 /link #1 把日志记到它名下。").font(.callout).foregroundStyle(.secondary).padding(.vertical, 8)
+                Text("还没有待办").font(.callout).foregroundStyle(.secondary).padding(.vertical, 8)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {

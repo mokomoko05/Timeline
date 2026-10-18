@@ -180,6 +180,7 @@ struct UnifiedNotesView: View {
 
 /// 笔记窗口里的日记模式：沿用笔记的侧栏、卡片和编辑器，不再嵌入带复盘区的 DayLogView。
 private struct UnifiedJournalView: View {
+    @Environment(\.locale) private var locale
     @ObservedObject var store: JournalStore
     @Binding var date: Date
     @StateObject private var mention = MentionState()
@@ -204,8 +205,8 @@ private struct UnifiedJournalView: View {
         guard !query.isEmpty else { return sorted }
         return sorted.filter { item in
             let entry = store.entry(for: item)
-            let dateText = item.formatted(.dateTime.year().month(.wide).day())
-            let weekday = item.formatted(.dateTime.weekday(.wide))
+            let dateText = item.formatted(.dateTime.year().month(.wide).day().locale(locale))
+            let weekday = item.formatted(.dateTime.weekday(.wide).locale(locale))
             return dateText.localizedStandardContains(query)
                 || weekday.localizedStandardContains(query)
                 || entry.logs.contains { $0.text.localizedStandardContains(query) || $0.tags.contains { $0.localizedStandardContains(query) } }
@@ -235,7 +236,6 @@ private struct UnifiedJournalView: View {
                 Spacer()
                 let key = HotKeyStore.binding(for: .notes).label
                 Text("\(key) 关闭").font(.system(size: 11)).foregroundStyle(Palette.muted)
-                    .help("\(key) 或 Esc 关闭笔记；窗口没有标题栏按钮，拖动空白处可移动")
             }
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(Palette.muted)
@@ -248,10 +248,6 @@ private struct UnifiedJournalView: View {
                 VStack(spacing: 8) {
                     Image(systemName: "book.pages").font(.system(size: 26, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
                     Text(query.isEmpty ? "还没有日记" : "没有匹配的日期").font(.system(size: 13, weight: .medium))
-                    if query.isEmpty {
-                        Text("在右侧输入框写下今天的日志，它会按日期出现在这里。")
-                            .font(.system(size: 12)).foregroundStyle(Palette.muted).multilineTextAlignment(.center)
-                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.horizontal, 8)
@@ -275,12 +271,12 @@ private struct UnifiedJournalView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
                     Image(systemName: "calendar").font(.system(size: 11)).foregroundStyle(selected ? Palette.accent : Palette.muted)
-                    Text(item.formatted(.dateTime.year().month(.wide).day()))
+                    Text(item.formatted(.dateTime.year().month(.wide).day().locale(locale)))
                         .font(.system(size: 13, weight: selected ? .semibold : .regular))
                         .lineLimit(1)
                 }
                 HStack(spacing: 8) {
-                    Text(JournalDates.calendar.isDateInToday(item) ? "今天" : item.formatted(.dateTime.weekday(.abbreviated)))
+                    Text(JournalDates.calendar.isDateInToday(item) ? AppLocalized("今天") : item.formatted(.dateTime.weekday(.abbreviated).locale(locale)))
                     Text("\(logs.count) 条日志").monospacedDigit()
                     Spacer(minLength: 4)
                 }
@@ -305,7 +301,6 @@ private struct UnifiedJournalView: View {
                         VStack(spacing: 8) {
                             Image(systemName: "book.pages").font(.system(size: 30, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
                             Text("这一天还没有日志").font(.system(size: 14, weight: .medium))
-                            Text("在下面写下今天的进展、想法或卡点").font(.system(size: 12)).foregroundStyle(Palette.muted)
                         }
                         .frame(maxWidth: .infinity).padding(.vertical, 60)
                     } else {
@@ -324,16 +319,16 @@ private struct UnifiedJournalView: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(date.formatted(.dateTime.year().month(.wide).day()))
+                Text(date.formatted(.dateTime.year().month(.wide).day().locale(locale)))
                     .font(.system(size: 18, weight: .semibold))
                 HStack(spacing: 10) {
-                    Text(date.formatted(.dateTime.weekday(.wide))).foregroundStyle(Palette.muted)
+                    Text(date.formatted(.dateTime.weekday(.wide).locale(locale))).foregroundStyle(Palette.muted)
                     Text("\(entry.logs.count) 条日志").foregroundStyle(Palette.muted)
                 }.font(.system(size: 12))
             }
             Spacer()
             if let error {
-                Text(error).font(.system(size: 11)).foregroundStyle(error.hasPrefix("已") ? Palette.success : Palette.deadline)
+                Text(LocalizedStringKey(error)).font(.system(size: 11)).foregroundStyle(error.hasPrefix("已") ? Palette.success : Palette.deadline)
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 14)
@@ -394,7 +389,7 @@ private struct UnifiedJournalView: View {
     private func journalAction(_ symbol: String, _ help: String, destructive: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol).font(.system(size: 11)).frame(width: 24, height: 22).contentShape(Rectangle()) }
             .buttonStyle(.plain).foregroundStyle(destructive ? Palette.deadline : Palette.muted)
-            .raisedOnHover(radius: 5).help(help).accessibilityLabel(help)
+            .raisedOnHover(radius: 5).help(LocalizedStringKey(help)).accessibilityLabel(LocalizedStringKey(help))
     }
 
     private var composer: some View {
@@ -407,7 +402,7 @@ private struct UnifiedJournalView: View {
             HStack(spacing: 8) {
                 Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent)
                 TaskInput(text: Binding(get: { store.entry(for: date).logDraft }, set: { store.setLogDraft($0, on: date) }),
-                          focused: $focused, placeholder: "写下今天的日志 · @ 待办 · # 标签 · ⌘V 贴图", fontSize: 13,
+                          focused: $focused, placeholder: "写下日志…", fontSize: 13,
                           submit: submit, onPasteImages: { datas in
                     for name in ImageTools.save(datas, in: store) { store.addDraftImage(name, on: date) }
                     focused = true
@@ -444,7 +439,7 @@ private struct UnifiedJournalView: View {
             let command = try store.commitLog(on: date)
             if case .entry = command { error = nil; focused = true; ImageIndexer.run(store: store) }
             else if case .help = command { store.setLogDraft("", on: date); error = "日志命令：/link、/done、/filter、/help" }
-        } catch let issue { error = issue.localizedDescription }
+        } catch let issue { error = AppErrorDescription(issue) }
     }
 
     private func beginEdit(_ log: DailyLogEntry) { saveEdit(); editingID = log.id; editText = log.text; editFocused = true }

@@ -3,6 +3,7 @@ import SwiftUI
 
 /// 复盘区里编辑单条日志的文本框：Enter 换行，⌘Enter 保存，点击别处失焦也保存，Esc 取消；输入法组词时不拦截。
 struct LogTextEditor: NSViewRepresentable {
+    @Environment(\.typography) private var typography
     @Binding var text: String
     let commit: () -> Void
     let cancel: () -> Void
@@ -13,7 +14,7 @@ struct LogTextEditor: NSViewRepresentable {
         let scroll = NSScrollView()
         let editor = KeyTrackingTextView(frame: .zero)
         editor.delegate = context.coordinator
-        editor.font = .monospacedSystemFont(ofSize: UIScale.pt(13), weight: .regular)
+        editor.font = .monospacedSystemFont(ofSize: typography.pt(13), weight: .regular)
         editor.isRichText = false
         editor.allowsUndo = true
         editor.drawsBackground = false
@@ -39,6 +40,8 @@ struct LogTextEditor: NSViewRepresentable {
         context.coordinator.parent = self
         guard let editor = scroll.documentView as? KeyTrackingTextView else { return }
         scroll.appearance = NSAppearance(named: .darkAqua)
+        let font = NSFont.monospacedSystemFont(ofSize: typography.pt(13), weight: .regular)
+        if editor.font != font { editor.font = font }
         editor.textColor = .labelColor
         if editor.string != text, !editor.hasMarkedText() { editor.string = text }
         editor.onSubmitShortcut = { [weak editor, weak coordinator = context.coordinator] in

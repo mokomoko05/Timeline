@@ -232,6 +232,39 @@ final class FocusSessionTests: XCTestCase {
         XCTAssertEqual(Prefs.focusMinLogSeconds, 0, "负数当 0")
     }
 
+    func testDefaultFocusDurationPersistsAndExplicitSessionDurationOverridesIt() throws {
+        let key = Prefs.focusDefaultMinutes
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let saved { UserDefaults.standard.set(saved, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertEqual(Prefs.focusDurationMinutes(), 25)
+        UserDefaults.standard.set(45, forKey: key)
+        XCTAssertEqual(Prefs.focusDurationMinutes(), 45)
+        let (session, _, task) = try makeSession()
+        session.start(task: task, url: nil)
+        XCTAssertEqual(session.active?.plannedSeconds, 45 * 60)
+        session.stop(reason: "test")
+        session.start(task: task, url: nil, plannedSeconds: 10 * 60)
+        XCTAssertEqual(session.active?.plannedSeconds, 10 * 60)
+        XCTAssertEqual(Prefs.focusDurationMinutes(), 45, "单轮调整不覆盖设置里的默认时长")
+        session.stop(reason: "test")
+        UserDefaults.standard.set(0, forKey: key)
+        XCTAssertEqual(Prefs.focusDurationMinutes(), 25)
+    }
+
+    func testManualMinuteSettingsValidateWholeMinutesAndAllowZeroOnlyForLogThreshold() {
+        XCTAssertEqual(FocusMinutesSetting.validMinutes(" 45 ", minimum: 1), 45)
+        XCTAssertEqual(FocusMinutesSetting.validMinutes("180", minimum: 0), 180)
+        XCTAssertEqual(FocusMinutesSetting.validMinutes("0", minimum: 0), 0)
+        for text in ["", "-1", "1.5", "abc", "99999999999999999999999"] {
+            XCTAssertNil(FocusMinutesSetting.validMinutes(text, minimum: 0))
+        }
+        XCTAssertNil(FocusMinutesSetting.validMinutes("0", minimum: 1))
+    }
+
     func testLeavingNeedsConsecutivePollsAndGraceAdoptsRedirectedPage() throws {
         let (session, store, task) = try makeSession()
         session.start(task: task, url: try XCTUnwrap(FocusSession.link(in: task.task.title)))
@@ -320,6 +353,31 @@ final class FocusSessionTests: XCTestCase {
         XCTAssertEqual(session.elapsed, 120, accuracy: 0.01, "恢复时扣除暂停的 3 分钟")
         session.stop(reason: "手动结束", now: start.addingTimeInterval(360))
         XCTAssertEqual(store.locate(task.id)?.task.focusSeconds ?? 0, 180, accuracy: 0.01)
+    }
+
+    func testCountdownDialAndDigitsStayInSyncAcrossPauseExtensionAndOvertime() throws {
+        let (session, _, task) = try makeSession()
+        let start = Date()
+        XCTAssertEqual(session.remainingFraction, 0)
+        session.start(task: task, url: nil, plannedSeconds: 1500, now: start)
+        XCTAssertEqual(session.remainingFraction, 1)
+        session.pause(now: start.addingTimeInterval(600))
+        XCTAssertEqual(FocusSession.clock(session.remainingSeconds), "15:00")
+        XCTAssertEqual(session.remainingFraction, 0.6, accuracy: 0.001)
+        session.pause(now: start.addingTimeInterval(900))
+        XCTAssertEqual(session.remainingSeconds, 900)
+        session.extend(by: 300)
+        XCTAssertEqual(FocusSession.clock(session.remainingSeconds), "20:00")
+        XCTAssertEqual(session.remainingFraction, 2.0 / 3, accuracy: 0.001)
+        session.resume(now: start.addingTimeInterval(900))
+        XCTAssertEqual(session.remainingSeconds, 1200)
+        session.pause(now: start.addingTimeInterval(2400))
+        XCTAssertEqual(FocusSession.clock(session.remainingSeconds), "00:00")
+        XCTAssertEqual(session.remainingFraction, 0)
+        XCTAssertNotNil(session.active, "到点后仍由用户结束专注")
+        session.stop(reason: "test", now: start.addingTimeInterval(2400))
+        XCTAssertEqual(session.remainingSeconds, 0)
+        XCTAssertEqual(session.remainingFraction, 0)
     }
 
     func testStoppingWhilePausedExcludesThePausedTime() throws {

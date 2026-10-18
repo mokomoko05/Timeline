@@ -32,6 +32,15 @@ final class SchedulerService {
         case .done: return setCompleted(true, request)
         case .undone: return setCompleted(false, request)
         case .drop: return dropTask(request)
+        case .priority:
+            guard !store.isReadOnly else { return .failure("当前数据只读，无法写入。") }
+            guard let number = request.task, let item = store.locate(number: number), let priority = request.priority else {
+                return .failure("请提供有效任务编号和优先级。")
+            }
+            store.setPriority(priority, for: item.id)
+            store.save()
+            guard !store.hasPendingSave else { return .failure("保存失败，请在应用中重试。") }
+            return WireResponse(ok: true, message: "已设置优先级：" + priority.title, number: number)
         }
     }
 
@@ -118,8 +127,9 @@ final class SchedulerService {
         guard !store.isReadOnly else { return .failure("当前数据只读，无法写入。") }
         let text = (request.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return .failure("待办内容为空。") }
-        guard let added = store.addParsedTodo(text, on: Date()) else { return .failure("添加失败。") }
+        guard let added = store.addParsedTodo(text, on: Date(), priority: request.priority ?? .normal) else { return .failure("添加失败。") }
         store.save()
+        guard !store.hasPendingSave else { return .failure("保存失败，请在应用中重试。") }
         var message = "已添加 " + label(added)
         if let due = added.task.dueDate {
             var text = due.relativeLabel

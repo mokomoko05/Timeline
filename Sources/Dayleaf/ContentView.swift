@@ -11,6 +11,8 @@ struct Card: ViewModifier {
 }
 
 struct ContentView: View {
+    @Environment(\.typography) private var typography
+    @Environment(\.locale) private var locale
     @ObservedObject var store: JournalStore
     @ObservedObject var loginItem: LoginItem
     @State private var selectedDate = JournalDates.calendar.startOfDay(for: Date())
@@ -35,7 +37,7 @@ struct ContentView: View {
     @AppStorage(Prefs.hideCompleted) private var hideCompleted = false
     @AppStorage(Prefs.clickExpands) private var clickExpands = true
     @AppStorage(Prefs.weekStartsSunday) private var weekStartsSunday = false
-    @AppStorage(Prefs.uiScale) private var uiScale = 1.0
+    @AppStorage(Prefs.taskSortMode) private var taskSort = TaskSortMode.deadline.rawValue
     @Environment(\.focusSession) private var focus
     @ObservedObject private var themes = ThemeStore.shared
     @EnvironmentObject private var reminders: ReminderScheduler
@@ -48,7 +50,7 @@ struct ContentView: View {
     private let dayTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     private var entry: DayEntry { store.entry(for: selectedDate) }
     /// 全部任务（不属于某一天），按截止时间排序；隐藏已完成时过滤掉已完成的。
-    private var visibleTasks: [ScheduledTask] { store.sortedTasks().filter { !hideCompleted || !$0.task.completed } }
+    private var visibleTasks: [ScheduledTask] { (TaskSortMode(rawValue: taskSort) ?? .deadline).sorted(store.tasks()).filter { !hideCompleted || !$0.task.completed } }
     private var weekStart: Int { weekStartsSunday ? 1 : 2 }
     private var footerVisible: Bool { store.errorMessage != nil || !reminders.status.isEmpty }
     private var draft: Binding<String> {
@@ -72,7 +74,7 @@ struct ContentView: View {
             }
             if footerVisible { footer.transition(.opacity) }
         }
-        .id("\(uiScale)|\(themes.themeID)|\(themes.appearance.rawValue)")
+        .id("\(themes.themeID)|\(themes.appearance.rawValue)")
         .animation(Motion.quick, value: footerVisible)
         .background(Palette.background)
         .foregroundStyle(Palette.ink)
@@ -118,7 +120,7 @@ struct ContentView: View {
         .onAppear {
             refreshOverview()
             reorder.groupProvider = { id in groups(for: visibleTasks).first { $0.items.contains { $0.id == id } }?.items.map(\.id) ?? [] }
-            reorder.commit = { store.reorderTasks($0) }
+            reorder.commit = { store.reorderTasks($0); taskSort = TaskSortMode.manual.rawValue }
         }
         .onReceive(dayTimer) { now in
             refreshOverview()
@@ -300,7 +302,7 @@ struct ContentView: View {
             Button("备份与恢复…") { showingBackups = true }
             Button("设置…") { commands.send(.settings) }
         } label: {
-            Image(systemName: "ellipsis.circle").font(.system(size: UIScale.pt(19))).foregroundStyle(Palette.muted)
+            Image(systemName: "ellipsis.circle").font(.system(size: typography.pt(19))).foregroundStyle(Palette.muted)
                 .frame(width: 32, height: 32).contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
@@ -315,21 +317,21 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
                     Text(format(selectedDate, "M月d日"))
-                        .font(.system(size: UIScale.pt(26), weight: .semibold, design: .rounded))
+                        .font(.system(size: typography.pt(26), weight: .semibold, design: .rounded))
                         .lineLimit(1).minimumScaleFactor(0.8)
                     if JournalDates.calendar.isDateInToday(selectedDate) {
-                        Text("今天").font(.system(size: UIScale.pt(11), weight: .medium))
+                        Text("今天").font(.system(size: typography.pt(11), weight: .medium))
                             .padding(.horizontal, 9).padding(.vertical, 5)
                             .background(Palette.soft, in: Capsule())
                             .foregroundStyle(Palette.accent)
                     } else {
                         Button("回到今天") { select(Date()) }
-                            .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: UIScale.pt(11), weight: .medium))
+                            .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: typography.pt(11), weight: .medium))
                             .foregroundStyle(Palette.accent).help("回到今天 · ⌘T")
                     }
                 }
                 Text(format(selectedDate, "yyyy年 · EEEE"))
-                    .font(.system(size: UIScale.pt(12))).foregroundStyle(Palette.muted)
+                    .font(.system(size: typography.pt(12))).foregroundStyle(Palette.muted)
                     .lineLimit(1).fixedSize()
                 overviewChip
             }
@@ -353,13 +355,13 @@ struct ContentView: View {
                 Button("把 \(overdueCount) 项逾期事项的截止日期改到今天") { rolloverToday() }
             } label: {
                 Label("逾期 \(overdueCount)", systemImage: "exclamationmark.circle.fill")
-                    .font(.system(size: UIScale.pt(11), weight: .medium))
+                    .font(.system(size: typography.pt(11), weight: .medium))
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Palette.deadline.opacity(0.14), in: Capsule())
                     .foregroundStyle(Palette.deadline)
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            .help("查看逾期事项，或把它们的截止日期改到今天")
+            .help("查看逾期事项")
         }
     }
 
@@ -414,7 +416,7 @@ struct ContentView: View {
                         .animation(Motion.quick, value: summary.doneToday)
                         .accessibilityLabel("今天的进度").accessibilityValue("\(summary.doneToday) / \(summary.totalToday)")
                     Text("今天 \(summary.doneToday)/\(summary.totalToday)")
-                        .font(.system(size: UIScale.pt(11), weight: .medium, design: .monospaced)).foregroundStyle(Palette.muted).fixedSize()
+                        .font(.system(size: typography.pt(11), weight: .medium, design: .monospaced)).foregroundStyle(Palette.muted).fixedSize()
                 }
             }
         }
@@ -426,8 +428,8 @@ struct ContentView: View {
         if count > 0 || group == nil {
             Button { if let group { scrollGroup = group } } label: {
                 HStack(spacing: 4) {
-                    Text("\(count)").font(.system(size: UIScale.pt(13), weight: .semibold, design: .rounded)).monospacedDigit()
-                    Text(title).font(.system(size: UIScale.pt(11)))
+                    Text("\(count)").font(.system(size: typography.pt(13), weight: .semibold, design: .rounded)).monospacedDigit()
+                    Text(LocalizedStringKey(title)).font(.system(size: typography.pt(11)))
                 }
                 .foregroundStyle(count > 0 ? tint : Palette.muted)
                 .padding(.horizontal, 8).padding(.vertical, 3)
@@ -442,20 +444,30 @@ struct ContentView: View {
     }
 
     private var todoCard: some View {
-        let all = store.sortedTasks()
+        let all = (TaskSortMode(rawValue: taskSort) ?? .deadline).sorted(store.tasks())
         let visible = all.filter { !hideCompleted || !$0.task.completed }
         let completed = all.filter(\.task.completed).count
         return VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 9) {
                 Image(systemName: "checklist").foregroundStyle(Palette.accent)
-                Text("待办清单").font(.system(size: UIScale.pt(16), weight: .semibold))
+                Text("待办清单").font(.system(size: typography.pt(16), weight: .semibold))
                     .foregroundStyle(interaction.activePane == .tasks ? Palette.accent : Palette.ink)
                 Spacer()
                 let hidden = hideCompleted ? completed : 0
+                Menu {
+                    Picker("排序", selection: $taskSort) {
+                        ForEach(TaskSortMode.allCases) { Text(LocalizedStringKey($0.title)).tag($0.rawValue) }
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+                .help(LocalizedStringKey((TaskSortMode(rawValue: taskSort) ?? .deadline).title))
+                .accessibilityLabel("排序")
                 if hidden > 0 {
                     Button { hideCompleted = false } label: {
                         Label("已隐藏 \(hidden) 项", systemImage: "eye.slash")
-                            .font(.system(size: UIScale.pt(11)))
+                            .font(.system(size: typography.pt(11)))
                             .padding(.horizontal, 7).padding(.vertical, 2)
                             .background(Palette.soft, in: Capsule())
                     }
@@ -473,9 +485,9 @@ struct ContentView: View {
                         VStack(alignment: .leading, spacing: TaskReorderModel.spacing) {
                             ForEach(groups(for: visible)) { group in
                                 HStack(spacing: 6) {
-                                    Text(group.title).font(.system(size: UIScale.pt(12), weight: .semibold)).foregroundStyle(group.tint)
+                                    Text(LocalizedStringKey(group.title)).font(.system(size: typography.pt(12), weight: .semibold)).foregroundStyle(group.tint)
                                         .id("group-" + group.id)
-                                    Text("\(group.items.count)").font(.system(size: UIScale.pt(11), design: .monospaced)).foregroundStyle(Palette.muted)
+                                    Text("\(group.items.count)").font(.system(size: typography.pt(11), design: .monospaced)).foregroundStyle(Palette.muted)
                                     Rectangle().fill(Palette.line).frame(height: 1)
                                 }
                                 .padding(.top, 8).padding(.horizontal, 2)
@@ -528,17 +540,16 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
                     Image(systemName: "plus").foregroundStyle(Palette.accent)
-                    TaskInput(text: draft, focused: $addingTodo, placeholder: "添加待办，之后再分配截止日期", submit: addTodo,
+                    TaskInput(text: draft, focused: $addingTodo, placeholder: "添加待办…", submit: addTodo,
                               cancel: { addingTodo = false }, previous: {
                         if let newest = visible.max(by: { ($0.task.number ?? 0) < ($1.task.number ?? 0) }) {
                             addingTodo = false
                             requestedEdit = newest.id
                         }
-                    }, minHeight: UIScale.pt(22), maxLines: 6, allowsNewlines: false, collapsesPastedNewlines: false)
-                        .help("回车添加。先创建，之后再用日历按钮或拖到日历上分配截止日期；也可以直接写「明天 15:00 开会」「每周一」「提前30分钟」，加 #标签 归类。支持 [别名](https://网址)，⌘K 插入链接")
+                    }, minHeight: typography.pt(22), maxLines: 6, allowsNewlines: false, collapsesPastedNewlines: false)
                     Button(action: addTodo) {
                         Image(systemName: "arrow.turn.down.left")
-                            .font(.system(size: UIScale.pt(11), weight: .semibold))
+                            .font(.system(size: typography.pt(11), weight: .semibold))
                             .padding(7).background(Palette.card, in: RoundedRectangle(cornerRadius: 6))
                     }
                     .buttonStyle(HitAreaButtonStyle())
@@ -570,9 +581,7 @@ struct ContentView: View {
             Image(systemName: hasHidden ? "eye.slash" : "leaf")
                 .font(.system(size: 30, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
             Text(hasHidden ? "已完成的事项已隐藏" : "还没有待办")
-                .font(.system(size: UIScale.pt(14), weight: .medium))
-            Text("在下方输入添加。先创建，之后再分配截止日期：\n点任务右侧的日历按钮，或把它拖到日历上。")
-                .font(.system(size: UIScale.pt(12))).foregroundStyle(Palette.muted).multilineTextAlignment(.center)
+                .font(.system(size: typography.pt(14), weight: .medium))
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
@@ -586,9 +595,10 @@ struct ContentView: View {
         let previews = dates.map { date in
             DeadlineDayCell.previewItems(dueItems: dueByDay[JournalDates.key(date)] ?? [], hideCompleted: hideCompleted)
         }
-        let rowCount = CGFloat(dates.count / 7)
-        let weekdays = Array(["日", "一", "二", "三", "四", "五", "六"].enumerated())
-        let ordered = (0..<7).map { weekdays[($0 + weekStart - 1) % 7].element }
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        let weekdays = formatter.veryShortStandaloneWeekdaySymbols ?? []
+        let ordered = (0..<7).map { weekdays[($0 + weekStart - 1) % 7] }
         return VStack(spacing: 12) {
             HStack {
                 if !tasksVisible {
@@ -598,13 +608,13 @@ struct ContentView: View {
                 Button { showingMonthJumper = true } label: {
                     HStack(spacing: 4) {
                         Text(format(displayedMonth, "yyyy年 M月"))
-                            .font(.system(size: UIScale.pt(16), weight: .semibold, design: .rounded))
+                            .font(.system(size: typography.pt(16), weight: .semibold, design: .rounded))
                             .foregroundStyle(interaction.activePane == .calendar ? Palette.accent : Palette.ink)
-                        Image(systemName: "chevron.down").font(.system(size: UIScale.pt(8), weight: .bold)).foregroundStyle(Palette.muted)
+                        Image(systemName: "chevron.down").font(.system(size: typography.pt(8), weight: .bold)).foregroundStyle(Palette.muted)
                     }
                 }
                 .buttonStyle(HitAreaButtonStyle(compact: true))
-                .help("点击跳转到任意年月 · 触控板左右轻扫切换月份")
+                .help("选择月份")
                 .accessibilityLabel("选择月份，当前\(format(displayedMonth, "yyyy年M月"))")
                 .popover(isPresented: $showingMonthJumper, arrowEdge: .bottom) {
                     MonthJumper(current: displayedMonth) { date in
@@ -614,31 +624,28 @@ struct ContentView: View {
                 }
                 Spacer()
                 Button("今天") { select(Date()) }
-                    .buttonStyle(HitAreaButtonStyle()).font(.system(size: UIScale.pt(11), weight: .medium))
+                    .buttonStyle(HitAreaButtonStyle()).font(.system(size: typography.pt(11), weight: .medium))
                     .foregroundStyle(Palette.accent).help("回到今天 · ⌘T")
-                Button("未完成") { agenda = .unfinished }.buttonStyle(HitAreaButtonStyle()).font(.system(size: UIScale.pt(11))).foregroundStyle(Palette.accent)
+                Button("未完成") { agenda = .unfinished }.buttonStyle(HitAreaButtonStyle()).font(.system(size: typography.pt(11))).foregroundStyle(Palette.accent)
                 Button { agenda = .all } label: { Image(systemName: "magnifyingglass") }
                     .buttonStyle(HitAreaButtonStyle()).help("搜索 · ⌘F").accessibilityLabel("搜索")
                 Button { commands.send(.notes) } label: { Image(systemName: "note.text") }
-                    .buttonStyle(HitAreaButtonStyle()).help("笔记 · ⌘N（选中了待办就打开它的笔记）").accessibilityLabel("笔记")
+                    .buttonStyle(HitAreaButtonStyle()).help("笔记 · ⌘N").accessibilityLabel("笔记")
                 navigationButton("chevron.left", help: "上个月") { shiftMonth(-1) }
                 navigationButton("chevron.right", help: "下个月") { shiftMonth(1) }
                 optionsMenu
             }
             GeometryReader { geometry in
-                let dayHeight = max(80, (geometry.size.height - 22 - 6 * rowCount) / rowCount)
-                let weekHeights = stride(from: 0, to: dates.count, by: 7).map { start in
-                    max(dayHeight, UIScale.pt(29) + CGFloat(previews[start..<(start + 7)].map(\.count).max() ?? 0) * UIScale.pt(25))
-                }
+                let metrics = CalendarGridMetrics(size: geometry.size, counts: previews.map(\.count), scale: typography.scale)
                 ScrollView(.vertical) {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
-                        ForEach(ordered, id: \.self) { weekday in
-                            Text(weekday).font(.system(size: UIScale.pt(11), weight: .medium))
-                                .foregroundStyle(Palette.muted).frame(height: 18)
+                    LazyVGrid(columns: Array(repeating: GridItem(.fixed(metrics.columnWidth), spacing: 6), count: 7), spacing: 6) {
+                        ForEach(Array(ordered.enumerated()), id: \.offset) { _, weekday in
+                            Text(weekday).font(.system(size: typography.pt(11), weight: .medium))
+                                .foregroundStyle(Palette.muted).frame(height: metrics.weekdayHeight)
                         }
                         ForEach(Array(dates.enumerated()), id: \.element) { index, date in
                             DeadlineDayCell(store: store, date: date, selectedDate: selectedDate,
-                                            displayedMonth: displayedMonth, height: weekHeights[index / 7],
+                                            displayedMonth: displayedMonth, height: metrics.weekHeights[index / 7],
                                             items: previews[index],
                                             select: { selectFromCalendar(date) },
                                             open: { selectFromCalendar(date, forceExpand: true); addingTodo = true },
@@ -652,7 +659,8 @@ struct ContentView: View {
                             })
                         }
                     }
-                    .padding(2)
+                    .padding(2).padding(.trailing, CalendarGridMetrics.scrollbarGutter)
+                    .frame(width: geometry.size.width, alignment: .leading)
                 }
             }
             .frame(minHeight: 120)
@@ -667,10 +675,10 @@ struct ContentView: View {
                 Text(selectedDate.relativeLabel).fontWeight(.semibold)
                 let due = store.calendarDeadlines[JournalDates.key(selectedDate)] ?? []
                 if !due.isEmpty {
-                    Text("\(due.filter(\.task.isDone).count)/\(due.filter { !$0.task.isDropped }.count)").font(.system(size: UIScale.pt(10), design: .monospaced))
+                    Text("\(due.filter(\.task.isDone).count)/\(due.filter { !$0.task.isDropped }.count)").font(.system(size: typography.pt(10), design: .monospaced))
                 }
             }
-            .font(.system(size: UIScale.pt(11)))
+            .font(.system(size: typography.pt(11)))
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(Palette.soft, in: Capsule())
             .foregroundStyle(Palette.accent)
@@ -707,7 +715,7 @@ struct ContentView: View {
                         .buttonStyle(HitAreaButtonStyle())
                 }
             }
-            .font(.system(size: UIScale.pt(11)))
+            .font(.system(size: typography.pt(11)))
             .foregroundStyle(Palette.deadline)
             .padding(.horizontal, 30).padding(.vertical, 8)
         }
@@ -715,10 +723,10 @@ struct ContentView: View {
 
     private func navigationButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: UIScale.pt(11), weight: .medium))
+            Image(systemName: symbol).font(.system(size: typography.pt(11), weight: .medium))
                 .frame(width: 18, height: 18)
         }
-        .buttonStyle(HitAreaButtonStyle()).foregroundStyle(Palette.muted).help(help).accessibilityLabel(help)
+        .buttonStyle(HitAreaButtonStyle()).foregroundStyle(Palette.muted).help(LocalizedStringKey(help)).accessibilityLabel(LocalizedStringKey(help))
     }
 
     private func select(_ date: Date) {
@@ -756,9 +764,14 @@ struct ContentView: View {
 
     private func format(_ date: Date, _ pattern: String) -> String {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.locale = locale
         formatter.calendar = JournalDates.calendar
-        formatter.dateFormat = pattern
+        if formatter.locale.language.languageCode?.identifier == "en" {
+            let templates = ["M月d日": "MMMd", "yyyy年 · EEEE": "yEEEE", "yyyy年 M月": "yMMMM", "yyyy年M月": "yMMMM"]
+            formatter.setLocalizedDateFormatFromTemplate(templates[pattern] ?? pattern)
+        } else {
+            formatter.dateFormat = pattern
+        }
         return formatter.string(from: date)
     }
 
@@ -767,8 +780,8 @@ struct ContentView: View {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "Scheduler 备份-\(JournalDates.key(Date()))"
         panel.canCreateDirectories = true
-        panel.message = "将导出为一个文件夹，包含 journal.json 和日志图片（Images）。"
-        panel.prompt = "导出"
+        panel.message = AppLocalized("将导出为一个文件夹，包含 journal.json 和日志图片（Images）。")
+        panel.prompt = AppLocalized("导出")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try store.exportFolder(to: url)

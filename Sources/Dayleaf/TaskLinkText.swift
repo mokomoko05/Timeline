@@ -1,8 +1,10 @@
 import AppKit
 import SwiftUI
 import DayleafCore
+import Markdown
 
 struct TaskLinkText: NSViewRepresentable {
+    @Environment(\.typography) private var typography
     let source: String
     let completed: Bool
     let color: Color
@@ -21,8 +23,6 @@ struct TaskLinkText: NSViewRepresentable {
     /// 右键菜单里的操作（没有就用系统默认菜单）。
     var menuItems: [TextMenuItem] = []
     @Environment(\.isEnabled) private var enabled
-    @AppStorage(Prefs.uiScale) private var uiScale = 1.0
-    @AppStorage(Prefs.lineSpacing) private var settingLineSpacing = 2.0
 
     func makeNSView(context: Context) -> InteractiveTaskText {
         let view = InteractiveTaskText()
@@ -55,7 +55,13 @@ struct TaskLinkText: NSViewRepresentable {
         view.dragTaskID = dragTaskID
         view.textContainerInset = NSSize(width: compactLines ? 2 : 5, height: compactLines ? 0 : 4)
         let foreground = NSColor(completed ? Palette.muted : color)
-        if view.source != source || view.displayName != displayName || view.completed != completed || view.pointSize != fontSize || view.foreground != foreground || view.monospaced != monospaced || view.compactLines != compactLines || view.markdown != markdown || view.uiScaleFactor != uiScale || view.configuredLineSpacing != settingLineSpacing {
+        if view.source != source || view.displayName != displayName || view.completed != completed || view.pointSize != fontSize || view.foreground != foreground || view.monospaced != monospaced || view.compactLines != compactLines || view.markdown != markdown || view.uiScaleFactor != typography.scale || view.configuredLineSpacing != Double(typography.lineSpacing) {
+            let sourceChanged = view.source != source || view.displayName != displayName || view.markdown != markdown
+            let selection = view.selectedRanges
+            if sourceChanged {
+                view.markdownDocument = markdown ? Document(parsing: source) : nil
+                view.inlineText = markdown ? nil : NSAttributedString(TaskText.rendered(source, alias: displayName))
+            }
             view.source = source
             view.displayName = displayName
             view.completed = completed
@@ -64,10 +70,13 @@ struct TaskLinkText: NSViewRepresentable {
             view.monospaced = monospaced
             view.compactLines = compactLines
             view.markdown = markdown
-            view.uiScaleFactor = uiScale
-            view.configuredLineSpacing = settingLineSpacing
-            let styled = markdown ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced, lineSpacing: UIScale.lineSpacing) : Self.styledText(source, completed: completed, color: foreground, fontSize: fontSize, displayName: displayName, monospaced: monospaced, compactLines: compactLines, lineSpacing: compactLines ? 0 : UIScale.lineSpacing)
+            view.uiScaleFactor = typography.scale
+            view.configuredLineSpacing = Double(typography.lineSpacing)
+            let styled = markdown
+                ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced, lineSpacing: typography.lineSpacing, scale: typography.scale, document: view.markdownDocument)
+                : Self.styledText(source, completed: completed, color: foreground, fontSize: fontSize, displayName: displayName, monospaced: monospaced, compactLines: compactLines, lineSpacing: compactLines ? 0 : typography.lineSpacing, scale: typography.scale, rendered: view.inlineText)
             view.textStorage?.setAttributedString(styled)
+            if !sourceChanged { view.selectedRanges = selection }
             view.measurer.update(styled, maxLines: maxLines)
             view.invalidateIntrinsicContentSize()
             view.needsDisplay = true
@@ -81,16 +90,15 @@ struct TaskLinkText: NSViewRepresentable {
         // 之前是改容器、排版、再还原重排，一次测量要排两遍中文）。同一个宽度的结果缓存起来。
         let textWidth = max(1, width - nsView.textContainerInset.width * 2)
         let height = nsView.measurer.height(forWidth: textWidth)
-        return CGSize(width: width, height: max(UIScale.pt(fontSize) + 4, height) + nsView.textContainerInset.height * 2)
+        return CGSize(width: width, height: max(typography.pt(fontSize) + 4, height) + nsView.textContainerInset.height * 2)
     }
 
-    static func styledText(_ source: String, completed: Bool, color: NSColor, fontSize: CGFloat, displayName: String? = nil, monospaced: Bool = false, compactLines: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing) -> NSAttributedString {
-        let rendered = TaskText.rendered(source, alias: displayName)
-        let text = NSMutableAttributedString(attributedString: NSAttributedString(rendered))
+    static func styledText(_ source: String, completed: Bool, color: NSColor, fontSize: CGFloat, displayName: String? = nil, monospaced: Bool = false, compactLines: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing, scale: CGFloat = UIScale.factor, rendered: NSAttributedString? = nil) -> NSAttributedString {
+        let text = NSMutableAttributedString(attributedString: rendered ?? NSAttributedString(TaskText.rendered(source, alias: displayName)))
         let fullRange = NSRange(location: 0, length: text.length)
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = compactLines ? 0 : lineSpacing
-        let font = monospaced ? NSFont.monospacedSystemFont(ofSize: UIScale.pt(fontSize), weight: .regular) : NSFont.systemFont(ofSize: UIScale.pt(fontSize))
+        let font = monospaced ? NSFont.monospacedSystemFont(ofSize: fontSize * scale, weight: .regular) : NSFont.systemFont(ofSize: fontSize * scale)
         text.addAttributes([.font: font, .foregroundColor: color, .paragraphStyle: paragraph], range: fullRange)
         if completed { text.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: fullRange) }
         text.enumerateAttribute(.link, in: fullRange) { value, range, _ in
@@ -175,6 +183,8 @@ extension NSMenu {
 }
 
 final class InteractiveTaskText: NSTextView {
+    var markdownDocument: Document?
+    var inlineText: NSAttributedString?
     var markdown = false
     let measurer = TextMeasurer()
     var menuItems: [TextMenuItem] = []

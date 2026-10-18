@@ -36,6 +36,13 @@ final class FocusSession: ObservableObject {
     @Published private(set) var active: Active?
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var isPaused = false
+    var remainingSeconds: TimeInterval {
+        max(0, (active?.plannedSeconds ?? 0) - elapsed)
+    }
+    var remainingFraction: Double {
+        guard let planned = active?.plannedSeconds, planned > 0 else { return 0 }
+        return min(1, remainingSeconds / planned)
+    }
     var store: JournalStore?
     var onActiveChange: ((Bool) -> Void)?
     /// 专注不足这么长（秒）就不在日志里留记录；默认读设置，测试里可替换。
@@ -86,13 +93,13 @@ final class FocusSession: ObservableObject {
 
     // MARK: - 开始与结束
 
-    func start(task: ScheduledTask, url: URL?, plannedSeconds: TimeInterval = 25 * 60,
+    func start(task: ScheduledTask, url: URL?, plannedSeconds: TimeInterval? = nil,
                goal: String = "", now: Date = Date()) {
         guard let store, !store.isReadOnly else { return }
         if active != nil { stop(reason: "切换到了另一个任务", now: now) }
         let number = task.task.number
         active = Active(taskID: task.id, number: number, title: String(TaskText.rendered(task.task.title).characters), url: url,
-                        started: now, plannedSeconds: max(60, plannedSeconds), goal: goal.trimmingCharacters(in: .whitespacesAndNewlines))
+                        started: now, plannedSeconds: max(60, plannedSeconds ?? TimeInterval(Prefs.focusDurationMinutes()) * 60), goal: goal.trimmingCharacters(in: .whitespacesAndNewlines))
         elapsed = 0
         isPaused = false
         pausedAt = nil
@@ -188,18 +195,18 @@ final class FocusSession: ObservableObject {
     static func duration(_ seconds: TimeInterval) -> String {
         let total = Int(seconds.rounded())
         let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60)
-        if h > 0 { return "\(h) 小时 \(m) 分 \(s) 秒" }
-        if m > 0 { return "\(m) 分 \(s) 秒" }
-        return "\(s) 秒"
+        if h > 0 { return AppLocalizedFormat("%lld 小时 %lld 分 %lld 秒", h, m, s) }
+        if m > 0 { return AppLocalizedFormat("%lld 分 %lld 秒", m, s) }
+        return AppLocalizedFormat("%lld 秒", s)
     }
 
     /// 任务行上的累计时长：「1 小时 20 分」「25 分钟」「40 秒」。
     static func brief(_ seconds: TimeInterval) -> String {
         let total = Int(seconds.rounded())
         let (h, m) = (total / 3600, (total % 3600) / 60)
-        if h > 0 { return m > 0 ? "\(h) 小时 \(m) 分" : "\(h) 小时" }
-        if m > 0 { return "\(m) 分钟" }
-        return "\(total) 秒"
+        if h > 0 { return m > 0 ? AppLocalizedFormat("%lld 小时 %lld 分", h, m) : AppLocalizedFormat("%lld 小时", h) }
+        if m > 0 { return AppLocalizedFormat("%lld 分钟", m) }
+        return AppLocalizedFormat("%lld 秒", total)
     }
 
     static func clock(_ seconds: TimeInterval) -> String {
@@ -589,35 +596,117 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
     @objc private func hideTimer() { workspaceShown = false; refresh() }
 }
 
+@MainActor
+final class FocusNoteDraft: ObservableObject {
+    @Published var text = ""
+    @Published var images: [String] = []
+    @Published var link: UUID?
+    @Published var tags: [String] = []
+    @Published private(set) var error: String?
+    @Published private(set) var pendingEntryID: UUID?
+
+    func save(session: FocusSession) {
+        guard let store = session.store else { return }
+        if let pendingEntryID, store.allLogs().contains(where: { $0.log.id == pendingEntryID }) {
+            store.save()
+            if store.hasPendingSave {
+                error = AppLocalized("未能写入磁盘，输入已保留。请检查磁盘空间或权限后再次发送以重试。")
+            } else {
+                clear()
+                ImageIndexer.run(store: store)
+            }
+            return
+        }
+        pendingEntryID = nil
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (!body.isEmpty || !images.isEmpty), let active = session.active else { return }
+        do {
+            let result = try store.quickLogEntry(body, images: images,
+                                                taskID: session.isPaused ? nil : (link ?? active.taskID),
+                                                linkDefault: false, tags: session.isPaused ? [] : tags,
+                                                allowInlineTaskReference: !session.isPaused, on: Date())
+            guard let entry = result.entry else {
+                error = AppLocalized("这里只能写笔记，请使用普通文字或 /note /done /block /plan。")
+                return
+            }
+            if store.hasPendingSave {
+                pendingEntryID = entry.id
+                error = AppLocalized("未能写入磁盘，输入已保留。请检查磁盘空间或权限后再次发送以重试。")
+                return
+            }
+            clear()
+            ImageIndexer.run(store: store)
+        } catch {
+            self.error = AppErrorDescription(error)
+        }
+    }
+
+    private func clear() {
+        text = ""
+        images = []
+        link = nil
+        tags = []
+        error = nil
+        pendingEntryID = nil
+    }
+}
+
+/// 与数字倒计时共享进度，不单独启动计时器；表盘从十二点开始顺时针消退。
+private struct FocusCountdownDial: View {
+    let fraction: Double
+    let paused: Bool
+
+    private var color: Color { paused ? Palette.muted : Palette.accent }
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Palette.muted.opacity(0.18), lineWidth: 1)
+            Circle().trim(from: 1 - fraction, to: 1)
+                .stroke(color, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            Capsule().fill(color).frame(width: 1.2, height: 7)
+                .offset(y: -3.5)
+                .rotationEffect(.degrees((1 - fraction) * 360))
+            Circle().fill(color).frame(width: 2.5, height: 2.5)
+        }
+        .padding(1)
+        .frame(width: 26, height: 26)
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
+    }
+}
+
 struct FocusPanelView: View {
+    @ObservedObject private var languages = LanguageStore.shared
     @ObservedObject var session: FocusSession
     let close: () -> Void
     @State private var selectedTaskID: UUID?
-    @State private var minutes = "25"
+    @AppStorage(Prefs.focusDefaultMinutes) private var defaultMinutes = Prefs.defaultFocusMinutes
+    @AppStorage(Prefs.taskSortMode) private var taskSort = TaskSortMode.deadline.rawValue
+    @State private var minutes: String
     @State private var goal = ""
-    @State private var note = ""
     @State private var query = ""
     @State private var showingTaskPicker = false
-    @State private var noteImages: [String] = []
-    @State private var noteLink: UUID?
-    @State private var noteTags: [String] = []
     @State private var focused = true
+    @State private var showingSaveError = false
+    @StateObject private var draft = FocusNoteDraft()
     @StateObject private var mention = MentionState()
 
     init(session: FocusSession, close: @escaping () -> Void = {}) {
         self.session = session
         self.close = close
+        _minutes = State(initialValue: String(Prefs.focusDurationMinutes()))
     }
 
     private var store: JournalStore? { session.store }
     private var tasks: [ScheduledTask] {
-        let all = store?.sortedTasks().filter { !$0.task.completed } ?? []
+        let all = (TaskSortMode(rawValue: taskSort) ?? .deadline).sorted(store?.tasks() ?? []).filter { !$0.task.completed }
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return Array(all.prefix(12)) }
+        guard !q.isEmpty else { return all }
         return all.filter { item in
             let title = String(TaskText.rendered(item.task.title).characters)
             return title.localizedCaseInsensitiveContains(q) || "#\(item.task.number ?? 0)".contains(q)
-        }.prefix(12).map { $0 }
+        }
     }
 
     var body: some View {
@@ -635,6 +724,12 @@ struct FocusPanelView: View {
         .onAppear {
             configureMention()
             if selectedTaskID == nil { selectedTaskID = tasks.first?.id }
+        }
+        .onChange(of: defaultMinutes) { _ in
+            if session.active == nil { minutes = String(Prefs.focusDurationMinutes()) }
+        }
+        .onChange(of: session.active?.taskID) { id in
+            if id == nil { minutes = String(Prefs.focusDurationMinutes()) }
         }
     }
 
@@ -657,6 +752,7 @@ struct FocusPanelView: View {
                     if let selected = selectedTask {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.success)
                         Text("#\(selected.task.number ?? 0)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
+                        PriorityMark(priority: selected.task.priority)
                         Text(String(TaskText.rendered(selected.task.title).characters)).lineLimit(1)
                         Spacer(minLength: 0)
                         dueText(for: selected)
@@ -678,7 +774,7 @@ struct FocusPanelView: View {
             }
             HStack(spacing: 7) {
                 Label("时长", systemImage: "clock").font(.system(size: 11)).foregroundStyle(Palette.muted)
-                TextField("25", text: $minutes).textFieldStyle(.roundedBorder).frame(width: 52)
+                TextField(String(Prefs.focusDurationMinutes()), text: $minutes).textFieldStyle(.roundedBorder).frame(width: 52)
                 Text("分钟").font(.system(size: 11)).foregroundStyle(Palette.muted)
                 TextField("本轮目标（可选）", text: $goal).textFieldStyle(.roundedBorder)
             }
@@ -704,7 +800,6 @@ struct FocusPanelView: View {
                 Image(systemName: "checklist").foregroundStyle(Palette.accent)
                 Text("选择专注任务").font(.headline)
                 Spacer()
-                Text("点击任务可切换选择").font(.caption).foregroundStyle(.secondary)
             }
             TextField("搜索标题或编号…", text: $query)
                 .textFieldStyle(.roundedBorder)
@@ -733,6 +828,7 @@ struct FocusPanelView: View {
                 Image(systemName: selectedTaskID == item.id ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(selectedTaskID == item.id ? Palette.success : Palette.muted)
                 Text("#\(item.task.number ?? 0)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
+                PriorityMark(priority: item.task.priority)
                 Text(String(TaskText.rendered(item.task.title).characters)).lineLimit(1)
                 Spacer(minLength: 0)
                 dueText(for: item)
@@ -756,112 +852,138 @@ struct FocusPanelView: View {
     }
 
     private func activeView(_ active: FocusSession.Active) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Image(systemName: "timer.circle.fill").font(.system(size: 17)).foregroundStyle(Palette.success)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(session.isPaused ? "Paused" : "专注中").font(.system(size: 10, weight: .medium)).foregroundStyle(session.isPaused ? Palette.deadline : Palette.success)
+                    Text(session.isPaused ? "Paused" : "专注中")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(session.isPaused ? Palette.deadline : Palette.success)
                     Text(active.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 }
-                Spacer()
-                Text(FocusSession.clock(max(0, active.plannedSeconds - session.elapsed)))
-                    .font(.system(size: 18, weight: .semibold, design: .monospaced)).monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 7) {
+                    FocusCountdownDial(fraction: session.remainingFraction, paused: session.isPaused)
+                    Text(FocusSession.clock(session.remainingSeconds))
+                        .font(.system(size: 18, weight: .semibold, design: .monospaced)).monospacedDigit()
+                }
+                .fixedSize()
                 Button(action: close) { Image(systemName: "xmark") }
                     .buttonStyle(HitAreaButtonStyle(compact: true))
                     .foregroundStyle(Palette.muted)
             }
-            if !active.goal.isEmpty {
-                HStack(alignment: .top, spacing: 6) { Image(systemName: "flag.fill"); Text(active.goal).lineLimit(2) }
-                    .font(.system(size: 11)).foregroundStyle(Palette.accent).lineLimit(1)
+            .frame(height: 28)
+            HStack(spacing: 6) {
+                if !active.goal.isEmpty {
+                    Label(active.goal.replacingOccurrences(of: "\n", with: " "), systemImage: "flag.fill")
+                        .lineLimit(1).truncationMode(.tail).help(active.goal)
+                }
+                if draft.link != nil || !draft.tags.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            if let link = draft.link, let linked = store?.locate(link) {
+                                Text(FocusHint.label(linked)).lineLimit(1)
+                                Button { draft.link = nil } label: { Image(systemName: "xmark.circle.fill") }
+                                    .buttonStyle(.plain)
+                            }
+                            ForEach(draft.tags, id: \.self) { tag in Text("#" + tag) }
+                        }
+                    }
+                    .disabled(draft.pendingEntryID != nil)
+                }
+                Spacer(minLength: 0)
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                Image(systemName: "chevron.right.2").foregroundStyle(Palette.accent).padding(.bottom, 7)
+            .font(.system(size: 10)).foregroundStyle(Palette.accent)
+            .frame(height: 14)
+            HStack(spacing: 8) {
+                Image(systemName: "chevron.right.2").foregroundStyle(Palette.accent)
                 HStack(spacing: 5) {
-                    if !noteImages.isEmpty {
+                    if !draft.images.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 4) {
-                                ForEach(noteImages, id: \.self) { name in
-                                    PastedImageToken {
-                                        noteImages.removeAll { $0 == name }
-                                    }
+                                ForEach(draft.images, id: \.self) { name in
+                                    PastedImageToken { draft.images.removeAll { $0 == name } }
                                 }
                             }
                             .padding(.horizontal, 2)
                         }
-                        .frame(maxWidth: 124, minHeight: 28, maxHeight: 28)
+                        .frame(width: 124, height: 28)
                     }
-                    TaskInput(text: $note, focused: $focused,
-                              placeholder: "记下想法…  @ 待办 · # 标签 · ⌘V 贴图",
+                    TaskInput(text: $draft.text, focused: $focused,
+                              placeholder: "记下想法…",
                               fontSize: 12, submit: saveNote, cancel: close,
-                              onPasteImages: addNoteImages, minHeight: 42, maxLines: 4,
+                              onPasteImages: addNoteImages, minHeight: 34, maxLines: 2,
                               mention: mention)
-                        .frame(minWidth: 0, maxWidth: .infinity)
+                        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .disabled(draft.pendingEntryID != nil)
                 .padding(.horizontal, 9).padding(.vertical, 4)
+                .frame(height: 42)
                 .background(Palette.background, in: RoundedRectangle(cornerRadius: 9))
                 .popover(isPresented: Binding(get: { mention.isActive }, set: { if !$0 { mention.dismiss() } }), arrowEdge: .bottom) {
-                    if let store { MentionList(state: mention, store: store, contextTags: noteTags).frame(width: 320) }
+                    if let store { MentionList(state: mention, store: store, contextTags: draft.tags).frame(width: 320) }
                 }
-                Button { saveNote() } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 18)) }
+                Button(action: saveNote) {
+                    Image(systemName: draft.pendingEntryID == nil ? "arrow.up.circle.fill" : "arrow.clockwise.circle.fill")
+                        .font(.system(size: 18))
+                }
+                .buttonStyle(HitAreaButtonStyle(compact: true))
+                .foregroundStyle(Palette.accent)
+                .help(draft.pendingEntryID == nil ? "保存" : "重试保存")
+                .disabled(draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.images.isEmpty)
+            }
+            .frame(height: 42)
+            HStack(spacing: 4) {
+                if let error = draft.error {
+                    Button { showingSaveError.toggle() } label: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                    }
                     .buttonStyle(HitAreaButtonStyle(compact: true))
-                    .foregroundStyle(Palette.accent)
-                    .disabled(note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && noteImages.isEmpty)
-            }
-            if noteLink != nil || !noteTags.isEmpty {
-                HStack(spacing: 6) {
-                    if let noteLink, let linked = store?.locate(noteLink) {
-                        Label(FocusHint.label(linked), systemImage: "link")
-                            .font(.system(size: 11)).foregroundStyle(Palette.accent)
-                        Button { self.noteLink = nil } label: { Image(systemName: "xmark.circle.fill") }
-                            .buttonStyle(HitAreaButtonStyle(compact: true)).foregroundStyle(Palette.muted)
+                    .foregroundStyle(Palette.deadline)
+                    .help(error).accessibilityLabel("保存失败")
+                    .popover(isPresented: $showingSaveError) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("保存失败").font(.headline)
+                            Text(error).font(.callout).fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(14).frame(width: 280)
                     }
-                    ForEach(noteTags, id: \.self) { tag in
-                        Text("#" + tag).font(.system(size: 11)).foregroundStyle(Palette.accent)
-                    }
+                } else {
+                    Text("已用 \(FocusSession.clock(session.elapsed))")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Palette.muted).lineLimit(1).minimumScaleFactor(0.8)
                 }
-            }
-            HStack {
-                Text("已用 \(FocusSession.clock(session.elapsed))").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.muted)
-                Spacer()
-                Button {
-                    session.togglePause()
-                } label: {
+                Spacer(minLength: 0)
+                Button { session.togglePause() } label: {
                     Label(session.isPaused ? "继续" : "暂停", systemImage: session.isPaused ? "play.fill" : "pause.fill")
                         .frame(minWidth: 48, minHeight: 22)
                 }
-                    .buttonStyle(HitAreaButtonStyle(compact: false, pressedScale: 0.98))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Palette.accent)
-                Button {
-                    session.extend(by: 5 * 60)
-                } label: {
-                    Text("+5")
-                        .frame(minWidth: 48, minHeight: 22)
+                .buttonStyle(HitAreaButtonStyle(pressedScale: 0.98))
+                .foregroundStyle(Palette.accent)
+                Button { session.extend(by: 5 * 60) } label: {
+                    Text("+5min").frame(minWidth: 48, minHeight: 22)
                 }
-                    .buttonStyle(HitAreaButtonStyle(compact: false, pressedScale: 0.98))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Palette.accent)
-                Button(role: .destructive) {
-                    session.stop(reason: "手动结束")
-                } label: {
-                    Text("结束")
-                        .frame(minWidth: 48, minHeight: 22)
+                .buttonStyle(HitAreaButtonStyle(pressedScale: 0.98))
+                .foregroundStyle(Palette.accent)
+                Button(role: .destructive) { session.stop(reason: "手动结束") } label: {
+                    Text("结束").frame(minWidth: 48, minHeight: 22)
                 }
-                    .buttonStyle(HitAreaButtonStyle(compact: false, pressedScale: 0.98))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.red)
+                .buttonStyle(HitAreaButtonStyle(pressedScale: 0.98))
+                .foregroundStyle(.red)
             }
+            .font(.system(size: 11, weight: .medium))
+            .frame(height: 30)
         }
+        .frame(height: 120, alignment: .top)
     }
 
-    private var positiveMinutes: Double? { Double(minutes.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0 > 0 ? $0 : nil } }
+    private var positiveMinutes: Double? { Double(minutes.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isFinite && $0 > 0 && $0 <= Double(Int.max / 60) ? $0 : nil } }
 
     private func isOverdue(_ task: Todo) -> Bool {
         !task.completed && task.effectiveDeadline.map { $0 < Date() } == true
     }
 
     private func dueLabel(for task: Todo, due: Date) -> String {
-        if isOverdue(task) { return "逾期" }
         var label = due.relativeLabel
         if task.dueHasTime {
             let parts = JournalDates.calendar.dateComponents([.hour, .minute], from: due)
@@ -882,29 +1004,21 @@ struct FocusPanelView: View {
         mention.provider = MentionProviders.make(store: store)
         mention.onPick = { item in
             switch item {
-            case .task(let task): noteLink = task.id
-            case .tag(let tag): noteTags = TagText.merge(noteTags, [tag.name])
+            case .task(let task): draft.link = task.id
+            case .tag(let tag): draft.tags = TagText.merge(draft.tags, [tag.name])
             }
         }
     }
 
     private func addNoteImages(_ datas: [Data]) {
         guard let store else { return }
-        noteImages += ImageTools.save(datas, in: store)
+        guard draft.pendingEntryID == nil else { return }
+        draft.images += ImageTools.save(datas, in: store)
         focused = true
     }
 
     private func saveNote() {
-        let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (!text.isEmpty || !noteImages.isEmpty), let store, let active = session.active else { return }
-        let taskID = session.isPaused ? nil : (noteLink ?? active.taskID)
-        let tags = session.isPaused ? [] : noteTags
-        try? store.quickLog(text, images: noteImages, taskID: taskID, linkDefault: false, tags: tags, on: Date())
-        ImageIndexer.run(store: store)
-        note = ""
-        noteImages = []
-        noteLink = nil
-        noteTags = []
+        draft.save(session: session)
     }
 }
 

@@ -5,6 +5,7 @@ public struct Todo: Codable, Identifiable, Equatable {
     public var id: UUID
     public var title: String
     public var calendarName = ""
+    public var priority: TaskPriority = .normal
     /// 「不再需要做了」：已关闭但不算完成。放弃的待办 `completed` 也为 true（所以所有「未完成」的筛选、逾期、提醒都自然排除它），
     /// 用 `isDone` / `isDropped` 区分是真的做完了还是放弃了。
     public var completed: Bool
@@ -43,7 +44,7 @@ public struct Todo: Codable, Identifiable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, calendarName, completed, dropped, dueDate, dueHasTime, reminderMinutes, repeatRule, repeatMonthDay, nextOccurrenceID, number, focusSeconds, listPosition, tags
+        case id, title, calendarName, priority, completed, dropped, dueDate, dueHasTime, reminderMinutes, repeatRule, repeatMonthDay, nextOccurrenceID, number, focusSeconds, listPosition, tags
     }
 
     public init(from decoder: Decoder) throws {
@@ -51,6 +52,7 @@ public struct Todo: Codable, Identifiable, Equatable {
         id = try values.decode(UUID.self, forKey: .id)
         title = try values.decode(String.self, forKey: .title)
         calendarName = try values.decodeIfPresent(String.self, forKey: .calendarName) ?? ""
+        priority = TaskPriority(rawValue: try values.decodeIfPresent(String.self, forKey: .priority) ?? "normal") ?? .normal
         completed = try values.decode(Bool.self, forKey: .completed)
         dropped = try values.decodeIfPresent(Bool.self, forKey: .dropped) ?? false
         if !completed { dropped = false }
@@ -643,14 +645,15 @@ public final class JournalStore: ObservableObject {
 
     /// 全局快速添加：识别日期、时间、提醒和重复；识别出的日期成为截止日期。
     @discardableResult
-    public func addParsedTodo(_ text: String, on date: Date, now: Date = Date()) -> ScheduledTask? {
+    public func addParsedTodo(_ text: String, on date: Date, now: Date = Date(), priority: TaskPriority = .normal) -> ScheduledTask? {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isReadOnly, !text.isEmpty else { return nil }
         let resolved = QuickAdd.parse(text, now: now).resolve(defaultDay: date)
         var updated = days
         let key = JournalDates.key(date)
         var entry = updated[key] ?? DayEntry()
-        let numbered = allocate(resolved.todo)
+        var numbered = allocate(resolved.todo)
+        numbered.priority = priority
         entry.todos.append(numbered)
         updated[key] = entry
         replaceDays(updated, action: "添加待办")
@@ -1196,11 +1199,12 @@ public final class JournalStore: ObservableObject {
         replaceDays(updated, action: sourceKey == targetKey ? "调整顺序" : "移动任务", debounce: debounce)
     }
 
-    public func updateTodo(_ id: UUID, scheduledDate: Date, dueDate: Date?, dueHasTime: Bool, reminderMinutes: Int?, repeatRule: RepeatRule, calendarName: String? = nil, tags: [String]? = nil) {
+    public func updateTodo(_ id: UUID, scheduledDate: Date, dueDate: Date?, dueHasTime: Bool, reminderMinutes: Int?, repeatRule: RepeatRule, calendarName: String? = nil, tags: [String]? = nil, priority: TaskPriority? = nil) {
         guard !isReadOnly, let located = locate(id) else { return }
         let sourceKey = JournalDates.key(located.date)
         guard var source = days[sourceKey], let index = source.todos.firstIndex(where: { $0.id == id }) else { return }
         var task = source.todos[index]
+        if let priority { task.priority = priority }
         if let calendarName { task.calendarName = calendarName.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
         if let tags { task.tags = TagText.merge([], tags.compactMap(TagText.normalize)) }
         task.dueDate = dueDate.map { dueHasTime ? $0 : JournalDates.calendar.startOfDay(for: $0) }
@@ -1221,6 +1225,15 @@ public final class JournalStore: ObservableObject {
             updated[targetKey] = target
         }
         replaceDays(updated, action: "安排任务")
+    }
+
+    public func setPriority(_ priority: TaskPriority, for id: UUID) {
+        guard !isReadOnly, let located = locate(id), located.task.priority != priority else { return }
+        var updated = days
+        let key = JournalDates.key(located.date)
+        guard let index = updated[key]?.todos.firstIndex(where: { $0.id == id }) else { return }
+        updated[key]!.todos[index].priority = priority
+        replaceDays(updated, action: "修改优先级")
     }
 
     public func backups() -> [BackupRecord] {

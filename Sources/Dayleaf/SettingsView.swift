@@ -9,11 +9,8 @@ struct SettingsView: View {
     @AppStorage(Prefs.hideCompleted) private var hideCompleted = false
     @AppStorage(Prefs.clickExpands) private var clickExpands = true
     @AppStorage(Prefs.weekStartsSunday) private var weekStartsSunday = false
-    @AppStorage(Prefs.uiScale) private var uiScale = 1.0
-    @AppStorage(Prefs.lineSpacing) private var lineSpacing = 2.0
     @AppStorage(Prefs.globalHotKey) private var globalHotKey = true
     @AppStorage(Prefs.terminalLayout) private var terminalLayout = TerminalLayout.threePanes.rawValue
-    @AppStorage(Prefs.focusMinLogMinutes) private var focusMinLogMinutes = Prefs.defaultFocusMinLogMinutes
     @AppStorage(Prefs.focusPanelStyle) private var focusPanelStyle = FocusPanelStyle.card.rawValue
     @AppStorage(Prefs.focusPanelHidden) private var focusPanelHidden = false
     @AppStorage(AutoHideOnResign.prefKey) private var autoHideOnResign = true
@@ -26,66 +23,34 @@ struct SettingsView: View {
                     Text("周日").tag(true)
                 }.pickerStyle(.segmented)
                 Toggle("单击日期时自动展开待办清单", isOn: $clickExpands)
-                Text("关闭后，单击日期只选中它；双击或点标题栏的日期按钮再展开清单，日历不会随点击改变布局。")
-                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("隐藏已完成事项", isOn: $hideCompleted)
             }
             Section("配色") {
                 ThemePicker(themes: themes)
             }
             Section("文字显示") {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("整体字号")
-                        Spacer()
-                        Text("\(Int((uiScale * 100).rounded()))%")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Palette.muted)
-                    }
-                    Slider(value: $uiScale, in: 0.80...1.50, step: 0.01)
-                    HStack {
-                        Text("80%").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Text("150%").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("行间距")
-                        Spacer()
-                        Text("\(String(format: "%.1f", lineSpacing)) pt")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Palette.muted)
-                    }
-                    Slider(value: $lineSpacing, in: 0...10, step: 0.5)
-                    HStack {
-                        Text("紧凑").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Text("宽松").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                Text("字号和行间距会应用到任务、笔记、日记和搜索结果；修改后立即生效。")
-                    .font(.caption).foregroundStyle(.secondary)
+                TypographySettings()
             }
             Section("专注计时") {
                 Toggle("隐藏专注工作台", isOn: $focusPanelHidden)
-                Text("快捷键 \(HotKeyStore.binding(for: .focusPanel).label) 打开任务选择器。选择任务后，右下角会常驻显示本轮倒计时、目标和笔记输入；时长默认为 25 分钟，也可以在开始前自定义。")
+                FocusMinutesSetting(title: "默认专注时长", key: Prefs.focusDefaultMinutes,
+                                    fallback: Prefs.defaultFocusMinutes, minimum: 1)
+                FocusMinutesSetting(title: "日志记录门槛", key: Prefs.focusMinLogMinutes,
+                                    fallback: Prefs.defaultFocusMinLogMinutes, minimum: 0)
+                Text("低于门槛不记日志，0 表示全部记录。")
                     .font(.caption).foregroundStyle(.secondary)
-                Stepper(value: $focusMinLogMinutes, in: 0...120) {
-                    Text(focusMinLogMinutes == 0 ? "所有专注都记入日志" : "专注不足 \(focusMinLogMinutes) 分钟不记日志")
-                }
-                Text("专注期间可以自由切换网页、终端和笔记，不会因为离开任务链接而自动停止。手滑点了播放键、很快就结束的专注，不会在日志里留下记录；用过的时间仍然累加到任务上。")
+                Text("暂停不计时，切换应用不影响专注。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("通用") {
                 Picker("界面语言", selection: Binding(get: { languages.language }, set: { languages.set($0) })) {
                     ForEach(AppLanguage.allCases) { language in
-                        Text(language.title).tag(language)
+                        Text(LocalizedStringKey(language.title)).tag(language)
                     }
                 }
                 Toggle("登录时自动启动", isOn: Binding(get: { loginItem.enabled }, set: loginItem.setEnabled))
                 Toggle("切到别的应用时自动收起窗口", isOn: $autoHideOnResign)
-                Text("主窗口、笔记、日志、终端、设置在 Scheduler 失去前台时立刻收起（里面的内容、草稿、终端里的程序都保留）；快速日志和专注计时窗口不受影响，失焦也留在屏幕上。用全局快捷键或点 Dock 图标再唤起。在 Scheduler 自己的窗口之间切换不算离开。")
+                Text("快速记录与专注面板保持显示。")
                     .font(.caption).foregroundStyle(.secondary)
                 Picker("新建终端的布局", selection: $terminalLayout) {
                     Text("三窗格：左边上下两格，右边一栏").tag(TerminalLayout.threePanes.rawValue)
@@ -95,16 +60,118 @@ struct SettingsView: View {
                 if globalHotKey {
                     ForEach(HotKeyAction.allCases) { HotKeyRecorder(action: $0) }
                     if let failed = failedHotKeys(), !failed.isEmpty {
-                        Text("「\(failed.map(\.title).joined(separator: "」「"))」的组合已被其他应用占用，请换一个。")
+                        Text("「\(failed.map { AppLocalized($0.title) }.joined(separator: ", "))」的组合已被其他应用占用，请换一个。")
                             .font(.caption).foregroundStyle(Palette.deadline)
                     }
-                    Text("点组合框后直接按下想要的键（需要至少一个 ⌃ ⌥ ⌘）。在 Scheduler 或终端里再按一次就隐藏并回到刚才的应用；日志窗口里再按同一个键关闭，Tab 切换待办 / 日志（待办窗口按 Esc 关闭）；笔记窗口开着时再按一次关闭。菜单栏的叶子图标也能打开快速添加待办。")
+                    Text("点击录入快捷键，需包含 ⌃、⌥ 或 ⌘。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
         .formStyle(.grouped)
         .frame(width: 520, height: 830)
+    }
+}
+
+struct FocusMinutesSetting: View {
+    let title: String
+    let key: String
+    let fallback: Int
+    let minimum: Int
+    @State private var text = ""
+    @FocusState private var editing: Bool
+
+    var body: some View {
+        HStack {
+            Text(LocalizedStringKey(title))
+            Spacer()
+            TextField("", text: $text)
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 68)
+                .focused($editing)
+                .accessibilityLabel(LocalizedStringKey(title))
+                .onSubmit(commit)
+            Text("分钟").foregroundStyle(.secondary)
+        }
+        .onAppear { text = String(UserDefaults.standard.object(forKey: key) as? Int ?? fallback) }
+        .onChange(of: text) { value in
+            if let minutes = Self.validMinutes(value, minimum: minimum) {
+                UserDefaults.standard.set(minutes, forKey: key)
+            }
+        }
+        .onChange(of: editing) { if !$0 { commit() } }
+    }
+
+    static func validMinutes(_ text: String, minimum: Int) -> Int? {
+        guard let value = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              value >= minimum, value <= Int.max / 60 else { return nil }
+        return value
+    }
+
+    private func commit() {
+        text = String(Self.validMinutes(text, minimum: minimum)
+                      ?? (UserDefaults.standard.object(forKey: key) as? Int ?? fallback))
+    }
+}
+
+/// 滑动只改变局部预览；一次手势结束后才持久化并更新其它窗口。
+@MainActor
+final class TypographyAdjustment: ObservableObject {
+    @Published var scale: Double { didSet { if !editing { apply() } } }
+    @Published var spacing: Double { didSet { if !editing { apply() } } }
+    private var editing = false
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        let saved = AppTypography(scale: defaults.object(forKey: Prefs.uiScale) as? Double ?? 1,
+                                  lineSpacing: defaults.object(forKey: Prefs.lineSpacing) as? Double ?? 2)
+        scale = saved.scale
+        spacing = saved.lineSpacing
+    }
+
+    func setEditing(_ editing: Bool) {
+        self.editing = editing
+        if !editing { apply() }
+    }
+
+    private func apply() {
+        let value = AppTypography(scale: scale, lineSpacing: spacing)
+        if defaults.double(forKey: Prefs.uiScale) != value.scale { defaults.set(value.scale, forKey: Prefs.uiScale) }
+        if (defaults.object(forKey: Prefs.lineSpacing) as? Double ?? 2) != value.lineSpacing {
+            defaults.set(Double(value.lineSpacing), forKey: Prefs.lineSpacing)
+        }
+    }
+}
+
+struct TypographySettings: View {
+    @StateObject private var adjustment = TypographyAdjustment()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("整体字号")
+                Spacer()
+                Text("\(Int((adjustment.scale * 100).rounded()))%")
+                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
+            }
+            Slider(value: $adjustment.scale, in: 0.80...1.50, step: 0.01, onEditingChanged: adjustment.setEditing)
+            HStack {
+                Text("行间距")
+                Spacer()
+                Text("\(String(format: "%.1f", adjustment.spacing)) pt")
+                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
+            }
+            Slider(value: $adjustment.spacing, in: 0...10, step: 0.5, onEditingChanged: adjustment.setEditing)
+            Text("阅读与记录\n留一点时间给想法。")
+                .font(.system(size: 13 * adjustment.scale))
+                .lineSpacing(adjustment.spacing)
+                .frame(maxWidth: .infinity, minHeight: 62, maxHeight: 62, alignment: .leading)
+                .padding(.horizontal, 10)
+                .background(Palette.background, in: RoundedRectangle(cornerRadius: 6))
+                .clipped()
+        }
     }
 }
 

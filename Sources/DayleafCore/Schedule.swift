@@ -1,5 +1,53 @@
 import Foundation
 
+public enum TaskPriority: String, Codable, CaseIterable, Identifiable {
+    case high, normal, low
+    public var id: String { rawValue }
+    public var rank: Int { switch self { case .high: return 0; case .normal: return 1; case .low: return 2 } }
+    public var title: String { switch self { case .high: return "高优先级"; case .normal: return "普通优先级"; case .low: return "低优先级" } }
+}
+
+public enum TaskSortMode: String, CaseIterable, Identifiable {
+    case deadline, priority, manual
+    public var id: String { rawValue }
+    public var title: String { switch self { case .deadline: return "截止时间排序"; case .priority: return "优先级排序"; case .manual: return "手动排序" } }
+
+    /// 用于日期分组内部；月历始终使用 deadline，手动位置只在 manual 下生效。
+    public func precedes(_ lhs: ScheduledTask, _ rhs: ScheduledTask) -> Bool {
+        if self == .manual { return ScheduledTask.listOrder(lhs, rhs) }
+        if self == .priority, lhs.task.priority != rhs.task.priority {
+            return lhs.task.priority.rank < rhs.task.priority.rank
+        }
+        let calendar = JournalDates.calendar
+        let dayA = lhs.task.dueDate.map { calendar.startOfDay(for: $0) } ?? .distantFuture
+        let dayB = rhs.task.dueDate.map { calendar.startOfDay(for: $0) } ?? .distantFuture
+        if dayA != dayB { return dayA < dayB }
+        if lhs.task.dueHasTime != rhs.task.dueHasTime { return lhs.task.dueHasTime }
+        let a = lhs.task.effectiveDeadline ?? .distantFuture
+        let b = rhs.task.effectiveDeadline ?? .distantFuture
+        if a != b { return a < b }
+        if lhs.task.priority != rhs.task.priority { return lhs.task.priority.rank < rhs.task.priority.rank }
+        let x = lhs.task.number ?? .max, y = rhs.task.number ?? .max
+        return x != y ? x < y : lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    public static func group(for task: Todo, now: Date) -> Int {
+        if task.completed { return task.isDropped ? 7 : 6 }
+        guard let due = task.dueDate else { return 5 }
+        if task.effectiveDeadline.map({ $0 < now }) == true { return 0 }
+        let calendar = JournalDates.calendar
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: due)).day ?? 0
+        return days <= 0 ? 1 : (days == 1 ? 2 : (days <= 7 ? 3 : 4))
+    }
+
+    public func sorted(_ tasks: [ScheduledTask], now: Date = Date()) -> [ScheduledTask] {
+        tasks.sorted {
+            let a = Self.group(for: $0.task, now: now), b = Self.group(for: $1.task, now: now)
+            return a != b ? a < b : precedes($0, $1)
+        }
+    }
+}
+
 public enum RepeatRule: String, Codable, CaseIterable, Identifiable {
     case none, daily, weekdays, weekly, monthly
     public var id: String { rawValue }
@@ -41,7 +89,7 @@ public struct ScheduledTask: Identifiable {
         self.task = task
     }
 
-    /// 左侧清单和日历格子共用的顺序：手动位置优先，否则按截止时间，再按编号（排序不稳定，所以必须有最后的决胜条件）。
+    /// 手动排序：手动位置优先，否则按截止时间，再按编号和 ID 决胜。
     public static func listOrder(_ lhs: ScheduledTask, _ rhs: ScheduledTask) -> Bool {
         let (a, b) = (lhs.task.sortKey, rhs.task.sortKey)
         if a != b { return a < b }

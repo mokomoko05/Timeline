@@ -17,6 +17,7 @@ struct TaskDetailsView: View {
     @State private var recurrence: RepeatRule
     @State private var saving = false
     @State private var calendarName: String
+    @State private var priority: TaskPriority
 
     init(store: JournalStore, task: Todo, date: Date) {
         self.store = store
@@ -28,6 +29,7 @@ struct TaskDetailsView: View {
         _reminder = State(initialValue: task.reminderMinutes ?? -1)
         _recurrence = State(initialValue: task.repeatRule)
         _calendarName = State(initialValue: task.calendarName)
+        _priority = State(initialValue: task.priority)
     }
 
     /// offset = -1 表示下周一。
@@ -62,11 +64,20 @@ struct TaskDetailsView: View {
                 Button("清除") { hasDue = false }.buttonStyle(.bordered).controlSize(.small).disabled(!hasDue)
             }
             Form {
+                Picker("优先级", selection: $priority) {
+                    ForEach(TaskPriority.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
+                }.pickerStyle(.segmented)
                 TextField("月历短名称", text: $calendarName, prompt: Text("留空使用原标题"))
                 Toggle("设置截止日期（DDL）", isOn: $hasDue)
                 if hasDue {
-                    DatePicker("截止日期", selection: $due, displayedComponents: timed ? [.date, .hourAndMinute] : [.date])
-                    Toggle("指定时间", isOn: $timed)
+                    DatePicker("截止日期", selection: $due, displayedComponents: .date)
+                    HStack {
+                        Picker("截止时间", selection: $timed) {
+                            Text("未设置").tag(false)
+                            Text("指定时间").tag(true)
+                        }
+                        if timed { DatePicker("截止时间", selection: $due, displayedComponents: .hourAndMinute).labelsHidden() }
+                    }
                     Picker("提醒", selection: $reminder) {
                         Text("不提醒").tag(-1)
                         Text(timed ? "截止时" : "当天 09:00").tag(0)
@@ -77,9 +88,9 @@ struct TaskDetailsView: View {
                     }
                 }
                 Picker("重复", selection: $recurrence) {
-                    ForEach(RepeatRule.allCases) { Text($0.title).tag($0) }
+                    ForEach(RepeatRule.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
                 }
-                if recurrence != .none { Text("完成后生成下一次，历史记录保留。").font(.caption).foregroundStyle(.secondary) }
+                if recurrence != .none { Text("完成后生成下一次").font(.caption).foregroundStyle(.secondary) }
             }.disabled(store.isReadOnly)
             if !reminders.status.isEmpty { Text(reminders.status).font(.caption).foregroundStyle(.orange) }
             HStack {
@@ -91,7 +102,7 @@ struct TaskDetailsView: View {
                         if hasDue && reminder >= 0 { _ = await reminders.requestPermission() }
                         store.updateTodo(task.id, scheduledDate: home, dueDate: hasDue ? due : nil,
                                          dueHasTime: timed, reminderMinutes: reminder < 0 ? nil : reminder, repeatRule: recurrence,
-                                         calendarName: calendarName)
+                                         calendarName: calendarName, priority: priority)
                         reminders.refresh()
                         dismiss()
                     }
@@ -105,6 +116,7 @@ struct TaskDetailsView: View {
 }
 
 struct AgendaView: View {
+    @Environment(\.typography) private var typography
     @ObservedObject var store: JournalStore
     let navigate: (Date?, UUID?) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -133,7 +145,7 @@ struct AgendaView: View {
         VStack(spacing: 14) {
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(Palette.muted)
-                TextField("搜索任务、日志和每日总结，#标签 查看标签下的内容", text: $query).textFieldStyle(.plain).font(.system(size: UIScale.pt(15))).focused($searching)
+                TextField("搜索任务、日志…", text: $query).textFieldStyle(.plain).font(.system(size: typography.pt(15))).focused($searching)
                 if !query.isEmpty {
                     Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).foregroundStyle(Palette.muted).accessibilityLabel("清除搜索词")
@@ -143,21 +155,19 @@ struct AgendaView: View {
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
             Picker("范围", selection: $filter) {
-                ForEach(AgendaFilter.allCases) { Text($0.title).tag($0) }
+                ForEach(AgendaFilter.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
             }.pickerStyle(.segmented)
             HStack {
-                Text(hits.isEmpty ? " " : "\(hits.count) 条结果").font(.caption).foregroundStyle(.secondary)
+                Text(hits.isEmpty ? " " : AppLocalizedFormat("%lld 条结果", hits.count)).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Text("↑ ↓ 选择 · 回车跳转 · Esc 关闭").font(.caption).foregroundStyle(.secondary)
             }
             if hits.isEmpty {
                 VStack(spacing: 8) {
-                    Image(systemName: query.isEmpty ? "tray" : "magnifyingglass").font(.system(size: UIScale.pt(28), weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
-                    Text(query.isEmpty ? "暂无事项" : "没有找到「\(query)」").font(.system(size: UIScale.pt(14), weight: .medium))
+                    Image(systemName: query.isEmpty ? "tray" : "magnifyingglass").font(.system(size: typography.pt(28), weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
+                    Text(query.isEmpty ? AppLocalized("暂无事项") : AppLocalizedFormat("没有找到「%@」", query)).font(.system(size: typography.pt(14), weight: .medium))
                     if !query.isEmpty, filter != .all {
                         Button("在全部事项中搜索") { filter = .all }.buttonStyle(HitAreaButtonStyle()).foregroundStyle(Palette.accent)
-                    } else if !query.isEmpty {
-                        Text("换个关键词试试；日志和总结也会一起搜索。").font(.caption).foregroundStyle(.secondary)
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -191,7 +201,7 @@ struct AgendaView: View {
         case .task(let item):
             HStack(alignment: .top, spacing: 16) {
                 Button { navigate(item.task.dueDate, item.id); dismiss() } label: {
-                    Text(item.task.dueDate.map { $0.formatted(.dateTime.month().day()) } ?? "未设日期").font(.caption).frame(width: 70)
+                    Text(item.task.dueDate.map { $0.formatted(.dateTime.month().day().locale(AppLanguage.current.locale)) } ?? AppLocalized("未设日期")).font(.caption).frame(width: 70)
                 }.buttonStyle(HitAreaButtonStyle()).foregroundStyle(Palette.accent)
                 ManagedTaskRow(store: store, date: item.date, task: item.task, requestedEdit: $requestedEdit)
             }
@@ -199,14 +209,14 @@ struct AgendaView: View {
             Button { open(key) } label: {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("\(key) · \(entry.kind.label)").font(.caption).foregroundStyle(Palette.accent)
-                    Text(highlighted(String(TaskText.rendered(entry.text).characters))).font(.system(size: UIScale.pt(12), design: .monospaced)).lineLimit(3)
+                    Text(highlighted(String(TaskText.rendered(entry.text).characters))).font(.system(size: typography.pt(12), design: .monospaced)).lineLimit(3)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.buttonStyle(HitAreaButtonStyle())
         case .summary(let key, let text):
             Button { open(key) } label: {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("\(key) · 每日总结").font(.caption).foregroundStyle(Palette.accent)
-                    Text(highlighted(text)).font(.system(size: UIScale.pt(13))).lineLimit(4)
+                    Text(highlighted(text)).font(.system(size: typography.pt(13))).lineLimit(4)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.buttonStyle(HitAreaButtonStyle())
         }

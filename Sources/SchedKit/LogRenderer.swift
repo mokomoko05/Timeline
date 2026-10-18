@@ -190,6 +190,7 @@ public enum LogRenderer {
         public let focusSeconds: TimeInterval
         public let noteCount: Int
         public let tags: [String]
+        public var priority: TaskPriority = .normal
     }
 
     @MainActor
@@ -199,7 +200,7 @@ public enum LogRenderer {
             guard let number = item.task.number else { return nil }
             return TaskRow(number: number, title: String(TaskText.rendered(item.task.title).characters), completed: item.task.completed, dropped: item.task.isDropped,
                            due: item.task.dueDate, dueHasTime: item.task.dueHasTime, focusSeconds: item.task.focusSeconds,
-                           noteCount: counts[item.id] ?? 0, tags: item.task.tags)
+                           noteCount: counts[item.id] ?? 0, tags: item.task.tags, priority: item.task.priority)
         }
     }
 
@@ -208,6 +209,7 @@ public enum LogRenderer {
             let box = row.dropped ? ctx.style.gray("✗") : (row.completed ? ctx.style.green("✓") : ctx.style.gray("○"))
             let number = ctx.style.yellow(("#\(row.number)").padding(toLength: 5, withPad: " ", startingAt: 0))
             var meta: [String] = []
+            if row.priority != .normal { meta.append(row.priority == .high ? "↑ 高优先级" : "↓ 低优先级") }
             if let due = row.due {
                 var text = relativeDay(due, now: now)
                 if row.dueHasTime {

@@ -32,7 +32,7 @@ final class WindowLinkingTests: XCTestCase {
         XCTAssertEqual(controller.day.date, tomorrow, "再次打开换到那一天")
         controller.shift(-2)
         XCTAssertEqual(controller.day.date, calendar.date(byAdding: .day, value: -1, to: today), "前一天 / 后一天作用在日志窗口")
-        controller.setDate(Date().addingTimeInterval(3600))
+        controller.setDate(today.addingTimeInterval(3600))
         XCTAssertEqual(controller.day.date, today, "日期取当天开始")
     }
 

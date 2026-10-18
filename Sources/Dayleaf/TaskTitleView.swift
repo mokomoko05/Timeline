@@ -7,6 +7,7 @@ extension Notification.Name {
 }
 
 struct TaskTitleView: View {
+    @Environment(\.typography) private var typography
     @Environment(\.isEnabled) private var enabled
     @Binding var title: String
     let completed: Bool
@@ -27,7 +28,7 @@ struct TaskTitleView: View {
             if editing {
                 TaskInput(text: $editText, focused: $focused, fontSize: fontSize,
                           submit: { finishEditing(); next() }, cancel: finishEditing)
-                    .frame(height: UIScale.pt(fontSize) + 7)
+                    .frame(height: typography.pt(fontSize) + 7)
                     .padding(.horizontal, 4).padding(.vertical, 2)
                     .background(Palette.soft, in: RoundedRectangle(cornerRadius: 4))
                     .onChange(of: focused) { if !$0, !LinkInsertion.presenting { finishEditing() } }
@@ -39,7 +40,7 @@ struct TaskTitleView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .font(.system(size: UIScale.pt(fontSize)))
+        .font(.system(size: typography.pt(fontSize)))
         .foregroundStyle(completed ? Palette.muted : color)
         .tint(Palette.accent)
         .onReceive(NotificationCenter.default.publisher(for: .dayleafCommitEditing)) { _ in finishEditing() }

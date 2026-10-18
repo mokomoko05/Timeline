@@ -111,12 +111,18 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
     private let summaryItem = NSMenuItem()
     private var hotKeyItems: [(item: NSMenuItem, action: HotKeyAction, title: String)] = []
     private var hotKeyObserver: NSObjectProtocol?
+    private var languageObserver: NSObjectProtocol?
 
     init(store: JournalStore, openMain: @escaping () -> Void, openShell: @escaping () -> Void = {}) {
         self.store = store
         self.openMain = openMain
         self.openShell = openShell
         super.init()
+    }
+
+    deinit {
+        if let hotKeyObserver { NotificationCenter.default.removeObserver(hotKeyObserver) }
+        if let languageObserver { NotificationCenter.default.removeObserver(languageObserver) }
     }
 
     func installStatusItem() {
@@ -129,25 +135,33 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
         menu.delegate = self
         hotKeyItems = []
         func hotKeyItem(_ title: String, _ action: HotKeyAction, _ selector: Selector) {
-            let menuItem = menu.addItem(withTitle: title, action: selector, keyEquivalent: "")
+            let menuItem = menu.addItem(withTitle: AppLocalized(title), action: selector, keyEquivalent: "")
             menuItem.target = self
             hotKeyItems.append((menuItem, action, title))
         }
-        let todoItem = menu.addItem(withTitle: "快速添加待办…", action: #selector(captureTodo), keyEquivalent: "")
+        let todoItem = menu.addItem(withTitle: AppLocalized("快速添加待办…"), action: #selector(captureTodo), keyEquivalent: "")
         todoItem.target = self
         hotKeyItem("快速写日志…", .log, #selector(captureLog))
         hotKeyItem("内置终端（zsh）", .shell, #selector(openShellWindow))
-        let reset = menu.addItem(withTitle: "重置快速记录窗口位置", action: #selector(resetPosition), keyEquivalent: "")
+        let reset = menu.addItem(withTitle: AppLocalized("重置快速记录窗口位置"), action: #selector(resetPosition), keyEquivalent: "")
         reset.target = self
         menu.addItem(.separator())
         summaryItem.isEnabled = false
         menu.addItem(summaryItem)
         hotKeyItem("打开 Scheduler", .main, #selector(openApp))
         menu.addItem(.separator())
-        menu.addItem(withTitle: "退出 Scheduler", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: AppLocalized("退出 Scheduler"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         item.menu = menu
         statusItem = item
         refreshHotKeyLabels()
+        if languageObserver == nil {
+            languageObserver = NotificationCenter.default.addObserver(forName: .appLanguageDidChange, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.removeStatusItem()
+                    self?.installStatusItem()
+                }
+            }
+        }
         if hotKeyObserver == nil {
             hotKeyObserver = NotificationCenter.default.addObserver(forName: .dayleafHotKeysChanged, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.refreshHotKeyLabels() }
@@ -157,7 +171,7 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
 
     /// 图标提示和菜单项上的快捷键都读当前设置，改键后立即更新。
     func refreshHotKeyLabels() {
-        statusItem?.button?.toolTip = "Scheduler · 打开 \(GlobalHotKey.mainLabel) · 日志 \(GlobalHotKey.logLabel) · 终端 \(GlobalHotKey.shellLabel)"
+        statusItem?.button?.toolTip = AppLocalizedFormat("Scheduler · 打开 %@ · 日志 %@ · 终端 %@", GlobalHotKey.mainLabel, GlobalHotKey.logLabel, GlobalHotKey.shellLabel)
         for entry in hotKeyItems {
             let binding = HotKeyStore.binding(for: entry.action)
             var mask: NSEvent.ModifierFlags = []
@@ -168,11 +182,11 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
             let name = HotKeyBinding.keyName(binding.keyCode)
             // 单个字母、数字、符号可以作为菜单快捷键显示在右侧；方向键、F 键、空格等没有对应字符，写在标题后面。
             if name.count == 1, name.unicodeScalars.allSatisfy({ $0.isASCII }) {
-                entry.item.title = entry.title
+                entry.item.title = AppLocalized(entry.title)
                 entry.item.keyEquivalent = name.lowercased()
                 entry.item.keyEquivalentModifierMask = mask
             } else {
-                entry.item.title = "\(entry.title)    \(binding.label)"
+                entry.item.title = "\(AppLocalized(entry.title))    \(binding.label)"
                 entry.item.keyEquivalent = ""
             }
         }
@@ -187,7 +201,7 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
         refreshHotKeyLabels()
         // 和清单顶部的摘要同一个口径：按截止日期算。
         let summary = store.taskSummary()
-        summaryItem.title = summary.overdue > 0 ? "今天截止 \(summary.dueToday) · 逾期 \(summary.overdue)" : "今天截止 \(summary.dueToday)"
+        summaryItem.title = summary.overdue > 0 ? AppLocalizedFormat("今天截止 %lld · 逾期 %lld", summary.dueToday, summary.overdue) : AppLocalizedFormat("今天截止 %lld", summary.dueToday)
     }
 
     @objc private func captureTodo() { toggle(.todo) }
@@ -280,6 +294,8 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
 }
 
 struct QuickCaptureView: View {
+    @Environment(\.typography) private var typography
+    @ObservedObject private var languages = LanguageStore.shared
     @ObservedObject var store: JournalStore
     @ObservedObject var model: QuickCaptureModel
     let close: () -> Void
@@ -299,29 +315,25 @@ struct QuickCaptureView: View {
         get { model.mode }
         nonmutating set { model.mode = newValue }
     }
-    /// 待办模式没有专属的全局快捷键，用 Esc 关闭；日志模式再按日志的快捷键关闭。
-    private var closeHint: String { mode == .todo ? "Esc 关闭" : "再按 \(GlobalHotKey.logLabel) 关闭" }
-
     private var parsed: QuickAdd { QuickAdd.parse(text) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Capsule().fill(Palette.line).frame(width: 36, height: 4)
-                .frame(maxWidth: .infinity).help("按住窗口空白处可拖动，位置会被记住")
+                .frame(maxWidth: .infinity)
                 .accessibilityHidden(true)
             HStack(spacing: 8) {
-                Image(systemName: "leaf.fill").foregroundStyle(Palette.success)
                 Picker("类型", selection: $model.mode) {
                     Text("待办").tag(QuickCaptureMode.todo)
                     Text("日志").tag(QuickCaptureMode.log)
                 }.labelsHidden().pickerStyle(.segmented).frame(width: 120)
                 Spacer()
-                Text("Tab 切换 · \(closeHint) · 可拖动").font(.system(size: UIScale.pt(11))).foregroundStyle(Palette.muted)
+                Text("Tab 切换").font(.system(size: typography.pt(11))).foregroundStyle(Palette.muted)
             }
             HStack(spacing: 8) {
                 Image(systemName: mode == .todo ? "plus.circle" : "chevron.right.2").foregroundStyle(Palette.accent)
                 TaskInput(text: $model.text, focused: $focused,
-                          placeholder: mode == .todo ? "添加待办，例如：明天 15:00 开会 #项目A" : "记录…  @ 待办 · # 标签 · /done /block /plan · ⌘V 贴图",
+                          placeholder: mode == .todo ? "添加待办…" : "记录…  @ 待办 · # 标签",
                           fontSize: 12, submit: submit, cancel: close, complete: { mode = mode == .todo ? .log : .todo },
                           onPasteImages: mode == .log ? addImages : nil,
                           minHeight: 42, maxLines: 4, allowsNewlines: mode == .log, mention: mode == .log ? mention : nil)
@@ -343,7 +355,7 @@ struct QuickCaptureView: View {
                     Label(failure, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.deadline)
                 } else if restored, model.hasDraft {
                     HStack(spacing: 6) {
-                        Label("已恢复上次没发送的草稿", systemImage: "arrow.uturn.backward.circle").foregroundStyle(Palette.muted)
+                        Label("草稿已恢复", systemImage: "arrow.uturn.backward.circle").foregroundStyle(Palette.muted)
                         Button("清空") { model.clearDraft(); restored = false; focused = true }
                             .buttonStyle(.plain).foregroundStyle(Palette.accent)
                     }
@@ -351,13 +363,13 @@ struct QuickCaptureView: View {
                     if parsed.hasSchedule || !parsed.tags.isEmpty {
                         ParsedChips(parsed: parsed)
                     } else {
-                        Text("回车添加；写上日期、时间会成为截止日期，不写则之后再分配").foregroundStyle(Palette.muted)
+                        Text("回车添加").foregroundStyle(Palette.muted)
                     }
                 } else {
                     LogChipsBar(store: store, link: $model.link, unlinked: $model.unlinked, tags: $model.tags, contextTags: model.tags,
-                                hint: "回车记录到今天 · @ 关联待办 · # 选标签")
+                                hint: "回车记录")
                 }
-            }.font(.system(size: UIScale.pt(12))).frame(height: LogChipsBar.height, alignment: .leading)
+            }.font(.system(size: typography.pt(12))).frame(height: LogChipsBar.height, alignment: .leading)
         }
         .padding(16)
         .frame(width: 340)
@@ -399,8 +411,8 @@ struct QuickCaptureView: View {
         failure = nil
         switch mode {
         case .todo:
-            guard let added = store.addParsedTodo(value, on: Date()) else { failure = "当前数据只读，无法保存。"; return }
-            message = added.task.dueDate.map { "已添加 #\(added.task.number ?? 0)，截止\($0.relativeLabel)" } ?? "已添加 #\(added.task.number ?? 0)，还没有截止日期"
+            guard let added = store.addParsedTodo(value, on: Date()) else { failure = AppLocalized("当前数据只读，无法保存。"); return }
+            message = added.task.dueDate.map { AppLocalizedFormat("已添加 #%lld，截止%@", added.task.number ?? 0, $0.relativeLabel) } ?? AppLocalizedFormat("已添加 #%lld，还没有截止日期", added.task.number ?? 0)
         case .log:
             do {
                 let paused = store.focusPaused
@@ -409,16 +421,16 @@ struct QuickCaptureView: View {
                                                      linkDefault: paused ? false : !model.unlinked,
                                                      tags: paused ? [] : tags,
                                                      allowInlineTaskReference: !paused, on: Date())
-                guard case .entry = result.command else { failure = "快速记录只支持普通文字和 /note /done /block /plan。"; return }
-                let linked = result.entry.flatMap(FocusHint.label(of:)).map { "，已关联 " + $0 } ?? ""
-                message = (images.isEmpty ? "已记录" : "已记录，含 \(images.count) 张图片") + linked
-                    + (paused ? " · 专注暂停，未关联任务或标签" : (tags.isEmpty ? "" : "，标签 " + tags.map { "#" + $0 }.joined(separator: " ")))
+                guard case .entry = result.command else { failure = AppLocalized("快速记录只支持普通文字和 /note /done /block /plan。"); return }
+                let linked = result.entry.flatMap(FocusHint.label(of:)).map { AppLocalized("，已关联 ") + $0 } ?? ""
+                message = (images.isEmpty ? AppLocalized("已记录") : AppLocalizedFormat("已记录，含 %lld 张图片", images.count)) + linked
+                    + (paused ? AppLocalized(" · 专注暂停，未关联任务或标签") : (tags.isEmpty ? "" : AppLocalized("，标签 ") + tags.map { "#" + $0 }.joined(separator: " ")))
                 images = []
                 tags = []
                 model.link = nil
                 model.unlinked = false
                 ImageIndexer.run(store: store)
-            } catch { failure = error.localizedDescription; return }
+            } catch { failure = AppErrorDescription(error); return }
         }
         text = ""
         Task { @MainActor in
@@ -430,6 +442,7 @@ struct QuickCaptureView: View {
 
 /// 输入框下方的解析结果：用户在提交前就能确认「明天 15:00」被理解对了。
 struct ParsedChips: View {
+    @Environment(\.typography) private var typography
     let parsed: QuickAdd
     /// 识别出的日期是任务的截止日期，标签上写明。
     var dayIsDeadline = false
@@ -447,7 +460,7 @@ struct ParsedChips: View {
 
     private func chip(_ symbol: String, _ text: String) -> some View {
         Label(text, systemImage: symbol)
-            .font(.system(size: UIScale.pt(11), weight: .medium))
+            .font(.system(size: typography.pt(11), weight: .medium))
             .padding(.horizontal, 8).padding(.vertical, 3)
             .background(Palette.soft, in: Capsule())
             .foregroundStyle(Palette.accent)

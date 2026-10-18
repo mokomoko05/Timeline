@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ItemActionButton: View {
+    @Environment(\.typography) private var typography
     let symbol: String
     let title: String
     var destructive = false
@@ -14,8 +15,8 @@ struct ItemActionButton: View {
         Button(role: destructive ? .destructive : nil, action: action) {
             HStack(spacing: 4) {
                 Image(systemName: symbol).frame(width: 18, height: 18)
-                if showsTitle { Text(title) }
-            }.font(.system(size: UIScale.pt(11)))
+                if showsTitle { Text(LocalizedStringKey(title)) }
+            }.font(.system(size: typography.pt(11)))
         }
         .buttonStyle(HitAreaButtonStyle(compact: compact))
         .foregroundStyle(destructive ? Palette.deadline : (active ? Palette.accent : Palette.muted))

@@ -100,7 +100,7 @@ struct TaskDragHandle: View {
     var body: some View {
         NativeTaskHandle(task: task, enabled: enabled, select: select, reorder: reorder)
             .frame(width: 30, height: 30)
-            .help(reorder == nil ? "拖到日历上更改截止日期" : "按住上下拖动排序，其他条目会让位；向右拖到日历上更改截止日期")
+            .help(reorder == nil ? "拖到日历上更改截止日期" : "拖动排序或更改截止日期")
             .accessibilityLabel("拖动任务排序或更改日期")
     }
 }

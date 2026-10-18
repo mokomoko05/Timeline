@@ -33,6 +33,7 @@ struct FlowLayout: Layout {
 
 /// 圆角矩形标签：`highlighted` 表示选中。
 struct TagChip: View {
+    @Environment(\.typography) private var typography
     let name: String
     var highlighted = false
     /// 批量时只有一部分日志带这个标签：描边但不填充。
@@ -41,7 +42,7 @@ struct TagChip: View {
 
     var body: some View {
         Text("#" + name)
-            .font(.system(size: UIScale.pt(size), weight: highlighted ? .semibold : .regular))
+            .font(.system(size: typography.pt(size), weight: highlighted ? .semibold : .regular))
             .lineLimit(1)
             .padding(.horizontal, 9).padding(.vertical, 4)
             .foregroundStyle(highlighted ? Palette.onAccent : (partial ? Palette.accent : Palette.ink))
@@ -53,6 +54,7 @@ struct TagChip: View {
 
 /// 待办行里的一排标签（点一下打开这个标签名下的笔记）。
 struct TaskTagLine: View {
+    @Environment(\.typography) private var typography
     let tags: [String]
     var fontSize: CGFloat = 10
 
@@ -60,7 +62,7 @@ struct TaskTagLine: View {
         HStack(spacing: 4) {
             ForEach(tags, id: \.self) { tag in
                 Button { NotificationCenter.default.post(name: .dayleafOpenTag, object: tag) } label: {
-                    Text("#" + tag).font(.system(size: UIScale.pt(fontSize))).lineLimit(1)
+                    Text("#" + tag).font(.system(size: typography.pt(fontSize))).lineLimit(1)
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(Palette.soft, in: RoundedRectangle(cornerRadius: 4))
                 }
@@ -125,7 +127,7 @@ struct TagPickerView: View {
                 Text(String(TaskText.rendered(task.title).characters)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             if choices.isEmpty {
-                Text("还没有标签。在下面输入一个，回车添加。").font(.caption).foregroundStyle(.secondary)
+                Text("还没有标签").font(.caption).foregroundStyle(.secondary)
             } else {
                 ScrollView {
                     FlowLayout(spacing: 6) {
@@ -143,15 +145,15 @@ struct TagPickerView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Image(systemName: "plus").foregroundStyle(Palette.muted)
-                    TextField("新标签，回车添加（可用 / 分层，例如 项目/子项）", text: $draft)
+                    TextField("新标签…", text: $draft)
                         .textFieldStyle(.plain).focused($typing).onSubmit(commitDraft)
                 }
                 .padding(.horizontal, 9).padding(.vertical, 6)
                 .background(Palette.card, in: RoundedRectangle(cornerRadius: 7))
-                if let message { Text(message).font(.caption).foregroundStyle(.orange) }
+                if let message { Text(LocalizedStringKey(message)).font(.caption).foregroundStyle(.orange) }
             }
             HStack {
-                Text(selected.isEmpty ? "未选标签" : "已选 \(selected.count) 个").font(.caption).foregroundStyle(.secondary)
+                Text(selected.isEmpty ? AppLocalized("未选标签") : AppLocalizedFormat("已选 %lld 个", selected.count)).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存") {
@@ -232,11 +234,11 @@ struct LogBatchTagView: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("给 \(logIDs.count) 条日志加标签").font(.headline)
-                Text("高亮：全部都有 · 描边：部分有。关联待办的标签会自动带上，这里只管日志自己的标签。")
+                Text("实心：全部选中 · 描边：部分选中")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if choices.isEmpty {
-                Text("还没有标签。在下面输入一个，回车添加。").font(.caption).foregroundStyle(.secondary)
+                Text("还没有标签").font(.caption).foregroundStyle(.secondary)
             } else {
                 ScrollView {
                     FlowLayout(spacing: 6) {
@@ -253,11 +255,11 @@ struct LogBatchTagView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Image(systemName: "plus").foregroundStyle(Palette.muted)
-                    TextField("新标签，回车添加（可用 / 分层）", text: $draft).textFieldStyle(.plain).onSubmit(commitDraft)
+                    TextField("新标签…", text: $draft).textFieldStyle(.plain).onSubmit(commitDraft)
                 }
                 .padding(.horizontal, 9).padding(.vertical, 6)
                 .background(Palette.card, in: RoundedRectangle(cornerRadius: 7))
-                if let message { Text(message).font(.caption).foregroundStyle(.orange) }
+                if let message { Text(LocalizedStringKey(message)).font(.caption).foregroundStyle(.orange) }
             }
             HStack {
                 Text("加 \(toAdd.count) · 去 \(toRemove.count)").font(.caption).foregroundStyle(.secondary)

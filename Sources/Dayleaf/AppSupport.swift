@@ -4,16 +4,26 @@ import SwiftUI
 import DayleafCore
 
 /// AppKit 菜单和窗口标题使用的本地化入口；SwiftUI 的 Text/Button 字面量会自动使用同一份 strings。
-func AppLocalized(_ key: String) -> String {
-    let language = UserDefaults.standard.string(forKey: Prefs.language).flatMap(AppLanguage.init(rawValue:)) ?? .system
-    let identifier: String
-    switch language {
-    case .english: identifier = "en"
-    case .chinese: identifier = "zh-Hans"
-    case .system: identifier = Locale.current.language.languageCode?.identifier == "en" ? "en" : "zh-Hans"
+func AppLocalized(_ key: String, bundle: Bundle = .main) -> String {
+    let identifier = AppLanguage.current.locale.identifier
+    let localized = bundle.path(forResource: identifier, ofType: "lproj").flatMap(Bundle.init(path:)) ?? bundle
+    return NSLocalizedString(key, bundle: localized, comment: "")
+}
+
+func AppLocalizedFormat(_ key: String, _ arguments: CVarArg...) -> String {
+    String(format: AppLocalized(key), locale: AppLanguage.current.locale, arguments: arguments)
+}
+
+func AppErrorDescription(_ error: Error) -> String {
+    guard let error = error as? LogInputError else { return AppLocalized(error.localizedDescription) }
+    switch error {
+    case .empty: return AppLocalized("请输入记录内容，或先关联一条任务。")
+    case .unknownCommand(let command): return AppLocalizedFormat("未知命令 %@，输入 /help 查看用法。", command)
+    case .missingTask: return AppLocalized("关联任务已删除，请重新选择任务或取消关联。")
+    case .readOnly: return AppLocalized("当前数据只读，无法保存日志。")
+    case .badTaskReference(let text): return AppLocalizedFormat("无法识别任务编号「%@」，请写成 #1。", text)
+    case .unknownTask(let number): return AppLocalizedFormat("没有 #%lld 号任务。编号显示在任务行左边，创建后不会变。", number)
     }
-    let bundle = Bundle(path: Bundle.main.path(forResource: identifier, ofType: "lproj") ?? "") ?? .main
-    return NSLocalizedString(key, bundle: bundle, comment: "")
 }
 
 extension Notification.Name {
@@ -35,6 +45,13 @@ enum Prefs {
     /// 专注不足这么多分钟就不在日志里留记录（0 表示都记）。
     static let focusMinLogMinutes = "focusMinLogMinutes"
     static let defaultFocusMinLogMinutes = 5
+    static let focusDefaultMinutes = "focusDefaultMinutes"
+    static let taskSortMode = "taskSortMode"
+    static let defaultFocusMinutes = 25
+    static func focusDurationMinutes(defaults: UserDefaults = .standard) -> Int {
+        let value = defaults.object(forKey: focusDefaultMinutes) as? Int ?? defaultFocusMinutes
+        return value > 0 && value <= Int.max / 60 ? value : defaultFocusMinutes
+    }
     /// 专注计时窗口的样式（`FocusPanelStyle.rawValue`）和是否隐藏（专注照常进行，只是不显示）。
     static let focusPanelStyle = "focusPanelStyle"
     static let focusPanelHidden = "focusPanelHidden"
@@ -43,7 +60,7 @@ enum Prefs {
     static var focusMinLogSeconds: TimeInterval {
         let defaults = UserDefaults.standard
         let minutes = defaults.object(forKey: focusMinLogMinutes) == nil ? defaultFocusMinLogMinutes : defaults.integer(forKey: focusMinLogMinutes)
-        return TimeInterval(max(0, minutes) * 60)
+        return TimeInterval(max(0, minutes)) * 60
     }
 }
 
@@ -51,12 +68,16 @@ enum Prefs {
 enum AppLanguage: String, CaseIterable, Identifiable {
     case system, chinese, english
     var id: String { rawValue }
+    static var current: AppLanguage {
+        UserDefaults.standard.string(forKey: Prefs.language).flatMap(Self.init(rawValue:)) ?? .system
+    }
     var title: String {
         switch self { case .system: return "跟随系统 / System"; case .chinese: return "中文"; case .english: return "English" }
     }
     var locale: Locale {
         switch self {
-        case .system: return Locale.current
+        case .system:
+            return Locale(identifier: Bundle.preferredLocalizations(from: ["zh-Hans", "en"], forPreferences: Locale.preferredLanguages).first ?? "zh-Hans")
         case .chinese: return Locale(identifier: "zh-Hans")
         case .english: return Locale(identifier: "en")
         }
@@ -94,10 +115,38 @@ final class LanguageStore: ObservableObject {
 
 struct LocalizedRoot<Content: View>: View {
     @ObservedObject private var languages = LanguageStore.shared
+    @AppStorage(Prefs.uiScale) private var scale = 1.0
+    @AppStorage(Prefs.lineSpacing) private var spacing = 2.0
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        content().environment(\.locale, languages.locale)
+        content()
+            .environment(\.locale, languages.locale)
+            .environment(\.typography, AppTypography(scale: scale, lineSpacing: spacing))
+    }
+}
+
+/// 值类型的排版配置由窗口根节点传入；只有读取它的视图随字号变化刷新。
+struct AppTypography: Equatable {
+    let scale: Double
+    let lineSpacing: CGFloat
+
+    init(scale: Double = 1, lineSpacing: Double = 2) {
+        self.scale = scale.isFinite ? min(1.5, max(0.8, scale)) : 1
+        self.lineSpacing = CGFloat(lineSpacing.isFinite ? min(10, max(0, lineSpacing)) : 2)
+    }
+
+    func pt(_ value: CGFloat) -> CGFloat { value * scale }
+}
+
+private struct TypographyKey: EnvironmentKey {
+    static let defaultValue = AppTypography()
+}
+
+extension EnvironmentValues {
+    var typography: AppTypography {
+        get { self[TypographyKey.self] }
+        set { self[TypographyKey.self] = newValue }
     }
 }
 
@@ -202,17 +251,18 @@ final class ToastCenter: ObservableObject {
 }
 
 struct ToastView: View {
+    @Environment(\.typography) private var typography
     @ObservedObject var center: ToastCenter
 
     var body: some View {
         Group {
             if let toast = center.current {
                 HStack(spacing: 12) {
-                    Text(toast.message).font(.system(size: UIScale.pt(12), weight: .medium)).lineLimit(1)
+                    Text(LocalizedStringKey(toast.message)).font(.system(size: typography.pt(12), weight: .medium)).lineLimit(1)
                     if let title = toast.actionTitle, let action = toast.action {
-                        Button(title) { action(); center.dismiss() }
+                        Button(LocalizedStringKey(title)) { action(); center.dismiss() }
                             .buttonStyle(HitAreaButtonStyle(compact: true))
-                            .font(.system(size: UIScale.pt(12), weight: .semibold))
+                            .font(.system(size: typography.pt(12), weight: .semibold))
                             .foregroundStyle(Palette.accent)
                     }
                     Button { center.dismiss() } label: { Image(systemName: "xmark").font(.system(size: 9, weight: .semibold)) }
@@ -243,12 +293,12 @@ extension Date {
     /// 「今天 / 明天 / 10月8日」之类的短标签。
     var relativeLabel: String {
         let calendar = JournalDates.calendar
-        if calendar.isDateInToday(self) { return "今天" }
-        if calendar.isDateInTomorrow(self) { return "明天" }
-        if calendar.isDateInYesterday(self) { return "昨天" }
+        if calendar.isDateInToday(self) { return AppLocalized("今天") }
+        if calendar.isDateInTomorrow(self) { return AppLocalized("明天") }
+        if calendar.isDateInYesterday(self) { return AppLocalized("昨天") }
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = calendar.isDate(self, equalTo: Date(), toGranularity: .year) ? "M月d日" : "yyyy年M月d日"
+        formatter.locale = AppLanguage.current.locale
+        formatter.setLocalizedDateFormatFromTemplate(calendar.isDate(self, equalTo: Date(), toGranularity: .year) ? "MMMd" : "yMMMd")
         return formatter.string(from: self)
     }
 }

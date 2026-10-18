@@ -3,6 +3,7 @@ import SwiftUI
 import DayleafCore
 
 struct ManagedTaskRow: View {
+    @Environment(\.typography) private var typography
     @ObservedObject var store: JournalStore
     @EnvironmentObject private var interaction: WorkspaceInteraction
     @ObservedObject private var dragSession = TaskDragSession.shared
@@ -28,7 +29,7 @@ struct ManagedTaskRow: View {
         HStack(alignment: .center, spacing: 4) {
             Button { selectTask(); store.toggleTodo(task.id, on: date) } label: {
                 Image(systemName: task.isDropped ? "xmark.circle.fill" : (task.completed ? "checkmark.circle.fill" : "circle"))
-                    .font(.system(size: UIScale.pt(compact ? 14 : 17), weight: .light))
+                    .font(.system(size: typography.pt(compact ? 14 : 17), weight: .light))
                     .foregroundStyle(task.isDropped ? Palette.muted : (task.completed ? Palette.success : Palette.muted))
                     .frame(width: 18, height: 22)
                     .id(task.completed)
@@ -40,8 +41,10 @@ struct ManagedTaskRow: View {
             .help(task.isDropped ? "已放弃：点一下恢复成未完成" : "")
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .top, spacing: 1) {
+                    TaskPriorityButton(store: store, task: task)
+                        .frame(width: 16, height: 26)
                     if let number = task.number {
-                        Text("#\(number)").font(.system(size: UIScale.pt(10), design: .monospaced))
+                        Text("#\(number)").font(.system(size: typography.pt(10), design: .monospaced))
                             .foregroundStyle(Palette.muted).padding(.top, 7).fixedSize()
                     }
                 TaskTitleView(title: Binding(
@@ -50,23 +53,20 @@ struct ManagedTaskRow: View {
                 ), completed: task.completed, color: Palette.ink, fontSize: compact ? 12 : 14,
                               next: next, itemID: task.id, requestedEdit: $requestedEdit,
                               prepare: selectTask, menuItems: menuItems)
+                    TaskDeadlineButton(store: store, task: task).padding(.top, 4)
                 }
-                if task.dueDate != nil || task.repeatRule != .none || task.focusSeconds >= 1 || focus?.active?.taskID == task.id || !task.tags.isEmpty || store.pinnedTask?.id == task.id || task.isDropped {
+                if task.reminderMinutes != nil || task.repeatRule != .none || task.focusSeconds >= 1 || focus?.active?.taskID == task.id || !task.tags.isEmpty || store.pinnedTask?.id == task.id || task.isDropped {
                     HStack(spacing: 4) {
                         if task.isDropped { Label("已放弃", systemImage: "nosign") }
                         if store.pinnedTask?.id == task.id {
                             Image(systemName: "pin.fill").foregroundStyle(Palette.accent).help("固定关联：新日志默认记到它名下")
-                        }
-                        if let due = task.dueDate {
-                            Image(systemName: "clock")
-                            Text(dueText(due))
                         }
                         if task.reminderMinutes != nil { Image(systemName: "bell") }
                         if task.repeatRule != .none { Image(systemName: "repeat") }
                         if let focus { FocusTimeBadge(session: focus, taskID: task.id, accumulated: task.focusSeconds) }
                         TaskTagLine(tags: task.tags)
                     }
-                    .font(.system(size: UIScale.pt(10))).lineLimit(1)
+                    .font(.system(size: typography.pt(10))).lineLimit(1)
                     .foregroundStyle(overdue ? Palette.deadline : Palette.muted)
                     .padding(.horizontal, 5)
                 }
@@ -108,7 +108,7 @@ struct ManagedTaskRow: View {
             ForEach(Array(menuItems.enumerated()), id: \.offset) { _, item in
                 if item.separator { Divider() } else {
                     Button(role: item.destructive ? .destructive : nil, action: item.action) {
-                        if let symbol = item.symbol { Label(item.title, systemImage: symbol) } else { Text(item.title) }
+                        if let symbol = item.symbol { Label(LocalizedStringKey(item.title), systemImage: symbol) } else { Text(LocalizedStringKey(item.title)) }
                     }
                 }
             }
@@ -172,21 +172,16 @@ struct ManagedTaskRow: View {
     private var menuItems: [TextMenuItem] {
         guard !store.isReadOnly else { return [] }
         var list = radialItems.map { TextMenuItem(title: $0.title, symbol: $0.symbol, destructive: $0.destructive, action: $0.action) }
+        list.insert(contentsOf: TaskPriority.allCases.map { priority in
+            TextMenuItem(title: priority.title, symbol: task.priority == priority ? "checkmark" : nil,
+                         action: { store.setPriority(priority, for: task.id) })
+        }, at: 0)
         // 删除前面加一条分隔线。
         if let last = list.indices.last, list.count > 1 { list.insert(.divider, at: last) }
         return list
     }
 
     private var overdue: Bool { !task.completed && task.effectiveDeadline.map { $0 < Date() } == true }
-
-    private func dueText(_ due: Date) -> String {
-        var text = due.relativeLabel
-        if task.dueHasTime {
-            let parts = JournalDates.calendar.dateComponents([.hour, .minute], from: due)
-            text += String(format: " %02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
-        }
-        return overdue ? text + " · 已逾期" : text
-    }
 
     private func selectTask() {
         interaction.selectedTaskID = task.id

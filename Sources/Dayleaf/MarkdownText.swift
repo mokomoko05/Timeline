@@ -5,13 +5,14 @@ import DayleafCore
 /// CommonMark/GFM 语法树直接排进 TextKit；表格使用原生 NSTextTable。
 /// 不执行 HTML，不自动请求远程图片。
 enum MarkdownText {
-    static func render(_ source: String, color: NSColor, fontSize: CGFloat, monospaced: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing) -> NSAttributedString {
-        let renderer = Renderer(color: color, size: UIScale.pt(fontSize), monospaced: monospaced, lineSpacing: lineSpacing)
-        renderer.blocks(Document(parsing: source))
+    static func render(_ source: String, color: NSColor, fontSize: CGFloat, monospaced: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing, scale: CGFloat = UIScale.factor, document: Document? = nil) -> NSAttributedString {
+        let renderer = Renderer(color: color, size: fontSize * scale, monospaced: monospaced, lineSpacing: lineSpacing)
+        renderer.blocks(document ?? Document(parsing: source))
         return renderer.output
     }
 
     private final class Renderer {
+        private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
         let output = NSMutableAttributedString()
         let color: NSColor
         let size: CGFloat
@@ -62,7 +63,7 @@ enum MarkdownText {
         }
 
         func paragraph(_ content: NSMutableAttributedString, style: NSMutableParagraphStyle) {
-            if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            if let detector = Self.linkDetector {
                 for match in detector.matches(in: content.string, range: content.fullRange) {
                     guard let url = match.url.flatMap({ TaskText.linkURL($0.absoluteString) }),
                           content.attribute(.link, at: match.range.location, effectiveRange: nil) == nil,

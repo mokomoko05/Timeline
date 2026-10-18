@@ -5,6 +5,7 @@ import DayleafCore
 /// 待办标题、日志/笔记正文等各处共用的输入框。单行（标题）用 `NSTextField`；多行自动增高（`minHeight` 非空且允许换行）用
 /// `NSScrollView` + `NSTextView`，这样内容超过 `maxLines` 封顶高度后能在框内滚动，而不是带着外面的列表一起滚。
 struct TaskInput: View {
+    @ObservedObject private var languages = LanguageStore.shared
     @Binding var text: String
     @Binding var focused: Bool
     var placeholder = ""
@@ -43,12 +44,12 @@ struct TaskInput: View {
 
     var body: some View {
         if growing {
-            GrowingTaskInput(text: $text, focused: $focused, placeholder: placeholder, fontSize: fontSize, submit: submit,
+            GrowingTaskInput(text: $text, focused: $focused, placeholder: AppLocalized(placeholder), fontSize: fontSize, submit: submit,
                               cancel: cancel, monospaced: monospaced, historyUp: historyUp, historyDown: historyDown,
                               complete: complete, onPasteImages: onPasteImages, minHeight: minHeight ?? 24, maxLines: maxLines,
                               returnSubmits: returnSubmits, mention: mention)
         } else {
-            SingleLineTaskInput(text: $text, focused: $focused, placeholder: placeholder, fontSize: fontSize, submit: submit,
+            SingleLineTaskInput(text: $text, focused: $focused, placeholder: AppLocalized(placeholder), fontSize: fontSize, submit: submit,
                                  cancel: cancel, previous: previous, monospaced: monospaced, onPasteImages: onPasteImages,
                                  minHeight: minHeight, maxLines: maxLines, allowsNewlines: allowsNewlines,
                                  collapsesPastedNewlines: collapsesPastedNewlines ?? !allowsNewlines)
@@ -82,6 +83,7 @@ final class InputHeightMeasurer {
 
 /// 单行（标题）场景：原来的 `NSTextField` 实现，回车提交，不支持框内滚动（本来也用不到）。
 struct SingleLineTaskInput: NSViewRepresentable {
+    @Environment(\.typography) private var typography
     @Environment(\.isEnabled) private var enabled
     @Binding var text: String
     @Binding var focused: Bool
@@ -102,7 +104,7 @@ struct SingleLineTaskInput: NSViewRepresentable {
     private var growing: Bool { minHeight != nil }
 
     private var resolvedFont: NSFont {
-        monospaced ? .monospacedSystemFont(ofSize: UIScale.pt(fontSize), weight: .regular) : .systemFont(ofSize: UIScale.pt(fontSize))
+        monospaced ? .monospacedSystemFont(ofSize: typography.pt(fontSize), weight: .regular) : .systemFont(ofSize: typography.pt(fontSize))
     }
 
     /// 内容需要的高度：行数（按宽度折行）乘行高，再加上单行时上下的留白；到 `maxLines` 行为止。
@@ -216,6 +218,7 @@ struct SingleLineTaskInput: NSViewRepresentable {
 /// Enter 换行，⌘Enter 提交（`returnSubmits` 为 true 时反过来：Enter 直接提交，Shift+Enter 换行）；
 /// 点击框外失焦也提交，Esc 取消。
 struct GrowingTaskInput: NSViewRepresentable {
+    @Environment(\.typography) private var typography
     @Environment(\.isEnabled) private var enabled
     @Binding var text: String
     @Binding var focused: Bool
@@ -235,7 +238,7 @@ struct GrowingTaskInput: NSViewRepresentable {
     var mention: MentionState?
 
     private var resolvedFont: NSFont {
-        monospaced ? .monospacedSystemFont(ofSize: UIScale.pt(fontSize), weight: .regular) : .systemFont(ofSize: UIScale.pt(fontSize))
+        monospaced ? .monospacedSystemFont(ofSize: typography.pt(fontSize), weight: .regular) : .systemFont(ofSize: typography.pt(fontSize))
     }
 
     static func height(for text: String, font: NSFont, width: CGFloat, minHeight: CGFloat, maxLines: Int) -> CGFloat {

@@ -149,6 +149,7 @@ enum MentionProviders {
 
 /// 输入框下面的补全列表（`@` 待办、`#` 标签）。
 struct MentionList: View {
+    @Environment(\.typography) private var typography
     @ObservedObject var state: MentionState
     @ObservedObject var store: JournalStore
     /// 正在写的标签等：带这些标签的待办会排前面，并标出来。
@@ -165,7 +166,7 @@ struct MentionList: View {
                         .contentShape(Rectangle())
                         .gesture(DragGesture(minimumDistance: 0).onChanged { _ in state.choose(index) })
                 }
-                Text("↑ ↓ 选择 · 回车 / Tab 确认 · Esc 取消").font(.system(size: UIScale.pt(10))).foregroundStyle(Palette.muted)
+                Text("↑ ↓ 选择 · 回车 / Tab 确认 · Esc 取消").font(.system(size: typography.pt(10))).foregroundStyle(Palette.muted)
                     .padding(.horizontal, 10).padding(.vertical, 4)
             }
             .padding(.vertical, 3)
@@ -189,22 +190,22 @@ struct MentionList: View {
         let isPinned = item.id == store.pinnedTask?.id
         let shared = item.task.tags.filter { tag in contextTags.contains { TagText.matches(tag, query: $0) || TagText.matches($0, query: tag) } }
         return HStack(spacing: 6) {
-            Text(item.task.number.map { "#\($0)" } ?? "").font(.system(size: UIScale.pt(11), design: .monospaced))
+            Text(item.task.number.map { "#\($0)" } ?? "").font(.system(size: typography.pt(11), design: .monospaced))
                 .foregroundStyle(Palette.muted).frame(width: 34, alignment: .leading)
             Text(String(TaskText.rendered(item.task.title, alias: item.task.calendarName).characters))
-                .font(.system(size: UIScale.pt(13))).lineLimit(1)
+                .font(.system(size: typography.pt(13))).lineLimit(1)
                 .foregroundStyle(item.task.completed ? Palette.muted : Palette.ink)
                 .strikethrough(item.task.isDone, color: Palette.muted)
             if item.task.isDropped {
-                Label("已放弃", systemImage: "xmark.circle.fill").labelStyle(.titleAndIcon).font(.system(size: UIScale.pt(10))).foregroundStyle(Palette.muted)
+                Label("已放弃", systemImage: "xmark.circle.fill").labelStyle(.titleAndIcon).font(.system(size: typography.pt(10))).foregroundStyle(Palette.muted)
             } else if item.task.isDone {
-                Label("已完成", systemImage: "checkmark.circle.fill").labelStyle(.titleAndIcon).font(.system(size: UIScale.pt(10))).foregroundStyle(Palette.success)
+                Label("已完成", systemImage: "checkmark.circle.fill").labelStyle(.titleAndIcon).font(.system(size: typography.pt(10))).foregroundStyle(Palette.success)
             }
-            if isFocus { Image(systemName: "timer").foregroundStyle(Palette.success).font(.system(size: UIScale.pt(10))) }
-            if isPinned { Image(systemName: "pin.fill").foregroundStyle(Palette.accent).font(.system(size: UIScale.pt(10))) }
+            if isFocus { Image(systemName: "timer").foregroundStyle(Palette.success).font(.system(size: typography.pt(10))) }
+            if isPinned { Image(systemName: "pin.fill").foregroundStyle(Palette.accent).font(.system(size: typography.pt(10))) }
             Spacer(minLength: 4)
             ForEach(Array((shared.isEmpty ? Array(item.task.tags.prefix(2)) : shared).prefix(2)), id: \.self) { tag in
-                Text("#" + tag).font(.system(size: UIScale.pt(10))).lineLimit(1)
+                Text("#" + tag).font(.system(size: typography.pt(10))).lineLimit(1)
                     .foregroundStyle(shared.contains(tag) ? Palette.accent : Palette.muted)
             }
         }
@@ -215,16 +216,16 @@ struct MentionList: View {
 
     private func tagRow(_ tag: TagCandidate) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: tag.isNew ? "plus.circle" : "number").font(.system(size: UIScale.pt(11))).foregroundStyle(Palette.muted)
+            Image(systemName: tag.isNew ? "plus.circle" : "number").font(.system(size: typography.pt(11))).foregroundStyle(Palette.muted)
                 .frame(width: 20, alignment: .leading)
-            Text("#" + tag.name).font(.system(size: UIScale.pt(13))).foregroundStyle(Palette.accent).lineLimit(1)
+            Text("#" + tag.name).font(.system(size: typography.pt(13))).foregroundStyle(Palette.accent).lineLimit(1)
             Spacer(minLength: 4)
             if tag.isNew {
-                Text("新建标签").font(.system(size: UIScale.pt(10))).foregroundStyle(Palette.muted)
+                Text("新建标签").font(.system(size: typography.pt(10))).foregroundStyle(Palette.muted)
             } else if tag.taskCount > 0 || tag.noteCount > 0 {
-                Text("\(tag.taskCount) 个待办 · \(tag.noteCount) 条笔记").font(.system(size: UIScale.pt(10))).foregroundStyle(Palette.muted)
+                Text("\(tag.taskCount) 个待办 · \(tag.noteCount) 条笔记").font(.system(size: typography.pt(10))).foregroundStyle(Palette.muted)
             } else {
-                Text("空标签").font(.system(size: UIScale.pt(10))).foregroundStyle(Palette.muted)
+                Text("空标签").font(.system(size: typography.pt(10))).foregroundStyle(Palette.muted)
             }
         }
         .accessibilityElement(children: .ignore)

@@ -41,7 +41,7 @@ struct LinkPickerView: View {
                 }.buttonStyle(.plain).foregroundStyle(Palette.muted)
             }
             if list.isEmpty {
-                Text(query.isEmpty ? "没有未完成的待办" : "没有匹配「\(query)」的待办").font(.caption).foregroundStyle(.secondary)
+                Text(query.isEmpty ? AppLocalized("没有未完成的待办") : AppLocalizedFormat("没有匹配「%@」的待办", query)).font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 60)
             } else {
                 ScrollViewReader { proxy in
@@ -92,7 +92,7 @@ struct LinkPickerView: View {
                         if item.task.isDropped { Image(systemName: "xmark.circle.fill").foregroundStyle(Palette.muted).font(.system(size: 10)) } else if item.task.completed { Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.success).font(.system(size: 10)) }
                     }
                     HStack(spacing: 6) {
-                        if let due = item.task.dueDate { Text("截止 " + due.relativeLabel) }
+                        if let due = item.task.dueDate { Text(AppLocalized("截止 ") + due.relativeLabel) }
                         ForEach(item.task.tags, id: \.self) { Text("#" + $0).foregroundStyle(Palette.accent) }
                     }.font(.system(size: 10)).foregroundStyle(Palette.muted).lineLimit(1)
                 }
@@ -132,6 +132,7 @@ struct LinkPickerButton<Label: View>: View {
 /// 关联和标签都在输入框里选：`@` 加几个字选待办，`#` 加几个字选标签（见 `MentionList`）；这里只显示结果，可以点 × 去掉。
 /// 关联的优先级：明确选的 > 专注中的 > 固定的；选定的待办可以一键「固定」，之后的日志默认都记到它名下，不计时。
 struct LogChipsBar: View {
+    @Environment(\.typography) private var typography
     @ObservedObject var store: JournalStore
     @Binding var link: UUID?
     @Binding var unlinked: Bool
@@ -161,16 +162,16 @@ struct LogChipsBar: View {
                     if showsLink { linkChips }
                     ForEach(tags, id: \.self) { tag in tagChip(tag) }
                     if !hasChips, !hint.isEmpty {
-                        Text(hint).font(.system(size: UIScale.pt(size))).foregroundStyle(Palette.muted).lineLimit(1)
+                        Text(LocalizedStringKey(hint)).font(.system(size: typography.pt(size))).foregroundStyle(Palette.muted).lineLimit(1)
                     }
                 }
                 .padding(.vertical, 1)
             }
             if showsLink {
                 LinkPickerButton(store: store, current: explicit?.id, contextTags: contextTags, pick: choose) {
-                    Image(systemName: "link").font(.system(size: UIScale.pt(size))).frame(width: 22, height: 20).contentShape(Rectangle())
+                    Image(systemName: "link").font(.system(size: typography.pt(size))).frame(width: 22, height: 20).contentShape(Rectangle())
                 }
-                .foregroundStyle(Palette.muted).help("用列表选择关联的待办（也可以在输入框里写 @ 加标题、编号或拼音）")
+                .foregroundStyle(Palette.muted).help("选择关联的待办")
                 .accessibilityLabel("选择关联的待办")
             }
         }
@@ -190,10 +191,10 @@ struct LogChipsBar: View {
             pill("link.badge.plus", "这条不关联待办", tint: Palette.muted)
             small("arrow.uturn.backward", "恢复自动关联") { unlinked = false }
         } else if let focus = store.focusTask {
-            pill("timer", "专注中 " + FocusHint.label(focus), tint: Palette.success)
+            pill("timer", AppLocalized("专注中 ") + FocusHint.label(focus), tint: Palette.success)
             small("xmark", "这条不关联") { unlinked = true }
         } else if let pinned = store.pinnedTask {
-            pill("pin.fill", "固定 " + FocusHint.label(pinned), tint: Palette.accent)
+            pill("pin.fill", AppLocalized("固定 ") + FocusHint.label(pinned), tint: Palette.accent)
             small("pin.slash", "取消固定") { store.pinTask(nil) }
             small("xmark", "这条不关联") { unlinked = true }
         }
@@ -203,9 +204,9 @@ struct LogChipsBar: View {
         Button { tags.removeAll { TagText.key($0) == TagText.key(tag) } } label: {
             HStack(spacing: 3) {
                 Text("#" + tag).lineLimit(1)
-                Image(systemName: "xmark").font(.system(size: UIScale.pt(8), weight: .semibold))
+                Image(systemName: "xmark").font(.system(size: typography.pt(8), weight: .semibold))
             }
-            .font(.system(size: UIScale.pt(size)))
+            .font(.system(size: typography.pt(size)))
             .padding(.horizontal, 8).padding(.vertical, 3)
             .foregroundStyle(Palette.onAccent)
             .background(Palette.accent, in: RoundedRectangle(cornerRadius: 7))
@@ -214,7 +215,7 @@ struct LogChipsBar: View {
     }
 
     private func pill(_ symbol: String, _ text: String, tint: Color) -> some View {
-        Label(text, systemImage: symbol).font(.system(size: UIScale.pt(size))).lineLimit(1)
+        Label(text, systemImage: symbol).font(.system(size: typography.pt(size))).lineLimit(1)
             .padding(.horizontal, 8).padding(.vertical, 3)
             .foregroundStyle(tint)
             .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
@@ -222,7 +223,7 @@ struct LogChipsBar: View {
 
     private func small(_ symbol: String, _ help: String, tint: Color = Palette.muted, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: UIScale.pt(size))).frame(width: 20, height: 20).contentShape(Rectangle())
+            Image(systemName: symbol).font(.system(size: typography.pt(size))).frame(width: 20, height: 20).contentShape(Rectangle())
         }
         .buttonStyle(.plain).foregroundStyle(tint).help(help).accessibilityLabel(help)
     }
