@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage(Prefs.clickExpands) private var clickExpands = true
     @AppStorage(Prefs.weekStartsSunday) private var weekStartsSunday = false
     @AppStorage(Prefs.uiScale) private var uiScale = 1.0
+    @AppStorage(Prefs.lineSpacing) private var lineSpacing = 2.0
     @AppStorage(Prefs.globalHotKey) private var globalHotKey = true
     @AppStorage(Prefs.terminalLayout) private var terminalLayout = TerminalLayout.threePanes.rawValue
     @AppStorage(Prefs.focusMinLogMinutes) private var focusMinLogMinutes = Prefs.defaultFocusMinLogMinutes
@@ -32,12 +33,39 @@ struct SettingsView: View {
             Section("配色") {
                 ThemePicker(themes: themes)
             }
-            Section("字号") {
-                Picker("界面字号", selection: $uiScale) {
-                    Text("标准").tag(1.0)
-                    Text("较大 115%").tag(1.15)
-                    Text("更大 130%").tag(1.3)
+            Section("文字显示") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("整体字号")
+                        Spacer()
+                        Text("\(Int((uiScale * 100).rounded()))%")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(Palette.muted)
+                    }
+                    Slider(value: $uiScale, in: 0.80...1.50, step: 0.01)
+                    HStack {
+                        Text("80%").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Text("150%").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("行间距")
+                        Spacer()
+                        Text("\(String(format: "%.1f", lineSpacing)) pt")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(Palette.muted)
+                    }
+                    Slider(value: $lineSpacing, in: 0...10, step: 0.5)
+                    HStack {
+                        Text("紧凑").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Text("宽松").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Text("字号和行间距会应用到任务、笔记、日记和搜索结果；修改后立即生效。")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("专注计时") {
                 Toggle("隐藏专注工作台", isOn: $focusPanelHidden)
@@ -76,7 +104,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 780)
+        .frame(width: 520, height: 830)
     }
 }
 
@@ -99,7 +127,7 @@ final class SettingsWindowController {
 
     func show() {
         if window == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 780),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 830),
                                   styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = AppLocalized("设置")
             window.isReleasedWhenClosed = false

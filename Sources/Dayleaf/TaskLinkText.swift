@@ -21,6 +21,8 @@ struct TaskLinkText: NSViewRepresentable {
     /// 右键菜单里的操作（没有就用系统默认菜单）。
     var menuItems: [TextMenuItem] = []
     @Environment(\.isEnabled) private var enabled
+    @AppStorage(Prefs.uiScale) private var uiScale = 1.0
+    @AppStorage(Prefs.lineSpacing) private var settingLineSpacing = 2.0
 
     func makeNSView(context: Context) -> InteractiveTaskText {
         let view = InteractiveTaskText()
@@ -53,7 +55,7 @@ struct TaskLinkText: NSViewRepresentable {
         view.dragTaskID = dragTaskID
         view.textContainerInset = NSSize(width: compactLines ? 2 : 5, height: compactLines ? 0 : 4)
         let foreground = NSColor(completed ? Palette.muted : color)
-        if view.source != source || view.displayName != displayName || view.completed != completed || view.pointSize != fontSize || view.foreground != foreground || view.monospaced != monospaced || view.compactLines != compactLines || view.markdown != markdown {
+        if view.source != source || view.displayName != displayName || view.completed != completed || view.pointSize != fontSize || view.foreground != foreground || view.monospaced != monospaced || view.compactLines != compactLines || view.markdown != markdown || view.uiScaleFactor != uiScale || view.configuredLineSpacing != settingLineSpacing {
             view.source = source
             view.displayName = displayName
             view.completed = completed
@@ -62,7 +64,9 @@ struct TaskLinkText: NSViewRepresentable {
             view.monospaced = monospaced
             view.compactLines = compactLines
             view.markdown = markdown
-            let styled = markdown ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced) : Self.styledText(source, completed: completed, color: foreground, fontSize: fontSize, displayName: displayName, monospaced: monospaced, compactLines: compactLines)
+            view.uiScaleFactor = uiScale
+            view.configuredLineSpacing = settingLineSpacing
+            let styled = markdown ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced, lineSpacing: UIScale.lineSpacing) : Self.styledText(source, completed: completed, color: foreground, fontSize: fontSize, displayName: displayName, monospaced: monospaced, compactLines: compactLines, lineSpacing: compactLines ? 0 : UIScale.lineSpacing)
             view.textStorage?.setAttributedString(styled)
             view.measurer.update(styled, maxLines: maxLines)
             view.invalidateIntrinsicContentSize()
@@ -80,12 +84,12 @@ struct TaskLinkText: NSViewRepresentable {
         return CGSize(width: width, height: max(UIScale.pt(fontSize) + 4, height) + nsView.textContainerInset.height * 2)
     }
 
-    static func styledText(_ source: String, completed: Bool, color: NSColor, fontSize: CGFloat, displayName: String? = nil, monospaced: Bool = false, compactLines: Bool = false) -> NSAttributedString {
+    static func styledText(_ source: String, completed: Bool, color: NSColor, fontSize: CGFloat, displayName: String? = nil, monospaced: Bool = false, compactLines: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing) -> NSAttributedString {
         let rendered = TaskText.rendered(source, alias: displayName)
         let text = NSMutableAttributedString(attributedString: NSAttributedString(rendered))
         let fullRange = NSRange(location: 0, length: text.length)
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = compactLines ? 0 : 6
+        paragraph.lineSpacing = compactLines ? 0 : lineSpacing
         let font = monospaced ? NSFont.monospacedSystemFont(ofSize: UIScale.pt(fontSize), weight: .regular) : NSFont.systemFont(ofSize: UIScale.pt(fontSize))
         text.addAttributes([.font: font, .foregroundColor: color, .paragraphStyle: paragraph], range: fullRange)
         if completed { text.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: fullRange) }
@@ -183,6 +187,8 @@ final class InteractiveTaskText: NSTextView {
     var interactionEnabled = true
     var dragTaskID: UUID?
     var compactLines = false
+    var uiScaleFactor = 1.0
+    var configuredLineSpacing = 2.0
     private var mouseDownEvent: NSEvent?
     private var dragged = false
     var onEdit: (() -> Void)?

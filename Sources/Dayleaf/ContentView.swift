@@ -98,10 +98,11 @@ struct ContentView: View {
         }
         .sheet(item: $agenda) { filter in
             AgendaView(store: store, navigate: { date, id in
-                reveal(date: date, taskID: id)
-                // 点中的是某天的日志或总结（不是待办）：关掉搜索后打开那天的日志。
-                if id == nil, date != nil {
-                    notesWindow.showJournal(store: store, date: date ?? selectedDate)
+                // 主界面的日志 / 总结条目统一跳到合并窗口的日记模式，并选中对应日期。
+                if let date, id == nil {
+                    notesWindow.showJournal(store: store, date: date)
+                } else {
+                    reveal(date: date, taskID: id)
                 }
             }, filter: filter)
         }

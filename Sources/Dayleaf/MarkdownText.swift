@@ -5,8 +5,8 @@ import DayleafCore
 /// CommonMark/GFM 语法树直接排进 TextKit；表格使用原生 NSTextTable。
 /// 不执行 HTML，不自动请求远程图片。
 enum MarkdownText {
-    static func render(_ source: String, color: NSColor, fontSize: CGFloat, monospaced: Bool = false) -> NSAttributedString {
-        let renderer = Renderer(color: color, size: UIScale.pt(fontSize), monospaced: monospaced)
+    static func render(_ source: String, color: NSColor, fontSize: CGFloat, monospaced: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing) -> NSAttributedString {
+        let renderer = Renderer(color: color, size: UIScale.pt(fontSize), monospaced: monospaced, lineSpacing: lineSpacing)
         renderer.blocks(Document(parsing: source))
         return renderer.output
     }
@@ -16,16 +16,18 @@ enum MarkdownText {
         let color: NSColor
         let size: CGFloat
         let font: NSFont
-        init(color: NSColor, size: CGFloat, monospaced: Bool) {
+        let lineSpacing: CGFloat
+        init(color: NSColor, size: CGFloat, monospaced: Bool, lineSpacing: CGFloat) {
             self.color = color
             self.size = size
+            self.lineSpacing = lineSpacing
             font = monospaced ? .monospacedSystemFont(ofSize: size, weight: .regular) : .systemFont(ofSize: size)
         }
 
         func style(indent: CGFloat = 0) -> NSMutableParagraphStyle {
             let style = NSMutableParagraphStyle()
-            style.lineSpacing = 3
-            style.paragraphSpacing = 7
+            style.lineSpacing = lineSpacing
+            style.paragraphSpacing = max(2, lineSpacing * 2)
             style.headIndent = indent
             style.firstLineHeadIndent = indent
             return style

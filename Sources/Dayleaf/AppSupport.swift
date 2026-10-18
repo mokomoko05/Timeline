@@ -27,6 +27,8 @@ enum Prefs {
     static let clickExpands = "clickExpandsTasks"
     static let weekStartsSunday = "weekStartsSunday"
     static let uiScale = "uiScale"
+    /// 全局文本额外行距（点），用于任务、笔记、日志和搜索结果。
+    static let lineSpacing = "lineSpacing"
     static let globalHotKey = "globalHotKeyEnabled"
     /// 新建终端的布局：threePanes（左上下两格、右一栏）或 single。
     static let terminalLayout = "terminalLayout"
@@ -107,6 +109,15 @@ enum UIScale {
     }
 
     static func pt(_ value: CGFloat) -> CGFloat { value * factor }
+
+    static var lineSpacing: CGFloat {
+        let value = UserDefaults.standard.object(forKey: Prefs.lineSpacing) as? Double
+        return CGFloat(value ?? 2.0).clamped(to: 0...10)
+    }
+}
+
+private extension CGFloat {
+    func clamped(to range: ClosedRange<CGFloat>) -> CGFloat { Swift.min(Swift.max(self, range.lowerBound), range.upperBound) }
 }
 
 private struct AppCommandsKey: EnvironmentKey {
