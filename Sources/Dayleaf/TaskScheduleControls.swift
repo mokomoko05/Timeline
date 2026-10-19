@@ -23,8 +23,6 @@ struct PriorityMark: View {
 struct TaskPriorityButton: View {
     @ObservedObject var store: JournalStore
     let task: Todo
-    @State private var anchor = AnchorBox()
-
     var items: [RadialItem] {
         TaskPriority.allCases.map { priority in
             RadialItem(id: priority.rawValue, symbol: "circle.fill", title: priority.title,
@@ -34,22 +32,33 @@ struct TaskPriorityButton: View {
     }
 
     var body: some View {
+        PrioritySelectionButton(priority: task.priority, items: items, enabled: !store.isReadOnly)
+    }
+}
+
+struct PrioritySelectionButton: View {
+    let priority: TaskPriority
+    let items: [RadialItem]
+    var enabled = true
+    @State private var anchor = AnchorBox()
+
+    var body: some View {
         Button {
             RadialMenuController.shared.present(items: items, anchor: anchor.view ?? NSView(), kind: .priority)
         } label: {
-            PriorityMark(priority: task.priority)
+            PriorityMark(priority: priority)
                 .frame(width: 18, height: 22).contentShape(Rectangle())
         }
-        .buttonStyle(.plain).disabled(store.isReadOnly)
-        .raisedOnHover(radius: 4, enabled: !store.isReadOnly)
+        .buttonStyle(.plain).disabled(!enabled)
+        .raisedOnHover(radius: 4, enabled: enabled)
         .background(AnchorReader(box: anchor))
         .onHover { inside in
-            if inside && !store.isReadOnly {
+            if inside && enabled {
                 RadialMenuController.shared.scheduleOpen(items: { items }, anchor: anchor.view, kind: .priority)
             } else { RadialMenuController.shared.cancelOpen() }
         }
-        .help(LocalizedStringKey(task.priority.title))
-        .accessibilityLabel(LocalizedStringKey(task.priority.title))
+        .help(LocalizedStringKey(priority.title))
+        .accessibilityLabel(LocalizedStringKey(priority.title))
         .accessibilityHint("选择优先级")
         .accessibilityActions {
             ForEach(items) { item in Button(LocalizedStringKey(item.title), action: item.action) }

@@ -657,6 +657,16 @@ final class FocusPanelStyleTests: XCTestCase {
             XCTAssertLessThanOrEqual(host.fittingSize.width, size.width + 1, "\(style.title) 的内容放得进窗口")
             XCTAssertLessThanOrEqual(host.fittingSize.height, size.height + 1)
             XCTAssertGreaterThan(host.fittingSize.height, 6)
+            func editors(_ view: NSView) -> [ImagePasteTextView] {
+                (view as? ImagePasteTextView).map { [$0] } ?? view.subviews.flatMap(editors)
+            }
+            let editor = try XCTUnwrap(editors(host).first)
+            XCTAssertLessThanOrEqual(try XCTUnwrap(editor.enclosingScrollView).frame.height, 26)
+            editor.string = String(repeating: "A long focus note with several lines. ", count: 20)
+            editor.didChangeText()
+            host.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(editor.frame.height, try XCTUnwrap(editor.enclosingScrollView).contentSize.height)
+            XCTAssertEqual(host.fittingSize.height, 158, accuracy: 1)
         }
         let current = try XCTUnwrap(session.active)
         session.tick(now: current.started.addingTimeInterval(current.plannedSeconds + 1))

@@ -167,7 +167,7 @@ final class FocusNoteDraftTests: XCTestCase {
         let scroll = try XCTUnwrap(editor.enclosingScrollView)
         let rect = scroll.convert(scroll.bounds, to: host)
         XCTAssertTrue(host.bounds.contains(rect))
-        XCTAssertGreaterThanOrEqual(scroll.bounds.height, 30)
+        XCTAssertEqual(scroll.bounds.height, 24, accuracy: 1, "输入区显示一行，长内容在框内滚动")
         XCTAssertGreaterThanOrEqual(host.bounds.maxY - rect.maxY, 30)
     }
 }

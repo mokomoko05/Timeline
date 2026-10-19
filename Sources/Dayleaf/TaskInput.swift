@@ -53,7 +53,7 @@ struct TaskInput: View {
             SingleLineTaskInput(text: $text, focused: $focused, placeholder: AppLocalized(placeholder), fontSize: fontSize, submit: submit,
                                  cancel: cancel, previous: previous, monospaced: monospaced, onPasteImages: onPasteImages,
                                  minHeight: minHeight, maxLines: maxLines, allowsNewlines: allowsNewlines,
-                                 collapsesPastedNewlines: collapsesPastedNewlines ?? !allowsNewlines)
+                                 collapsesPastedNewlines: collapsesPastedNewlines ?? !allowsNewlines, complete: complete)
         }
     }
 }
@@ -100,6 +100,7 @@ struct SingleLineTaskInput: NSViewRepresentable {
     var allowsNewlines = true
     /// 粘贴进来的换行要不要变成空格。省略时跟 `allowsNewlines` 相反。
     var collapsesPastedNewlines: Bool?
+    var complete: (() -> Void)?
     private var collapsesNewlines: Bool { collapsesPastedNewlines ?? !allowsNewlines }
 
     private var growing: Bool { minHeight != nil }
@@ -204,6 +205,10 @@ struct SingleLineTaskInput: NSViewRepresentable {
                 parent.cancel()
                 parent.focused = false
                 control.window?.makeFirstResponder(nil)
+                return true
+            }
+            if commandSelector == #selector(NSResponder.insertTab(_:)), let complete = parent.complete {
+                complete()
                 return true
             }
             if commandSelector == #selector(NSResponder.deleteBackward(_:)), textView.string.isEmpty {

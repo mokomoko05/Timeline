@@ -641,7 +641,7 @@ public final class JournalStore: ObservableObject {
     /// 逐行解析输入框草稿（识别日期、时间、提醒、重复），一次撤销即可还原。
     /// 识别出的日期是任务的截止日期；没写日期就是还没分配日期的任务。任务本身不属于某一天。
     @discardableResult
-    public func commitDraft(on date: Date, now: Date = Date(), defaultDue: Bool = false) -> [ScheduledTask] {
+    public func commitDraft(on date: Date, now: Date = Date(), defaultDue: Bool = false, options: TaskCreationOptions = .init()) -> [ScheduledTask] {
         guard !isReadOnly else { return [] }
         let key = JournalDates.key(date)
         let lines = (days[key]?.deadlineDraft ?? "").components(separatedBy: .newlines)
@@ -651,7 +651,7 @@ public final class JournalStore: ObservableObject {
         for line in lines {
             let resolved = QuickAdd.parse(line, now: now).resolve(defaultDay: date, defaultDue: defaultDue)
             var entry = updated[key] ?? DayEntry()
-            let numbered = allocate(resolved.todo)
+            let numbered = allocate(options.applying(to: resolved.todo))
             entry.todos.append(numbered)
             updated[key] = entry
             added.append(ScheduledTask(date: date, task: numbered))
@@ -664,15 +664,16 @@ public final class JournalStore: ObservableObject {
 
     /// 全局快速添加：识别日期、时间、提醒和重复；识别出的日期成为截止日期。
     @discardableResult
-    public func addParsedTodo(_ text: String, on date: Date, now: Date = Date(), priority: TaskPriority = .normal) -> ScheduledTask? {
+    public func addParsedTodo(_ text: String, on date: Date, now: Date = Date(), priority: TaskPriority = .normal, options: TaskCreationOptions? = nil) -> ScheduledTask? {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isReadOnly, !text.isEmpty else { return nil }
         let resolved = QuickAdd.parse(text, now: now).resolve(defaultDay: date)
         var updated = days
         let key = JournalDates.key(date)
         var entry = updated[key] ?? DayEntry()
-        var numbered = allocate(resolved.todo)
-        numbered.priority = priority
+        var defaults = TaskCreationOptions()
+        defaults.priority = priority
+        let numbered = allocate((options ?? defaults).applying(to: resolved.todo))
         entry.todos.append(numbered)
         updated[key] = entry
         replaceDays(updated, action: "添加待办")

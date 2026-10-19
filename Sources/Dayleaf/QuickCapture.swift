@@ -74,6 +74,7 @@ enum QuickCaptureMode: String { case todo, log }
 @MainActor
 final class QuickCaptureModel: ObservableObject {
     @Published var mode: QuickCaptureMode = .todo
+    @Published var creationOptions = TaskCreationOptions()
     /// 手动收起后仍保留草稿，只有成功提交才清空。
     @Published var text = ""
     @Published var images: [String] = []
@@ -92,6 +93,7 @@ final class QuickCaptureModel: ObservableObject {
         tags = []
         link = nil
         unlinked = false
+        creationOptions = TaskCreationOptions()
     }
 }
 
@@ -336,22 +338,19 @@ struct QuickCaptureView: View {
                 }.buttonStyle(.plain).raisedOnHover(radius: 4).help("收起")
                     .accessibilityLabel("收起")
             }
-            HStack(spacing: 8) {
-                Image(systemName: mode == .todo ? "plus.circle" : "chevron.right.2").foregroundStyle(Palette.accent)
-                TaskInput(text: $model.text, focused: $focused,
-                          placeholder: mode == .todo ? "添加待办…" : "记录…  @ 待办 · # 标签",
-                          fontSize: 12, submit: submit, cancel: close, complete: { mode = mode == .todo ? .log : .todo },
-                          onPasteImages: mode == .log ? addImages : nil,
-                          minHeight: 42, maxLines: 4, allowsNewlines: mode == .log, mention: mode == .log ? mention : nil,
-                          submitsOnBlur: false)
-                if mode == .todo {
-                    TodoDraftTagButton(store: store, text: $model.text)
+            if mode == .todo {
+                TaskComposerRow(store: store, text: $model.text, focused: $focused, options: $model.creationOptions,
+                                compact: true, submit: submit, cancel: close, complete: { mode = .log })
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right.2").foregroundStyle(Palette.accent)
+                    TaskInput(text: $model.text, focused: $focused, placeholder: "记录…  @ 待办 · # 标签",
+                              fontSize: 12, submit: submit, cancel: close, complete: { mode = .todo },
+                              onPasteImages: addImages, minHeight: 24, maxLines: 1, mention: mention,
+                              returnSubmits: true, submitsOnBlur: false)
                 }
-            }
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(Palette.background, in: RoundedRectangle(cornerRadius: 10))
-            if mode == .log {
-                Color.clear.frame(height: 0)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Palette.background, in: RoundedRectangle(cornerRadius: 10))
             }
             if mode == .log, !images.isEmpty {
                 PendingImagesStrip(store: store, names: images,
@@ -428,7 +427,8 @@ struct QuickCaptureView: View {
         failure = nil
         switch mode {
         case .todo:
-            guard let added = store.addParsedTodo(value, on: Date()) else { failure = AppLocalized("当前数据只读，无法保存。"); return }
+            guard let added = store.addParsedTodo(value, on: Date(), options: model.creationOptions) else { failure = AppLocalized("当前数据只读，无法保存。"); return }
+            model.creationOptions = TaskCreationOptions()
             message = added.task.dueDate.map { AppLocalizedFormat("已添加 #%lld，截止%@", added.task.number ?? 0, $0.relativeLabel) } ?? AppLocalizedFormat("已添加 #%lld，还没有截止日期", added.task.number ?? 0)
         case .log:
             do {

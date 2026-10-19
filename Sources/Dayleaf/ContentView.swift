@@ -46,6 +46,7 @@ struct ContentView: View {
     @EnvironmentObject private var toast: ToastCenter
     @State private var currentDayKey = JournalDates.key(Date())
     @State private var addingTodo = false
+    @State private var creationOptions = TaskCreationOptions()
     @AppStorage("tasksPaneExpanded") private var tasksVisible = false
     private let dayTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     private var entry: DayEntry { store.entry(for: selectedDate) }
@@ -544,35 +545,13 @@ struct ContentView: View {
                 }
                 .frame(maxHeight: .infinity)
             }
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 10) {
-                    Image(systemName: "plus").foregroundStyle(Palette.accent)
-                    TaskInput(text: draft, focused: $addingTodo, placeholder: "添加待办…", submit: addTodo,
-                              cancel: { addingTodo = false }, previous: {
-                        if let newest = visible.max(by: { ($0.task.number ?? 0) < ($1.task.number ?? 0) }) {
-                            addingTodo = false
-                            requestedEdit = newest.id
-                        }
-                    }, minHeight: typography.pt(22), maxLines: 6, allowsNewlines: false, collapsesPastedNewlines: false)
-                    TodoDraftTagButton(store: store, text: draft)
-                    Button(action: addTodo) {
-                        Image(systemName: "arrow.turn.down.left")
-                            .font(.system(size: typography.pt(11), weight: .semibold))
-                            .padding(7).background(Palette.card, in: RoundedRectangle(cornerRadius: 6))
-                    }
-                    .buttonStyle(HitAreaButtonStyle())
-                    .disabled(draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityLabel("添加待办")
+            TaskComposerRow(store: store, text: draft, focused: $addingTodo, options: $creationOptions,
+                            defaultDate: selectedDate, submit: addTodo, cancel: { addingTodo = false }, previous: {
+                if let newest = visible.max(by: { ($0.task.number ?? 0) < ($1.task.number ?? 0) }) {
+                    addingTodo = false
+                    requestedEdit = newest.id
                 }
-                let parsed = QuickAdd.parse(draft.wrappedValue)
-                if parsed.hasSchedule || !parsed.tags.isEmpty { ParsedChips(parsed: parsed, dayIsDeadline: true).transition(.opacity) }
-            }
-            .padding(11)
-            .background(Palette.background, in: RoundedRectangle(cornerRadius: 10))
-            // 输入框：平时一道淡边，正在输入时变成强调色的光圈。
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(addingTodo ? Palette.accent.opacity(0.7) : Palette.line.opacity(0.6), lineWidth: addingTodo ? 1.5 : 0.75).allowsHitTesting(false))
-            .animation(Motion.quick, value: addingTodo)
-            .animation(Motion.quick, value: QuickAdd.parse(draft.wrappedValue).hasSchedule || !QuickAdd.parse(draft.wrappedValue).tags.isEmpty)
+            })
         }
         .disabled(store.isReadOnly)
         .modifier(Card())
@@ -759,7 +738,8 @@ struct ContentView: View {
 
     private func addTodo() {
         guard !store.isReadOnly else { return }
-        let added = store.commitDraft(on: selectedDate)
+        let added = store.commitDraft(on: selectedDate, options: creationOptions)
+        if !added.isEmpty { creationOptions = TaskCreationOptions() }
         addingTodo = true
         scrollTarget = added.last?.id
         if added.contains(where: { $0.task.reminderMinutes != nil }) {
