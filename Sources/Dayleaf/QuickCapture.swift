@@ -358,7 +358,7 @@ struct QuickCaptureView: View {
                     TaskInput(text: $model.text, focused: $focused, placeholder: "记录…  @ 待办 · # 标签",
                               fontSize: 12, submit: submit, cancel: close, complete: { mode = .todo },
                               onPasteImages: addImages, minHeight: 24, maxLines: 1, mention: mention,
-                              returnSubmits: true, submitsOnBlur: false)
+                              submitsOnBlur: false)
                 }
                 .padding(.horizontal, 12).padding(.vertical, 6)
                 .background(Palette.background, in: RoundedRectangle(cornerRadius: 10))
@@ -387,7 +387,7 @@ struct QuickCaptureView: View {
                     }
                 } else {
                     LogChipsBar(store: store, link: $model.link, unlinked: $model.unlinked, tags: $model.tags, contextTags: model.tags,
-                                hint: "回车记录")
+                                hint: "⌘Enter 记录")
                 }
             }.font(.system(size: typography.pt(12))).frame(height: LogChipsBar.height, alignment: .leading)
         }

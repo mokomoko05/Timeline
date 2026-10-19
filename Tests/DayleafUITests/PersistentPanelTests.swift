@@ -55,6 +55,14 @@ final class PersistentPanelTests: XCTestCase {
             (view as? ImagePasteTextView) ?? view.subviews.lazy.compactMap(findEditor).first
         }
         let editor = try XCTUnwrap(findEditor(try XCTUnwrap(panel.contentView)))
+        XCTAssertFalse(editor.returnSubmits)
+        func enter(_ flags: NSEvent.ModifierFlags) -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                             windowNumber: 0, context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
+                             isARepeat: false, keyCode: 36)!
+        }
+        XCTAssertFalse(editor.shouldInterceptReturn(enter([])), "Enter passes through for a newline")
+        XCTAssertTrue(editor.shouldInterceptReturn(enter(.command)), "Command + Enter submits")
         XCTAssertEqual(panel.level, .floating)
         XCTAssertFalse(try XCTUnwrap(panel as? NSPanel).hidesOnDeactivate)
         editor.string = "Unfinished draft"
