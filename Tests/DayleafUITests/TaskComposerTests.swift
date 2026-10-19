@@ -22,7 +22,15 @@ final class TaskComposerTests: XCTestCase {
             func fields(_ view: NSView) -> [TaskTextField] {
                 (view as? TaskTextField).map { [$0] } ?? view.subviews.flatMap(fields)
             }
-            XCTAssertGreaterThan(try XCTUnwrap(fields(host).first).frame.width, 80)
+            if width < 400 {
+                func editors(_ view: NSView) -> [ImagePasteTextView] {
+                    (view as? ImagePasteTextView).map { [$0] } ?? view.subviews.flatMap(editors)
+                }
+                let editor = try XCTUnwrap(editors(host).first)
+                XCTAssertGreaterThan(try XCTUnwrap(editor.enclosingScrollView).frame.width, 80)
+            } else {
+                XCTAssertGreaterThan(try XCTUnwrap(fields(host).first).frame.width, 80)
+            }
             XCTAssertLessThan(host.fittingSize.height, 85)
             if let destination = ProcessInfo.processInfo.environment["DAYLEAF_COMPOSER_SNAPSHOT"], let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
                 host.cacheDisplay(in: host.bounds, to: bitmap)

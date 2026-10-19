@@ -327,10 +327,21 @@ struct QuickCaptureView: View {
                 .frame(maxWidth: .infinity)
                 .accessibilityHidden(true)
             HStack(spacing: 8) {
-                Picker("类型", selection: $model.mode) {
-                    Text("待办").tag(QuickCaptureMode.todo)
-                    Text("日志").tag(QuickCaptureMode.log)
-                }.labelsHidden().pickerStyle(.segmented).frame(width: 120)
+                HStack(spacing: 3) {
+                    ForEach([QuickCaptureMode.todo, .log], id: \.self) { choice in
+                        Button { mode = choice } label: {
+                            Text(choice == .todo ? "待办" : "日志")
+                                .font(.system(size: 11, weight: .medium))
+                                .frame(width: 62, height: 26)
+                                .foregroundStyle(mode == choice ? Palette.accent : Palette.muted)
+                                .background(mode == choice ? Palette.soft : .clear, in: RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain).raisedOnHover(radius: 6)
+                        .accessibilityAddTraits(mode == choice ? .isSelected : [])
+                    }
+                }
+                .padding(4)
+                .background(Palette.background, in: RoundedRectangle(cornerRadius: 10))
                 Spacer()
                 Text("Tab 切换").font(.system(size: typography.pt(11))).foregroundStyle(Palette.muted)
                 Button(action: close) {
