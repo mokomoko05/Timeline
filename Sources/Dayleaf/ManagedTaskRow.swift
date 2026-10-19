@@ -47,15 +47,20 @@ struct ManagedTaskRow: View {
                         Text("#\(number)").font(.system(size: typography.pt(10), design: .monospaced))
                             .foregroundStyle(Palette.muted).padding(.top, 7).fixedSize()
                     }
-                TaskTitleView(title: Binding(
-                    get: { store.entry(for: date).todos.first(where: { $0.id == task.id })?.title ?? task.title },
-                    set: { store.renameTodo(task.id, title: $0, on: date) }
-                ), completed: task.completed, color: Palette.ink, fontSize: compact ? 12 : 14,
-                              next: next, itemID: task.id, requestedEdit: $requestedEdit,
-                              prepare: selectTask, menuItems: menuItems)
-                    TaskDeadlineButton(store: store, task: task).padding(.top, 4)
+                    TaskTitleView(title: Binding(
+                        get: { store.entry(for: date).todos.first(where: { $0.id == task.id })?.title ?? task.title },
+                        set: { store.renameTodo(task.id, title: $0, on: date) }
+                    ), completed: task.completed, color: Palette.ink, fontSize: compact ? 12 : 14,
+                                  next: next, itemID: task.id, requestedEdit: $requestedEdit,
+                                  prepare: selectTask, menuItems: menuItems)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        TaskDeadlineButton(store: store, task: task)
+                        if let focus {
+                            TaskFocusButton(session: focus, task: ScheduledTask(date: date, task: task))
+                        }
+                    }.padding(.top, 4).fixedSize()
                 }
-                if task.reminderMinutes != nil || task.repeatRule != .none || task.focusSeconds >= 1 || focus?.active?.taskID == task.id || !task.tags.isEmpty || store.pinnedTask?.id == task.id || task.isDropped {
+                if task.reminderMinutes != nil || task.repeatRule != .none || !task.tags.isEmpty || store.pinnedTask?.id == task.id || task.isDropped {
                     HStack(spacing: 4) {
                         if task.isDropped { Label("已放弃", systemImage: "nosign") }
                         if store.pinnedTask?.id == task.id {
@@ -63,7 +68,6 @@ struct ManagedTaskRow: View {
                         }
                         if task.reminderMinutes != nil { Image(systemName: "bell") }
                         if task.repeatRule != .none { Image(systemName: "repeat") }
-                        if let focus { FocusTimeBadge(session: focus, taskID: task.id, accumulated: task.focusSeconds) }
                         TaskTagLine(tags: task.tags)
                     }
                     .font(.system(size: typography.pt(10))).lineLimit(1)
@@ -74,10 +78,7 @@ struct ManagedTaskRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 0) {
                 TagSelectionButton(store: store, tags: Binding(get: { store.locate(task.id)?.task.tags ?? task.tags }, set: { store.setTags(task.id, $0) }))
-                if let focus, !task.completed {
-                    FocusPlayButton(session: focus, task: ScheduledTask(date: date, task: task), url: FocusSession.link(in: task.title))
-                }
-                RadialMenuButton(items: { radialItems }, help: "更多操作：笔记、截止日期、标签、固定、放弃、删除")
+                RadialMenuButton(items: { radialItems }, help: "更多操作：笔记、标签、固定、放弃、删除")
                     .popover(isPresented: $showingTags, arrowEdge: .leading) { TagPickerView(store: store, task: task) }
                 TaskDragHandle(task: task, enabled: !store.isReadOnly, select: { reorder?.suppressScroll = true; selectTask() }, reorder: reorder.map { model in
                     TaskReorderHooks(begin: { model.begin(task.id) }, update: { model.update($0) },
@@ -138,11 +139,6 @@ struct ManagedTaskRow: View {
                 NotificationCenter.default.post(name: .dayleafCommitEditing, object: nil)
                 commands?.send(.notesForTask(task.id))
             }),
-            RadialItem(id: "date", symbol: "calendar.badge.clock", title: "截止日期与月历短标题", action: {
-                selectTask()
-                NotificationCenter.default.post(name: .dayleafCommitEditing, object: nil)
-                showingDetails = true
-            }),
             RadialItem(id: "tag", symbol: task.tags.isEmpty ? "tag" : "tag.fill", title: "标签", active: !task.tags.isEmpty, action: {
                 selectTask()
                 NotificationCenter.default.post(name: .dayleafCommitEditing, object: nil)
@@ -173,6 +169,12 @@ struct ManagedTaskRow: View {
     private var menuItems: [TextMenuItem] {
         guard !store.isReadOnly else { return [] }
         var list = radialItems.map { TextMenuItem(title: $0.title, symbol: $0.symbol, destructive: $0.destructive, action: $0.action) }
+        // 环形菜单不再重复日期入口；完整设置仍可从右键或 D 打开。
+        list.insert(TextMenuItem(title: "截止日期与月历短标题", symbol: "calendar.badge.clock", action: {
+            selectTask()
+            NotificationCenter.default.post(name: .dayleafCommitEditing, object: nil)
+            showingDetails = true
+        }), at: 1)
         list.insert(contentsOf: TaskPriority.allCases.map { priority in
             TextMenuItem(title: priority.title, symbol: task.priority == priority ? "checkmark" : nil,
                          action: { store.setPriority(priority, for: task.id) })

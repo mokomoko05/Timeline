@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 import DayleafCore
 @testable import Dayleaf
@@ -6,6 +7,47 @@ import DayleafCore
 @MainActor
 final class NotesWindowTests: XCTestCase {
     private static var keepAlive: [AnyObject] = []
+
+    func testSwitchingModesRetainsTheEditorsAndJournalScrollPosition() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let day = Date()
+        let task = try XCTUnwrap(store.addParsedTodo("Read", on: day))
+        for index in 0..<80 { _ = try store.quickLog("Journal \(index)", taskID: task.id, on: day) }
+        let workspace = NotesWorkspaceNavigation()
+        workspace.open(.journal, date: day)
+        let nav = NotesNavigation()
+        nav.open(task: task.id)
+        let host = NSHostingView(rootView: UnifiedNotesView(store: store, workspace: workspace, nav: nav, close: {}, reveal: { _ in }, openDay: { _ in }))
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 680), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.contentView = nil; window.close() }
+        func views<T: NSView>(_ root: NSView, type: T.Type) -> [T] {
+            ((root as? T).map { [$0] } ?? []) + root.subviews.flatMap { views($0, type: type) }
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(views(host, type: ImagePasteTextView.self).first { !$0.isHiddenOrHasHiddenAncestor })
+        let scroll = try XCTUnwrap(views(host, type: NSScrollView.self).filter { !$0.isHiddenOrHasHiddenAncestor }
+            .max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) })
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 300))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let position = scroll.contentView.bounds.origin
+        for _ in 0..<3 {
+            workspace.mode = .notes
+            try await Task.sleep(nanoseconds: 30_000_000)
+            host.layoutSubtreeIfNeeded()
+            workspace.mode = .journal
+            try await Task.sleep(nanoseconds: 30_000_000)
+            host.layoutSubtreeIfNeeded()
+            XCTAssertTrue(views(host, type: ImagePasteTextView.self).contains { $0 === editor })
+            XCTAssertEqual(scroll.contentView.bounds.origin, position)
+        }
+
+    }
 
     func testGlobalShortcutBringsOffSpaceOrBackgroundWindowForwardInsteadOfClosingIt() {
         for active in [true, false] {

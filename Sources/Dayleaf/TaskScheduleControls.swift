@@ -55,18 +55,17 @@ struct TaskDeadlineButton: View {
     }
 
     var body: some View {
-        if let due = task.dueDate {
-            Button { showing = true } label: {
-                Text(label(due)).font(.system(size: compact ? 9 : 10, weight: .medium, design: .monospaced))
-                    .lineLimit(1).fixedSize()
-                    .foregroundStyle(!task.completed && task.effectiveDeadline.map({ $0 < Date() }) == true ? Palette.deadline : Palette.muted)
-                    .padding(.horizontal, compact ? 2 : 4).padding(.vertical, 2)
-            }
-            .buttonStyle(.plain).raisedOnHover(radius: 4).disabled(store.isReadOnly)
-            .help("修改截止时间")
-            .popover(isPresented: $showing, arrowEdge: .bottom) {
-                TaskDeadlineEditor(store: store, task: task, close: { showing = false })
-            }
+        Button { showing = true } label: {
+            Text(task.dueDate.map(label) ?? "No Due").font(.system(size: compact ? 9 : 10, weight: .medium, design: .monospaced))
+                .lineLimit(1).fixedSize()
+                .foregroundStyle(!task.completed && task.effectiveDeadline.map({ $0 < Date() }) == true ? Palette.deadline : Palette.muted)
+                .padding(.horizontal, compact ? 2 : 4).padding(.vertical, 2)
+        }
+        .buttonStyle(.plain).raisedOnHover(radius: 4).disabled(store.isReadOnly)
+        .help("修改截止时间")
+        .accessibilityIdentifier("task-deadline-" + task.id.uuidString)
+        .popover(isPresented: $showing, arrowEdge: .bottom) {
+            TaskDeadlineEditor(store: store, task: task, close: { showing = false })
         }
     }
 

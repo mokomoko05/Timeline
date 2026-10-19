@@ -689,3 +689,6 @@
 "有效专注 %@" = "Focused for %@";
 "累计 %@" = "Total %@";
 "搜索或创建标签" = "Search or create tags";
+"跳到最新" = "Go to bottom";
+"跳到最新日志" = "Go to the latest journal entry";
+"更多操作：笔记、标签、固定、放弃、删除" = "More: notes, tags, pin, drop, delete";

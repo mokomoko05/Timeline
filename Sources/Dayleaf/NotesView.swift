@@ -119,6 +119,7 @@ struct NotesView: View {
             nav.validate(in: store)
             configureMention()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .dayleafCommitEditing)) { _ in commitNoteEditIfAny() }
     }
 
     /// 输入框里 `@` / `#` 的候选：标签页里，正在写的标签名下的待办排前面；选中后记进对应输入框的草稿。

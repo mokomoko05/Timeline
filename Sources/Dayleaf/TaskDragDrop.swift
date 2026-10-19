@@ -37,7 +37,9 @@ final class TaskDragSession: ObservableObject {
     }
 
     func end() {
-        withAnimation(Self.animation) { activeID = nil }
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { activeID = nil }
         NSCursor.arrow.set()
     }
 }
@@ -82,6 +84,7 @@ struct TaskDragSource: ViewModifier {
     func body(content: Content) -> some View {
         content.opacity(session.activeID == task.id ? 0.28 : 1)
             .scaleEffect(session.activeID == task.id ? 0.98 : 1)
+            .transaction { if session.activeID != task.id { $0.animation = nil; $0.disablesAnimations = true } }
             .overlay {
                 if edgeDragging {
                     NativeTaskHandle(task: task, enabled: enabled, drawsHandle: false, edgeOnly: true, select: select)
@@ -310,7 +313,8 @@ enum NativeTaskDrag {
             return true
         }
         item.setDraggingFrame(NSRect(origin: .zero, size: size), contents: preview)
-        view.beginDraggingSession(with: [item], event: event, source: source)
+        let session = view.beginDraggingSession(with: [item], event: event, source: source)
+        session.animatesToStartingPositionsOnCancelOrFail = false
     }
 }
 

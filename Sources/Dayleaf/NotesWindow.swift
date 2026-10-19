@@ -168,11 +168,12 @@ struct UnifiedNotesView: View {
         VStack(spacing: 0) {
             modeBar
             Divider()
-            if workspace.mode == .notes {
+            RetainedWorkspacePages(showsFirst: workspace.mode == .notes) {
                 NotesView(store: store, nav: nav, close: close, reveal: reveal, openDay: openDay)
-            } else {
+            } second: {
                 journalBody
             }
+            .transaction { $0.animation = nil; $0.disablesAnimations = true }
         }
         .background(Palette.background)
         .foregroundStyle(Palette.ink)
@@ -183,7 +184,11 @@ struct UnifiedNotesView: View {
     private var modeBar: some View {
         HStack(spacing: 8) {
             Image(systemName: workspace.mode == .notes ? "note.text" : "book.pages").foregroundStyle(Palette.accent)
-            Picker("", selection: Binding(get: { workspace.mode == .notes ? 0 : 1 }, set: { workspace.mode = $0 == 0 ? .notes : .journal })) {
+            Picker("", selection: Binding(get: { workspace.mode == .notes ? 0 : 1 }, set: {
+                NotificationCenter.default.post(name: .dayleafCommitEditing, object: nil)
+                NSApp.keyWindow?.makeFirstResponder(nil)
+                workspace.mode = $0 == 0 ? .notes : .journal
+            })) {
                 Text("笔记").tag(0)
                 Text("日记").tag(1)
             }
@@ -325,32 +330,40 @@ private struct UnifiedJournalView: View {
     }
 
     private var detail: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if entry.logsInTimeOrder.isEmpty {
-                        VStack(spacing: 8) {
-                            Image(systemName: "book.pages").font(.system(size: 30, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
-                            Text("这一天还没有日志").font(.system(size: 14, weight: .medium))
-                        }
-                        .frame(maxWidth: .infinity).padding(.vertical, 60)
-                    } else {
-                        let logs = entry.logsInTimeOrder
-                        let segments = LogTimelineSegment.segments(in: store.allLogs(includeFocus: true).map(\.log))
-                        ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
-                            journalRow(log, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id])
-                        }
-                    }
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                HStack(alignment: .top) {
+                    header
+                    GoToBottomButton { proxy.scrollTo("journal-bottom", anchor: .bottom) }
+                        .disabled(entry.logs.isEmpty)
+                        .padding(.trailing, 20).padding(.top, 14)
                 }
-                .padding(20)
+                Divider()
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if entry.logsInTimeOrder.isEmpty {
+                            VStack(spacing: 8) {
+                                Image(systemName: "book.pages").font(.system(size: 30, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
+                                Text("这一天还没有日志").font(.system(size: 14, weight: .medium))
+                            }
+                            .frame(maxWidth: .infinity).padding(.vertical, 60)
+                        } else {
+                            let logs = entry.logsInTimeOrder
+                            let segments = store.timelineSegments()
+                            ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
+                                journalRow(log, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id])
+                            }
+                        }
+                        Color.clear.frame(height: 1).id("journal-bottom")
+                    }
+                    .padding(20)
+                }
+                .id(JournalDates.key(date))
+                .contentShape(Rectangle())
+                .onTapGesture { if editingID != nil { NSApp.keyWindow?.makeFirstResponder(nil) } }
+                Divider()
+                composer
             }
-            .id(JournalDates.key(date))
-            .contentShape(Rectangle())
-            .onTapGesture { if editingID != nil { NSApp.keyWindow?.makeFirstResponder(nil) } }
-            Divider()
-            composer
         }
     }
 

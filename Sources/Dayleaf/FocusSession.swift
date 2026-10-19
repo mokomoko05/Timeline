@@ -1138,41 +1138,32 @@ private struct PastedImageToken: View {
     }
 }
 
-/// 任务行上的播放键：所有未完成的任务都有。有链接的会打开页面并检测是否离开；没有链接的只计时，手动结束。
-struct FocusPlayButton: View {
+/// 截止日期下方的专注入口：播放 / 结束状态和累计时间共用一个按钮。
+struct TaskFocusButton: View {
     @ObservedObject var session: FocusSession
     let task: ScheduledTask
-    /// 任务里的链接（没有为 nil）。
-    let url: URL?
-
     private var running: Bool { session.active?.taskID == task.id }
+    private var total: TimeInterval { task.task.focusSeconds + (running ? session.elapsed : 0) }
 
     var body: some View {
-        ItemActionButton(symbol: running ? "stop.circle.fill" : "play.circle",
-                         title: running ? "结束专注计时" : (url == nil ? "专注计时：开始计时，需要手动结束" : "专注计时：打开链接并开始计时，可自由切换页面")) {
-            if running { session.stop(reason: "手动结束") } else { session.start(task: task, url: url) }
-        }
-        .foregroundStyle(running ? Color.red : Palette.success)
-    }
-}
-
-/// 任务行上的累计专注时长；这个任务正在计时时实时增长。
-struct FocusTimeBadge: View {
-    @ObservedObject var session: FocusSession
-    let taskID: UUID
-    let accumulated: TimeInterval
-
-    var body: some View {
-        let running = session.active?.taskID == taskID
-        let total = accumulated + (running ? session.elapsed : 0)
-        if total >= 1 || running {
-            HStack(spacing: 3) {
-                Image(systemName: running ? "timer" : "hourglass")
-                Text(running ? FocusSession.clock(total) : FocusSession.brief(total)).monospacedDigit()
+        Button {
+            if running { session.stop(reason: "手动结束") }
+            else { session.start(task: task, url: FocusSession.link(in: task.task.title)) }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: running ? "stop.fill" : "play.fill")
+                    .font(.system(size: 8))
+                Text(running ? FocusSession.clock(total) : FocusSession.brief(total))
+                    .font(.system(size: 10, design: .monospaced)).monospacedDigit()
             }
-            .foregroundStyle(running ? Palette.success : Palette.muted)
-            .help("在这个任务上已累计专注 \(FocusSession.duration(total))")
-            .accessibilityLabel("已专注 \(FocusSession.duration(total))")
+            .padding(.horizontal, 4).padding(.vertical, 2).contentShape(Rectangle())
         }
+        .buttonStyle(.plain).raisedOnHover(radius: 4)
+        .foregroundStyle(running ? Color.red : Palette.muted)
+        .help(running ? "结束专注计时" : "开始专注")
+        .accessibilityLabel(running ? "结束专注计时" : "开始专注")
+        .accessibilityValue(FocusSession.duration(total))
+        .accessibilityIdentifier("task-focus-" + task.id.uuidString)
+        .disabled(task.task.completed && !running)
     }
 }

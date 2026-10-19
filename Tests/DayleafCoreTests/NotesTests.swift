@@ -12,6 +12,35 @@ final class NotesTests: XCTestCase {
         return JournalStore(directory: directory)
     }
 
+    func testCachedNotebookSummariesRefreshForChangesUndoAndReload() throws {
+        let store = makeStore()
+        let task = try XCTUnwrap(store.addParsedTodo("Read #paper", on: day))
+        XCTAssertTrue(store.noteTopics().isEmpty)
+        XCTAssertEqual(store.allTags().first?.noteCount, 0)
+        XCTAssertTrue(store.timelineSegments().isEmpty)
+        _ = try store.quickLog("Finding", taskID: task.id, on: day)
+        XCTAssertEqual(store.noteTopics().first?.count, 1)
+        XCTAssertEqual(store.allTags().first?.noteCount, 1)
+        store.setLogDraft("unsent", on: day)
+        XCTAssertEqual(store.noteTopics().first?.count, 1)
+        store.setTags(task.id, ["reading"])
+        XCTAssertEqual(store.noteTopics().first?.tags, ["reading"])
+        XCTAssertEqual(store.allTags().first?.name, "reading")
+        store.undo()
+        XCTAssertEqual(store.noteTopics().first?.tags, ["paper"])
+        XCTAssertEqual(store.allTags().first?.name, "paper")
+        store.createTag("empty")
+        XCTAssertTrue(store.allTags().contains { $0.name == "empty" })
+        let start = try XCTUnwrap(store.addFocusLog("▶ 开始专注", taskID: task.id, event: .start))
+        XCTAssertEqual(store.timelineSegments()[start]?.focusAfter, true)
+        store.undo()
+        XCTAssertNil(store.timelineSegments()[start])
+        store.save()
+        let reloaded = JournalStore(directory: store.directory, readOnlySnapshot: true)
+        XCTAssertEqual(reloaded.noteTopics().first?.count, 1)
+        XCTAssertEqual(Set(reloaded.allTags().map(\.name)), ["paper", "empty"])
+    }
+
     func testNotesGatherLogsForOneTaskAcrossDaysWithStableNumber() throws {
         let store = makeStore()
         store.addTodo("读 EuroSys 论文", on: day)

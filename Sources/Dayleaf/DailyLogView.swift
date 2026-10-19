@@ -357,7 +357,7 @@ struct DailyLogView: View {
     /// 筛选模式：跨日期显示所选任务相关的全部日志，按日期分组。
     private var filteredStream: some View {
         let logs = filteredLogs
-        let segments = LogTimelineSegment.segments(in: store.allLogs(includeFocus: true).map(\.log))
+        let segments = store.timelineSegments()
         let groups = Dictionary(grouping: logs, by: \.key).sorted { $0.key < $1.key }
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
@@ -381,7 +381,7 @@ struct DailyLogView: View {
     }
 
     private var dayStream: some View {
-        let segments = LogTimelineSegment.segments(in: store.allLogs(includeFocus: true).map(\.log))
+        let segments = store.timelineSegments()
         return GeometryReader { geometry in
             ScrollViewReader { proxy in
                 ScrollView {
@@ -403,6 +403,10 @@ struct DailyLogView: View {
                     .onTapGesture { if editingLogID != nil { NSApp.keyWindow?.makeFirstResponder(nil) } }
                 }
                 .background(TerminalPalette.surface)
+                .overlay(alignment: .bottomTrailing) {
+                    GoToBottomButton { proxy.scrollTo("tail", anchor: .bottom) }
+                        .padding(10).disabled(entry.logs.isEmpty)
+                }
                 // 打开时不滚动，停在顶部。只有自己刚写了一条新日志时，才跟到那一条。
                 .onChange(of: entry.logs.count) { [count = entry.logs.count] new in
                     if focused, new > count { withAnimation(Motion.quick) { proxy.scrollTo("tail", anchor: .bottom) } }

@@ -58,12 +58,11 @@ final class TaskReorderTests: XCTestCase {
 
     // MARK: - 状态模型
 
-    func testModelLiftsSettlesThenCommitsTheNewOrderOnce() async throws {
+    func testModelCommitsAndResetsImmediatelyOnRelease() async throws {
         let ids = (0..<4).map { _ in UUID() }
         let model = TaskReorderModel()
         for (i, id) in ids.enumerated() { model.frames[id] = rect(i) }
         model.groupProvider = { _ in ids }
-        model.reduceMotion = { false }   // 这个测试要走「先滑动、再提交」的路径
         var commits: [[UUID]] = []
         model.commit = { commits.append($0) }
 
@@ -80,10 +79,6 @@ final class TaskReorderTests: XCTestCase {
         XCTAssertEqual(model.offset(for: ids[1]), 0)
         model.update(100)
         model.finish()
-        XCTAssertTrue(model.settling)
-        XCTAssertEqual(model.offset(for: ids[0]), ReorderMath.slotOffset(frames: (0..<4).map { rect($0) }, active: 0, target: 2), "先滑进新位置")
-        XCTAssertTrue(commits.isEmpty, "滑动期间还没提交")
-        try await Task.sleep(nanoseconds: 500_000_000)
         XCTAssertEqual(commits, [[ids[1], ids[2], ids[0], ids[3]]])
         XCTAssertFalse(model.isActive)
         XCTAssertEqual(model.offset(for: ids[0]), 0)
@@ -99,13 +94,11 @@ final class TaskReorderTests: XCTestCase {
         XCTAssertTrue(model.begin(ids[1]))
         model.update(60)
         model.cancel()
-        try await Task.sleep(nanoseconds: 400_000_000)
         XCTAssertEqual(commits, 0)
         XCTAssertFalse(model.isActive)
         XCTAssertTrue(model.begin(ids[1]))
         model.update(5)
         model.finish()
-        try await Task.sleep(nanoseconds: 400_000_000)
         XCTAssertEqual(commits, 0, "没有换位置就不改数据")
         model.groupProvider = { _ in [ids[0]] }
         XCTAssertFalse(model.begin(ids[0]), "分组里只有一项，没有可排的")
@@ -179,7 +172,6 @@ final class TaskReorderTests: XCTestCase {
         XCTAssertEqual(model.offset(for: todos[0].id), 100, accuracy: 0.5)
 
         first.mouseUp(with: mouse(.leftMouseUp, at: NSPoint(x: start.x, y: start.y - 100), in: window))
-        try await Task.sleep(nanoseconds: 500_000_000)
         XCTAssertEqual(commits, [[todos[1].id, todos[2].id, todos[0].id, todos[3].id]])
         XCTAssertFalse(model.isActive)
     }
@@ -257,7 +249,6 @@ final class TaskReorderTests: XCTestCase {
             if step % 10 == 0 { try await Task.sleep(nanoseconds: 20_000_000) }
         }
         model.cancel()
-        try await Task.sleep(nanoseconds: 400_000_000)
         XCTAssertEqual(Self.outerRenders, before, "拖动过程中外层不能重绘（否则整个清单和日历每次鼠标移动都重算）")
     }
 

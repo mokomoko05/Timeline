@@ -205,7 +205,9 @@ public final class JournalStore: ObservableObject {
     /// 专注暂停时保留任务状态，但普通日志不再自动关联到该任务。
     @Published public private(set) var focusPaused = false
     /// 显式创建的标签，包括还没有内容的空标签。
-    @Published public internal(set) var tagRegistry: [String] = []
+    @Published public internal(set) var tagRegistry: [String] = [] {
+        didSet { cachedTagSummaries = nil }
+    }
     /// 固定关联的待办（不计时）。读 `pinnedTask` 才会排除已删除、已完成的。
     @Published public internal(set) var pinnedTaskID: UUID?
     public let directory: URL
@@ -215,6 +217,22 @@ public final class JournalStore: ObservableObject {
     private var dailyBackupKey: String?
     private var deletedTodo: (task: Todo, date: Date, index: Int)?
     private var indexedTasks: [ScheduledTask]?
+    private var cachedNoteTopics: [NoteTopic]?
+    var cachedTagSummaries: [TagSummary]?
+    private var cachedTimelineSegments: [UUID: LogTimelineSegment]?
+
+    /// 输入草稿不影响汇总；只有日志或待办真的改变时才重新扫描历史。
+    private func invalidateNotebookIndex(logsChanged: Bool, tasksChanged: Bool) {
+        if logsChanged || tasksChanged { cachedNoteTopics = nil; cachedTagSummaries = nil }
+        if logsChanged { cachedTimelineSegments = nil }
+    }
+
+    public func timelineSegments() -> [UUID: LogTimelineSegment] {
+        if let cachedTimelineSegments { return cachedTimelineSegments }
+        let result = LogTimelineSegment.segments(in: days.values.flatMap(\.logs))
+        cachedTimelineSegments = result
+        return result
+    }
     private var indexedDeadlines: [String: [ScheduledTask]]?
     private var nextTaskNumber = 1
     public var backupsDirectory: URL { directory.appendingPathComponent("Backups", isDirectory: true) }
@@ -838,6 +856,7 @@ public final class JournalStore: ObservableObject {
 
     /// 至少有一条日志关联的任务，最近有笔记的排在前面。
     public func noteTopics() -> [NoteTopic] {
+        if let cachedNoteTopics { return cachedNoteTopics }
         var info: [UUID: (count: Int, images: Int, latest: Date, title: String, number: Int?)] = [:]
         for day in days.values {
             for log in day.logs where log.isNotebookEntry {
@@ -847,7 +866,7 @@ public final class JournalStore: ObservableObject {
                             log.taskTitle ?? previous?.title ?? "", log.taskNumber ?? previous?.number)
             }
         }
-        return info.map { id, value in
+        let result = info.map { id, value in
             let located = locate(id)
             return NoteTopic(id: id, number: located?.task.number ?? value.number,
                              title: located.map { String(TaskText.rendered($0.task.title).characters) } ?? value.title,
@@ -855,6 +874,8 @@ public final class JournalStore: ObservableObject {
                              completed: located?.task.completed ?? false, dropped: located?.task.isDropped ?? false, deleted: located == nil, dueDate: located?.task.dueDate,
                              focusSeconds: located?.task.focusSeconds ?? 0, tags: located?.task.tags ?? [])
         }.sorted { $0.lastActivity > $1.lastActivity }
+        cachedNoteTopics = result
+        return result
     }
 
     /// 某个任务的笔记主题：有笔记就是 `noteTopics()` 里那一项；还没有笔记、但任务还在，就给一个 0 条的主题，
@@ -998,6 +1019,7 @@ public final class JournalStore: ObservableObject {
             changed = true
         }
         guard changed else { return }
+        invalidateNotebookIndex(logsChanged: true, tasksChanged: false)
         days = updated
         hasPendingSave = true
         scheduleSave()
@@ -1334,6 +1356,8 @@ public final class JournalStore: ObservableObject {
         guard !isReadOnly, force || updated != days else { return }
         registerUndo(days, replacing: updated, action: action)
         let tasksChanged = Set(days.keys).union(updated.keys).contains(where: { (days[$0]?.todos ?? []) != (updated[$0]?.todos ?? []) })
+        let logsChanged = Set(days.keys).union(updated.keys).contains { (days[$0]?.logs ?? []) != (updated[$0]?.logs ?? []) }
+        invalidateNotebookIndex(logsChanged: logsChanged, tasksChanged: tasksChanged)
         days = updated
         if tasksChanged { invalidateTaskIndex() }
         hasPendingSave = true
@@ -1350,6 +1374,7 @@ public final class JournalStore: ObservableObject {
         updated[key] = entry.hasContent ? entry : nil
         if !debounce { registerUndo(days, replacing: updated, action: action) }
         let tasksChanged = entry.todos != (days[key]?.todos ?? [])
+        invalidateNotebookIndex(logsChanged: entry.logs != (days[key]?.logs ?? []), tasksChanged: tasksChanged)
         days = updated
         if tasksChanged { invalidateTaskIndex() }
         hasPendingSave = true

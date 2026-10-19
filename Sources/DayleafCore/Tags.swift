@@ -114,6 +114,7 @@ extension JournalStore {
     /// 所有出现过的标签（不区分大小写合并）：待办上的，以及已删除待办的日志里留下的。
     /// `论文/方法` 也会让上级 `论文` 出现，数量按「含子标签」统计，和点进去看到的内容一致。有笔记的、最近有动静的排前面。
     public func allTags() -> [TagSummary] {
+        if let cachedTagSummaries { return cachedTagSummaries }
         var names: [String: String] = [:]
         var taskCounts: [String: (all: Int, open: Int)] = [:]
         var noteCounts: [String: (count: Int, latest: Date)] = [:]
@@ -151,13 +152,15 @@ extension JournalStore {
                 }
             }
         }
-        return names.map { key, name in
+        let result = names.map { key, name in
             TagSummary(name: name, taskCount: taskCounts[key]?.all ?? 0, openCount: taskCounts[key]?.open ?? 0,
                        noteCount: noteCounts[key]?.count ?? 0, lastActivity: noteCounts[key]?.latest ?? .distantPast)
         }.sorted {
             if $0.lastActivity != $1.lastActivity { return $0.lastActivity > $1.lastActivity }
             return $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
+        cachedTagSummaries = result
+        return result
     }
 
     private func liveTags() -> [UUID: [String]] {

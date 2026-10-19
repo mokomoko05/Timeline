@@ -79,7 +79,8 @@ final class LogEventStyleTests: XCTestCase {
         try await Task.sleep(nanoseconds: 100_000_000)
         host.layoutSubtreeIfNeeded()
         func texts(_ view: NSView) -> [InteractiveTaskText] {
-            (view as? InteractiveTaskText).map { [$0] } ?? view.subviews.flatMap(texts)
+            guard !view.isHiddenOrHasHiddenAncestor else { return [] }
+            return (view as? InteractiveTaskText).map { [$0] } ?? view.subviews.flatMap(texts)
         }
         let rendered = texts(host)
         XCTAssertTrue(rendered.contains { $0.source == goal })
