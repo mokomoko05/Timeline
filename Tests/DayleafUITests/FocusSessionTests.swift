@@ -612,8 +612,8 @@ final class FocusPanelStyleTests: XCTestCase {
         let end = try XCTUnwrap(session.active).started.addingTimeInterval(try XCTUnwrap(session.active).plannedSeconds + 1)
         session.tick(now: end)
         XCTAssertTrue(session.needsReflection)
-        XCTAssertTrue(controller.isPanelVisible, "到点后重新显示隐藏的面板以填写反馈")
-        XCTAssertFalse(defaults.bool(forKey: Prefs.focusPanelHidden))
+        XCTAssertFalse(controller.isPanelVisible, "到点也尊重手动收起")
+        XCTAssertTrue(defaults.bool(forKey: Prefs.focusPanelHidden))
         defaults.set(false, forKey: Prefs.focusPanelHidden)
         defaults.set(FocusPanelStyle.dot.rawValue, forKey: Prefs.focusPanelStyle)
         controller.refresh()
@@ -621,8 +621,12 @@ final class FocusPanelStyleTests: XCTestCase {
         XCTAssertFalse(controller.showsMenuBarTimer)
 
         session.stop(reason: "手动结束")
-        XCTAssertFalse(controller.isPanelVisible, "结束专注后窗口消失")
+        XCTAssertTrue(controller.isPanelVisible, "结束专注后继续显示任务选择器")
         XCTAssertFalse(controller.showsMenuBarTimer)
+        controller.toggleWorkspace()
+        XCTAssertFalse(controller.isPanelVisible, "只有手动收起才隐藏")
+        controller.refresh()
+        XCTAssertFalse(controller.isPanelVisible)
     }
 
     func testToggleHiddenFlipsTheStoredPreferenceAndUnknownStyleFallsBackToCard() {

@@ -26,6 +26,17 @@ final class TaskPriorityTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(Todo.self, from: JSONEncoder().encode(task)).priority, .high)
     }
 
+    func testEveryColorPriorityPersistsAndSortsFromHighestToLowest() throws {
+        let priorities: [TaskPriority] = [.urgent, .high, .normal, .lower, .low]
+        for priority in priorities {
+            var task = Todo(title: priority.rawValue)
+            task.priority = priority
+            XCTAssertEqual(try JSONDecoder().decode(Todo.self, from: JSONEncoder().encode(task)).priority, priority)
+        }
+        let tasks = priorities.reversed().enumerated().map { item($0.offset, priority: $0.element) }
+        XCTAssertEqual(tasks.sorted(by: TaskSortMode.priority.precedes).map(\.task.priority), priorities)
+    }
+
     func testDeadlineOrderUsesTimeThenPriorityAndKeepsAllDayBeforeNextDay() {
         let tasks = [item(1, hour: 15), item(2, priority: .high), item(3, hour: 9, priority: .low),
                      item(4, hour: 15, priority: .high), item(5, day: 19, hour: 0)]

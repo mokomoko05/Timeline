@@ -10,7 +10,21 @@ struct RadialItem: Identifiable {
     var destructive = false
     /// 开着的开关（比如已固定）：用强调色。
     var active = false
+    var tint: Color? = nil
     let action: () -> Void
+}
+
+/// 优先级从左侧圆点向右展开，上方最高、下方最低。
+enum RadialMenuKind {
+    case actions, priority
+    var hub: CGPoint { CGPoint(x: self == .priority ? 22 : RadialLayout.hub.x, y: RadialLayout.hub.y) }
+    func offset(index: Int, count: Int) -> CGSize {
+        let value = RadialLayout.offset(index: index, count: count)
+        return CGSize(width: self == .priority ? -value.width : value.width, height: value.height)
+    }
+    func relative(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: self == .priority ? -point.x : point.x, y: point.y)
+    }
 }
 
 /// 环形菜单的几何：以「三点」按钮为圆心，向左展开成一段扇形环（按钮在行的最右边，右边是拖动把手，所以不向右展开）。
@@ -70,12 +84,13 @@ enum RadialMotion {
 @MainActor
 final class RadialMenuModel: ObservableObject {
     let items: [RadialItem]
+    let kind: RadialMenuKind
     @Published var hovered: Int?
     /// 展开着（true）还是正在收回圆心（false）：鼠标一离开就收，收的过程中鼠标回来又会展开。
     @Published var expanded = false
     var choose: (Int) -> Void = { _ in }
 
-    init(items: [RadialItem]) { self.items = items }
+    init(items: [RadialItem], kind: RadialMenuKind = .actions) { self.items = items; self.kind = kind }
 }
 
 /// 展开的环形菜单：一段带质感的扇形环，上面是各个操作；指着哪个，上方显示它的名字。
@@ -83,7 +98,7 @@ struct RadialMenuView: View {
     @ObservedObject var model: RadialMenuModel
     private var appeared: Bool { model.expanded }
 
-    private var hub: CGPoint { RadialLayout.hub }
+    private var hub: CGPoint { model.kind.hub }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -116,7 +131,9 @@ struct RadialMenuView: View {
             path.addArc(center: hub, radius: RadialLayout.radius,
                         startAngle: .degrees(-RadialLayout.fanStart), endAngle: .degrees(-RadialLayout.fanEnd), clockwise: true)
         }
-        let shape = path.strokedPath(StrokeStyle(lineWidth: RadialLayout.itemSize + 12, lineCap: .round))
+        let reflected = model.kind == .priority
+            ? path.applying(CGAffineTransform(translationX: hub.x * 2, y: 0).scaledBy(x: -1, y: 1)) : path
+        let shape = reflected.strokedPath(StrokeStyle(lineWidth: RadialLayout.itemSize + 12, lineCap: .round))
         return shape
             .fill(LinearGradient(colors: [Palette.card, Palette.background], startPoint: .topTrailing, endPoint: .bottomLeading))
             .overlay(shape.stroke(LinearGradient(colors: [Color.white.opacity(0.35), Palette.line], startPoint: .top, endPoint: .bottom), lineWidth: 0.75))
@@ -129,16 +146,18 @@ struct RadialMenuView: View {
     private var hubView: some View {
         Circle().fill(LinearGradient(colors: [Palette.soft, Palette.card], startPoint: .top, endPoint: .bottom))
             .overlay(Circle().strokeBorder(LinearGradient(colors: [Color.white.opacity(0.4), Palette.line], startPoint: .top, endPoint: .bottom), lineWidth: 0.75))
-            .overlay(Image(systemName: "ellipsis").font(.system(size: 11, weight: .bold)).foregroundStyle(Palette.muted))
+            .overlay(Image(systemName: model.kind == .priority ? "circle.fill" : "ellipsis")
+                .font(.system(size: model.kind == .priority ? 7 : 11, weight: .bold))
+                .foregroundStyle(model.items.first(where: \.active)?.tint ?? Palette.muted))
             .frame(width: RadialLayout.hubRadius * 2, height: RadialLayout.hubRadius * 2)
             .shadow(color: .black.opacity(0.25), radius: 3, y: 1.5)
             .position(hub)
     }
 
     private func itemView(_ item: RadialItem, index: Int) -> some View {
-        let offset = RadialLayout.offset(index: index, count: model.items.count)
+        let offset = model.kind.offset(index: index, count: model.items.count)
         let hovered = model.hovered == index
-        let tint: Color = item.destructive ? Palette.deadline : (item.active ? Palette.accent : Palette.ink)
+        let tint: Color = item.tint ?? (item.destructive ? Palette.deadline : (item.active ? Palette.accent : Palette.ink))
         return Button { model.choose(index) } label: {
             Image(systemName: item.symbol).font(.system(size: 13, weight: .medium)).foregroundStyle(tint)
                 .frame(width: RadialLayout.itemSize, height: RadialLayout.itemSize)
@@ -155,6 +174,7 @@ struct RadialMenuView: View {
         .opacity(appeared ? 1 : 0)
         .animation(Motion.reduced ? nil : (appeared ? RadialMotion.expand.delay(Double(index) * 0.012) : RadialMotion.collapse), value: appeared)
         .accessibilityLabel(item.title)
+        .accessibilityAddTraits(item.active ? .isSelected : [])
     }
 }
 
@@ -184,29 +204,29 @@ final class RadialMenuController {
     var hoveredIndex: Int? { model?.hovered }
 
     /// 鼠标移到三点按钮上：稍等一下再展开，快速掠过不会弹出来。
-    func scheduleOpen(items: @escaping () -> [RadialItem], anchor: NSView?) {
+    func scheduleOpen(items: @escaping () -> [RadialItem], anchor: NSView?, kind: RadialMenuKind = .actions) {
         pendingOpen?.cancel()
         pendingOpen = Task { [weak self, weak anchor] in
             try? await Task.sleep(for: Self.openDelay)
             guard !Task.isCancelled, let self, let anchor else { return }
-            self.present(items: items(), anchor: anchor)
+            self.present(items: items(), anchor: anchor, kind: kind)
         }
     }
 
     func cancelOpen() { pendingOpen?.cancel(); pendingOpen = nil }
 
-    func present(items: [RadialItem], anchor: NSView) {
+    func present(items: [RadialItem], anchor: NSView, kind: RadialMenuKind = .actions) {
         cancelOpen()
         guard !items.isEmpty, let window = anchor.window else { return }
         dismiss()
         let frame = window.convertToScreen(anchor.convert(anchor.bounds, to: nil))
-        present(items: items, hubAt: CGPoint(x: frame.midX, y: frame.midY), parent: window)
+        present(items: items, hubAt: CGPoint(x: frame.midX, y: frame.midY), parent: window, kind: kind)
     }
 
     /// 直接指定圆心的屏幕位置（测试用）。
-    func present(items: [RadialItem], hubAt center: CGPoint, parent: NSWindow? = nil) {
+    func present(items: [RadialItem], hubAt center: CGPoint, parent: NSWindow? = nil, kind: RadialMenuKind = .actions) {
         dismiss()
-        let model = RadialMenuModel(items: items)
+        let model = RadialMenuModel(items: items, kind: kind)
         model.choose = { [weak self] index in self?.choose(index) }
         self.model = model
         hubScreen = center
@@ -223,7 +243,7 @@ final class RadialMenuController {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         // 圆心对准三点按钮：浮层的左上角 = 圆心 − 圆心在浮层里的位置（屏幕坐标 y 向上）。
-        panel.setFrameOrigin(NSPoint(x: center.x - RadialLayout.hub.x, y: center.y - (size.height - RadialLayout.hub.y)))
+        panel.setFrameOrigin(NSPoint(x: center.x - kind.hub.x, y: center.y - (size.height - kind.hub.y)))
         if Headless.active { panel.alphaValue = 0; panel.ignoresMouseEvents = true }
         parent?.addChildWindow(panel, ordered: .above)
         panel.orderFrontRegardless()
@@ -249,7 +269,7 @@ final class RadialMenuController {
         model = nil
     }
 
-    private func choose(_ index: Int) {
+    func choose(_ index: Int) {
         guard let items = model?.items, items.indices.contains(index) else { return }
         let action = items[index].action
         dismiss()
@@ -269,7 +289,7 @@ final class RadialMenuController {
     /// 根据鼠标位置更新「指着哪一项」。鼠标一离开就立刻开始收回，动画放完关掉浮层；收的过程中鼠标回来就反向展开。
     func update(mouse: CGPoint) {
         guard let model else { return }
-        let relative = CGPoint(x: mouse.x - hubScreen.x, y: mouse.y - hubScreen.y)
+        let relative = model.kind.relative(CGPoint(x: mouse.x - hubScreen.x, y: mouse.y - hubScreen.y))
         let inside = RadialLayout.contains(relative)
         let hovered = inside ? RadialLayout.item(at: relative, count: model.items.count) : nil
         if model.hovered != hovered { model.hovered = hovered }

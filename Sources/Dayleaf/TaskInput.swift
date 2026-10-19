@@ -34,6 +34,7 @@ struct TaskInput: View {
     /// 快速日志命令行这种「主要是单行命令，偶尔需要在框内滚动」的场景用它：既要保留 `GrowingTaskInput`
     /// 的框内滚动、mention 候选等能力，又要回车直接提交。
     var returnSubmits = false
+    var submitsOnBlur = true
 
     private var growing: Bool { minHeight != nil && allowsNewlines }
 
@@ -47,7 +48,7 @@ struct TaskInput: View {
             GrowingTaskInput(text: $text, focused: $focused, placeholder: AppLocalized(placeholder), fontSize: fontSize, submit: submit,
                               cancel: cancel, monospaced: monospaced, historyUp: historyUp, historyDown: historyDown,
                               complete: complete, onPasteImages: onPasteImages, minHeight: minHeight ?? 24, maxLines: maxLines,
-                              returnSubmits: returnSubmits, mention: mention)
+                              returnSubmits: returnSubmits, mention: mention, submitsOnBlur: submitsOnBlur)
         } else {
             SingleLineTaskInput(text: $text, focused: $focused, placeholder: AppLocalized(placeholder), fontSize: fontSize, submit: submit,
                                  cancel: cancel, previous: previous, monospaced: monospaced, onPasteImages: onPasteImages,
@@ -236,6 +237,7 @@ struct GrowingTaskInput: NSViewRepresentable {
     /// true 时回车直接提交（Shift+Enter 换行），而不是回车换行、⌘Enter 提交。
     var returnSubmits = false
     var mention: MentionState?
+    var submitsOnBlur = true
 
     private var resolvedFont: NSFont {
         monospaced ? .monospacedSystemFont(ofSize: typography.pt(fontSize), weight: .regular) : .systemFont(ofSize: typography.pt(fontSize))
@@ -388,7 +390,7 @@ struct GrowingTaskInput: NSViewRepresentable {
             }
             guard let editor = notification.object as? NSTextView else { return }
             parent.text = editor.string
-            parent.submit()
+            if parent.submitsOnBlur { parent.submit() }
         }
 
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {

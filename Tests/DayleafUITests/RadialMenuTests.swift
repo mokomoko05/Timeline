@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
+import DayleafCore
 @testable import Dayleaf
 
 @MainActor
@@ -45,6 +46,47 @@ final class RadialMenuTests: XCTestCase {
             let a = RadialLayout.offset(index: index - 1, count: count), b = RadialLayout.offset(index: index, count: count)
             XCTAssertGreaterThanOrEqual(hypot(a.width - b.width, a.height - b.height), RadialLayout.itemSize, "相邻两项不重叠")
         }
+    }
+
+    func testPriorityMenuOpensRightWithIncreasingPriorityFromBottomToTopAndSavesSelection() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let task = try XCTUnwrap(store.addParsedTodo("Read", on: Date()))
+        let entries = TaskPriorityButton(store: store, task: task.task).items
+        if let destination = ProcessInfo.processInfo.environment["DAYLEAF_PRIORITY_SNAPSHOT"] {
+            let model = RadialMenuModel(items: entries, kind: .priority)
+            model.expanded = true
+            let host = NSHostingView(rootView: RadialMenuView(model: model))
+            let window = QuietWindow(contentRect: NSRect(origin: .zero, size: RadialLayout.panelSize), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            host.layoutSubtreeIfNeeded()
+            if let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: destination))
+            }
+            window.contentView = nil
+            window.close()
+        }
+        let menu = RadialMenuController.shared
+        menu.present(items: entries, hubAt: CGPoint(x: 300, y: 500), kind: .priority)
+        var previousY = -CGFloat.infinity
+        for (index, priority) in TaskPriority.allCases.enumerated() {
+            let offset = RadialMenuKind.priority.offset(index: index, count: entries.count)
+            XCTAssertGreaterThanOrEqual(offset.width, -1)
+            XCTAssertGreaterThan(offset.height, previousY)
+            previousY = offset.height
+            menu.update(mouse: CGPoint(x: 300 + offset.width, y: 500 - offset.height))
+            XCTAssertEqual(menu.hoveredIndex, index)
+            XCTAssertEqual(entries[index].id, priority.rawValue)
+            XCTAssertNotNil(entries[index].tint)
+        }
+        menu.choose(0)
+        XCTAssertFalse(menu.isOpen)
+        XCTAssertEqual(store.locate(task.id)?.task.priority, .urgent)
+        store.undo()
+        XCTAssertEqual(store.locate(task.id)?.task.priority, .normal)
     }
 
     func testHitTestingFollowsTheItemsAndTheFanShape() {

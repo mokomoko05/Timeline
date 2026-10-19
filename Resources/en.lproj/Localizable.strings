@@ -692,3 +692,11 @@
 "跳到最新" = "Go to bottom";
 "跳到最新日志" = "Go to the latest journal entry";
 "更多操作：笔记、标签、固定、放弃、删除" = "More: notes, tags, pin, drop, delete";
+
+"最高优先级" = "Highest priority";
+
+"较低优先级" = "Lower priority";
+
+"选择优先级" = "Choose priority";
+
+"收起" = "Hide";

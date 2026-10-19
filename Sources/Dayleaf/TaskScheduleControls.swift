@@ -3,10 +3,12 @@ import DayleafCore
 
 struct PriorityMark: View {
     let priority: TaskPriority
-    private var color: Color {
+    var color: Color {
         switch priority {
+        case .urgent: return .red
         case .high: return .orange
         case .normal: return .blue
+        case .lower: return .green
         case .low: return Palette.muted
         }
     }
@@ -21,25 +23,37 @@ struct PriorityMark: View {
 struct TaskPriorityButton: View {
     @ObservedObject var store: JournalStore
     let task: Todo
+    @State private var anchor = AnchorBox()
+
+    var items: [RadialItem] {
+        TaskPriority.allCases.map { priority in
+            RadialItem(id: priority.rawValue, symbol: "circle.fill", title: priority.title,
+                       active: priority == task.priority, tint: PriorityMark(priority: priority).color,
+                       action: { store.setPriority(priority, for: task.id) })
+        }
+    }
+
     var body: some View {
         Button {
-            guard let current = store.locate(task.id)?.task else { return }
-            let next: TaskPriority
-            switch current.priority {
-            case .normal: next = .high
-            case .high: next = .low
-            case .low: next = .normal
-            }
-            store.setPriority(next, for: task.id)
+            RadialMenuController.shared.present(items: items, anchor: anchor.view ?? NSView(), kind: .priority)
         } label: {
             PriorityMark(priority: task.priority)
                 .frame(width: 18, height: 22).contentShape(Rectangle())
         }
         .buttonStyle(.plain).disabled(store.isReadOnly)
         .raisedOnHover(radius: 4, enabled: !store.isReadOnly)
-        .help(AppLocalizedFormat("%@ · 点击切换", AppLocalized(task.priority.title)))
+        .background(AnchorReader(box: anchor))
+        .onHover { inside in
+            if inside && !store.isReadOnly {
+                RadialMenuController.shared.scheduleOpen(items: { items }, anchor: anchor.view, kind: .priority)
+            } else { RadialMenuController.shared.cancelOpen() }
+        }
+        .help(LocalizedStringKey(task.priority.title))
         .accessibilityLabel(LocalizedStringKey(task.priority.title))
-        .accessibilityHint("点击切换优先级")
+        .accessibilityHint("选择优先级")
+        .accessibilityActions {
+            ForEach(items) { item in Button(LocalizedStringKey(item.title), action: item.action) }
+        }
     }
 }
 

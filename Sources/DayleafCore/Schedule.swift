@@ -1,10 +1,10 @@
 import Foundation
 
 public enum TaskPriority: String, Codable, CaseIterable, Identifiable {
-    case high, normal, low
+    case urgent, high, normal, lower, low
     public var id: String { rawValue }
-    public var rank: Int { switch self { case .high: return 0; case .normal: return 1; case .low: return 2 } }
-    public var title: String { switch self { case .high: return "高优先级"; case .normal: return "普通优先级"; case .low: return "低优先级" } }
+    public var rank: Int { Self.allCases.firstIndex(of: self)! }
+    public var title: String { switch self { case .urgent: return "最高优先级"; case .high: return "高优先级"; case .normal: return "普通优先级"; case .lower: return "较低优先级"; case .low: return "低优先级" } }
 }
 
 public enum TaskSortMode: String, CaseIterable, Identifiable {

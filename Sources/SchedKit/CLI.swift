@@ -109,7 +109,7 @@ public enum CLI {
       sched done <N>             完成任务 #N
       sched undone <N>           取消完成任务 #N（放弃的也用它恢复）
       sched drop <N>             放弃任务 #N（不用做了，留着记录；再来一次恢复）
-      sched priority <N> <high|normal|low>  设置任务优先级；todo 可加 --priority high
+      sched priority <N> <urgent|high|normal|lower|low>  设置任务优先级；todo 可加 --priority high
 
     筛选（logs / pick / notes 通用）
       -t, --task N[,N]           只看这些任务的日志        -d, --date D       只看某一天
@@ -495,13 +495,13 @@ public enum CLI {
                 guard !text.isEmpty else { return fail("用法：sched todo <内容>，例如 sched todo 明天 15:00 开会", code: 2) }
                 request.text = text
                 if let value = args.value("priority") {
-                    guard let priority = TaskPriority(rawValue: value) else { return fail("优先级应为 high、normal 或 low", code: 2) }
+                    guard let priority = TaskPriority(rawValue: value) else { return fail("优先级应为 urgent、high、normal、lower 或 low", code: 2) }
                     request.priority = priority
                 }
             case .priority:
                 guard rest.count == 2, let number = LogCommand.taskNumber(rest[0]),
                       let priority = TaskPriority(rawValue: rest[1]) else {
-                    return fail("用法：sched priority <N> <high|normal|low>", code: 2)
+                    return fail("用法：sched priority <N> <urgent|high|normal|lower|low>", code: 2)
                 }
                 request.task = number
                 request.priority = priority

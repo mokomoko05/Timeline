@@ -477,19 +477,18 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
     private var elapsedSink: AnyCancellable?
     private let defaults: UserDefaults
     private var workspaceShown = false
+    private var refreshing = false
 
     init(session: FocusSession, defaults: UserDefaults = .standard) {
         self.session = session
         self.defaults = defaults
         super.init()
         session.onActiveChange = { [weak self] active in
-            self?.workspaceShown = active
+            if active { self?.workspaceShown = true }
             self?.refresh()
         }
         session.onCountdownEnd = { [weak self] in
             guard let self else { return }
-            workspaceShown = true
-            defaults.set(false, forKey: Prefs.focusPanelHidden)
             refresh()
             if !Headless.active { NSSound(named: "Glass")?.play() }
         }
@@ -508,6 +507,10 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
 
     /// 专注工作台：未专注时显示任务选择器，专注中显示目标与输入栏。
     func refresh() {
+        // 字体和系统偏好首次加载会同步发通知，避免创建窗口时重入 SwiftUI 排版。
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
         let hidden = defaults.bool(forKey: Prefs.focusPanelHidden)
         if workspaceShown && !hidden {
             showPanel(size: Self.workspaceSize)
@@ -955,7 +958,7 @@ struct FocusPanelView: View {
                               placeholder: "记下想法…",
                               fontSize: 12, submit: saveNote, cancel: close,
                               onPasteImages: addNoteImages, minHeight: 34, maxLines: 2,
-                              mention: mention)
+                              mention: mention, submitsOnBlur: false)
                         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .disabled(draft.pendingEntryID != nil)
@@ -1042,7 +1045,7 @@ struct FocusPanelView: View {
                 .frame(height: 14)
             TaskInput(text: $reflectionDraft.text, focused: $focused,
                       placeholder: "完成了什么？下一步是什么？", fontSize: 12,
-                      submit: saveReflection, cancel: close, minHeight: 34, maxLines: 2)
+                      submit: saveReflection, cancel: close, minHeight: 34, maxLines: 2, submitsOnBlur: false)
                 .disabled(reflectionDraft.pendingEntryID != nil)
                 .padding(.horizontal, 9).padding(.vertical, 4).frame(height: 42)
                 .background(Palette.background, in: RoundedRectangle(cornerRadius: 9))

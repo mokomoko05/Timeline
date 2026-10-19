@@ -74,7 +74,7 @@ enum QuickCaptureMode: String { case todo, log }
 @MainActor
 final class QuickCaptureModel: ObservableObject {
     @Published var mode: QuickCaptureMode = .todo
-    /// 草稿：窗口一失焦就会关闭（比如去别的应用复制东西），所以文字、图片、标签放在这里，窗口关掉再打开仍在，只有成功提交才清空。
+    /// 手动收起后仍保留草稿，只有成功提交才清空。
     @Published var text = ""
     @Published var images: [String] = []
     @Published var tags: [String] = []
@@ -242,19 +242,13 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
         panel.isMovableByWindowBackground = true
         panel.setFrameOrigin(restoredOrigin(for: panel.frame.size))
         panel.delegate = self
+        if Headless.active { panel.alphaValue = 0; panel.ignoresMouseEvents = true }
         self.panel = panel
         panel.makeKeyAndOrderFront(nil)
     }
 
-    func windowDidResignKey(_ notification: Notification) {
-        DispatchQueue.main.async { [weak self] in
-            guard let panel = self?.panel, !panel.isKeyWindow else { return }
-            // 选择浮窗接收键盘时仍在编辑这份草稿，不能连同宿主面板一起关闭。
-            let key = NSApp.keyWindow
-            if panel.attachedSheet != nil || key?.parent === panel || panel.childWindows?.contains(where: { $0 === key }) == true { return }
-            panel.close()
-        }
-    }
+    // 失焦仅交出键盘，面板继续置顶显示。
+    func windowDidResignKey(_ notification: Notification) {}
 
     /// 内容高度变化（出现缩略图）时调整窗口，保持顶边位置不动。
     private func resize(height: CGFloat) {
@@ -337,6 +331,10 @@ struct QuickCaptureView: View {
                 }.labelsHidden().pickerStyle(.segmented).frame(width: 120)
                 Spacer()
                 Text("Tab 切换").font(.system(size: typography.pt(11))).foregroundStyle(Palette.muted)
+                Button(action: close) {
+                    Image(systemName: "minus").frame(width: 18, height: 18)
+                }.buttonStyle(.plain).raisedOnHover(radius: 4).help("收起")
+                    .accessibilityLabel("收起")
             }
             HStack(spacing: 8) {
                 Image(systemName: mode == .todo ? "plus.circle" : "chevron.right.2").foregroundStyle(Palette.accent)
@@ -344,7 +342,8 @@ struct QuickCaptureView: View {
                           placeholder: mode == .todo ? "添加待办…" : "记录…  @ 待办 · # 标签",
                           fontSize: 12, submit: submit, cancel: close, complete: { mode = mode == .todo ? .log : .todo },
                           onPasteImages: mode == .log ? addImages : nil,
-                          minHeight: 42, maxLines: 4, allowsNewlines: mode == .log, mention: mode == .log ? mention : nil)
+                          minHeight: 42, maxLines: 4, allowsNewlines: mode == .log, mention: mode == .log ? mention : nil,
+                          submitsOnBlur: false)
                 if mode == .todo {
                     TodoDraftTagButton(store: store, text: $model.text)
                 }
@@ -392,7 +391,14 @@ struct QuickCaptureView: View {
         .background(GeometryReader { proxy in Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height) })
         .onPreferenceChange(PanelHeightKey.self) { resize($0) }
         .onChange(of: mode) { _ in failure = nil; focused = true }
-        .onChange(of: model.text) { _ in restored = false }
+        .onChange(of: model.text) { value in restored = false; if !value.isEmpty { message = nil } }
+        .task(id: message) {
+            guard message != nil else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(700))
+                message = nil
+            } catch {}
+        }
         .onAppear {
             restored = model.hasDraft
             mention.triggers = [.task, .tag]
@@ -418,7 +424,7 @@ struct QuickCaptureView: View {
 
     private func submit() {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty || (mode == .log && !images.isEmpty), message == nil else { return }
+        guard !value.isEmpty || (mode == .log && !images.isEmpty) else { return }
         failure = nil
         switch mode {
         case .todo:
@@ -444,10 +450,6 @@ struct QuickCaptureView: View {
             } catch { failure = AppErrorDescription(error); return }
         }
         text = ""
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            close()
-        }
     }
 }
 
