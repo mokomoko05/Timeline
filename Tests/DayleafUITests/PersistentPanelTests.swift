@@ -35,6 +35,20 @@ final class PersistentPanelTests: XCTestCase {
         XCTAssertTrue(input.returnSubmits)
         input.scrollRangeToVisible(NSRange(location: (input.string as NSString).length, length: 0))
         XCTAssertGreaterThan(scroll.contentView.bounds.minY, 0, "The wrapped content can scroll vertically")
+        for choice in [QuickCaptureMode.log, .todo, .log, .todo] {
+            window.makeFirstResponder(input)
+            model.mode = choice
+            try await Task.sleep(for: .milliseconds(50))
+            host.layoutSubtreeIfNeeded()
+            XCTAssertTrue(editor(host) === input, "Switching must retain the active native editor")
+            XCTAssertEqual(host.fittingSize.height, panelHeight, accuracy: 1, "Both modes use the same panel height")
+            XCTAssertEqual(scroll.frame.height, inputHeight, accuracy: 1)
+            XCTAssertEqual(input.returnSubmits, choice == .todo)
+        }
+        model.text = "Tomorrow read the paper #reading"
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(host.fittingSize.height, panelHeight, accuracy: 1, "Task metadata stays in the existing rows")
         if let path = ProcessInfo.processInfo.environment["DAYLEAF_QUICK_SNAPSHOT"], let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
             host.cacheDisplay(in: host.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))

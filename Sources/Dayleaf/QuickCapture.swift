@@ -329,7 +329,7 @@ struct QuickCaptureView: View {
             HStack(spacing: 8) {
                 HStack(spacing: 3) {
                     ForEach([QuickCaptureMode.todo, .log], id: \.self) { choice in
-                        Button { mode = choice } label: {
+                        Button { switchMode(to: choice) } label: {
                             Text(choice == .todo ? "待办" : "日志")
                                 .font(.system(size: 11, weight: .medium))
                                 .frame(width: 62, height: 26)
@@ -338,6 +338,7 @@ struct QuickCaptureView: View {
                         }
                         .buttonStyle(.plain).raisedOnHover(radius: 6)
                         .accessibilityAddTraits(mode == choice ? .isSelected : [])
+                        .accessibilityIdentifier("quick-mode-" + choice.rawValue)
                     }
                 }
                 .padding(4)
@@ -349,20 +350,32 @@ struct QuickCaptureView: View {
                 }.buttonStyle(.plain).raisedOnHover(radius: 4).help("收起")
                     .accessibilityLabel("收起")
             }
-            if mode == .todo {
-                TaskComposerRow(store: store, text: $model.text, focused: $focused, options: $model.creationOptions,
-                                compact: true, submit: submit, cancel: close, complete: { mode = .log })
-            } else {
-                HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                if mode == .todo {
+                    PrioritySelectionButton(priority: model.creationOptions.priority, items: TaskPriority.allCases.map { priority in
+                        RadialItem(id: priority.rawValue, symbol: "circle.fill", title: priority.title,
+                                   active: model.creationOptions.priority == priority, tint: PriorityMark(priority: priority).color,
+                                   action: { model.creationOptions.priority = priority })
+                    }, enabled: !store.isReadOnly)
+                } else {
                     Image(systemName: "chevron.right.2").foregroundStyle(Palette.accent)
-                    TaskInput(text: $model.text, focused: $focused, placeholder: "记录…  @ 待办 · # 标签",
-                              fontSize: 12, submit: submit, cancel: close, complete: { mode = .todo },
-                              onPasteImages: addImages, minHeight: 24, maxLines: 1, mention: mention,
-                              submitsOnBlur: false)
                 }
-                .padding(.horizontal, 12).padding(.vertical, 6)
-                .background(Palette.background, in: RoundedRectangle(cornerRadius: 10))
+                // 两个模式共用原生编辑器，切换时不销毁正在响应输入的视图。
+                TaskInput(text: $model.text, focused: $focused,
+                          placeholder: mode == .todo ? "添加待办…" : "记录…  @ 待办 · # 标签",
+                          fontSize: 12, submit: submit, cancel: close,
+                          complete: { switchMode(to: mode == .todo ? .log : .todo) },
+                          onPasteImages: mode == .log ? addImages : nil, minHeight: 24, maxLines: 1,
+                          mention: mode == .log ? mention : nil, returnSubmits: mode == .todo, submitsOnBlur: false)
+                if mode == .todo {
+                    DraftDeadlineButton(options: $model.creationOptions,
+                                        initial: model.creationOptions.applying(to: parsed.resolve(defaultDay: Date()).todo))
+                        .foregroundStyle(Palette.muted).frame(maxWidth: 94)
+                    TodoDraftTagButton(store: store, text: $model.text)
+                }
             }
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(Palette.background, in: RoundedRectangle(cornerRadius: 10))
             if mode == .log, !images.isEmpty {
                 PendingImagesStrip(store: store, names: images,
                                    remove: { name in images.removeAll { $0 == name } },
@@ -424,6 +437,14 @@ struct QuickCaptureView: View {
         .popover(isPresented: Binding(get: { mention.isActive && mode == .log }, set: { if !$0 { mention.dismiss() } }), arrowEdge: .bottom) {
             MentionList(state: mention, store: store, contextTags: model.tags).frame(width: 320)
         }
+    }
+
+    private func switchMode(to choice: QuickCaptureMode) {
+        guard mode != choice else { return }
+        // 先完成输入法组词和草稿同步，再改变模式，避免旧编辑回调抢回焦点。
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        mention.dismiss()
+        mode = choice
     }
 
     private func addImages(_ datas: [Data]) {

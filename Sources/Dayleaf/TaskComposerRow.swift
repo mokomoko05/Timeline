@@ -14,7 +14,6 @@ struct TaskComposerRow: View {
     var cancel: () -> Void = {}
     var previous: () -> Void = {}
     var complete: (() -> Void)?
-    @State private var showingDeadline = false
 
     private var preview: Todo { options.applying(to: QuickAdd.parse(text).resolve(defaultDay: defaultDate).todo) }
 
@@ -42,17 +41,7 @@ struct TaskComposerRow: View {
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .trailing, spacing: 2) {
-                Button { showingDeadline = true } label: {
-                    Text(preview.dueDate.map { due in
-                        preview.dueHasTime ? due.relativeLabel + " " + TaskDeadlineButton.time(due) : due.relativeLabel
-                    } ?? "No Due")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced)).lineLimit(1).fixedSize()
-                    .padding(.horizontal, 4).padding(.vertical, 2)
-                }
-                .buttonStyle(.plain).raisedOnHover(radius: 4).help("修改截止时间")
-                .popover(isPresented: $showingDeadline, arrowEdge: .bottom) {
-                    DraftDeadlineEditor(options: $options, initial: preview, defaultDate: defaultDate)
-                }
+                DraftDeadlineButton(options: $options, initial: preview, defaultDate: defaultDate)
                 Button(action: submit) {
                     Image(systemName: "arrow.turn.down.left").font(.system(size: 10))
                         .frame(minWidth: 24, minHeight: 20)
@@ -66,6 +55,27 @@ struct TaskComposerRow: View {
         .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(focused ? Palette.accent.opacity(0.7) : Palette.line.opacity(0.6), lineWidth: focused ? 1.5 : 0.75).allowsHitTesting(false))
         .disabled(store.isReadOnly)
+    }
+}
+
+struct DraftDeadlineButton: View {
+    @Binding var options: TaskCreationOptions
+    let initial: Todo
+    var defaultDate = Date()
+    @State private var showing = false
+
+    var body: some View {
+        Button { showing = true } label: {
+            Text(initial.dueDate.map { due in
+                initial.dueHasTime ? due.relativeLabel + " " + TaskDeadlineButton.time(due) : due.relativeLabel
+            } ?? "No Due")
+                .font(.system(size: 10, weight: .medium, design: .monospaced)).lineLimit(1)
+                .padding(.horizontal, 4).padding(.vertical, 2)
+        }
+        .buttonStyle(.plain).raisedOnHover(radius: 4).help("修改截止时间")
+        .popover(isPresented: $showing, arrowEdge: .bottom) {
+            DraftDeadlineEditor(options: $options, initial: initial, defaultDate: defaultDate)
+        }
     }
 }
 
