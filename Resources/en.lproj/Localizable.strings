@@ -635,6 +635,7 @@
 "记录…  @ 待办 · # 标签" = "Record…  @ task · # tag";
 "草稿已恢复" = "Draft restored";
 "回车添加" = "Return to add";
+"⌘Enter 添加" = "⌘Enter to add";
 "回车记录" = "Return to save";
 "暂停不计时，切换应用不影响专注。" = "Pauses stop the timer; switching apps does not.";
 "快速记录与专注面板保持显示。" = "Quick capture and focus panels stay visible.";

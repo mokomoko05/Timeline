@@ -111,6 +111,62 @@ final class TagViewsTests: XCTestCase {
         XCTAssertTrue(panel.isVisible, "选择器接收搜索输入时宿主仍在")
         XCTAssertEqual(panel.frame.size, originalSize, "浮窗不改变快速面板大小")
     }
+
+    func testTagPopoverEnterSavesDraftAndEscapeDiscardsIt() async throws {
+        _ = NSApplication.shared
+        let store = makeStore()
+        let state = TagPopoverTestState()
+        let host = NSHostingView(rootView: TagPopoverTestHost(store: store, state: state))
+        let anchor = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        anchor.isReleasedWhenClosed = false
+        anchor.contentView = host
+        anchor.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        defer { anchor.contentView = nil; anchor.close() }
+        for (confirms, focusesInput) in [(true, true), (true, false), (false, true)] {
+            state.presented = true
+            try await Task.sleep(for: .milliseconds(200))
+            func input(in view: NSView) -> NSTextField? {
+                if let field = view as? NSTextField, field.isEditable { return field }
+                return view.subviews.lazy.compactMap(input).first
+            }
+            let popup = try XCTUnwrap(NSApp.windows.first { $0 !== anchor && $0.isVisible && $0.contentView.flatMap(input) != nil })
+            let content = try XCTUnwrap(popup.contentView)
+            let field = try XCTUnwrap(input(in: content))
+            popup.makeKey()
+            if focusesInput {
+                popup.makeFirstResponder(field)
+                let editor = try XCTUnwrap(popup.firstResponder as? NSTextView)
+                editor.insertText(confirms ? "NewTag" : "Discarded", replacementRange: editor.selectedRange())
+            } else {
+                popup.makeFirstResponder(content)
+            }
+            let key = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                   windowNumber: popup.windowNumber, context: nil,
+                                                   characters: confirms ? "\r" : "\u{1b}", charactersIgnoringModifiers: confirms ? "\r" : "\u{1b}",
+                                                   isARepeat: false, keyCode: confirms ? 36 : 53))
+            popup.sendEvent(key)
+            try await Task.sleep(for: .milliseconds(250))
+            XCTAssertFalse(state.presented, "Enter and Escape close the tag popover")
+            XCTAssertEqual(state.tags, ["Existing", "NewTag"], confirms ? "Enter saves a new tag in one step" : "Escape discards unsaved input")
+        }
+    }
+
+}
+
+@MainActor
+private final class TagPopoverTestState: ObservableObject {
+    @Published var presented = false
+    @Published var tags = ["Existing"]
+}
+
+private struct TagPopoverTestHost: View {
+    let store: JournalStore
+    @ObservedObject var state: TagPopoverTestState
+    var body: some View {
+        Text("Tags").padding()
+            .popover(isPresented: $state.presented) { TagSelectionPopover(store: store, tags: $state.tags) }
+    }
 }
 
 @MainActor

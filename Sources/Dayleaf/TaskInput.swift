@@ -284,6 +284,8 @@ struct GrowingTaskInput: NSViewRepresentable {
         context.coordinator.placeholderField.translatesAutoresizingMaskIntoConstraints = false
         scroll.documentView = editor
         scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
         scroll.drawsBackground = false
         scroll.addSubview(context.coordinator.placeholderField)
         NSLayoutConstraint.activate([

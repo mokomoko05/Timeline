@@ -32,23 +32,45 @@ final class PersistentPanelTests: XCTestCase {
         XCTAssertEqual(scroll.frame.height, inputHeight, accuracy: 1)
         XCTAssertEqual(host.fittingSize.height, panelHeight, accuracy: 1)
         XCTAssertGreaterThan(input.frame.height, scroll.contentSize.height)
-        XCTAssertTrue(input.returnSubmits)
+        XCTAssertFalse(input.returnSubmits)
         input.scrollRangeToVisible(NSRange(location: (input.string as NSString).length, length: 0))
         XCTAssertGreaterThan(scroll.contentView.bounds.minY, 0, "The wrapped content can scroll vertically")
         for choice in [QuickCaptureMode.log, .todo, .log, .todo] {
             window.makeFirstResponder(input)
-            model.mode = choice
+            func button(in view: NSView) -> CaptureModeButton? {
+                if let button = view as? CaptureModeButton, button.choice == choice { return button }
+                return view.subviews.lazy.compactMap(button).first
+            }
+            let target = try XCTUnwrap(button(in: host))
+            XCTAssertTrue(target.acceptsFirstMouse(for: nil))
+            let click = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [],
+                                                       timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                                       eventNumber: 0, clickCount: 1, pressure: 1))
+            target.mouseDown(with: click)
             try await Task.sleep(for: .milliseconds(50))
             host.layoutSubtreeIfNeeded()
             XCTAssertTrue(editor(host) === input, "Switching must retain the active native editor")
             XCTAssertEqual(host.fittingSize.height, panelHeight, accuracy: 1, "Both modes use the same panel height")
             XCTAssertEqual(scroll.frame.height, inputHeight, accuracy: 1)
-            XCTAssertEqual(input.returnSubmits, choice == .todo)
+            XCTAssertEqual(model.mode, choice, "A click switches modes while the editor has focus")
+            XCTAssertTrue(window.firstResponder === input, "Mode clicks preserve editing focus")
+            XCTAssertFalse(input.returnSubmits)
+            let enter = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                     windowNumber: window.windowNumber, context: nil, characters: "\r",
+                                                     charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+            XCTAssertFalse(input.shouldInterceptReturn(enter), "Enter inserts a newline in either mode")
+            let submit = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+                                                      windowNumber: window.windowNumber, context: nil, characters: "\r",
+                                                      charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+            XCTAssertTrue(input.shouldInterceptReturn(submit), "Command + Enter submits in either mode")
         }
-        model.text = "Tomorrow read the paper #reading"
+        model.text = "Short task"
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertEqual(host.fittingSize.height, panelHeight, accuracy: 1, "Task metadata stays in the existing rows")
+        XCTAssertTrue(scroll.autohidesScrollers)
+        XCTAssertEqual(scroll.scrollerStyle, .overlay)
+        XCTAssertTrue(scroll.verticalScroller?.isHidden ?? true, "A single line has no visible scrollbar")
         if let path = ProcessInfo.processInfo.environment["DAYLEAF_QUICK_SNAPSHOT"], let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
             host.cacheDisplay(in: host.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))

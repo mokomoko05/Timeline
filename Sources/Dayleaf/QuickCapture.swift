@@ -327,22 +327,8 @@ struct QuickCaptureView: View {
                 .frame(maxWidth: .infinity)
                 .accessibilityHidden(true)
             HStack(spacing: 8) {
-                HStack(spacing: 3) {
-                    ForEach([QuickCaptureMode.todo, .log], id: \.self) { choice in
-                        Button { switchMode(to: choice) } label: {
-                            Text(choice == .todo ? "待办" : "日志")
-                                .font(.system(size: 11, weight: .medium))
-                                .frame(width: 62, height: 26)
-                                .foregroundStyle(mode == choice ? Palette.accent : Palette.muted)
-                                .background(mode == choice ? Palette.soft : .clear, in: RoundedRectangle(cornerRadius: 6))
-                        }
-                        .buttonStyle(.plain).raisedOnHover(radius: 6)
-                        .accessibilityAddTraits(mode == choice ? .isSelected : [])
-                        .accessibilityIdentifier("quick-mode-" + choice.rawValue)
-                    }
-                }
-                .padding(4)
-                .background(Palette.background, in: RoundedRectangle(cornerRadius: 10))
+                QuickCaptureModePicker(mode: mode, select: switchMode)
+                    .frame(width: 135, height: 34)
                 Spacer()
                 Text("Tab 切换").font(.system(size: typography.pt(11))).foregroundStyle(Palette.muted)
                 Button(action: close) {
@@ -366,7 +352,7 @@ struct QuickCaptureView: View {
                           fontSize: 12, submit: submit, cancel: close,
                           complete: { switchMode(to: mode == .todo ? .log : .todo) },
                           onPasteImages: mode == .log ? addImages : nil, minHeight: 24, maxLines: 1,
-                          mention: mode == .log ? mention : nil, returnSubmits: mode == .todo, submitsOnBlur: false)
+                          mention: mode == .log ? mention : nil, submitsOnBlur: false)
                 if mode == .todo {
                     DraftDeadlineButton(options: $model.creationOptions,
                                         initial: model.creationOptions.applying(to: parsed.resolve(defaultDay: Date()).todo))
@@ -396,7 +382,7 @@ struct QuickCaptureView: View {
                     if parsed.hasSchedule || !parsed.tags.isEmpty {
                         ParsedChips(parsed: parsed)
                     } else {
-                        Text("回车添加").foregroundStyle(Palette.muted)
+                        Text("⌘Enter 添加").foregroundStyle(Palette.muted)
                     }
                 } else {
                     LogChipsBar(store: store, link: $model.link, unlinked: $model.unlinked, tags: $model.tags, contextTags: model.tags,
@@ -441,8 +427,7 @@ struct QuickCaptureView: View {
 
     private func switchMode(to choice: QuickCaptureMode) {
         guard mode != choice else { return }
-        // 先完成输入法组词和草稿同步，再改变模式，避免旧编辑回调抢回焦点。
-        NSApp.keyWindow?.makeFirstResponder(nil)
+        // 原生切换控件接收第一次点击，保留编辑器焦点，不触发失焦后重新抢焦点。
         mention.dismiss()
         mode = choice
     }

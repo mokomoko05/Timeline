@@ -64,6 +64,12 @@ struct TagSelectionPopover: View {
         return true
     }
 
+    private func save() {
+        guard !store.isReadOnly, commitDraft() else { return }
+        tags = selected
+        dismiss()
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
@@ -90,7 +96,7 @@ struct TagSelectionPopover: View {
                 HStack(spacing: 6) {
                     Image(systemName: "plus").foregroundStyle(Palette.muted)
                     TextField("新标签…", text: $draft)
-                        .textFieldStyle(.plain).focused($typing).onSubmit { commitDraft() }
+                        .textFieldStyle(.plain).focused($typing).onSubmit(save)
                 }
                 .padding(.horizontal, 9).padding(.vertical, 6)
                 .background(Palette.card, in: RoundedRectangle(cornerRadius: 7))
@@ -100,11 +106,7 @@ struct TagSelectionPopover: View {
                 Text(selected.isEmpty ? AppLocalized("未选标签") : AppLocalizedFormat("已选 %lld 个", selected.count)).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("保存") {
-                    guard commitDraft() else { return }
-                    tags = selected
-                    dismiss()
-                }
+                Button("保存", action: save)
                 .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
                 .disabled(store.isReadOnly)
             }
@@ -112,6 +114,7 @@ struct TagSelectionPopover: View {
         .padding(18).frame(width: 360)
         .disabled(store.isReadOnly)
         .onAppear { typing = false }
+        .onExitCommand { dismiss() }
     }
 }
 
