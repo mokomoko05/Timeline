@@ -70,14 +70,7 @@ struct TaskDetailsView: View {
                 TextField("月历短名称", text: $calendarName, prompt: Text("留空使用原标题"))
                 Toggle("设置截止日期（DDL）", isOn: $hasDue)
                 if hasDue {
-                    DatePicker("截止日期", selection: $due, displayedComponents: .date)
-                    HStack {
-                        Picker("截止时间", selection: $timed) {
-                            Text("未设置").tag(false)
-                            Text("指定时间").tag(true)
-                        }
-                        if timed { DatePicker("截止时间", selection: $due, displayedComponents: .hourAndMinute).labelsHidden() }
-                    }
+                    DeadlineSelectionView(due: $due, timed: $timed)
                     Picker("提醒", selection: $reminder) {
                         Text("不提醒").tag(-1)
                         Text(timed ? "截止时" : "当天 09:00").tag(0)
@@ -111,7 +104,7 @@ struct TaskDetailsView: View {
                 .disabled(saving || store.isReadOnly)
             }
         }
-        .padding(20).frame(width: 430)
+        .padding(20).frame(width: hasDue && timed ? 490 : 430)
     }
 }
 

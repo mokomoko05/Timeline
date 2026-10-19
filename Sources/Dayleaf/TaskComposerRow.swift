@@ -83,9 +83,7 @@ private struct DraftDeadlineEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            DatePicker("截止日期", selection: $due, displayedComponents: .date)
-            Toggle("指定时间", isOn: $timed)
-            if timed { DatePicker("截止时间", selection: $due, displayedComponents: .hourAndMinute) }
+            DeadlineSelectionView(due: $due, timed: $timed)
             HStack {
                 Button("清除") {
                     options.overridesDeadline = true; options.dueDate = nil; options.dueHasTime = false
@@ -98,6 +96,6 @@ private struct DraftDeadlineEditor: View {
                     dismiss()
                 }.keyboardShortcut(.defaultAction)
             }
-        }.padding(14).frame(width: 310)
+        }.padding(14)
     }
 }

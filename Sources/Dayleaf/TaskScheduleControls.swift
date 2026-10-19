@@ -115,14 +115,7 @@ private struct TaskDeadlineEditor: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            DatePicker("截止日期", selection: $due, displayedComponents: .date)
-            HStack {
-                Picker("截止时间", selection: $timed) {
-                    Text("未设置").tag(false)
-                    Text("指定时间").tag(true)
-                }.frame(width: 170)
-                if timed { DatePicker("截止时间", selection: $due, displayedComponents: .hourAndMinute).labelsHidden() }
-            }
+            DeadlineSelectionView(due: $due, timed: $timed)
             HStack {
                 Button("清除") { store.setDeadline(task.id, to: nil); close() }
                 Spacer()
@@ -134,6 +127,6 @@ private struct TaskDeadlineEditor: View {
                     close()
                 }.keyboardShortcut(.defaultAction)
             }
-        }.padding(14).frame(width: 310)
+        }.padding(14)
     }
 }
