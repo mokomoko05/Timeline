@@ -39,42 +39,51 @@ struct ManagedTaskRow: View {
             .buttonStyle(HitAreaButtonStyle())
             .accessibilityLabel((task.isDropped ? "恢复已放弃的待办：" : (task.completed ? "标记未完成：" : "标记完成：")) + task.title)
             .help(task.isDropped ? "已放弃：点一下恢复成未完成" : "")
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .top, spacing: 1) {
-                    TaskPriorityButton(store: store, task: task)
-                        .frame(width: 18, height: 26)
-                    if let number = task.number {
-                        Text("#\(number)").font(.system(size: typography.pt(10), design: .monospaced))
-                            .foregroundStyle(Palette.muted).padding(.top, 7).fixedSize()
-                    }
-                    TaskTitleView(title: Binding(
-                        get: { store.entry(for: date).todos.first(where: { $0.id == task.id })?.title ?? task.title },
-                        set: { store.renameTodo(task.id, title: $0, on: date) }
-                    ), completed: task.completed, color: Palette.ink, fontSize: compact ? 12 : 14,
-                                  next: next, itemID: task.id, requestedEdit: $requestedEdit,
-                                  prepare: selectTask, menuItems: menuItems)
-                    VStack(alignment: .trailing, spacing: 2) {
-                        TaskDeadlineButton(store: store, task: task)
-                        if let focus {
-                            TaskFocusButton(session: focus, task: ScheduledTask(date: date, task: task))
+            HStack(alignment: .center, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .center, spacing: 1) {
+                        TaskPriorityButton(store: store, task: task)
+                            .frame(width: 18, height: 26)
+                        if let number = task.number {
+                            Text("#\(number)").font(.system(size: typography.pt(10), design: .monospaced))
+                                .foregroundStyle(Palette.muted).fixedSize()
                         }
-                    }.padding(.top, 4).fixedSize()
-                }
-                if task.reminderMinutes != nil || task.repeatRule != .none || !task.tags.isEmpty || store.pinnedTask?.id == task.id || task.isDropped {
-                    HStack(spacing: 4) {
-                        if task.isDropped { Label("已放弃", systemImage: "nosign") }
-                        if store.pinnedTask?.id == task.id {
-                            Image(systemName: "pin.fill").foregroundStyle(Palette.accent).help("固定关联：新日志默认记到它名下")
-                        }
-                        if task.reminderMinutes != nil { Image(systemName: "bell") }
-                        if task.repeatRule != .none { Image(systemName: "repeat") }
-                        TaskTagLine(tags: task.tags)
+                        TaskTitleView(title: Binding(
+                            get: { store.entry(for: date).todos.first(where: { $0.id == task.id })?.title ?? task.title },
+                            set: { store.renameTodo(task.id, title: $0, on: date) }
+                        ), completed: task.completed, color: Palette.ink, fontSize: compact ? 12 : 14,
+                                      next: next, itemID: task.id, requestedEdit: $requestedEdit,
+                                      prepare: selectTask, menuItems: menuItems)
                     }
-                    .font(.system(size: typography.pt(10))).lineLimit(1)
-                    .foregroundStyle(overdue ? Palette.deadline : Palette.muted)
-                    .padding(.horizontal, 5)
+                    if task.reminderMinutes != nil || task.repeatRule != .none || !task.tags.isEmpty || store.pinnedTask?.id == task.id || task.isDropped {
+                        HStack(spacing: 4) {
+                            if task.isDropped { Label("已放弃", systemImage: "nosign") }
+                            if store.pinnedTask?.id == task.id {
+                                Image(systemName: "pin.fill").foregroundStyle(Palette.accent).help("固定关联：新日志默认记到它名下")
+                            }
+                            if task.reminderMinutes != nil { Image(systemName: "bell") }
+                            if task.repeatRule != .none { Image(systemName: "repeat") }
+                            TaskTagLine(tags: task.tags)
+                        }
+                        .font(.system(size: typography.pt(10))).lineLimit(1)
+                        .foregroundStyle(overdue ? Palette.deadline : Palette.muted)
+                        .padding(.horizontal, 5)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // 日期与计时覆盖整块正文的高度，不再挤在标题行中。
+                VStack(alignment: .trailing, spacing: 2) {
+                    TaskDeadlineButton(store: store, task: task)
+                    if let focus {
+                        Spacer(minLength: 2)
+                        TaskFocusButton(session: focus, task: ScheduledTask(date: date, task: task))
+                    }
+                }
+                .padding(.vertical, 2)
+                .frame(maxHeight: .infinity)
             }
+            // 先按内容确定高度，再让右列分配上下空间，避免 Spacer 撑高条目。
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 0) {
                 TagSelectionButton(store: store, tags: Binding(get: { store.locate(task.id)?.task.tags ?? task.tags }, set: { store.setTags(task.id, $0) }))
