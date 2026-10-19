@@ -747,7 +747,7 @@ public final class JournalStore: ObservableObject {
         return true
     }
 
-    /// 关联任务的笔记和结构化专注流水，按时间从早到晚；旧式计时记录仍隐藏。
+    /// 关联任务的笔记，按时间从早到晚；专注开始、反馈和结束仅在日志中显示。
     public func notes(for taskID: UUID) -> [LoggedLog] {
         logs(linkedTo: [taskID]).filter { $0.log.isNotebookEntry }
     }
@@ -878,7 +878,11 @@ public final class JournalStore: ObservableObject {
     /// 和这条日志属于同一个任务的所有笔记里的图片，按时间顺序；日志没有关联任务时，就是它自己的图片。
     public func galleryImages(around log: DailyLogEntry) -> [GalleryImage] {
         let logs: [LoggedLog]
-        if let id = log.taskID { logs = notes(for: id) } else { logs = allLogs().filter { $0.log.id == log.id } }
+        if let id = log.taskID {
+            logs = log.isNotebookEntry ? notes(for: id) : self.logs(linkedTo: [id])
+        } else {
+            logs = allLogs(includeFocus: true).filter { $0.log.id == log.id }
+        }
         return Self.gallery(of: logs)
     }
 

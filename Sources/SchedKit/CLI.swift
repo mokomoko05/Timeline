@@ -322,6 +322,7 @@ public enum CLI {
             let (filter, problem) = filter(forTask: number)
             if let problem { return fail(problem, code: 2) }
             var effective = filter
+            effective.notebookOnly = true
             if args.value("last") == nil { effective.last = nil }   // 笔记默认看全部
             let rows = LogQuery.rows(in: store, filter: effective)
             let located = store.locate(number: number)
@@ -352,6 +353,7 @@ public enum CLI {
             var (effective, problem) = filter()
             if let problem { return fail(problem, code: 2) }
             effective.tag = tag
+            effective.notebookOnly = true
             if args.value("last") == nil { effective.last = nil }
             let rows = LogQuery.rows(in: store, filter: effective)
             let tasks = store.tasks(taggedWith: tag)

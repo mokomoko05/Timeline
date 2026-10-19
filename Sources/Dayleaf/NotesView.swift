@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import DayleafCore
 
-/// 笔记视图：每个 TODO 是一个主题，日志和结构化专注流水按日期汇成笔记；每个标签也是一个主题，汇总带这个标签的所有待办的笔记。
+/// 笔记视图：每个 TODO 是一个主题，笔记按日期汇总；每个标签也是一个主题，汇总带这个标签的所有待办的笔记。
 struct NotesView: View {
     @Environment(\.typography) private var typography
     @ObservedObject private var languages = LanguageStore.shared
@@ -491,7 +491,6 @@ struct NotesView: View {
                                  maxLines: 0, markdown: true, compactLines: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                LogFocusGoal(log: log)
                 if !log.images.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
@@ -504,7 +503,6 @@ struct NotesView: View {
                     }
                 }
             }
-            .logEventGutter(log)
             Spacer(minLength: 0)
             HStack(spacing: 0) {
                 noteAction("doc.on.doc", log.copyText == nil ? "这条只有图片，没有文字可复制" : "复制这条的文字（不含图片）") { copy(log) }

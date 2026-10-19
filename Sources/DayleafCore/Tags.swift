@@ -82,7 +82,7 @@ extension JournalStore {
         /// 带这个标签（含子标签）的待办数 / 其中未完成的。
         public let taskCount: Int
         public let openCount: Int
-        /// 这些待办名下的笔记条数（含结构化专注流水）。
+        /// 这些待办名下的笔记条数（不含专注开始、反馈和结束）。
         public let noteCount: Int
         public let lastActivity: Date
     }
@@ -157,7 +157,7 @@ extension JournalStore {
         effectiveTags(of: log, live: liveTags())
     }
 
-    /// 这个标签（含子标签）名下的笔记和结构化专注流水，按时间从早到晚。已删除待办的笔记靠记录时的标签快照仍然找得到。
+    /// 这个标签（含子标签）名下的笔记，按时间从早到晚。已删除待办的笔记靠记录时的标签快照仍然找得到。
     public func notes(forTag tag: String) -> [LoggedLog] {
         let live = liveTags()
         return allLogs(includeFocus: true).filter { item in item.log.isNotebookEntry && effectiveTags(of: item.log, live: live).contains { TagText.matches($0, query: tag) } }

@@ -302,7 +302,7 @@ private struct UnifiedJournalView: View {
             header
             Divider()
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     if entry.logsInTimeOrder.isEmpty {
                         VStack(spacing: 8) {
                             Image(systemName: "book.pages").font(.system(size: 30, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
@@ -310,7 +310,10 @@ private struct UnifiedJournalView: View {
                         }
                         .frame(maxWidth: .infinity).padding(.vertical, 60)
                     } else {
-                        ForEach(entry.logsInTimeOrder) { log in journalRow(log) }
+                        let logs = entry.logsInTimeOrder
+                        ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
+                            journalRow(log, hasPrevious: index > 0, hasNext: index < logs.count - 1)
+                        }
                     }
                 }
                 .padding(20)
@@ -341,15 +344,25 @@ private struct UnifiedJournalView: View {
         .padding(.horizontal, 20).padding(.vertical, 14)
     }
 
-    private func journalRow(_ log: DailyLogEntry) -> some View {
+    private func journalRow(_ log: DailyLogEntry, hasPrevious: Bool, hasNext: Bool) -> some View {
         let editing = editingID == log.id
-        return HStack(alignment: .top, spacing: 10) {
-            Text(Self.time(log.createdAt)).font(.system(size: typography.pt(11), design: .monospaced))
-                .foregroundStyle(Palette.muted).padding(.top, 3).fixedSize()
-            LogEventBadge(log: log)
+        return LogTimelineRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext) {
             VStack(alignment: .leading, spacing: 6) {
-                if let label = LogTaskLabel.saved(log, store: store, logDate: date) {
-                    Text(label).font(.system(size: typography.pt(11))).foregroundStyle(Palette.accent)
+                HStack(alignment: .top, spacing: 8) {
+                    LogEventBadge(log: log)
+                    if log.showsTimelineContext || !hasPrevious, let label = LogTaskLabel.saved(log, store: store, logDate: date) {
+                        Text(label).font(.system(size: typography.pt(11))).foregroundStyle(Palette.accent)
+                            .padding(.top, 2)
+                    }
+                    Spacer(minLength: 0)
+                    if !store.isReadOnly {
+                        HStack(spacing: 0) {
+                            journalAction("pencil", "编辑这条日志") { beginEdit(log) }
+                            journalAction("trash", "删除这条日志 · ⌘Z 撤销", destructive: true) {
+                                store.deleteLog(log.id, on: date); error = "已删除这条日志，⌘Z 可撤销"
+                            }
+                        }.fixedSize()
+                    }
                 }
                 if editing {
                     TaskInput(text: $editText, focused: $editFocused, fontSize: 13,
@@ -357,11 +370,15 @@ private struct UnifiedJournalView: View {
                         .padding(.horizontal, 8).padding(.vertical, 2)
                         .background(Palette.card, in: RoundedRectangle(cornerRadius: 6))
                         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Palette.accent.opacity(0.6)))
-                } else if !log.text.isEmpty {
+                } else if !LogEventStyle.body(log).isEmpty {
                     TaskLinkText(source: LogEventStyle.body(log), completed: false, color: Palette.ink, fontSize: 13,
                                  edit: { beginEdit(log) }, open: SafariLinks.open, maxLines: 0,
                                  markdown: true, compactLines: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let detail = LogEventStyle.detail(log) {
+                    Text(detail).font(.system(size: typography.pt(11), design: .monospaced))
+                        .foregroundStyle(Palette.muted)
                 }
                 LogFocusGoal(log: log)
                 if !log.images.isEmpty {
@@ -375,20 +392,9 @@ private struct UnifiedJournalView: View {
                         }
                     }
                 }
-                if !log.tags.isEmpty { TaskTagLine(tags: log.tags) }
-            }
-            .logEventGutter(log)
-            Spacer(minLength: 0)
-            if !store.isReadOnly {
-                HStack(spacing: 0) {
-                    journalAction("pencil", "编辑这条日志") { beginEdit(log) }
-                    journalAction("trash", "删除这条日志 · ⌘Z 撤销", destructive: true) {
-                        store.deleteLog(log.id, on: date); error = "已删除这条日志，⌘Z 可撤销"
-                    }
-                }.fixedSize()
+                if log.showsTimelineTags, !log.tags.isEmpty { TaskTagLine(tags: log.tags) }
             }
         }
-        .padding(.vertical, 6)
     }
 
     private func journalAction(_ symbol: String, _ help: String, destructive: Bool = false, action: @escaping () -> Void) -> some View {
@@ -455,7 +461,4 @@ private struct UnifiedJournalView: View {
         editingDate = nil
     }
 
-    private static func time(_ date: Date) -> String {
-        LogEventStyle.time(date)
-    }
 }

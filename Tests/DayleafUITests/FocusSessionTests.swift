@@ -178,7 +178,7 @@ final class FocusSessionTests: XCTestCase {
         XCTAssertEqual(store.locate(task.id)?.task.focusSeconds ?? 0, 1503, accuracy: 0.01, "用时累加到任务上")
         XCTAssertEqual(logs.map(\.createdAt), [start, start.addingTimeInterval(1503)])
         XCTAssertTrue(logs.allSatisfy { $0.focus && $0.taskID == task.id })
-        XCTAssertEqual(store.notes(for: task.id).map { $0.log.focusMarker }, ["FOCUS", "END"])
+        XCTAssertTrue(store.notes(for: task.id).isEmpty)
     }
 
     func testFocusShorterThanTheThresholdLeavesNoLogButStillCountsTheTime() async throws {
@@ -371,7 +371,7 @@ final class FocusSessionTests: XCTestCase {
         XCTAssertEqual(end.focusEndReason, "手动结束")
         store.save()
         let reloaded = JournalStore(directory: store.directory)
-        XCTAssertEqual(reloaded.notes(for: task.id).first?.log.focusGoal, log.focusGoal)
+        XCTAssertEqual(reloaded.allLogs(includeFocus: true).first?.log.focusGoal, log.focusGoal)
     }
 
     func testShortSessionKeepsAnExplicitGoalEvenBelowLoggingThreshold() throws {
@@ -380,8 +380,9 @@ final class FocusSessionTests: XCTestCase {
         let now = Date()
         session.start(task: task, url: nil, goal: "Keep this goal", now: now)
         session.stop(reason: "手动结束", now: now.addingTimeInterval(30))
-        XCTAssertEqual(store.notes(for: task.id).map { $0.log.focusMarker }, ["FOCUS", "END"])
-        XCTAssertEqual(store.notes(for: task.id).first?.log.focusGoal, "Keep this goal")
+        XCTAssertTrue(store.notes(for: task.id).isEmpty)
+        XCTAssertEqual(store.allLogs(includeFocus: true).map { $0.log.focusMarker }, ["FOCUS", "END"])
+        XCTAssertEqual(store.allLogs(includeFocus: true).first?.log.focusGoal, "Keep this goal")
         XCTAssertEqual(store.locate(task.id)?.task.focusSeconds, 30)
     }
 
@@ -482,7 +483,7 @@ final class FocusSessionTests: XCTestCase {
         XCTAssertEqual(focusedLogs.first { $0.text == "看完一半" }?.taskID, task.id)
         XCTAssertEqual(focusedLogs.first { $0.text == "手动指定" }?.taskID, other.id, "明确指定的任务优先于专注任务")
         XCTAssertFalse(try XCTUnwrap(store.locate(task.id)).task.completed, "快速日志里的 /done 不会替用户完成任务")
-        XCTAssertEqual(store.notes(for: task.id).map(\.log.text), ["▶ 开始专注", "第二页的公式很关键", "看完一半"], "笔记视图完整展示本轮专注流水")
+        XCTAssertEqual(store.notes(for: task.id).map(\.log.text), ["第二页的公式很关键", "看完一半"], "笔记保留实际内容，计时和反馈只在日志显示")
 
         session.stop(reason: "手动结束")
         XCTAssertNil(store.focusTaskID)

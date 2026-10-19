@@ -366,8 +366,8 @@ struct DailyLogView: View {
                 ForEach(groups, id: \.key) { group in
                     Text("── \(group.key) ──").font(.system(size: typography.pt(11), design: .monospaced))
                         .foregroundStyle(TerminalPalette.muted).padding(.top, 8).padding(.bottom, 2)
-                    ForEach(group.value) { item in
-                        DailyLogRow(store: store, date: item.date, log: item.log, highlighted: editingLogID == item.log.id, next: { focused = true },
+                    ForEach(Array(group.value.enumerated()), id: \.element.id) { index, item in
+                        DailyLogRow(store: store, date: item.date, log: item.log, hasPrevious: index > 0, hasNext: index < group.value.count - 1, highlighted: editingLogID == item.log.id, next: { focused = true },
                                     selection: selectionState(item.log.id), copy: { copyLogs([$0.id]) },
                                     edit: { beginLogEdit($0, on: $1) },
                                     preview: { ImageViewerController.shared.show(store: store, around: item.log, index: $0) })
@@ -383,8 +383,9 @@ struct DailyLogView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(entry.logsInTimeOrder) { log in
-                            DailyLogRow(store: store, date: date, log: log, highlighted: editingLogID == log.id, next: { focused = true },
+                        let logs = entry.logsInTimeOrder
+                        ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
+                            DailyLogRow(store: store, date: date, log: log, hasPrevious: index > 0, hasNext: index < logs.count - 1, highlighted: editingLogID == log.id, next: { focused = true },
                                         selection: selectionState(log.id), copy: { copyLogs([$0.id]) },
                                         edit: { beginLogEdit($0, on: $1) },
                                         preview: { ImageViewerController.shared.show(store: store, around: log, index: $0) })
@@ -603,6 +604,8 @@ private struct DailyLogRow: View {
     @ObservedObject var store: JournalStore
     let date: Date
     let log: DailyLogEntry
+    let hasPrevious: Bool
+    let hasNext: Bool
     let highlighted: Bool
     let next: () -> Void
     /// 这条是否被选中，以及点击右侧选择按钮时切换。
@@ -616,32 +619,8 @@ private struct DailyLogRow: View {
     @State private var editingTags = false
     @State private var hovered = false
 
-    private var color: Color {
-        if log.focusMarker == "FOCUS" { return TerminalPalette.blue }
-        if log.focusMarker == "REVIEW" { return TerminalPalette.green }
-        if log.focusMarker == "END" { return TerminalPalette.muted }
-        switch log.kind {
-        case .note: return TerminalPalette.muted
-        case .done: return TerminalPalette.green
-        case .block: return TerminalPalette.amber
-        case .plan: return TerminalPalette.blue
-        }
-    }
-
-    private var timestamp: String {
-        let parts = JournalDates.calendar.dateComponents([.hour, .minute, .second], from: log.createdAt)
-        return String(format: "[%02d:%02d:%02d]", parts.hour!, parts.minute!, parts.second!)
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            line
-            if expanded, !log.images.isEmpty {
-                LogImageGallery(store: store, names: log.images, preview: preview)
-                    .transition(Motion.reduced ? .identity : .opacity)
-            }
-        }
-        .animation(Motion.quick, value: expanded)
+        line.animation(Motion.quick, value: expanded)
     }
 
     private func toggleImages() {
@@ -649,18 +628,10 @@ private struct DailyLogRow: View {
         expanded.toggle()
     }
 
-    private var line: some View {
+    private var rowContent: some View {
         HStack(alignment: .top, spacing: 3) {
-            Text(timestamp).foregroundStyle(color)
-                .font(.system(size: typography.pt(11), design: .monospaced)).padding(.top, 1)
-                .fixedSize()
-                .help("\(log.kind.title) · \(log.createdAt.formatted(date: .abbreviated, time: .standard))")
-            Text(log.focusMarker)
-                .font(.system(size: typography.pt(10), weight: .semibold, design: .monospaced))
-                .foregroundStyle(color)
-                .padding(.horizontal, 4).frame(height: 20)
-                .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
-            if let label = LogTaskLabel.saved(log, store: store, logDate: date) {
+            LogEventBadge(log: log)
+            if log.showsTimelineContext || !hasPrevious, let label = LogTaskLabel.saved(log, store: store, logDate: date) {
                 Button {
                     // 不论有没有截止日期，都把主窗口调出来并选中这个任务。
                     if let id = log.taskID, store.locate(id) != nil {
@@ -684,11 +655,15 @@ private struct DailyLogRow: View {
                             .font(.system(size: typography.pt(12), design: .monospaced)).foregroundStyle(TerminalPalette.muted)
                             .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading).contentShape(Rectangle())
                     }.buttonStyle(.plain)
-                } else {
+                } else if !LogEventStyle.body(log).isEmpty {
                     TaskLinkText(source: LogEventStyle.body(log), completed: false, color: TerminalPalette.text, fontSize: 12,
                                  edit: { guard !store.isReadOnly else { return }; edit(log, date) }, open: SafariLinks.open,
                                  maxLines: 0, monospaced: true, markdown: true, compactLines: true,
                                  click: log.images.isEmpty ? nil : toggleImages, menuItems: menuItems)
+                }
+                if let detail = LogEventStyle.detail(log) {
+                    Text(detail).font(.system(size: typography.pt(11), design: .monospaced))
+                        .foregroundStyle(TerminalPalette.muted)
                 }
                 LogFocusGoal(log: log)
             }.frame(maxWidth: .infinity, alignment: .leading)
@@ -702,7 +677,19 @@ private struct DailyLogRow: View {
                 .help(expanded ? "收起图片" : "点击查看 \(log.images.count) 张图片")
                 .accessibilityLabel(expanded ? "收起图片" : "查看 \(log.images.count) 张图片")
             }
-            if !log.tags.isEmpty { TaskTagLine(tags: log.tags).padding(.top, 2) }
+            if log.showsTimelineTags, !log.tags.isEmpty { TaskTagLine(tags: log.tags).padding(.top, 2) }
+        }
+    }
+
+    private var line: some View {
+        LogTimelineRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext) {
+            VStack(alignment: .leading, spacing: 4) {
+                rowContent
+                if expanded, !log.images.isEmpty {
+                    LogImageGallery(store: store, names: log.images, preview: preview)
+                        .transition(Motion.reduced ? .identity : .opacity)
+                }
+            }
         }
         .frame(minHeight: 22, alignment: .top)
         .background(highlighted || selection.selected ? TerminalPalette.blue.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 3))

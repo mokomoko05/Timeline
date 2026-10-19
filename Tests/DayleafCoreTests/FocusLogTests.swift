@@ -59,19 +59,55 @@ final class FocusLogTests: XCTestCase {
         XCTAssertEqual(review.text, "/done remains text")
         let end = try XCTUnwrap(store.addFocusLog("■ 结束专注", taskID: task.id, now: now.addingTimeInterval(5), seconds: 1500,
                                                 event: .end, endReason: "计时结束"))
-        XCTAssertEqual(store.notes(for: task.id).map(\.id), [start, note.id, store.entry(for: now).logs[2].id, review.id, end])
-        XCTAssertEqual(store.notes(forTag: "reading").count, 5)
-        XCTAssertEqual(store.noteTopic(for: task.id)?.count, 5)
+        XCTAssertEqual(store.notes(for: task.id).map(\.id), [note.id, store.entry(for: now).logs[2].id])
+        XCTAssertEqual(store.notes(forTag: "reading").count, 2)
+        XCTAssertEqual(store.noteTopic(for: task.id)?.count, 2)
+        XCTAssertEqual(store.logs(forTag: "reading").count, 5)
+        XCTAssertEqual(store.allLogs(includeFocus: true).map(\.id), [start, note.id, store.entry(for: now).logs[2].id, paused.id, review.id, end])
         store.undo()
         XCTAssertEqual(store.locate(task.id)?.task.focusSeconds, 0)
         store.redo()
         store.save()
         let reloaded = JournalStore(directory: directory)
-        XCTAssertEqual(reloaded.notes(for: task.id).last?.log.focusElapsedSeconds, 1500)
-        XCTAssertEqual(reloaded.notes(for: task.id).first?.log.focusGoal, "Read methods")
+        XCTAssertEqual(reloaded.allLogs(includeFocus: true).last?.log.focusElapsedSeconds, 1500)
+        XCTAssertEqual(reloaded.allLogs(includeFocus: true).first?.log.focusGoal, "Read methods")
         let exported = directory.appendingPathComponent("export.json")
         try store.export(to: exported)
         try store.restore(from: exported)
-        XCTAssertEqual(store.notes(for: task.id).last?.log.focusEndReason, "计时结束")
+        XCTAssertEqual(store.allLogs(includeFocus: true).last?.log.focusEndReason, "计时结束")
+    }
+
+    func testOnlyFocusNotesAppearInNotebooksAndRepeatedContextIsHidden() {
+        let now = Date()
+        for event in [FocusLogEvent.start, .review, .end] {
+            let entry = DailyLogEntry(createdAt: now, kind: .note, text: "Event", focusEvent: event)
+            XCTAssertFalse(entry.isNotebookEntry)
+            XCTAssertFalse(entry.showsTimelineTags)
+            XCTAssertEqual(entry.showsTimelineContext, event == .start)
+        }
+        let note = DailyLogEntry(createdAt: now, kind: .note, text: "A finding", focusEvent: .note)
+        XCTAssertTrue(note.isNotebookEntry)
+        XCTAssertFalse(note.showsTimelineContext)
+        XCTAssertFalse(note.showsTimelineTags)
+        let legacyReview = DailyLogEntry(createdAt: now, kind: .note, text: "阶段反馈 · Finished")
+        XCTAssertFalse(legacyReview.isNotebookEntry)
+        let ordinary = DailyLogEntry(createdAt: now, kind: .note, text: "Ordinary")
+        XCTAssertTrue(ordinary.isNotebookEntry)
+        XCTAssertTrue(ordinary.showsTimelineContext)
+        XCTAssertTrue(ordinary.showsTimelineTags)
+    }
+
+    @MainActor
+    func testHiddenReviewImagesRemainAvailableFromJournal() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let now = Date()
+        let task = try XCTUnwrap(store.addParsedTodo("Read #reading", on: now))
+        let review = try XCTUnwrap(store.quickLogEntry("Feedback", images: ["review.png"], taskID: task.id,
+                                                     on: now, focusEvent: .review).entry)
+        XCTAssertTrue(store.notes(for: task.id).isEmpty)
+        XCTAssertEqual(store.galleryImages(around: review).map(\.name), ["review.png"])
+        XCTAssertEqual(store.noteTopic(for: task.id)?.count, 0)
     }
 }

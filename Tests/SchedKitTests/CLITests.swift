@@ -82,6 +82,26 @@ final class CLITests: XCTestCase {
         XCTAssertTrue(none.err.contains("还没有笔记"))
     }
 
+    func testFocusEventsStayInLogsButNotInTaskOrTagNotebooks() throws {
+        let fixture = try Fixture.make(testCase: self)
+        fixture.store.setTags(fixture.paper.id, ["reading"])
+        fixture.store.addFocusLog("▶ 开始专注", taskID: fixture.paper.id, now: fixture.day2,
+                                  event: .start, goal: "Focus goal", plannedSeconds: 1500)
+        _ = try fixture.store.quickLogEntry("Focus observation", taskID: fixture.paper.id, on: fixture.day2, focusEvent: .note)
+        _ = try fixture.store.quickLogEntry("Stage feedback", taskID: fixture.paper.id, on: fixture.day2, focusEvent: .review)
+        fixture.store.addFocusLog("■ 结束专注", taskID: fixture.paper.id, now: fixture.day2.addingTimeInterval(1500),
+                                  event: .end)
+        fixture.store.save()
+        for target in ["1", "reading"] {
+            let result = runCLI(["notes", target, "--focus", "--md"], directory: fixture.directory)
+            XCTAssertEqual(result.code, 0, result.err)
+            XCTAssertTrue(result.out.contains("Focus observation"))
+            for marker in ["[FOCUS]", "[REVIEW]", "[END]"] { XCTAssertFalse(result.out.contains(marker), result.out) }
+        }
+        let result = runCLI(["logs", "--focus", "--md"], directory: fixture.directory)
+        for marker in ["[FOCUS]", "[NOTE]", "[REVIEW]", "[END]"] { XCTAssertTrue(result.out.contains(marker), result.out) }
+    }
+
     func testTasksAndStatus() throws {
         let fixture = try Fixture.make(testCase: self)
         let tasks = runCLI(["tasks"], directory: fixture.directory)

@@ -4,9 +4,12 @@ import DayleafCore
 enum LogEventStyle {
     static func color(_ log: DailyLogEntry) -> Color {
         switch log.focusMarker {
-        case "FOCUS", "PLAN": return Palette.accent
-        case "REVIEW", "DONE": return Palette.success
-        case "END": return Palette.muted
+        case "FOCUS": return .blue
+        case "NOTE": return .teal
+        case "REVIEW": return .purple
+        case "END": return .green
+        case "PLAN": return Palette.accent
+        case "DONE": return Palette.success
         case "BLOCK": return Palette.deadline
         default: return Palette.muted
         }
@@ -18,12 +21,16 @@ enum LogEventStyle {
     }
 
     @MainActor static func body(_ log: DailyLogEntry) -> String {
-        if log.focusEvent == .start, log.text == "▶ 开始专注", let seconds = log.focusPlannedSeconds {
-            return AppLocalizedFormat("计划 %@", FocusSession.brief(seconds))
+        if log.focusMarker == "FOCUS", log.text == "▶ 开始专注" {
+            return log.focusPlannedSeconds.map { AppLocalizedFormat("计划 %@", FocusSession.brief($0)) } ?? ""
         }
-        if log.focusEvent == .end, log.text.hasPrefix("■ 结束专注 · "), let seconds = log.focusElapsedSeconds {
-            let duration = AppLocalizedFormat("有效专注 %@", FocusSession.brief(seconds))
-            return log.focusEndReason.map { duration + " · " + AppLocalized($0) } ?? duration
+        if log.focusMarker == "END", log.text.hasPrefix("■ 结束专注") {
+            let parts = log.text.components(separatedBy: " · ")
+            let duration = log.focusElapsedSeconds.map(FocusSession.duration)
+                ?? parts.first(where: { $0.hasPrefix("用时 ") }).map { String($0.dropFirst(3)) }
+            let reason = log.focusEndReason ?? (parts.count > 3 ? parts.last : nil)
+            let summary = duration.map { AppLocalizedFormat("有效专注 %@", $0) } ?? AppLocalized("结束专注")
+            return reason.map { summary + " · " + AppLocalized($0) } ?? summary
         }
         if log.focusEvent == nil, log.focusMarker == "REVIEW" {
             for prefix in ["阶段反馈 · ", "Session reflection · "] where log.text.hasPrefix(prefix) {
@@ -31,6 +38,12 @@ enum LogEventStyle {
             }
         }
         return log.text
+    }
+
+    static func detail(_ log: DailyLogEntry) -> String? {
+        guard log.focusMarker == "END", log.text.hasPrefix("■ 结束专注 · ") else { return nil }
+        return log.text.components(separatedBy: " · ").first(where: { $0.hasPrefix("累计 ") })
+            .map { AppLocalizedFormat("累计 %@", String($0.dropFirst(3))) }
     }
 }
 
@@ -64,14 +77,45 @@ struct LogFocusGoal: View {
     }
 }
 
-extension View {
-    func logEventGutter(_ log: DailyLogEntry) -> some View {
-        padding(.leading, 8)
-            .overlay(alignment: .leading) {
-                if log.isFocusMarker {
-                    Rectangle().fill(LogEventStyle.color(log).opacity(0.25)).frame(width: 1)
-                        .allowsHitTesting(false)
+struct LogTimelineRail: Shape {
+    let hasPrevious: Bool
+    let hasNext: Bool
+    let nodeY: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: 8, y: hasPrevious ? rect.minY : nodeY))
+        path.addLine(to: CGPoint(x: 8, y: hasNext ? rect.maxY : nodeY))
+        return path
+    }
+}
+
+struct LogTimelineRow<Content: View>: View {
+    @Environment(\.typography) private var typography
+    let log: DailyLogEntry
+    let hasPrevious: Bool
+    let hasNext: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(LogEventStyle.time(log.createdAt))
+                .font(.system(size: typography.pt(11), design: .monospaced))
+                .foregroundStyle(Palette.muted).padding(.top, 3).fixedSize()
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 24).padding(.bottom, 14)
+                .overlay(alignment: .leading) {
+                    LogTimelineRail(hasPrevious: hasPrevious, hasNext: hasNext, nodeY: typography.pt(9))
+                        .stroke(Palette.line, lineWidth: 1)
+                        .overlay(alignment: .topLeading) {
+                            Circle().fill(LogEventStyle.color(log))
+                                .frame(width: log.isFocusMarker ? 7 : 5, height: log.isFocusMarker ? 7 : 5)
+                                .position(x: 8, y: typography.pt(9))
+                        }
+                        .frame(width: 16).allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
-            }
+        }
     }
 }

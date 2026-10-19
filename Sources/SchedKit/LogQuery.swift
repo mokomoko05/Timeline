@@ -58,6 +58,7 @@ public struct LogFilter: Equatable {
     public var kinds: Set<DailyLogKind> = []
     public var grep: String?
     public var includeFocus = false
+    public var notebookOnly = false
     public var onlyWithImages = false
     /// 只要最后 N 条（时间最近的）。
     public var last: Int?
@@ -76,6 +77,7 @@ public enum LogQuery {
         let tagged = filter.tag.map { tag in Set(store.logs(forTag: tag).map(\.id)) }
         var rows: [LogRow] = store.allLogs(includeFocus: filter.includeFocus).compactMap { item in
             let log = item.log
+            if filter.notebookOnly && !log.isNotebookEntry { return nil }
             if let tagged, !tagged.contains(log.id) { return nil }
             let live = log.taskID.flatMap { store.locate($0) }
             let number = live?.task.number ?? log.taskNumber

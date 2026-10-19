@@ -47,9 +47,9 @@ public enum LogRenderer {
         let label = row.marker.padding(toLength: 6, withPad: " ", startingAt: 0)
         switch row.marker {
         case "FOCUS": return style.blue(label)
-        case "NOTE": return style.gray(label)
-        case "REVIEW": return style.green(label)
-        case "END": return style.yellow(label)
+        case "NOTE": return style.cyan(label)
+        case "REVIEW": return style.magenta(label)
+        case "END": return style.green(label)
         default: return kindLabel(row.kind, style: style)
         }
     }

@@ -46,7 +46,7 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
     public var images: [String]
     /// 图片名 → 识别出的文字。没有该键表示尚未识别，空字符串表示识别过但没有文字。
     public var imageText: [String: String]
-    /// 专注计时产生的开始、结束记录；带事件类型的新记录也进入笔记视图。
+    /// 专注计时产生的开始、结束记录，仅在日志中显示。
     public var focus: Bool
     public var focusEvent: FocusLogEvent?
     public var focusGoal: String?
@@ -144,7 +144,9 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
     }
 
     public var isFocusMarker: Bool { focusEvent != nil || ["FOCUS", "REVIEW", "END"].contains(focusMarker) }
-    public var isNotebookEntry: Bool { !focus || focusEvent != nil }
+    public var isNotebookEntry: Bool { !focus && !["FOCUS", "REVIEW", "END"].contains(focusMarker) }
+    public var showsTimelineContext: Bool { !isFocusMarker || focusMarker == "FOCUS" }
+    public var showsTimelineTags: Bool { !isFocusMarker }
     public var searchableText: String { [text, focusGoal ?? "", recognizedText].joined(separator: "\n") }
 }
 
