@@ -59,7 +59,7 @@ final class TaskPriorityTests: XCTestCase {
         XCTAssertEqual(store.locate(task.id)?.task.priority, .low)
         store.updateTodo(task.id, scheduledDate: date(18), dueDate: date(18, 15), dueHasTime: true,
                          reminderMinutes: 30, repeatRule: .daily, priority: .high)
-        store.toggleTodo(task.id, on: date(18))
+        store.toggleTodo(task.id, on: date(18), now: date(18, 16))
         let next = try XCTUnwrap(store.tasks().first { !$0.task.completed })
         XCTAssertEqual(next.task.priority, .high)
         XCTAssertEqual(next.task.dueDate, date(19, 15))

@@ -679,3 +679,9 @@
 
 "%@ · 点击切换" = "%@ · Click to change";
 "点击切换优先级" = "Click to change priority";
+
+"阶段反馈" = "Session reflection";
+"完成了什么？下一步是什么？" = "What did you finish? What's next?";
+"跳过" = "Skip";
+"保存并结束" = "Save & finish";
+"计时结束" = "Timer finished";

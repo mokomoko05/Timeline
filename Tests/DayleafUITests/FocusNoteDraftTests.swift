@@ -50,6 +50,21 @@ final class FocusNoteDraftTests: XCTestCase {
         XCTAssertNil(draft.error)
     }
 
+    func testReflectionLinksToItsTaskWhilePausedAndTreatsCommandsAsFeedbackText() throws {
+        let (session, store, task, _) = try fixture()
+        session.tick(now: Date().addingTimeInterval(3600))
+        XCTAssertTrue(session.needsReflection)
+        let draft = FocusNoteDraft()
+        draft.text = "/done Read the introduction; next: methods"
+        XCTAssertTrue(draft.save(session: session, reflection: true))
+        let log = try XCTUnwrap(store.allLogs().first?.log)
+        XCTAssertEqual(log.taskID, task.id)
+        XCTAssertTrue(log.text.contains("阶段反馈"))
+        XCTAssertTrue(log.text.contains("/done Read the introduction"))
+        XCTAssertFalse(store.locate(task.id)!.task.completed)
+        XCTAssertTrue(draft.text.isEmpty)
+    }
+
     func testDiskFailureKeepsDraftAndRetryPersistsExactlyOneEntry() throws {
         let (session, store, task, directory) = try fixture()
         let draft = FocusNoteDraft()
@@ -97,6 +112,24 @@ final class FocusNoteDraftTests: XCTestCase {
         XCTAssertEqual(draft.images, ["draft.png"])
         XCTAssertEqual(draft.link, task.id)
         XCTAssertEqual(draft.tags, ["reading"])
+    }
+
+    func testFailedReflectionSaveKeepsSessionAndRetriesWithoutDuplicatingFeedback() throws {
+        let (session, store, task, directory) = try fixture()
+        session.tick(now: Date().addingTimeInterval(3600))
+        let draft = FocusNoteDraft()
+        draft.text = "Finished methods; next: experiments"
+        try FileManager.default.removeItem(at: directory)
+        try Data("blocking file".utf8).write(to: directory)
+        XCTAssertFalse(draft.save(session: session, reflection: true))
+        XCTAssertNotNil(draft.pendingEntryID)
+        XCTAssertTrue(session.needsReflection)
+        XCTAssertFalse(draft.text.isEmpty)
+        try FileManager.default.removeItem(at: directory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        XCTAssertTrue(draft.save(session: session, reflection: true))
+        XCTAssertEqual(store.allLogs().count, 1)
+        XCTAssertEqual(JournalStore(directory: directory).allLogs().first?.log.taskID, task.id)
     }
 
     func testPausedNoteKeepsInlineReferenceAsTextWithoutTaskOrTags() throws {

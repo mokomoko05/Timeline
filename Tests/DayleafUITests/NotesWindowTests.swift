@@ -7,6 +7,40 @@ import DayleafCore
 final class NotesWindowTests: XCTestCase {
     private static var keepAlive: [AnyObject] = []
 
+    func testJournalReusedWindowRendersTheRequestedDateAfterNotesAndOtherDates() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let first = JournalDates.calendar.startOfDay(for: Date())
+        let second = JournalDates.calendar.date(byAdding: .day, value: -5, to: first)!
+        _ = try store.quickLog("Journal marker FIRST", linkDefault: false, on: first)
+        _ = try store.quickLog("Journal marker SECOND", linkDefault: false, on: second)
+        let controller = NotesWindowController()
+        Self.keepAlive.append(controller)
+        defer { controller.close() }
+        controller.show(store: store, taskID: nil, reveal: { _ in }, openDay: { _ in })
+        let window = try XCTUnwrap(controller.window)
+
+        func renderedSources(_ view: NSView) -> [String] {
+            if let text = view as? InteractiveTaskText, let source = text.source { return [source] }
+            return view.subviews.flatMap(renderedSources)
+        }
+        for (date, marker) in [(first, "FIRST"), (second, "SECOND"), (first, "FIRST")] {
+            controller.showJournal(store: store, date: date.addingTimeInterval(3600))
+            try await Task.sleep(nanoseconds: 80_000_000)
+            window.contentView?.layoutSubtreeIfNeeded()
+            XCTAssertTrue(controller.window === window)
+            XCTAssertEqual(controller.workspace.mode, .journal)
+            XCTAssertEqual(controller.journalDate, date)
+            let sources = renderedSources(try XCTUnwrap(window.contentView))
+            XCTAssertTrue(sources.contains("Journal marker \(marker)"), "Requested day must reach the actual rendered journal: \(sources)")
+        }
+        controller.setDate(second)
+        try await Task.sleep(nanoseconds: 80_000_000)
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertTrue(renderedSources(try XCTUnwrap(window.contentView)).contains("Journal marker SECOND"))
+    }
+
     func testNotesIsAnIndependentResizableWindowThatHidingTheMainWindowDoesNotTouch() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }

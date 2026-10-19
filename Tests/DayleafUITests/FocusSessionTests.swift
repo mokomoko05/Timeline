@@ -89,7 +89,7 @@ final class FocusSessionTests: XCTestCase {
     func testClosingTheFocusedTaskStopsTheTimerWithAReason() async throws {
         for (close, reason) in [("完成", "任务已完成"), ("放弃", "任务已放弃"), ("删除", "任务已删除")] {
             let (session, store, task) = try makeSession()
-            let start = JournalDates.calendar.date(bySettingHour: 12, minute: 0, second: 0, of: Date())!
+            let start = Date().addingTimeInterval(-2)
             session.start(task: task, url: try XCTUnwrap(FocusSession.link(in: task.task.title)), now: start)
             switch close {
             case "完成": store.toggleTodo(task.id, on: task.date)
@@ -123,7 +123,7 @@ final class FocusSessionTests: XCTestCase {
         session.openLink = { opened.append($0) }
         var probed = 0
         session.activateExistingTab = { _ in probed += 1; return false }
-        let start = JournalDates.calendar.date(bySettingHour: 12, minute: 0, second: 0, of: Date())!
+        let start = Date()
         var changes: [Bool] = []
         session.onActiveChange = { changes.append($0) }
 
@@ -137,7 +137,7 @@ final class FocusSessionTests: XCTestCase {
         XCTAssertEqual(store.focusTaskID, plain.id, "专注期间的日志照常关联到它")
 
         // 不检测：计时器每秒走一次，但没有链接就不会去探测前台，所以不会因为「离开」而自动结束。
-        // （开始时间在过去的 12:00，计时器据此算出的 elapsed 很大，说明它确实在走。）
+        // 使用真实当前时间，避免上午运行时开始时间落在未来。
         try? await Task.sleep(nanoseconds: 2_300_000_000)
         XCTAssertNotNil(session.active, "没有链接的专注只能手动结束")
         XCTAssertGreaterThan(session.elapsed, 0.5, "秒表照常走")
@@ -355,6 +355,47 @@ final class FocusSessionTests: XCTestCase {
         XCTAssertEqual(store.locate(task.id)?.task.focusSeconds ?? 0, 180, accuracy: 0.01)
     }
 
+    func testCountdownRequestsReflectionOnceAndDoesNotCountTimeSpentReflecting() throws {
+        let (session, store, task) = try makeSession()
+        let start = Date()
+        var prompts = 0
+        session.onCountdownEnd = { prompts += 1 }
+        session.start(task: task, url: nil, plannedSeconds: 60, now: start)
+        session.tick(now: start.addingTimeInterval(59))
+        XCTAssertFalse(session.needsReflection)
+        session.tick(now: start.addingTimeInterval(90))
+        XCTAssertTrue(session.needsReflection)
+        XCTAssertTrue(session.isPaused)
+        XCTAssertEqual(session.elapsed, 60)
+        session.tick(now: start.addingTimeInterval(600))
+        XCTAssertEqual(prompts, 1)
+        session.resume(now: start.addingTimeInterval(600))
+        XCTAssertTrue(session.isPaused)
+        session.stop(reason: "计时结束", now: start.addingTimeInterval(600))
+        XCTAssertEqual(store.locate(task.id)?.task.focusSeconds, 60)
+        XCTAssertFalse(session.needsReflection)
+    }
+
+    func testExtensionAfterCountdownResumesAndPromptsAtTheNextEnd() throws {
+        let (session, _, task) = try makeSession()
+        let start = Date()
+        session.start(task: task, url: nil, plannedSeconds: 60, now: start)
+        session.pause(now: start.addingTimeInterval(30))
+        session.tick(now: start.addingTimeInterval(600))
+        XCTAssertFalse(session.needsReflection)
+        session.resume(now: start.addingTimeInterval(600))
+        session.tick(now: start.addingTimeInterval(630))
+        XCTAssertTrue(session.needsReflection)
+        session.extend(by: 300, now: start.addingTimeInterval(700))
+        XCTAssertFalse(session.isPaused)
+        XCTAssertFalse(session.needsReflection)
+        XCTAssertEqual(session.remainingSeconds, 300)
+        session.tick(now: start.addingTimeInterval(1000))
+        XCTAssertTrue(session.needsReflection)
+        XCTAssertEqual(session.elapsed, 360)
+        session.stop(reason: "test", now: start.addingTimeInterval(1000))
+    }
+
     func testCountdownDialAndDigitsStayInSyncAcrossPauseExtensionAndOvertime() throws {
         let (session, _, task) = try makeSession()
         let start = Date()
@@ -537,6 +578,11 @@ final class FocusPanelStyleTests: XCTestCase {
         defaults.set(true, forKey: Prefs.focusPanelHidden)
         controller.refresh()
         XCTAssertFalse(controller.showsMenuBarTimer, "隐藏时菜单栏里也没有")
+        let end = try XCTUnwrap(session.active).started.addingTimeInterval(try XCTUnwrap(session.active).plannedSeconds + 1)
+        session.tick(now: end)
+        XCTAssertTrue(session.needsReflection)
+        XCTAssertTrue(controller.isPanelVisible, "到点后重新显示隐藏的面板以填写反馈")
+        XCTAssertFalse(defaults.bool(forKey: Prefs.focusPanelHidden))
         defaults.set(false, forKey: Prefs.focusPanelHidden)
         defaults.set(FocusPanelStyle.dot.rawValue, forKey: Prefs.focusPanelStyle)
         controller.refresh()
@@ -577,6 +623,13 @@ final class FocusPanelStyleTests: XCTestCase {
             XCTAssertLessThanOrEqual(host.fittingSize.height, size.height + 1)
             XCTAssertGreaterThan(host.fittingSize.height, 6)
         }
+        let current = try XCTUnwrap(session.active)
+        session.tick(now: current.started.addingTimeInterval(current.plannedSeconds + 1))
+        let reflection = NSHostingView(rootView: FocusPanelView(session: session))
+        reflection.setFrameSize(NSSize(width: 340, height: 158))
+        reflection.layoutSubtreeIfNeeded()
+        XCTAssertEqual(reflection.fittingSize.width, 340, accuracy: 1)
+        XCTAssertEqual(reflection.fittingSize.height, 158, accuracy: 1)
         UserDefaults.standard.removeObject(forKey: Prefs.focusPanelStyle)
     }
 }

@@ -14,8 +14,7 @@ extension EnvironmentValues {
     }
 }
 
-/// 一次专注计时：打开任务里的链接并开始计时，日志记录开始时间；
-/// 之后每秒检查前台是否还是目标页面，离开就停止计时并在日志里记下用时和原因。
+/// 专注计时允许自由切换页面；到点暂停，等待阶段反馈或延长。
 @MainActor
 final class FocusSession: ObservableObject {
     struct Active: Equatable {
@@ -25,7 +24,7 @@ final class FocusSession: ObservableObject {
         /// 任务里的链接；没有链接的任务为 nil：只计时，不打开页面、也不检测是否离开。
         let url: URL?
         let started: Date
-        /// 本轮计划时长；计时不会在到点时强制结束，只用于显示剩余时间。
+        /// 本轮计划时长；到点暂停并提示阶段反馈。
         let plannedSeconds: TimeInterval
         /// 本轮专注目标（可为空）。
         let goal: String
@@ -36,6 +35,8 @@ final class FocusSession: ObservableObject {
     @Published private(set) var active: Active?
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var isPaused = false
+    @Published private(set) var needsReflection = false
+    var onCountdownEnd: (() -> Void)?
     var remainingSeconds: TimeInterval {
         max(0, (active?.plannedSeconds ?? 0) - elapsed)
     }
@@ -102,6 +103,7 @@ final class FocusSession: ObservableObject {
                         started: now, plannedSeconds: max(60, plannedSeconds ?? TimeInterval(Prefs.focusDurationMinutes()) * 60), goal: goal.trimmingCharacters(in: .whitespacesAndNewlines))
         elapsed = 0
         isPaused = false
+        needsReflection = false
         pausedAt = nil
         pausedSeconds = 0
         store.setFocusPaused(false)
@@ -147,6 +149,7 @@ final class FocusSession: ObservableObject {
         active = nil
         elapsed = 0
         isPaused = false
+        needsReflection = false
         pausedAt = nil
         pausedSeconds = 0
         baseline = nil
@@ -164,7 +167,7 @@ final class FocusSession: ObservableObject {
 
     /// 继续本轮专注，并扣除暂停期间的时间。
     func resume(now: Date = Date()) {
-        guard active != nil, isPaused else { return }
+        guard active != nil, isPaused, !needsReflection else { return }
         if let pausedAt {
             pausedSeconds += max(0, now.timeIntervalSince(pausedAt))
         }
@@ -185,11 +188,15 @@ final class FocusSession: ObservableObject {
     }
 
     /// 延长当前专注轮次；不改变已经累计的时间。
-    func extend(by seconds: TimeInterval) {
+    func extend(by seconds: TimeInterval, now: Date = Date()) {
         guard let current = active, seconds > 0 else { return }
         active = Active(taskID: current.taskID, number: current.number, title: current.title, url: current.url,
                         started: current.started, plannedSeconds: current.plannedSeconds + seconds, goal: current.goal,
                         startLogID: current.startLogID)
+        if needsReflection {
+            needsReflection = false
+            resume(now: now)
+        }
     }
 
     static func duration(_ seconds: TimeInterval) -> String {
@@ -227,10 +234,20 @@ final class FocusSession: ObservableObject {
         return false
     }
 
-    private func tick() {
-        guard active != nil else { return }
-        if stopIfTaskClosed() { return }
-        if !isPaused { elapsed = effectiveElapsed(at: Date()) }
+    func tick(now: Date = Date()) {
+        guard let current = active else { return }
+        if stopIfTaskClosed(now: now) { return }
+        if !isPaused {
+            let seconds = effectiveElapsed(at: now)
+            if seconds >= current.plannedSeconds {
+                // 睡眠唤醒、主线程延迟也只累计到计划终点。
+                pause(now: now.addingTimeInterval(-(seconds - current.plannedSeconds)))
+                needsReflection = true
+                onCountdownEnd?()
+            } else {
+                elapsed = seconds
+            }
+        }
         // 专注期间允许自由查资料、切换网页、终端和笔记窗口；链接只负责开始时打开，不再检测前台页面。
     }
 
@@ -464,6 +481,13 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
             self?.workspaceShown = active
             self?.refresh()
         }
+        session.onCountdownEnd = { [weak self] in
+            guard let self else { return }
+            workspaceShown = true
+            defaults.set(false, forKey: Prefs.focusPanelHidden)
+            refresh()
+            if !Headless.active { NSSound(named: "Glass")?.play() }
+        }
         // 设置里改了样式、按了隐藏快捷键，立刻生效。
         observers.append(NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
@@ -605,8 +629,9 @@ final class FocusNoteDraft: ObservableObject {
     @Published private(set) var error: String?
     @Published private(set) var pendingEntryID: UUID?
 
-    func save(session: FocusSession) {
-        guard let store = session.store else { return }
+    @discardableResult
+    func save(session: FocusSession, reflection: Bool = false) -> Bool {
+        guard let store = session.store else { return false }
         if let pendingEntryID, store.allLogs().contains(where: { $0.log.id == pendingEntryID }) {
             store.save()
             if store.hasPendingSave {
@@ -615,29 +640,32 @@ final class FocusNoteDraft: ObservableObject {
                 clear()
                 ImageIndexer.run(store: store)
             }
-            return
+            return !store.hasPendingSave
         }
         pendingEntryID = nil
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (!body.isEmpty || !images.isEmpty), let active = session.active else { return }
+        guard (!body.isEmpty || !images.isEmpty), let active = session.active else { return false }
         do {
-            let result = try store.quickLogEntry(body, images: images,
-                                                taskID: session.isPaused ? nil : (link ?? active.taskID),
+            let text = reflection ? "/note " + AppLocalized("阶段反馈") + " · " + body : body
+            let result = try store.quickLogEntry(text, images: images,
+                                                taskID: reflection ? active.taskID : (session.isPaused ? nil : (link ?? active.taskID)),
                                                 linkDefault: false, tags: session.isPaused ? [] : tags,
-                                                allowInlineTaskReference: !session.isPaused, on: Date())
+                                                allowInlineTaskReference: !reflection && !session.isPaused, on: Date())
             guard let entry = result.entry else {
                 error = AppLocalized("这里只能写笔记，请使用普通文字或 /note /done /block /plan。")
-                return
+                return false
             }
             if store.hasPendingSave {
                 pendingEntryID = entry.id
                 error = AppLocalized("未能写入磁盘，输入已保留。请检查磁盘空间或权限后再次发送以重试。")
-                return
+                return false
             }
             clear()
             ImageIndexer.run(store: store)
+            return true
         } catch {
             self.error = AppErrorDescription(error)
+            return false
         }
     }
 
@@ -690,6 +718,7 @@ struct FocusPanelView: View {
     @State private var focused = true
     @State private var showingSaveError = false
     @StateObject private var draft = FocusNoteDraft()
+    @StateObject private var reflectionDraft = FocusNoteDraft()
     @StateObject private var mention = MentionState()
 
     init(session: FocusSession, close: @escaping () -> Void = {}) {
@@ -713,7 +742,9 @@ struct FocusPanelView: View {
         VStack(alignment: .leading, spacing: 0) {
             Capsule().fill(Palette.line).frame(width: 36, height: 4).frame(maxWidth: .infinity)
                 .padding(.bottom, 12)
-            if let active = session.active { activeView(active) } else { pickerView }
+            if let active = session.active {
+                if session.needsReflection { reflectionView(active) } else { activeView(active) }
+            } else { pickerView }
         }
         .padding(11)
         .frame(width: 340, height: panelHeight, alignment: .topLeading)
@@ -730,6 +761,9 @@ struct FocusPanelView: View {
         }
         .onChange(of: session.active?.taskID) { id in
             if id == nil { minutes = String(Prefs.focusDurationMinutes()) }
+        }
+        .onChange(of: session.needsReflection) { needsReflection in
+            if needsReflection { focused = true }
         }
     }
 
@@ -975,6 +1009,47 @@ struct FocusPanelView: View {
             .frame(height: 30)
         }
         .frame(height: 120, alignment: .top)
+    }
+
+    private func reflectionView(_ active: FocusSession.Active) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle").foregroundStyle(Palette.success)
+                Text("阶段反馈").font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Text(FocusSession.brief(session.elapsed)).font(.system(size: 11)).foregroundStyle(Palette.muted)
+            }.frame(height: 22)
+            Text(active.goal.isEmpty ? active.title : active.goal)
+                .font(.system(size: 10)).foregroundStyle(Palette.muted).lineLimit(1)
+                .frame(height: 14)
+            TaskInput(text: $reflectionDraft.text, focused: $focused,
+                      placeholder: "完成了什么？下一步是什么？", fontSize: 12,
+                      submit: saveReflection, cancel: close, minHeight: 34, maxLines: 2)
+                .disabled(reflectionDraft.pendingEntryID != nil)
+                .padding(.horizontal, 9).padding(.vertical, 4).frame(height: 42)
+                .background(Palette.background, in: RoundedRectangle(cornerRadius: 9))
+            HStack(spacing: 3) {
+                if let error = reflectionDraft.error {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Palette.deadline)
+                        .help(error).accessibilityLabel(error)
+                }
+                Button("跳过") { session.stop(reason: "计时结束") }
+                    .disabled(reflectionDraft.pendingEntryID != nil)
+                Spacer(minLength: 0)
+                Button("+5min") { session.extend(by: 300) }
+                Button("保存并结束", action: saveReflection)
+                    .foregroundStyle(Palette.accent)
+                    .disabled(reflectionDraft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .buttonStyle(HitAreaButtonStyle(compact: true, pressedScale: 0.98))
+            .font(.system(size: 11, weight: .medium)).frame(height: 26)
+        }.frame(height: 120, alignment: .top)
+    }
+
+    private func saveReflection() {
+        if reflectionDraft.save(session: session, reflection: true) {
+            session.stop(reason: "计时结束")
+        }
     }
 
     private var positiveMinutes: Double? { Double(minutes.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isFinite && $0 > 0 && $0 <= Double(Int.max / 60) ? $0 : nil } }

@@ -17,8 +17,9 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
     private(set) var window: NSWindow?
     /// 上次停留的位置，存进偏好；窗口关闭后视图和里面没发送的草稿也留着。
     let nav: NotesNavigation
-    /// 合并窗口当前的工作区；日志仍复用原有 DailyLogView，保留编辑、复盘和图片能力。
-    private(set) var journalDate = JournalDates.calendar.startOfDay(for: Date())
+    /// 合并窗口与页面共用当前模式和日期。
+    let workspace = NotesWorkspaceNavigation()
+    var journalDate: Date { workspace.date }
 
     init(nav: NotesNavigation? = nil) {
         self.nav = nav ?? NotesNavigation(defaults: .standard)
@@ -36,10 +37,10 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
         self.window = window
         if let taskID { nav.open(task: taskID) }
         if let tag { nav.open(tag: tag) }
-        let view = UnifiedNotesView(store: store, mode: .notes, date: journalDate, nav: nav,
+        workspace.open(.notes)
+        let view = UnifiedNotesView(store: store, workspace: workspace, nav: nav,
                                     close: { [weak self] in self?.close() },
-                                    reveal: reveal, openDay: openDay,
-                                    selectDate: { [weak self] date in self?.journalDate = date })
+                                    reveal: reveal, openDay: openDay)
         // 不再给视图换新的 id：保持同一个视图，里面的草稿、编辑状态和滚动位置都留着。
         if let host = window.contentViewController as? NSHostingController<AnyView> {
             host.rootView = AnyView(LocalizedRoot { view })
@@ -52,18 +53,21 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
                      reveal: @escaping (UUID) -> Void = { _ in }, openDay: @escaping (Date) -> Void = { _ in }) {
         let window = self.window ?? makeWindow()
         self.window = window
-        journalDate = JournalDates.calendar.startOfDay(for: date)
-        let view = UnifiedNotesView(store: store, mode: .journal, date: journalDate, nav: nav,
+        NotificationCenter.default.post(name: .dayleafCommitEditing, object: nil)
+        workspace.open(.journal, date: date)
+        let view = UnifiedNotesView(store: store, workspace: workspace, nav: nav,
                                     close: { [weak self] in self?.close() },
-                                    reveal: reveal, openDay: openDay,
-                                    selectDate: { [weak self] date in self?.journalDate = date })
+                                    reveal: reveal, openDay: openDay)
         if let host = window.contentViewController as? NSHostingController<AnyView> {
             host.rootView = AnyView(LocalizedRoot { view })
         }
         window.makeKeyAndOrderFront(nil)
     }
 
-    func setDate(_ date: Date) { journalDate = JournalDates.calendar.startOfDay(for: date) }
+    func setDate(_ date: Date) {
+        NotificationCenter.default.post(name: .dayleafCommitEditing, object: nil)
+        workspace.open(.journal, date: date)
+    }
     func shift(_ days: Int) { setDate(JournalDates.calendar.date(byAdding: .day, value: days, to: journalDate) ?? journalDate) }
     var isKey: Bool { window?.isKeyWindow == true }
 
@@ -110,35 +114,35 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
 
 enum UnifiedNotesMode { case notes, journal }
 
-/// 笔记与日记的统一工作区：左上角切换模式，日记模式左侧按日期导航。
+@MainActor
+final class NotesWorkspaceNavigation: ObservableObject {
+    @Published var mode: UnifiedNotesMode = .notes
+    @Published var date = JournalDates.calendar.startOfDay(for: Date())
+    @Published private(set) var requestID = 0
+
+    func open(_ mode: UnifiedNotesMode, date: Date? = nil) {
+        self.mode = mode
+        if let date { self.date = JournalDates.calendar.startOfDay(for: date) }
+        requestID += 1
+    }
+}
+
+/// 窗口与页面共用导航状态，复用 hosting view 时也立即响应外部日期跳转。
 struct UnifiedNotesView: View {
     @ObservedObject var store: JournalStore
-    let initialMode: UnifiedNotesMode
-    let date: Date
+    @ObservedObject var workspace: NotesWorkspaceNavigation
     let nav: NotesNavigation
     let close: () -> Void
     let reveal: (UUID) -> Void
     let openDay: (Date) -> Void
-    let selectDate: (Date) -> Void
-    @State private var selectedDate: Date
-    @State private var currentMode: UnifiedNotesMode
     @StateObject private var interaction = WorkspaceInteraction()
     @StateObject private var toast = ToastCenter()
-
-    init(store: JournalStore, mode: UnifiedNotesMode, date: Date, nav: NotesNavigation,
-         close: @escaping () -> Void, reveal: @escaping (UUID) -> Void,
-         openDay: @escaping (Date) -> Void, selectDate: @escaping (Date) -> Void) {
-        self.store = store; self.initialMode = mode; self.date = date; self.nav = nav
-        self.close = close; self.reveal = reveal; self.openDay = openDay; self.selectDate = selectDate
-        _selectedDate = State(initialValue: date)
-        _currentMode = State(initialValue: mode)
-    }
 
     var body: some View {
         VStack(spacing: 0) {
             modeBar
             Divider()
-            if currentMode == .notes {
+            if workspace.mode == .notes {
                 NotesView(store: store, nav: nav, close: close, reveal: reveal, openDay: openDay)
             } else {
                 journalBody
@@ -148,13 +152,12 @@ struct UnifiedNotesView: View {
         .foregroundStyle(Palette.ink)
         .environmentObject(interaction)
         .environmentObject(toast)
-        .onChange(of: selectedDate) { selectDate($0) }
     }
 
     private var modeBar: some View {
         HStack(spacing: 8) {
-            Image(systemName: currentMode == .notes ? "note.text" : "book.pages").foregroundStyle(Palette.accent)
-            Picker("", selection: Binding(get: { currentMode == .notes ? 0 : 1 }, set: { currentMode = $0 == 0 ? .notes : .journal })) {
+            Image(systemName: workspace.mode == .notes ? "note.text" : "book.pages").foregroundStyle(Palette.accent)
+            Picker("", selection: Binding(get: { workspace.mode == .notes ? 0 : 1 }, set: { workspace.mode = $0 == 0 ? .notes : .journal })) {
                 Text("笔记").tag(0)
                 Text("日记").tag(1)
             }
@@ -166,14 +169,8 @@ struct UnifiedNotesView: View {
         .padding(.horizontal, 16).padding(.top, 5).padding(.bottom, 6)
     }
 
-    private var journalDates: [Date] {
-        var dates = store.days.keys.compactMap(JournalDates.date(for:)).filter { !store.entry(for: $0).logs.isEmpty }
-        if !dates.contains(where: { JournalDates.calendar.isDate($0, inSameDayAs: selectedDate) }) { dates.append(selectedDate) }
-        return dates.sorted(by: >)
-    }
-
     private var journalBody: some View {
-        UnifiedJournalView(store: store, date: $selectedDate)
+        UnifiedJournalView(store: store, date: $workspace.date, navigationRequest: workspace.requestID)
     }
 
 }
@@ -183,10 +180,12 @@ private struct UnifiedJournalView: View {
     @Environment(\.locale) private var locale
     @ObservedObject var store: JournalStore
     @Binding var date: Date
+    let navigationRequest: Int
     @StateObject private var mention = MentionState()
     @State private var focused = false
     @State private var error: String?
     @State private var editingID: UUID?
+    @State private var editingDate: Date?
     @State private var editText = ""
     @State private var editFocused = false
     /// 日记侧栏和笔记侧栏共用同一套搜索入口；日期、星期和日志正文都可检索。
@@ -223,7 +222,8 @@ private struct UnifiedJournalView: View {
         .background(Palette.background)
         .foregroundStyle(Palette.ink)
         .onAppear { configureMention() }
-        .onChange(of: date) { _ in configureMention(); editingID = nil }
+        .onChange(of: date) { _ in saveEdit(); configureMention() }
+        .onChange(of: navigationRequest) { _ in query = "" }
         .onReceive(NotificationCenter.default.publisher(for: .dayleafCommitEditing)) { _ in saveEdit() }
         .onDisappear { saveEdit() }
     }
@@ -252,12 +252,17 @@ private struct UnifiedJournalView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.horizontal, 8)
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 4) {
-                        Text("日期（\(allDates.count) 天）").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)
-                            .padding(.horizontal, 10).padding(.top, 6)
-                        ForEach(dates, id: \.self) { item in dateRow(item) }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            Text("日期（\(allDates.count) 天）").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)
+                                .padding(.horizontal, 10).padding(.top, 6)
+                            ForEach(dates, id: \.self) { item in dateRow(item).id(item) }
+                        }
                     }
+                    .onAppear { proxy.scrollTo(date, anchor: .center) }
+                    .onChange(of: date) { proxy.scrollTo($0, anchor: .center) }
+                    .onChange(of: navigationRequest) { _ in proxy.scrollTo(date, anchor: .center) }
                 }
             }
         }
@@ -309,6 +314,7 @@ private struct UnifiedJournalView: View {
                 }
                 .padding(20)
             }
+            .id(JournalDates.key(date))
             .contentShape(Rectangle())
             .onTapGesture { if editingID != nil { NSApp.keyWindow?.makeFirstResponder(nil) } }
             Divider()
@@ -442,10 +448,12 @@ private struct UnifiedJournalView: View {
         } catch let issue { error = AppErrorDescription(issue) }
     }
 
-    private func beginEdit(_ log: DailyLogEntry) { saveEdit(); editingID = log.id; editText = log.text; editFocused = true }
+    private func beginEdit(_ log: DailyLogEntry) { saveEdit(); editingID = log.id; editingDate = date; editText = log.text; editFocused = true }
     private func saveEdit() {
         guard let id = editingID else { return }
-        editingID = nil; editFocused = false; store.updateLog(id, text: editText, on: date)
+        editingID = nil; editFocused = false
+        store.updateLog(id, text: editText, on: editingDate ?? date)
+        editingDate = nil
     }
 
     private func kindColor(_ kind: DailyLogKind) -> Color {
