@@ -13,62 +13,105 @@ struct MetadataSymbol: View {
     }
 }
 
-/// 草稿和已保存条目共用的标签选择器；点选即时生效，点击外部关闭。
+/// 沿用原来的圆角标签多选浮窗；保存后才写回，取消不改变草稿或条目。
 struct TagSelectionPopover: View {
     @ObservedObject var store: JournalStore
     @Binding var tags: [String]
-    @State private var query = ""
-    @FocusState private var searching: Bool
+    var title: String?
+    @Environment(\.dismiss) private var dismiss
+    @State private var selected: [String]
+    @State private var added: [String] = []
+    @State private var draft = ""
+    @State private var message: String?
+    @FocusState private var typing: Bool
 
-    private var candidates: [TagCandidate] { store.tagCandidates(query: query, limit: 100) }
-    private var choices: [TagCandidate] {
-        let candidates = candidates
-        let missing = tags.filter { tag in
-            !candidates.contains { TagText.key($0.name) == TagText.key(tag) }
-                && (query.isEmpty || tag.localizedStandardContains(query))
-        }.map { TagCandidate(name: $0, isNew: false, taskCount: 0, noteCount: 0) }
-        return missing + candidates
+    init(store: JournalStore, tags: Binding<[String]>, title: String? = nil) {
+        self.store = store
+        self._tags = tags
+        self.title = title
+        _selected = State(initialValue: tags.wrappedValue)
     }
 
-    private func selected(_ tag: String) -> Bool { tags.contains { TagText.key($0) == TagText.key(tag) } }
+    /// 可选的标签：库里已有的（最近用过的在前）、这个待办自己的，以及刚输入的新标签。
+    private var choices: [String] {
+        TagText.merge(TagText.merge(tags, store.allTags().map(\.name)), added)
+    }
+
+    private func isSelected(_ tag: String) -> Bool { selected.contains { TagText.key($0) == TagText.key(tag) } }
+
     private func toggle(_ tag: String) {
-        if selected(tag) { tags.removeAll { TagText.key($0) == TagText.key(tag) } }
-        else { tags = TagText.merge(tags, [tag]); query = "" }
+        if isSelected(tag) { selected.removeAll { TagText.key($0) == TagText.key(tag) } } else { selected.append(tag) }
+        message = nil
+    }
+
+    @discardableResult
+    private func commitDraft() -> Bool {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return true }
+        let tags = TagText.parseList(text)
+        guard !tags.isEmpty else {
+            message = "标签不能含空格，也不能是纯数字（#3 表示任务编号）"
+            return false
+        }
+        for tag in tags {
+            // 和已有标签只差大小写时，沿用已有写法。
+            let existing = choices.first { TagText.key($0) == TagText.key(tag) } ?? tag
+            if !choices.contains(existing) { added.append(existing) }
+            if !isSelected(existing) { selected.append(existing) }
+        }
+        draft = ""
+        message = nil
+        return true
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Text("#").foregroundStyle(Palette.accent)
-                TextField("搜索或创建标签", text: $query).textFieldStyle(.plain).focused($searching)
-                    .onSubmit { if let first = choices.first { toggle(first.name) } }
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("标签").font(.headline)
+                if let title { Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
             }
-            .padding(8).background(Palette.card, in: RoundedRectangle(cornerRadius: 7))
             if choices.isEmpty {
-                Text("还没有标签").font(.caption).foregroundStyle(Palette.muted).padding(8)
+                Text("还没有标签").font(.caption).foregroundStyle(.secondary)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(choices) { candidate in
-                            Button { toggle(candidate.name) } label: {
-                                HStack {
-                                    if candidate.isNew { Text("创建").foregroundStyle(Palette.muted) }
-                                    Text("#" + candidate.name).lineLimit(1)
-                                    Spacer()
-                                    if selected(candidate.name) { Image(systemName: "checkmark").foregroundStyle(Palette.accent) }
-                                }
-                                .font(.system(size: 12)).padding(.horizontal, 8).padding(.vertical, 7)
-                                .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain).raisedOnHover(radius: 6)
-                            .accessibilityValue(Text(selected(candidate.name) ? "已选中" : "未选中"))
+                    FlowLayout(spacing: 6) {
+                        ForEach(choices, id: \.self) { tag in
+                            Button { toggle(tag) } label: { TagChip(name: tag, highlighted: isSelected(tag)) }
+                                .buttonStyle(.plain).raisedOnHover(radius: 7)
+                                .accessibilityLabel("#\(tag)").accessibilityValue(Text(isSelected(tag) ? "已选中" : "未选中"))
+                                .accessibilityAddTraits(.isButton)
                         }
-                    }.padding(3)
-                }.frame(height: min(CGFloat(choices.count) * 32 + 6, 250))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 190)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus").foregroundStyle(Palette.muted)
+                    TextField("新标签…", text: $draft)
+                        .textFieldStyle(.plain).focused($typing).onSubmit { commitDraft() }
+                }
+                .padding(.horizontal, 9).padding(.vertical, 6)
+                .background(Palette.card, in: RoundedRectangle(cornerRadius: 7))
+                if let message { Text(LocalizedStringKey(message)).font(.caption).foregroundStyle(.orange) }
+            }
+            HStack {
+                Text(selected.isEmpty ? AppLocalized("未选标签") : AppLocalizedFormat("已选 %lld 个", selected.count)).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("保存") {
+                    guard commitDraft() else { return }
+                    tags = selected
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+                .disabled(store.isReadOnly)
             }
         }
-        .padding(12).frame(width: 280).disabled(store.isReadOnly)
-        .onAppear { searching = true }
+        .padding(18).frame(width: 360)
+        .disabled(store.isReadOnly)
+        .onAppear { typing = false }
     }
 }
 

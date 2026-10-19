@@ -80,7 +80,7 @@ struct TagPickerView: View {
     var body: some View {
         TagSelectionPopover(store: store, tags: Binding(
             get: { store.locate(task.id)?.task.tags ?? task.tags },
-            set: { store.setTags(task.id, $0) }))
+            set: { store.setTags(task.id, $0) }), title: String(TaskText.rendered(task.title).characters))
     }
 }
 
