@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import DayleafCore
 
@@ -22,6 +23,28 @@ enum DeadlineSelection {
         let value = Int((fraction * (minutes ? 60 : 12)).rounded()) % (minutes ? 60 : 12)
         return minutes ? value : (value == 0 ? 12 : value)
     }
+
+    static func endpoint(date: Date, minutes: Bool) -> CGPoint {
+        let calendar = JournalDates.calendar
+        let minute = Double(calendar.component(.minute, from: date))
+        let value = minutes ? minute / 60 : (Double(calendar.component(.hour, from: date) % 12) + minute / 60) / 12
+        let angle = value * 2 * .pi
+        let length: CGFloat = minutes ? 57 : 36
+        return CGPoint(x: 83 + sin(angle) * length, y: 83 - cos(angle) * length)
+    }
+
+    /// 点中指针或其末端时直接选它；重叠时以更近的末端决定。
+    static func hand(at point: CGPoint, date: Date) -> Bool? {
+        func distance(minutes: Bool) -> CGFloat {
+            let end = endpoint(date: date, minutes: minutes)
+            let vx = end.x - 83, vy = end.y - 83
+            let t = min(1, max(0.3, ((point.x - 83) * vx + (point.y - 83) * vy) / (vx * vx + vy * vy)))
+            return hypot(point.x - 83 - t * vx, point.y - 83 - t * vy)
+        }
+        let hour = distance(minutes: false), minute = distance(minutes: true)
+        guard min(hour, minute) <= 10 else { return nil }
+        return minute < hour
+    }
 }
 
 struct DeadlineSelectionView: View {
@@ -40,8 +63,11 @@ struct DeadlineSelectionView: View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 10) {
                 calendar
-                DatePicker("截止日期", selection: Binding(get: { due }, set: { due = DeadlineSelection.day($0, keepingTime: due) }), displayedComponents: .date)
-                    .datePickerStyle(.field).font(.system(size: 12))
+                HStack {
+                    Text("截止日期").font(.system(size: 12))
+                    DeadlineTextInput(due: $due, component: .day)
+                        .frame(width: 112, height: 24)
+                }
                 Toggle("指定时间", isOn: $timed).toggleStyle(.checkbox).font(.system(size: 12))
             }.frame(width: 224)
             if timed {
@@ -104,9 +130,10 @@ struct DeadlineSelectionView: View {
     }
 }
 
-private struct DeadlineClockPicker: View {
+struct DeadlineClockPicker: View {
     @Binding var due: Date
     @State private var minutes = false
+    @State private var draggedMinutes: Bool?
     private var hour: Int { JournalDates.calendar.component(.hour, from: due) }
     private var minute: Int { JournalDates.calendar.component(.minute, from: due) }
     private var pm: Binding<Bool> {
@@ -115,12 +142,13 @@ private struct DeadlineClockPicker: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            segments(first: "小时", second: "分钟", selection: $minutes)
+            segments(first: "时针", second: "分针", selection: $minutes)
             dial
-            DatePicker("截止时间", selection: $due, displayedComponents: .hourAndMinute)
-                .datePickerStyle(.field).labelsHidden()
-                .environment(\.locale, Locale(identifier: "en_US"))
-                .accessibilityLabel("手动输入时间")
+            HStack(spacing: 3) {
+                DeadlineTextInput(due: $due, component: .hour).frame(width: 42, height: 24)
+                Text(":").foregroundStyle(Palette.muted)
+                DeadlineTextInput(due: $due, component: .minute).frame(width: 42, height: 24)
+            }
             segments(first: "AM", second: "PM", selection: pm)
         }
     }
@@ -128,7 +156,10 @@ private struct DeadlineClockPicker: View {
     private func segments(first: String, second: String, selection: Binding<Bool>) -> some View {
         HStack(spacing: 2) {
             ForEach([false, true], id: \.self) { value in
-                Button { selection.wrappedValue = value } label: {
+                Button {
+                    NSApp.keyWindow?.makeFirstResponder(nil)
+                    selection.wrappedValue = value
+                } label: {
                     Text(LocalizedStringKey(value ? second : first))
                         .font(.system(size: 11, weight: .medium))
                         .frame(maxWidth: .infinity).frame(height: 24)
@@ -143,40 +174,128 @@ private struct DeadlineClockPicker: View {
     private var dial: some View {
         let size: CGFloat = 166
         let radius: CGFloat = 64
-        let value = minutes ? Double(minute) / 60 : Double(hour % 12) / 12
-        let angle = value * 2 * .pi
         return ZStack {
             Circle().fill(Palette.background)
                 .overlay(Circle().strokeBorder(Palette.line, lineWidth: 0.75))
-            Path { path in
-                path.move(to: CGPoint(x: size / 2, y: size / 2))
-                path.addLine(to: CGPoint(x: size / 2 + sin(angle) * (radius - 15), y: size / 2 - cos(angle) * (radius - 15)))
-            }.stroke(Palette.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-            Circle().fill(Palette.accent).frame(width: 5, height: 5)
-            ForEach(0..<12) { index in
-                let tickAngle = Double(index) * .pi / 6
-                let number = minutes ? index * 5 : (index == 0 ? 12 : index)
-                let selected = minutes ? minute == number : hour % 12 == index
-                Button {
-                    if minutes { due = DeadlineSelection.time(due, minute: number) }
-                    else { due = DeadlineSelection.time(due, hour: number); minutes = true }
-                } label: {
-                    Text(minutes ? String(format: "%02d", number) : "\(number)")
-                        .font(.system(size: 12, weight: selected ? .semibold : .regular)).monospacedDigit()
-                        .frame(width: 27, height: 27)
-                        .foregroundStyle(selected ? Color.white : Palette.ink)
-                        .background(selected ? Palette.accent : .clear, in: Circle())
-                }.buttonStyle(.plain)
-                    .position(x: size / 2 + sin(tickAngle) * radius, y: size / 2 - cos(tickAngle) * radius)
+            ForEach(0..<60) { index in
+                let angle = Double(index) * .pi / 30
+                Path { path in
+                    let outer: CGFloat = 79
+                    let inner: CGFloat = index.isMultiple(of: 5) ? 74 : 77
+                    path.move(to: CGPoint(x: 83 + sin(angle) * inner, y: 83 - cos(angle) * inner))
+                    path.addLine(to: CGPoint(x: 83 + sin(angle) * outer, y: 83 - cos(angle) * outer))
+                }.stroke(Palette.muted.opacity(0.45), lineWidth: 0.75)
             }
+            ForEach(0..<12) { index in
+                let angle = Double(index) * .pi / 6
+                Text("\(index == 0 ? 12 : index)")
+                    .font(.system(size: 12)).monospacedDigit()
+                    .position(x: 83 + sin(angle) * radius, y: 83 - cos(angle) * radius)
+            }
+            hand(minutes: false)
+            hand(minutes: true)
+            Circle().fill(Palette.accent).frame(width: 6, height: 6)
         }
         .frame(width: size, height: size)
         .contentShape(Circle())
-        .simultaneousGesture(DragGesture(minimumDistance: 3).onChanged { event in
-            let picked = DeadlineSelection.dialValue(at: event.location, size: size, minutes: minutes)
-            if minutes { due = DeadlineSelection.time(due, minute: picked) }
-            else { due = DeadlineSelection.time(due, hour: picked) }
+        .gesture(DragGesture(minimumDistance: 0).onChanged { event in
+            if draggedMinutes == nil {
+                NSApp.keyWindow?.makeFirstResponder(nil)
+                draggedMinutes = DeadlineSelection.hand(at: event.startLocation, date: due) ?? minutes
+                minutes = draggedMinutes ?? minutes
+            }
+            if hypot(event.translation.width, event.translation.height) > 3 {
+                setTime(at: event.location, minutes: draggedMinutes ?? minutes)
+            }
+        }.onEnded { event in
+            let moved = hypot(event.translation.width, event.translation.height) > 3
+            if moved || DeadlineSelection.hand(at: event.startLocation, date: due) == nil {
+                setTime(at: event.location, minutes: draggedMinutes ?? minutes)
+            }
+            draggedMinutes = nil
         })
         .accessibilityElement(children: .contain).accessibilityLabel("钟表选择时间")
+    }
+
+    private func hand(minutes isMinute: Bool) -> some View {
+        let endpoint = DeadlineSelection.endpoint(date: due, minutes: isMinute)
+        let active = minutes == isMinute
+        let color = active ? Palette.accent : Palette.muted
+        return ZStack(alignment: .topLeading) {
+            Path { path in
+                path.move(to: CGPoint(x: 83, y: 83))
+                path.addLine(to: endpoint)
+            }.stroke(color, style: StrokeStyle(lineWidth: isMinute ? 2 : 4, lineCap: .round))
+            Circle().fill(Palette.card).overlay(Circle().strokeBorder(color, lineWidth: 2))
+                .frame(width: active ? 11 : 8, height: active ? 11 : 8)
+                .position(endpoint)
+        }.allowsHitTesting(false)
+    }
+
+    private func setTime(at point: CGPoint, minutes: Bool) {
+        let picked = DeadlineSelection.dialValue(at: point, size: 166, minutes: minutes)
+        due = minutes ? DeadlineSelection.time(due, minute: picked) : DeadlineSelection.time(due, hour: picked)
+    }
+}
+
+/// 普通文本框不带系统日历弹窗。时、分分别输入，编辑回调始终保留当前 AM/PM。
+struct DeadlineTextInput: NSViewRepresentable {
+    enum Component { case day, hour, minute }
+    @Binding var due: Date
+    let component: Component
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.delegate = context.coordinator
+        field.isBordered = true
+        field.bezelStyle = .roundedBezel
+        field.focusRingType = .none
+        field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        field.alignment = component == .day ? .left : .center
+        field.setAccessibilityLabel(AppLocalized(component == .day ? "截止日期" : (component == .hour ? "时针" : "分针")))
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        if field.currentEditor() == nil { field.stringValue = display }
+    }
+
+    var display: String {
+        let calendar = JournalDates.calendar
+        switch component {
+        case .day: return JournalDates.key(due)
+        case .hour:
+            let hour = calendar.component(.hour, from: due) % 12
+            return String(format: "%02d", hour == 0 ? 12 : hour)
+        case .minute: return String(format: "%02d", calendar.component(.minute, from: due))
+        }
+    }
+
+    func apply(_ text: String) {
+        switch component {
+        case .day:
+            if let day = JournalDates.date(for: text) { due = DeadlineSelection.day(day, keepingTime: due) }
+        case .hour:
+            if let hour = Int(text), (1...12).contains(hour) { due = DeadlineSelection.time(due, hour: hour) }
+        case .minute:
+            if let minute = Int(text), (0...59).contains(minute) { due = DeadlineSelection.time(due, minute: minute) }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: DeadlineTextInput
+        init(_ parent: DeadlineTextInput) { self.parent = parent }
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            parent.apply(field.stringValue)
+        }
+        func controlTextDidEndEditing(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            // 有效输入已在变更时写入；失焦只规范显示，避免旧文字覆盖刚点选的日期或 AM/PM。
+            field.stringValue = parent.display
+        }
     }
 }

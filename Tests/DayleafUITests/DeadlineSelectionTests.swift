@@ -30,6 +30,30 @@ final class DeadlineSelectionTests: XCTestCase {
         }
     }
 
+    func testHandsCanBeSelectedIndividuallyAndManualEditsKeepCurrentPeriod() {
+        let value = date(15, 37)
+        XCTAssertEqual(DeadlineSelection.hand(at: DeadlineSelection.endpoint(date: value, minutes: false), date: value), false)
+        XCTAssertEqual(DeadlineSelection.hand(at: DeadlineSelection.endpoint(date: value, minutes: true), date: value), true)
+        var current = value
+        let binding = Binding(get: { current }, set: { current = $0 })
+        let hours = DeadlineTextInput(due: binding, component: .hour)
+        hours.apply("11")
+        XCTAssertEqual(current, date(23, 37))
+        current = DeadlineSelection.time(current, pm: false)
+        hours.apply("11")
+        XCTAssertEqual(current, date(11, 37), "An editing callback cannot restore the old PM value")
+        DeadlineTextInput(due: binding, component: .day).apply("2026-10-31")
+        XCTAssertEqual(current, date(11, 37, day: 31))
+        DeadlineTextInput(due: binding, component: .minute).apply("99")
+        XCTAssertEqual(current, date(11, 37, day: 31))
+        let field = NSTextField()
+        field.stringValue = "2026-10-19"
+        let coordinator = DeadlineTextInput(due: binding, component: .day).makeCoordinator()
+        coordinator.controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification, object: field))
+        XCTAssertEqual(current, date(11, 37, day: 31), "Stale text must not undo a calendar click on blur")
+        XCTAssertEqual(field.stringValue, "2026-10-31")
+    }
+
     func testCalendarAndOptionalClockStayCompactAndKeepManualDateFields() throws {
         for timed in [false, true] {
             let view = DeadlineSelectionView(due: .constant(date(15, 37)), timed: .constant(timed))
@@ -47,10 +71,12 @@ final class DeadlineSelectionTests: XCTestCase {
             func pickers(_ view: NSView) -> [NSDatePicker] {
                 (view as? NSDatePicker).map { [$0] } ?? view.subviews.flatMap(pickers)
             }
-            XCTAssertEqual(pickers(host).count, timed ? 2 : 1, "Manual input remains available beside the visual selectors")
-            for picker in pickers(host) {
-                XCTAssertTrue(host.bounds.contains(picker.convert(picker.bounds, to: host)))
+            XCTAssertTrue(pickers(host).isEmpty, "No native date picker can open a duplicate calendar")
+            func inputs(_ view: NSView) -> [NSTextField] {
+                let fields = (view as? NSTextField).map { $0.isEditable ? [$0] : [] } ?? []
+                return fields + view.subviews.flatMap(inputs)
             }
+            XCTAssertEqual(inputs(host).count, timed ? 3 : 1)
             if let destination = ProcessInfo.processInfo.environment["DAYLEAF_DEADLINE_SNAPSHOT"], let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
                 host.cacheDisplay(in: host.bounds, to: bitmap)
                 try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: destination + (timed ? "-clock" : "-date") + ".png"))

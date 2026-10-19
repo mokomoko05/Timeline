@@ -706,3 +706,7 @@
 "手动输入时间" = "Enter time manually";
 
 "钟表选择时间" = "Choose time on clock";
+
+"时针" = "Hour hand";
+
+"分针" = "Minute hand";
