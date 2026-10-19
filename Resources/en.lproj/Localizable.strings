@@ -685,3 +685,5 @@
 "跳过" = "Skip";
 "保存并结束" = "Save & finish";
 "计时结束" = "Timer finished";
+"计划 %@" = "Planned %@";
+"有效专注 %@" = "Focused for %@";

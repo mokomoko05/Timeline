@@ -34,12 +34,23 @@ public enum LogRenderer {
     }
 
     private static func kindLabel(_ kind: DailyLogKind, style: Style) -> String {
-        let label = kind.label.padding(toLength: 5, withPad: " ", startingAt: 0)
+        let label = kind.label.padding(toLength: 6, withPad: " ", startingAt: 0)
         switch kind {
         case .note: return style.gray(label)
         case .done: return style.green(label)
         case .block: return style.red(label)
         case .plan: return style.blue(label)
+        }
+    }
+
+    private static func markerLabel(_ row: LogRow, style: Style) -> String {
+        let label = row.marker.padding(toLength: 6, withPad: " ", startingAt: 0)
+        switch row.marker {
+        case "FOCUS": return style.blue(label)
+        case "NOTE": return style.gray(label)
+        case "REVIEW": return style.green(label)
+        case "END": return style.yellow(label)
+        default: return kindLabel(row.kind, style: style)
         }
     }
 
@@ -69,9 +80,9 @@ public enum LogRenderer {
 
     static func entry(_ row: LogRow, ctx: RenderContext, showImages: Bool) -> [String] {
         let task = row.taskNumber.map { "#\($0)" } ?? ""
-        let prefix = "\(row.timeLabel)  \(kindLabelPlain(row.kind))  \(task.padding(toLength: 4, withPad: " ", startingAt: 0))"
+        let prefix = "\(row.timeLabel)  \(row.marker.padding(toLength: 6, withPad: " ", startingAt: 0))  \(task.padding(toLength: 4, withPad: " ", startingAt: 0))"
         let indent = TerminalText.width(prefix) + 1
-        let styledPrefix = ctx.style.gray(row.timeLabel) + "  " + kindLabel(row.kind, style: ctx.style) + "  " +
+        let styledPrefix = ctx.style.gray(row.timeLabel) + "  " + markerLabel(row, style: ctx.style) + "  " +
             ctx.style.yellow(task.padding(toLength: 4, withPad: " ", startingAt: 0)) + " "
         let body = richText(row.text.isEmpty ? (row.images.isEmpty ? "" : "（图片）") : row.text, style: ctx.style)
         let wrapped = TerminalText.wrap(body, width: max(10, ctx.width - indent))
@@ -80,6 +91,10 @@ public enum LogRenderer {
             lines.append(index == 0 ? styledPrefix + piece : String(repeating: " ", count: indent) + piece)
         }
         if lines.isEmpty { lines.append(styledPrefix) }
+        if row.focusEvent == .start, let goal = row.focusGoal, !goal.isEmpty {
+            lines += TerminalText.wrap(richText(goal, style: ctx.style), width: max(10, ctx.width - indent))
+                .map { String(repeating: " ", count: indent) + $0 }
+        }
         if row.focus { lines[0] += " " + ctx.style.dim("⏱") }
         if !row.images.isEmpty {
             let note = "🖼 \(row.images.count) 张图片" + (showImages ? "" : "（sched show \(row.shortID) 查看）")
@@ -88,8 +103,6 @@ public enum LogRenderer {
         }
         return lines
     }
-
-    private static func kindLabelPlain(_ kind: DailyLogKind) -> String { kind.label.padding(toLength: 5, withPad: " ", startingAt: 0) }
 
     /// 图片：支持内联协议就直接画出来，否则打印文件路径（可点击）。
     static func imageLines(_ row: LogRow, ctx: RenderContext, indent: Int) -> [String] {
@@ -119,13 +132,16 @@ public enum LogRenderer {
     /// 单条日志的完整视图。
     public static func detail(_ row: LogRow, ctx: RenderContext) -> [String] {
         var lines: [String] = []
-        lines.append(ctx.style.bold("\(row.dateKey) \(row.timeLabel)") + "  " + kindLabel(row.kind, style: ctx.style) +
+        lines.append(ctx.style.bold("\(row.dateKey) \(row.timeLabel)") + "  " + markerLabel(row, style: ctx.style) +
                      (row.focus ? "  " + ctx.style.dim("专注记录") : "") + "  " + ctx.style.gray("id " + row.shortID))
         if let number = row.taskNumber {
             lines.append(ctx.style.yellow("#\(number)") + " " + ctx.style.bold(TerminalText.truncate(row.taskTitle ?? "", to: max(10, ctx.width - 8))))
         }
         lines.append("")
         lines += TerminalText.wrap(richText(row.text, style: ctx.style), width: ctx.width)
+        if row.focusEvent == .start, let goal = row.focusGoal, !goal.isEmpty {
+            lines += TerminalText.wrap(richText(goal, style: ctx.style), width: ctx.width)
+        }
         if !row.images.isEmpty {
             lines.append("")
             lines += imageLines(row, ctx: ctx, indent: 0)
@@ -151,6 +167,8 @@ public enum LogRenderer {
             ]
             if let number = row.taskNumber { item["task"] = number }
             if let title = row.taskTitle { item["task_title"] = title }
+            if let event = row.focusEvent { item["focus_event"] = event.rawValue }
+            if let goal = row.focusGoal { item["focus_goal"] = goal }
             if !row.imageText.isEmpty { item["image_text"] = row.imageText }
             return item
         }
@@ -168,9 +186,12 @@ public enum LogRenderer {
                 lines.append("## \(row.dateKey)")
                 lastKey = row.dateKey
             }
-            var line = "- \(row.timeLabel) [\(row.kind.label)]"
+            var line = "- \(row.timeLabel) [\(row.marker)]"
             if row.taskNumber != nil, !title.hasPrefix("#") { line += " #\(row.taskNumber!)" }
             line += " " + String(TaskText.rendered(row.text).characters).replacingOccurrences(of: "\n", with: "\n  ")
+            if row.focusEvent == .start, let goal = row.focusGoal, !goal.isEmpty {
+                line += "\n  " + goal.replacingOccurrences(of: "\n", with: "\n  ")
+            }
             for name in row.images { line += "\n  ![](Images/\(name))" }
             lines.append(line)
         }

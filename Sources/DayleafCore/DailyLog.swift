@@ -21,6 +21,10 @@ public enum DailyLogKind: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+public enum FocusLogEvent: String, Codable, Equatable {
+    case start, note, review, end
+}
+
 extension DayEntry {
     /// 当天的日志按记录时间从早到晚（补记、导入的日志不一定是按时间追加的）。
     public var logsInTimeOrder: [DailyLogEntry] { logs.sorted { $0.createdAt < $1.createdAt } }
@@ -42,11 +46,18 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
     public var images: [String]
     /// 图片名 → 识别出的文字。没有该键表示尚未识别，空字符串表示识别过但没有文字。
     public var imageText: [String: String]
-    /// 专注计时产生的开始、结束记录：显示在终端日志里，但不进入笔记视图。
+    /// 专注计时产生的开始、结束记录；带事件类型的新记录也进入笔记视图。
     public var focus: Bool
+    public var focusEvent: FocusLogEvent?
+    public var focusGoal: String?
+    public var focusPlannedSeconds: TimeInterval?
+    public var focusElapsedSeconds: TimeInterval?
+    public var focusEndReason: String?
 
     public init(id: UUID = UUID(), createdAt: Date, kind: DailyLogKind, text: String, taskID: UUID? = nil, taskTitle: String? = nil, taskNumber: Int? = nil, taskTags: [String] = [], tags: [String] = [],
-                images: [String] = [], imageText: [String: String] = [:], focus: Bool = false) {
+                images: [String] = [], imageText: [String: String] = [:], focus: Bool = false,
+                focusEvent: FocusLogEvent? = nil, focusGoal: String? = nil, focusPlannedSeconds: TimeInterval? = nil,
+                focusElapsedSeconds: TimeInterval? = nil, focusEndReason: String? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.kind = kind
@@ -59,10 +70,15 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
         self.images = images
         self.imageText = imageText
         self.focus = focus
+        self.focusEvent = focusEvent
+        self.focusGoal = focusGoal
+        self.focusPlannedSeconds = focusPlannedSeconds
+        self.focusElapsedSeconds = focusElapsedSeconds
+        self.focusEndReason = focusEndReason
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, createdAt, kind, text, taskID, taskTitle, taskNumber, taskTags, tags, images, imageText, focus
+        case id, createdAt, kind, text, taskID, taskTitle, taskNumber, taskTags, tags, images, imageText, focus, focusEvent, focusGoal, focusPlannedSeconds, focusElapsedSeconds, focusEndReason
     }
 
     public init(from decoder: Decoder) throws {
@@ -79,6 +95,11 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
         images = try values.decodeIfPresent([String].self, forKey: .images) ?? []
         imageText = try values.decodeIfPresent([String: String].self, forKey: .imageText) ?? [:]
         focus = try values.decodeIfPresent(Bool.self, forKey: .focus) ?? false
+        focusEvent = (try values.decodeIfPresent(String.self, forKey: .focusEvent)).flatMap(FocusLogEvent.init(rawValue:))
+        focusGoal = try values.decodeIfPresent(String.self, forKey: .focusGoal)
+        focusPlannedSeconds = try values.decodeIfPresent(TimeInterval.self, forKey: .focusPlannedSeconds)
+        focusElapsedSeconds = try values.decodeIfPresent(TimeInterval.self, forKey: .focusElapsedSeconds)
+        focusEndReason = try values.decodeIfPresent(String.self, forKey: .focusEndReason)
     }
 
     /// 没有图片时不写入新字段，旧数据的 JSON 保持原样。
@@ -96,12 +117,35 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
         if !images.isEmpty { try values.encode(images, forKey: .images) }
         if !imageText.isEmpty { try values.encode(imageText, forKey: .imageText) }
         if focus { try values.encode(true, forKey: .focus) }
+        try values.encodeIfPresent(focusEvent, forKey: .focusEvent)
+        try values.encodeIfPresent(focusGoal, forKey: .focusGoal)
+        try values.encodeIfPresent(focusPlannedSeconds, forKey: .focusPlannedSeconds)
+        try values.encodeIfPresent(focusElapsedSeconds, forKey: .focusElapsedSeconds)
+        try values.encodeIfPresent(focusEndReason, forKey: .focusEndReason)
     }
 
     public var command: String { "/\(kind.rawValue) \(text)" }
 
     /// 搜索时用到的全部图片文字。
     public var recognizedText: String { images.compactMap { imageText[$0] }.filter { !$0.isEmpty }.joined(separator: "\n") }
+
+    public var focusMarker: String {
+        switch focusEvent {
+        case .start: return "FOCUS"
+        case .note: return kind == .note ? "NOTE" : kind.label
+        case .review: return "REVIEW"
+        case .end: return "END"
+        case nil:
+            if focus && text.hasPrefix("▶") { return "FOCUS" }
+            if focus && text.hasPrefix("■") { return "END" }
+            if kind == .note && (text.hasPrefix("阶段反馈 · ") || text.hasPrefix("Session reflection · ")) { return "REVIEW" }
+            return kind.label
+        }
+    }
+
+    public var isFocusMarker: Bool { focusEvent != nil || ["FOCUS", "REVIEW", "END"].contains(focusMarker) }
+    public var isNotebookEntry: Bool { !focus || focusEvent != nil }
+    public var searchableText: String { [text, focusGoal ?? "", recognizedText].joined(separator: "\n") }
 }
 
 public enum LogCommand: Equatable {

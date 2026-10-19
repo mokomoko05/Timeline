@@ -46,7 +46,7 @@ final class FocusSession: ObservableObject {
     }
     var store: JournalStore?
     var onActiveChange: ((Bool) -> Void)?
-    /// 专注不足这么长（秒）就不在日志里留记录；默认读设置，测试里可替换。
+    /// 未写目标或反馈的专注不足这么长（秒）就不留计时记录；默认读设置，测试里可替换。
     var minLoggedSeconds: () -> TimeInterval = { Prefs.focusMinLogSeconds }
     /// 没有授权控制 Safari、只能检测是否离开 Safari 时调用一次（每次专注一次），由界面用提示条告知。
     var onDegraded: (() -> Void)?
@@ -111,7 +111,9 @@ final class FocusSession: ObservableObject {
         learnedBundle = nil
         automationDenied = false
         baseline = url.map(Self.baseline(for:))
-        active?.startLogID = store.addFocusLog("▶ 开始专注", taskID: task.id, now: now)
+        active?.startLogID = store.addFocusLog("▶ 开始专注", taskID: task.id, now: now,
+                                              event: .start, goal: active?.goal.isEmpty == false ? active?.goal : nil,
+                                              plannedSeconds: active?.plannedSeconds)
         store.setFocusTask(task.id)
         // 任务一完成、放弃或删除就立刻结束（不等下一秒的计时）。
         storeSink = store.$days.dropFirst().sink { [weak self] _ in
@@ -137,13 +139,16 @@ final class FocusSession: ObservableObject {
         timer = nil
         storeSink = nil
         let seconds = effectiveElapsed(at: now)
-        if seconds < minLoggedSeconds() {
-            // 太短：不留日志（撤掉开始那条、不写结束那条），时间照常累加。
+        let hasReflection = store?.allLogs().contains {
+            $0.log.taskID == session.taskID && $0.log.focusEvent == .review && $0.log.createdAt >= session.started
+        } == true
+        if seconds < minLoggedSeconds(), session.goal.isEmpty, !hasReflection {
+            // 太短且没有目标或反馈：撤掉开始记录、不写结束记录，时间照常累加。
             store?.discardShortFocus(startLogID: session.startLogID, taskID: session.taskID, seconds: seconds, now: now)
         } else {
             let total = (store?.locate(session.taskID)?.task.focusSeconds ?? 0) + seconds
             store?.addFocusLog("■ 结束专注 · 用时 \(Self.duration(seconds)) · 累计 \(Self.duration(total)) · \(reason)",
-                               taskID: session.taskID, now: now, seconds: seconds, fallback: (session.title, session.number))
+                               taskID: session.taskID, now: now, seconds: seconds, fallback: (session.title, session.number), event: .end, endReason: reason)
         }
         store?.setFocusTask(nil)
         active = nil
@@ -646,11 +651,14 @@ final class FocusNoteDraft: ObservableObject {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (!body.isEmpty || !images.isEmpty), let active = session.active else { return false }
         do {
-            let text = reflection ? "/note " + AppLocalized("阶段反馈") + " · " + body : body
+            let text = reflection ? "/note " + body : body
             let result = try store.quickLogEntry(text, images: images,
                                                 taskID: reflection ? active.taskID : (session.isPaused ? nil : (link ?? active.taskID)),
                                                 linkDefault: false, tags: session.isPaused ? [] : tags,
-                                                allowInlineTaskReference: !reflection && !session.isPaused, on: Date())
+                                                allowInlineTaskReference: !reflection && !session.isPaused, on: Date(),
+                                                focusEvent: reflection ? .review : nil,
+                                                focusGoal: reflection ? active.goal : nil,
+                                                focusPlannedSeconds: reflection ? active.plannedSeconds : nil)
             guard let entry = result.entry else {
                 error = AppLocalized("这里只能写笔记，请使用普通文字或 /note /done /block /plan。")
                 return false

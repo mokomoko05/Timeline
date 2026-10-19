@@ -14,9 +14,9 @@ final class RendererTests: XCTestCase {
         let text = LogRenderer.list(rows, ctx: context(fixture)).joined(separator: "\n")
         XCTAssertTrue(text.contains("── 2026-10-07 周三"), text)
         XCTAssertTrue(text.contains("── 2026-10-08 周四"))
-        XCTAssertTrue(text.contains("09:05  INFO   #1   读完摘要，公式 3 看不懂"))
-        XCTAssertTrue(text.contains("10:30  BLOCK  #1   图 4 的坐标轴没标单位"))
-        XCTAssertTrue(text.contains("17:20  DONE   #2   周报发出去了"))
+        XCTAssertTrue(text.contains("09:05  INFO    #1   读完摘要，公式 3 看不懂"))
+        XCTAssertTrue(text.contains("10:30  BLOCK   #1   图 4 的坐标轴没标单位"))
+        XCTAssertTrue(text.contains("17:20  DONE    #2   周报发出去了"))
         XCTAssertTrue(text.contains("🖼 1 张图片（sched show"), "带图片的日志提示怎么查看")
         XCTAssertFalse(text.contains("\u{1B}"), "不着色时没有任何转义序列")
     }
@@ -112,6 +112,46 @@ final class RendererTests: XCTestCase {
         fixture.store.save()
         XCTAssertEqual(LogRenderer.taskRows(in: fixture.snapshot(), includeCompleted: false).map(\.number), [1, 3])
         XCTAssertEqual(LogRenderer.taskRows(in: fixture.snapshot(), includeCompleted: true).count, 3)
+    }
+
+    func testFocusTimelineMarkersAndGoalSurviveRenderingSearchAndExport() throws {
+        let fixture = try Fixture.make(testCase: self)
+        let goal = "Understand throughput\nCheck the evaluation method"
+        let start = try XCTUnwrap(fixture.store.addFocusLog("▶ 开始专注", taskID: fixture.paper.id,
+            now: fixture.day2, event: .start, goal: goal, plannedSeconds: 1500))
+        _ = try fixture.store.quickLogEntry("Observation", taskID: fixture.paper.id, on: fixture.day2,
+            now: fixture.day2.addingTimeInterval(60), focusEvent: .note)
+        _ = try fixture.store.quickLogEntry("Review result", taskID: fixture.paper.id, on: fixture.day2,
+            now: fixture.day2.addingTimeInterval(1500), focusEvent: .review)
+        fixture.store.addFocusLog("■ 结束专注", taskID: fixture.paper.id,
+            now: fixture.day2.addingTimeInterval(1501), seconds: 1500, event: .end)
+        var filter = LogFilter()
+        filter.includeFocus = true
+        let rows = LogQuery.rows(in: fixture.store, filter: filter).filter { $0.focusEvent != nil }
+        XCTAssertEqual(rows.map(\.marker), ["FOCUS", "NOTE", "REVIEW", "END"])
+        let plain = LogRenderer.list(rows, ctx: context(fixture)).joined(separator: "\n")
+        for marker in ["FOCUS", "NOTE", "REVIEW", "END"] { XCTAssertTrue(plain.contains(marker), plain) }
+        XCTAssertFalse(plain.contains("INFO"))
+        XCTAssertTrue(plain.contains("Understand throughput"))
+        XCTAssertTrue(plain.contains("Check the evaluation method"))
+        let colored = LogRenderer.list(rows, ctx: context(fixture, style: Style(enabled: true)))
+        XCTAssertEqual(colored.map(TerminalText.stripEscapes).joined(separator: "\n"), plain)
+        let markdown = LogRenderer.markdown(title: "Focus", rows: rows)
+        XCTAssertTrue(markdown.contains("[FOCUS]"))
+        XCTAssertTrue(markdown.contains("\n  Understand throughput\n  Check the evaluation method"))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(LogRenderer.json(rows).utf8)) as? [[String: Any]])
+        XCTAssertEqual(json.first?["focus_event"] as? String, "start")
+        XCTAssertEqual(json.first?["focus_goal"] as? String, goal)
+        filter.grep = "Understand throughput"
+        XCTAssertEqual(LogQuery.rows(in: fixture.store, filter: filter).map(\.id), [start])
+    }
+
+    func testLegacyReflectionGetsTheSameMarkerInCLIAndNotebook() throws {
+        let fixture = try Fixture.make(testCase: self)
+        let log = try XCTUnwrap(fixture.store.quickLogEntry("阶段反馈 · Finished", on: fixture.day2).entry)
+        let row = try XCTUnwrap(LogQuery.rows(in: fixture.store, filter: LogFilter()).first { $0.id == log.id })
+        XCTAssertEqual(row.marker, log.focusMarker)
+        XCTAssertEqual(row.marker, "REVIEW")
     }
 
     func testInlineImageProtocolDetectionAndEncoding() throws {

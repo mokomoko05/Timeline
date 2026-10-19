@@ -178,6 +178,7 @@ struct UnifiedNotesView: View {
 /// 笔记窗口里的日记模式：沿用笔记的侧栏、卡片和编辑器，不再嵌入带复盘区的 DayLogView。
 private struct UnifiedJournalView: View {
     @Environment(\.locale) private var locale
+    @Environment(\.typography) private var typography
     @ObservedObject var store: JournalStore
     @Binding var date: Date
     let navigationRequest: Int
@@ -208,7 +209,7 @@ private struct UnifiedJournalView: View {
             let weekday = item.formatted(.dateTime.weekday(.wide).locale(locale))
             return dateText.localizedStandardContains(query)
                 || weekday.localizedStandardContains(query)
-                || entry.logs.contains { $0.text.localizedStandardContains(query) || $0.tags.contains { $0.localizedStandardContains(query) } }
+                || entry.logs.contains { $0.searchableText.localizedStandardContains(query) || $0.tags.contains { $0.localizedStandardContains(query) } }
         }
     }
 
@@ -343,16 +344,12 @@ private struct UnifiedJournalView: View {
     private func journalRow(_ log: DailyLogEntry) -> some View {
         let editing = editingID == log.id
         return HStack(alignment: .top, spacing: 10) {
-            Text(Self.time(log.createdAt)).font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted).padding(.top, 3)
-            Text(log.kind.label).font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(kindColor(log.kind).opacity(0.16), in: RoundedRectangle(cornerRadius: 4))
-                .foregroundStyle(kindColor(log.kind)).padding(.top, 1)
+            Text(Self.time(log.createdAt)).font(.system(size: typography.pt(11), design: .monospaced))
+                .foregroundStyle(Palette.muted).padding(.top, 3).fixedSize()
+            LogEventBadge(log: log)
             VStack(alignment: .leading, spacing: 6) {
                 if let label = LogTaskLabel.saved(log, store: store, logDate: date) {
-                    Text(label).font(.system(size: 11)).foregroundStyle(Palette.accent)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Palette.soft, in: RoundedRectangle(cornerRadius: 4))
+                    Text(label).font(.system(size: typography.pt(11))).foregroundStyle(Palette.accent)
                 }
                 if editing {
                     TaskInput(text: $editText, focused: $editFocused, fontSize: 13,
@@ -361,11 +358,12 @@ private struct UnifiedJournalView: View {
                         .background(Palette.card, in: RoundedRectangle(cornerRadius: 6))
                         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Palette.accent.opacity(0.6)))
                 } else if !log.text.isEmpty {
-                    TaskLinkText(source: log.text, completed: false, color: Palette.ink, fontSize: 13,
+                    TaskLinkText(source: LogEventStyle.body(log), completed: false, color: Palette.ink, fontSize: 13,
                                  edit: { beginEdit(log) }, open: SafariLinks.open, maxLines: 0,
                                  markdown: true, compactLines: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                LogFocusGoal(log: log)
                 if !log.images.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
@@ -379,6 +377,7 @@ private struct UnifiedJournalView: View {
                 }
                 if !log.tags.isEmpty { TaskTagLine(tags: log.tags) }
             }
+            .logEventGutter(log)
             Spacer(minLength: 0)
             if !store.isReadOnly {
                 HStack(spacing: 0) {
@@ -456,11 +455,7 @@ private struct UnifiedJournalView: View {
         editingDate = nil
     }
 
-    private func kindColor(_ kind: DailyLogKind) -> Color {
-        switch kind { case .note: return Palette.muted; case .done: return Palette.success; case .block: return Palette.deadline; case .plan: return Palette.accent }
-    }
     private static func time(_ date: Date) -> String {
-        let c = JournalDates.calendar.dateComponents([.hour, .minute], from: date)
-        return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+        LogEventStyle.time(date)
     }
 }

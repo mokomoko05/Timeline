@@ -250,7 +250,7 @@ struct AgendaView: View {
         } else if !query.isEmpty {
             for key in store.days.keys.sorted() {
                 guard let day = store.days[key] else { continue }
-                for log in day.logs where log.text.localizedStandardContains(query) || log.taskTitle?.localizedStandardContains(query) == true || log.taskTags.contains(where: { $0.localizedStandardContains(query) }) || log.tags.contains(where: { $0.localizedStandardContains(query) }) || log.recognizedText.localizedStandardContains(query) {
+                for log in day.logs where log.searchableText.localizedStandardContains(query) || log.taskTitle?.localizedStandardContains(query) == true || log.taskTags.contains(where: { $0.localizedStandardContains(query) }) || log.tags.contains(where: { $0.localizedStandardContains(query) }) {
                     result.append(.log(key: key, entry: log))
                 }
                 if day.summary.localizedStandardContains(query) { result.append(.summary(key: key, text: day.summary)) }

@@ -14,9 +14,24 @@ public struct LogRow: Identifiable, Equatable {
     public let images: [String]
     public let imageText: [String: String]
     public let focus: Bool
+    public var focusEvent: FocusLogEvent? = nil
+    public var focusGoal: String? = nil
 
     /// 8 位短标识：命令行里引用一条日志（`sched show a1b2c3d4`），允许只写唯一的前缀。
     public var shortID: String { String(id.uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(8)) }
+    public var marker: String {
+        switch focusEvent {
+        case .start: return "FOCUS"
+        case .note: return kind == .note ? "NOTE" : kind.label
+        case .review: return "REVIEW"
+        case .end: return "END"
+        case nil:
+            if focus && text.hasPrefix("▶") { return "FOCUS" }
+            if focus && text.hasPrefix("■") { return "END" }
+            if kind == .note && (text.hasPrefix("阶段反馈 · ") || text.hasPrefix("Session reflection · ")) { return "REVIEW" }
+            return kind.label
+        }
+    }
 
     public var timeLabel: String {
         let parts = JournalDates.calendar.dateComponents([.hour, .minute], from: createdAt)
@@ -30,7 +45,7 @@ public struct LogRow: Identifiable, Equatable {
 
     /// 搜索用的全部文字：正文、任务标题、截图里识别出的文字。
     var searchable: String {
-        ([text, taskTitle ?? ""] + imageText.values).joined(separator: "\n")
+        ([text, taskTitle ?? "", focusGoal ?? ""] + imageText.values).joined(separator: "\n")
     }
 }
 
@@ -71,7 +86,8 @@ public enum LogQuery {
             if filter.onlyWithImages, log.images.isEmpty { return nil }
             let title = live.map { String(TaskText.rendered($0.task.title).characters) } ?? log.taskTitle
             let row = LogRow(id: log.id, dateKey: item.key, date: item.date, createdAt: log.createdAt, kind: log.kind, text: log.text,
-                             taskNumber: number, taskTitle: title, images: log.images, imageText: log.imageText, focus: log.focus)
+                             taskNumber: number, taskTitle: title, images: log.images, imageText: log.imageText, focus: log.focus,
+                             focusEvent: log.focusEvent, focusGoal: log.focusGoal)
             if let needle = filter.grep, !needle.isEmpty, !row.searchable.localizedCaseInsensitiveContains(needle) { return nil }
             return row
         }

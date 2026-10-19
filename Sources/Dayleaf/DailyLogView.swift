@@ -617,6 +617,9 @@ private struct DailyLogRow: View {
     @State private var hovered = false
 
     private var color: Color {
+        if log.focusMarker == "FOCUS" { return TerminalPalette.blue }
+        if log.focusMarker == "REVIEW" { return TerminalPalette.green }
+        if log.focusMarker == "END" { return TerminalPalette.muted }
         switch log.kind {
         case .note: return TerminalPalette.muted
         case .done: return TerminalPalette.green
@@ -652,6 +655,11 @@ private struct DailyLogRow: View {
                 .font(.system(size: typography.pt(11), design: .monospaced)).padding(.top, 1)
                 .fixedSize()
                 .help("\(log.kind.title) · \(log.createdAt.formatted(date: .abbreviated, time: .standard))")
+            Text(log.focusMarker)
+                .font(.system(size: typography.pt(10), weight: .semibold, design: .monospaced))
+                .foregroundStyle(color)
+                .padding(.horizontal, 4).frame(height: 20)
+                .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
             if let label = LogTaskLabel.saved(log, store: store, logDate: date) {
                 Button {
                     // 不论有没有截止日期，都把主窗口调出来并选中这个任务。
@@ -669,7 +677,7 @@ private struct DailyLogRow: View {
                 .help(label).accessibilityLabel("关联任务：\(label)")
                 .disabled(log.taskID.flatMap { store.locate($0) } == nil)
             }
-            Group {
+            VStack(alignment: .leading, spacing: 4) {
                 if log.text.isEmpty, !log.images.isEmpty {
                     Button(action: toggleImages) {
                         Text(expanded ? "收起图片" : "图片 · 点击查看")
@@ -677,11 +685,12 @@ private struct DailyLogRow: View {
                             .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading).contentShape(Rectangle())
                     }.buttonStyle(.plain)
                 } else {
-                    TaskLinkText(source: log.text, completed: false, color: TerminalPalette.text, fontSize: 12,
+                    TaskLinkText(source: LogEventStyle.body(log), completed: false, color: TerminalPalette.text, fontSize: 12,
                                  edit: { guard !store.isReadOnly else { return }; edit(log, date) }, open: SafariLinks.open,
                                  maxLines: 0, monospaced: true, markdown: true, compactLines: true,
                                  click: log.images.isEmpty ? nil : toggleImages, menuItems: menuItems)
                 }
+                LogFocusGoal(log: log)
             }.frame(maxWidth: .infinity, alignment: .leading)
             if !log.images.isEmpty {
                 Button(action: toggleImages) {

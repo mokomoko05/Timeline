@@ -57,10 +57,10 @@ final class FocusNoteDraftTests: XCTestCase {
         let draft = FocusNoteDraft()
         draft.text = "/done Read the introduction; next: methods"
         XCTAssertTrue(draft.save(session: session, reflection: true))
-        let log = try XCTUnwrap(store.allLogs().first?.log)
+        let log = try XCTUnwrap(store.days.values.flatMap(\.logs).first { $0.focusEvent == .review })
         XCTAssertEqual(log.taskID, task.id)
-        XCTAssertTrue(log.text.contains("阶段反馈"))
-        XCTAssertTrue(log.text.contains("/done Read the introduction"))
+        XCTAssertEqual(log.focusMarker, "REVIEW")
+        XCTAssertEqual(log.text, "/done Read the introduction; next: methods")
         XCTAssertFalse(store.locate(task.id)!.task.completed)
         XCTAssertTrue(draft.text.isEmpty)
     }

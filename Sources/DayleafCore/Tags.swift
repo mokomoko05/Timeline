@@ -82,7 +82,7 @@ extension JournalStore {
         /// 带这个标签（含子标签）的待办数 / 其中未完成的。
         public let taskCount: Int
         public let openCount: Int
-        /// 这些待办名下的笔记条数（不含专注记录）。
+        /// 这些待办名下的笔记条数（含结构化专注流水）。
         public let noteCount: Int
         public let lastActivity: Date
     }
@@ -120,7 +120,7 @@ extension JournalStore {
             }
         }
         for day in days.values {
-            for log in day.logs where !log.focus {
+            for log in day.logs where log.isNotebookEntry {
                 for key in levels(effectiveTags(of: log, live: live)) {
                     let previous = noteCounts[key]
                     noteCounts[key] = ((previous?.count ?? 0) + 1, max(previous?.latest ?? .distantPast, log.createdAt))
@@ -157,10 +157,10 @@ extension JournalStore {
         effectiveTags(of: log, live: liveTags())
     }
 
-    /// 这个标签（含子标签）名下所有待办的笔记，按时间从早到晚；不含专注计时记录。已删除待办的笔记靠记录时的标签快照仍然找得到。
+    /// 这个标签（含子标签）名下的笔记和结构化专注流水，按时间从早到晚。已删除待办的笔记靠记录时的标签快照仍然找得到。
     public func notes(forTag tag: String) -> [LoggedLog] {
         let live = liveTags()
-        return allLogs(includeFocus: false).filter { item in effectiveTags(of: item.log, live: live).contains { TagText.matches($0, query: tag) } }
+        return allLogs(includeFocus: true).filter { item in item.log.isNotebookEntry && effectiveTags(of: item.log, live: live).contains { TagText.matches($0, query: tag) } }
     }
 
     /// 同上，但包含专注计时的开始、结束记录。
@@ -215,7 +215,8 @@ extension JournalStore {
 extension DailyLogEntry {
     /// 复制到剪贴板的内容：只有文字（保留原文，包括 Markdown 链接写法），图片不算。没有文字时为 nil。
     public var copyText: String? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = focusEvent == .start && focusGoal?.isEmpty == false ? text + "\n" + (focusGoal ?? "") : text
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 }

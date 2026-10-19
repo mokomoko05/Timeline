@@ -561,7 +561,8 @@ public final class JournalStore: ObservableObject {
         var day = updated[key] ?? DayEntry()
         day.logs.append(DailyLogEntry(createdAt: now, kind: kind, text: text, taskID: linked?.id, taskTitle: title,
                                      taskNumber: linked.flatMap { taskNumber($0.id, on: $0.date) },
-                                     taskTags: linked?.task.tags ?? [], tags: entry.logDraftTags, images: images))
+                                     taskTags: linked?.task.tags ?? [], tags: entry.logDraftTags, images: images,
+                                     focusEvent: !focusPaused && linked?.id != nil && linked?.id == focusTaskID ? .note : nil))
         day.logDraft = ""
         day.logTaskID = nil
         day.logDraftImages = []
@@ -664,7 +665,8 @@ public final class JournalStore: ObservableObject {
     /// `seconds` 大于 0 时同时累加到任务的专注时长，和日志一起作为一次操作（撤销时一并还原）。
     @discardableResult
     public func addFocusLog(_ text: String, taskID: UUID, now: Date = Date(), seconds: TimeInterval = 0,
-                            fallback: (title: String, number: Int?)? = nil) -> UUID? {
+                            fallback: (title: String, number: Int?)? = nil, event: FocusLogEvent? = nil,
+                            goal: String? = nil, plannedSeconds: TimeInterval? = nil, endReason: String? = nil) -> UUID? {
         // 任务已经删了（比如专注中把它删掉）：用开始时记下的名字写这条结束记录，时长没地方累加就不加。
         let located = locate(taskID)
         guard !isReadOnly, located != nil || fallback != nil else { return nil }
@@ -679,7 +681,9 @@ public final class JournalStore: ObservableObject {
         var entry = updated[key] ?? DayEntry()
         let log = DailyLogEntry(createdAt: now, kind: .note, text: text, taskID: taskID,
                                 taskTitle: located.map { String(TaskText.rendered($0.task.title).characters) } ?? fallback?.title,
-                                taskNumber: located?.task.number ?? fallback?.number, taskTags: located?.task.tags ?? [], focus: true)
+                                taskNumber: located?.task.number ?? fallback?.number, taskTags: located?.task.tags ?? [], focus: true,
+                                focusEvent: event, focusGoal: goal, focusPlannedSeconds: plannedSeconds,
+                                focusElapsedSeconds: event == .end ? seconds : nil, focusEndReason: endReason)
         entry.logs.append(log)
         updated[key] = entry
         replaceDays(updated, action: "专注记录")
@@ -743,9 +747,9 @@ public final class JournalStore: ObservableObject {
         return true
     }
 
-    /// 某个任务的笔记：关联到它的日志，不含专注计时记录，按时间从早到晚。
+    /// 关联任务的笔记和结构化专注流水，按时间从早到晚；旧式计时记录仍隐藏。
     public func notes(for taskID: UUID) -> [LoggedLog] {
-        logs(linkedTo: [taskID]).filter { !$0.log.focus }
+        logs(linkedTo: [taskID]).filter { $0.log.isNotebookEntry }
     }
 
     /// 全局快速记录：不经过当天的输入草稿，直接追加一条日志。
@@ -758,7 +762,7 @@ public final class JournalStore: ObservableObject {
 
     /// 同 `quickLog`，同时返回写入的那条日志（命令不是普通记录时为 nil），界面据此告诉用户最终关联到了哪个待办。
     @discardableResult
-    public func quickLogEntry(_ text: String, images: [String] = [], taskID: UUID? = nil, linkDefault: Bool = true, tags: [String] = [], allowInlineTaskReference: Bool = true, on date: Date, now: Date = Date()) throws -> (command: LogCommand, entry: DailyLogEntry?) {
+    public func quickLogEntry(_ text: String, images: [String] = [], taskID: UUID? = nil, linkDefault: Bool = true, tags: [String] = [], allowInlineTaskReference: Bool = true, on date: Date, now: Date = Date(), focusEvent: FocusLogEvent? = nil, focusGoal: String? = nil, focusPlannedSeconds: TimeInterval? = nil) throws -> (command: LogCommand, entry: DailyLogEntry?) {
         guard !isReadOnly else { throw LogInputError.readOnly }
         let command = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !images.isEmpty
             ? LogCommand.entry(.note, "") : try LogCommand.parse(text)
@@ -778,7 +782,9 @@ public final class JournalStore: ObservableObject {
         let created = DailyLogEntry(createdAt: now, kind: kind, text: body,
                                     taskID: linked?.id, taskTitle: linked.map { String(TaskText.rendered($0.task.title).characters) },
                                     taskNumber: linked?.task.number, taskTags: linked?.task.tags ?? [],
-                                    tags: TagText.merge([], tags.compactMap(TagText.normalize)), images: images)
+                                    tags: TagText.merge([], tags.compactMap(TagText.normalize)), images: images,
+                                    focusEvent: focusEvent ?? (!focusPaused && linked?.id != nil && linked?.id == focusTaskID ? .note : nil),
+                                    focusGoal: focusGoal, focusPlannedSeconds: focusPlannedSeconds)
         entry.logs.append(created)
         updated[key] = entry
         replaceDays(updated, action: "添加日志")
@@ -834,7 +840,7 @@ public final class JournalStore: ObservableObject {
     public func noteTopics() -> [NoteTopic] {
         var info: [UUID: (count: Int, images: Int, latest: Date, title: String, number: Int?)] = [:]
         for day in days.values {
-            for log in day.logs where !log.focus {
+            for log in day.logs where log.isNotebookEntry {
                 guard let id = log.taskID else { continue }
                 let previous = info[id]
                 info[id] = ((previous?.count ?? 0) + 1, (previous?.images ?? 0) + log.images.count, max(previous?.latest ?? .distantPast, log.createdAt),

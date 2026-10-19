@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 import DayleafCore
 
-/// 笔记视图：每个 TODO 是一个主题，它名下（/link、/done #N 等）的日志按日期汇成笔记；每个标签也是一个主题，汇总带这个标签的所有待办的笔记。专注计时记录不在这里显示。
+/// 笔记视图：每个 TODO 是一个主题，日志和结构化专注流水按日期汇成笔记；每个标签也是一个主题，汇总带这个标签的所有待办的笔记。
 struct NotesView: View {
+    @Environment(\.typography) private var typography
     @ObservedObject private var languages = LanguageStore.shared
     @ObservedObject var store: JournalStore
     let initialSelection: UUID?
@@ -463,11 +464,8 @@ struct NotesView: View {
     private func noteRow(_ item: JournalStore.LoggedLog, showTask: Bool = false, showDate: Bool = false) -> some View {
         let log = item.log
         return HStack(alignment: .top, spacing: 10) {
-            Text((showDate ? String(item.key.dropFirst(5)) + " " : "") + Self.time(log.createdAt)).font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted).padding(.top, 2)
-            Text(log.kind.label).font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(kindColor(log.kind).opacity(0.16), in: RoundedRectangle(cornerRadius: 4))
-                .foregroundStyle(kindColor(log.kind)).padding(.top, 1)
+            Text((showDate ? String(item.key.dropFirst(5)) + " " : "") + Self.time(log.createdAt)).font(.system(size: typography.pt(11), design: .monospaced)).foregroundStyle(Palette.muted).padding(.top, 2).fixedSize()
+            LogEventBadge(log: log)
             VStack(alignment: .leading, spacing: 6) {
                 if showTask, let label = Self.sourceLabel(log) {
                     Button { if let id = log.taskID, store.noteTopic(for: id) != nil { select(task: id) } } label: {
@@ -488,11 +486,12 @@ struct NotesView: View {
                         Text("⌘Enter 保存 · Esc 取消").font(.system(size: 10)).foregroundStyle(Palette.muted)
                     }
                 } else if !log.text.isEmpty {
-                    TaskLinkText(source: log.text, completed: false, color: Palette.ink, fontSize: 13,
+                    TaskLinkText(source: LogEventStyle.body(log), completed: false, color: Palette.ink, fontSize: 13,
                                  edit: { guard !store.isReadOnly else { return }; beginNoteEdit(item) }, open: SafariLinks.open,
                                  maxLines: 0, markdown: true, compactLines: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                LogFocusGoal(log: log)
                 if !log.images.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
@@ -505,6 +504,7 @@ struct NotesView: View {
                     }
                 }
             }
+            .logEventGutter(log)
             Spacer(minLength: 0)
             HStack(spacing: 0) {
                 noteAction("doc.on.doc", log.copyText == nil ? "这条只有图片，没有文字可复制" : "复制这条的文字（不含图片）") { copy(log) }
@@ -825,7 +825,7 @@ struct NotesView: View {
             for item in group.value {
                 let log = item.log
                 let source = sourceLabel(log).map { "（\($0)）" } ?? ""
-                var line = "- \(time(log.createdAt)) [\(log.kind.label)] \(String(TaskText.rendered(log.text).characters))\(source)"
+                var line = "- \(time(log.createdAt)) [\(log.focusMarker)] \(String(TaskText.rendered(log.copyText ?? log.text).characters).replacingOccurrences(of: "\n", with: "\n  "))\(source)"
                 for name in log.images { line += "\n  ![](Images/\(name))" }
                 lines.append(line)
             }
@@ -885,18 +885,8 @@ struct NotesView: View {
         } catch { self.error = AppErrorDescription(error) }
     }
 
-    private func kindColor(_ kind: DailyLogKind) -> Color {
-        switch kind {
-        case .note: return Palette.muted
-        case .done: return Palette.success
-        case .block: return Palette.deadline
-        case .plan: return Palette.accent
-        }
-    }
-
     private static func time(_ date: Date) -> String {
-        let parts = JournalDates.calendar.dateComponents([.hour, .minute], from: date)
-        return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
+        LogEventStyle.time(date)
     }
 
     /// 笔记导出为 Markdown：按日期分组，图片引用 Images 文件夹里的文件名。
@@ -906,7 +896,7 @@ struct NotesView: View {
             lines.append("## \(group.key)")
             for item in group.value {
                 let log = item.log
-                var line = "- \(time(log.createdAt)) [\(log.kind.label)] \(String(TaskText.rendered(log.text).characters))"
+                var line = "- \(time(log.createdAt)) [\(log.focusMarker)] \(String(TaskText.rendered(log.copyText ?? log.text).characters).replacingOccurrences(of: "\n", with: "\n  "))"
                 for name in log.images { line += "\n  ![](Images/\(name))" }
                 lines.append(line)
             }

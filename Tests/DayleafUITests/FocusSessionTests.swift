@@ -178,7 +178,7 @@ final class FocusSessionTests: XCTestCase {
         XCTAssertEqual(store.locate(task.id)?.task.focusSeconds ?? 0, 1503, accuracy: 0.01, "用时累加到任务上")
         XCTAssertEqual(logs.map(\.createdAt), [start, start.addingTimeInterval(1503)])
         XCTAssertTrue(logs.allSatisfy { $0.focus && $0.taskID == task.id })
-        XCTAssertTrue(store.notes(for: task.id).isEmpty, "笔记视图屏蔽专注记录")
+        XCTAssertEqual(store.notes(for: task.id).map { $0.log.focusMarker }, ["FOCUS", "END"])
     }
 
     func testFocusShorterThanTheThresholdLeavesNoLogButStillCountsTheTime() async throws {
@@ -355,6 +355,36 @@ final class FocusSessionTests: XCTestCase {
         XCTAssertEqual(store.locate(task.id)?.task.focusSeconds ?? 0, 180, accuracy: 0.01)
     }
 
+    func testGoalPlanAndEffectiveDurationAreSavedAsTypedEvents() throws {
+        let (session, store, task) = try makeSession()
+        let start = Date()
+        session.start(task: task, url: nil, plannedSeconds: 1500, goal: "  Read **methods**\nCompare assumptions  ", now: start)
+        let log = try XCTUnwrap(store.allLogs(includeFocus: true).first?.log)
+        XCTAssertEqual(log.focusEvent, .start)
+        XCTAssertEqual(log.focusGoal, "Read **methods**\nCompare assumptions")
+        XCTAssertEqual(log.focusPlannedSeconds, 1500)
+        session.pause(now: start.addingTimeInterval(60))
+        session.stop(reason: "手动结束", now: start.addingTimeInterval(300))
+        let end = try XCTUnwrap(store.allLogs(includeFocus: true).last?.log)
+        XCTAssertEqual(end.focusEvent, .end)
+        XCTAssertEqual(end.focusElapsedSeconds, 60)
+        XCTAssertEqual(end.focusEndReason, "手动结束")
+        store.save()
+        let reloaded = JournalStore(directory: store.directory)
+        XCTAssertEqual(reloaded.notes(for: task.id).first?.log.focusGoal, log.focusGoal)
+    }
+
+    func testShortSessionKeepsAnExplicitGoalEvenBelowLoggingThreshold() throws {
+        let (session, store, task) = try makeSession()
+        session.minLoggedSeconds = { 300 }
+        let now = Date()
+        session.start(task: task, url: nil, goal: "Keep this goal", now: now)
+        session.stop(reason: "手动结束", now: now.addingTimeInterval(30))
+        XCTAssertEqual(store.notes(for: task.id).map { $0.log.focusMarker }, ["FOCUS", "END"])
+        XCTAssertEqual(store.notes(for: task.id).first?.log.focusGoal, "Keep this goal")
+        XCTAssertEqual(store.locate(task.id)?.task.focusSeconds, 30)
+    }
+
     func testCountdownRequestsReflectionOnceAndDoesNotCountTimeSpentReflecting() throws {
         let (session, store, task) = try makeSession()
         let start = Date()
@@ -452,7 +482,7 @@ final class FocusSessionTests: XCTestCase {
         XCTAssertEqual(focusedLogs.first { $0.text == "看完一半" }?.taskID, task.id)
         XCTAssertEqual(focusedLogs.first { $0.text == "手动指定" }?.taskID, other.id, "明确指定的任务优先于专注任务")
         XCTAssertFalse(try XCTUnwrap(store.locate(task.id)).task.completed, "快速日志里的 /done 不会替用户完成任务")
-        XCTAssertEqual(store.notes(for: task.id).map(\.log.text), ["第二页的公式很关键", "看完一半"], "笔记视图里能看到，但看不到专注计时记录")
+        XCTAssertEqual(store.notes(for: task.id).map(\.log.text), ["▶ 开始专注", "第二页的公式很关键", "看完一半"], "笔记视图完整展示本轮专注流水")
 
         session.stop(reason: "手动结束")
         XCTAssertNil(store.focusTaskID)
