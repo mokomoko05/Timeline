@@ -43,6 +43,48 @@ final class TagTests: XCTestCase {
         XCTAssertEqual(QuickAdd.parse("#项目A", now: now).tags, [], "只有标签时按原文当标题")
     }
 
+    func testDraftTagPickerCanSelectBeforeTypingTitleAndRemoveAllTags() throws {
+        let store = makeStore()
+        var draft = TagText.replacingTags(in: "", with: ["论文", "Reading", "reading"])
+        XCTAssertEqual(draft, "#论文 #Reading")
+        XCTAssertEqual(TagText.inlineTags(in: draft), ["论文", "Reading"])
+        draft = TagText.replacingTags(in: draft, with: ["Reading"])
+        XCTAssertEqual(draft, "#Reading")
+        XCTAssertEqual(TagText.replacingTags(in: draft, with: []), "")
+        draft += " 明天 15:00 读摘要"
+        let todo = try XCTUnwrap(store.addParsedTodo(draft, on: day, now: day))
+        XCTAssertEqual(todo.task.title, "读摘要")
+        XCTAssertEqual(todo.task.tags, ["Reading"])
+        XCTAssertNotNil(todo.task.dueDate)
+    }
+
+    func testReplacingDraftTagsPreservesLinksDatesAndMultilineText() {
+        let body = "明天 15:00 读 [文档](https://example.com/#intro)\n  修复 C# 和 #3 https://example.com/#anchor"
+        var draft = body + " #old"
+        for _ in 0..<10 { draft = TagText.replacingTags(in: draft, with: ["论文", "New"]) }
+        XCTAssertEqual(draft, body + " #论文 #New")
+        XCTAssertEqual(TagText.replacingTags(in: draft, with: []), body)
+        XCTAssertEqual(TagText.inlineTags(in: draft), ["论文", "New"])
+        XCTAssertEqual(TagText.replacingTags(in: "读 #old 摘要\n  第二行", with: ["new"]), "读 摘要\n  第二行 #new")
+    }
+
+    func testJournalCanExplicitlySkipAutomaticFocusLinkFromPicker() throws {
+        let store = makeStore()
+        let task = try XCTUnwrap(store.addParsedTodo("Read #论文", on: day))
+        store.setFocusTask(task.id)
+        store.setLogDraft("Unrelated note", on: day)
+        store.addDraftTag("灵感", on: day)
+        try store.commitLog(on: day, linkDefault: false)
+        let log = try XCTUnwrap(store.entry(for: day).logs.last)
+        XCTAssertNil(log.taskID)
+        XCTAssertNil(log.focusEvent)
+        XCTAssertEqual(log.tags, ["灵感"])
+        store.setLogDraft("Explicit choice", on: day)
+        store.setLogTask(task.id, on: day)
+        try store.commitLog(on: day, linkDefault: false)
+        XCTAssertEqual(store.entry(for: day).logs.last?.taskID, task.id)
+    }
+
     func testNewTodoCarriesTagsAndRenameMovesThemOutOfTheTitle() throws {
         let store = makeStore()
         let added = try XCTUnwrap(store.addParsedTodo("整理方法部分 #论文", on: day))

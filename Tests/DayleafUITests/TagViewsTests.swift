@@ -85,6 +85,32 @@ final class TagViewsTests: XCTestCase {
             XCTAssertGreaterThan(size.height, 100)
         }
     }
+
+    func testQuickPanelStaysOpenWhenMetadataPopoverTakesKeyboardFocus() async throws {
+        _ = NSApplication.shared
+        let store = makeStore()
+        store.createTag("论文")
+        let controller = QuickCaptureController(store: store, openMain: {})
+        let existing = Set(NSApp.windows.map(\.windowNumber))
+        controller.show(.log)
+        let panel = try XCTUnwrap(NSApp.windows.first { !existing.contains($0.windowNumber) && $0 is NSPanel })
+        panel.alphaValue = 0
+        let originalSize = panel.frame.size
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: TagSelectionPopover(store: store, tags: .constant([])))
+        defer { popover.close(); panel.close() }
+        let content = try XCTUnwrap(panel.contentView)
+        popover.show(relativeTo: NSRect(x: 20, y: 20, width: 24, height: 22), of: content, preferredEdge: .maxY)
+        popover.contentViewController?.view.window?.alphaValue = 0
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let popup = try XCTUnwrap(popover.contentViewController?.view.window)
+        popup.makeKey()
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: panel))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(panel.isVisible, "选择器接收搜索输入时宿主仍在")
+        XCTAssertEqual(panel.frame.size, originalSize, "浮窗不改变快速面板大小")
+    }
 }
 
 @MainActor

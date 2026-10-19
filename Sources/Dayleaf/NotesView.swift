@@ -30,9 +30,6 @@ struct NotesView: View {
     @State private var renameText = ""
     @State private var renameMessage: String?
     @State private var deletingTag: String?
-    /// 任务标题栏的标签面板；笔记行的标签面板（记哪一条）。
-    @State private var editingTopicTags = false
-    @State private var taggingNoteID: UUID?
     /// 标签页输入框里的 `@` 补全。
     @StateObject private var tagMention = MentionState()
     /// 任务页输入框里的 `#`（任务页的日志固定属于这个任务，只能选标签）。
@@ -423,9 +420,7 @@ struct NotesView: View {
                     }
                     .help(task.task.isDropped ? "恢复" : "放弃")
                 }
-                Button { editingTopicTags = true } label: { Label("标签", systemImage: task.task.tags.isEmpty ? "tag" : "tag.fill") }
-                    .help("给这个待办加、去标签")
-                    .popover(isPresented: $editingTopicTags, arrowEdge: .bottom) { TagPickerView(store: store, task: task.task) }
+                TagSelectionButton(store: store, tags: Binding(get: { store.locate(task.id)?.task.tags ?? [] }, set: { store.setTags(task.id, $0) }))
             }
             if !topic.deleted, !topic.completed {
                 let pinned = store.pinnedTask?.id == topic.id
@@ -491,6 +486,7 @@ struct NotesView: View {
                                  maxLines: 0, markdown: true, compactLines: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                if !log.tags.isEmpty { TaskTagLine(tags: log.tags) }
                 if !log.images.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
@@ -509,14 +505,7 @@ struct NotesView: View {
                     .disabled(log.copyText == nil)
                 if !store.isReadOnly {
                     noteAction("pencil", "编辑这条笔记") { beginNoteEdit(item) }
-                    noteAction(log.tags.isEmpty ? "tag" : "tag.fill", "这条笔记的标签") { taggingNoteID = log.id }
-                        .popover(isPresented: Binding(get: { taggingNoteID == log.id }, set: { if !$0 { taggingNoteID = nil } }), arrowEdge: .leading) {
-                            LogBatchTagView(store: store, logIDs: [log.id])
-                        }
-                    LinkPickerButton(store: store, current: log.taskID, pick: { store.setLogTask($0, forLog: log.id, on: item.date) }) {
-                        Image(systemName: "link").font(.system(size: 11)).frame(width: 24, height: 22).contentShape(Rectangle())
-                    }
-                    .foregroundStyle(Palette.muted).help("更换这条笔记关联的待办（章节）").accessibilityLabel("更换关联的待办")
+                    EntryMetadataButtons(store: store, log: log, date: item.date)
                     noteAction("trash", "删除这条笔记 · ⌘Z 撤销", destructive: true) { deleteNote(item) }
                 }
             }
@@ -858,9 +847,7 @@ struct NotesView: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
-            if !tags.wrappedValue.isEmpty {
-                LogChipsBar(store: store, link: .constant(nil), unlinked: .constant(false), tags: tags, showsLink: false)
-            }
+            LogChipsBar(store: store, link: .constant(nil), unlinked: .constant(false), tags: tags, showsLink: false)
             if let error {
                 Text(LocalizedStringKey(error)).font(.system(size: 11)).foregroundStyle(error.hasPrefix("已") ? Palette.success : Palette.deadline)
             }

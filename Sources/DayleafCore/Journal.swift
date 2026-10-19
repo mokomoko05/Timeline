@@ -513,7 +513,7 @@ public final class JournalStore: ObservableObject {
     }
 
     @discardableResult
-    public func commitLog(on date: Date, now: Date = Date()) throws -> LogCommand {
+    public func commitLog(on date: Date, now: Date = Date(), linkDefault: Bool = true) throws -> LogCommand {
         guard !isReadOnly else { throw LogInputError.readOnly }
         let entry = entry(for: date)
         let images = entry.logDraftImages
@@ -548,7 +548,7 @@ public final class JournalStore: ObservableObject {
         // 明确指定的任务（正文里的 #N、手动选的关联）优先；都没有时，专注中的任务兜底。
         let explicit = inline ?? entry.logTaskID.flatMap(locate)
         if inline == nil, entry.logTaskID != nil, explicit == nil { throw LogInputError.missingTask }
-        let linked = explicit ?? defaultLinkTask
+        let linked = explicit ?? (linkDefault ? defaultLinkTask : nil)
         let title = linked.map { String(TaskText.rendered($0.task.title).characters) }
         // 只有明确指定的任务才会在空正文时借用标题，/done 也只完成明确指定的任务；专注兜底的关联不会替用户完成任务。
         let text = body.isEmpty ? (explicit != nil ? title ?? "" : "") : body

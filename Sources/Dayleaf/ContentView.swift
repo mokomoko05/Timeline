@@ -554,6 +554,7 @@ struct ContentView: View {
                             requestedEdit = newest.id
                         }
                     }, minHeight: typography.pt(22), maxLines: 6, allowsNewlines: false, collapsesPastedNewlines: false)
+                    TodoDraftTagButton(store: store, text: draft)
                     Button(action: addTodo) {
                         Image(systemName: "arrow.turn.down.left")
                             .font(.system(size: typography.pt(11), weight: .semibold))

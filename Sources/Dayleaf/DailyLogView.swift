@@ -43,6 +43,7 @@ struct DailyLogView: View {
     @State private var showingHelp = false
     @State private var preparingReview = false
     @State private var focused = false
+    @State private var unlinked = false
     @State private var error: String?
     @StateObject private var mention = MentionState()
     @State private var historyIndex: Int?
@@ -356,6 +357,7 @@ struct DailyLogView: View {
     /// 筛选模式：跨日期显示所选任务相关的全部日志，按日期分组。
     private var filteredStream: some View {
         let logs = filteredLogs
+        let segments = LogTimelineSegment.segments(in: store.allLogs(includeFocus: true).map(\.log))
         let groups = Dictionary(grouping: logs, by: \.key).sorted { $0.key < $1.key }
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
@@ -367,7 +369,7 @@ struct DailyLogView: View {
                     Text("── \(group.key) ──").font(.system(size: typography.pt(11), design: .monospaced))
                         .foregroundStyle(TerminalPalette.muted).padding(.top, 8).padding(.bottom, 2)
                     ForEach(Array(group.value.enumerated()), id: \.element.id) { index, item in
-                        DailyLogRow(store: store, date: item.date, log: item.log, hasPrevious: index > 0, hasNext: index < group.value.count - 1, highlighted: editingLogID == item.log.id, next: { focused = true },
+                        DailyLogRow(store: store, date: item.date, log: item.log, hasPrevious: index > 0, hasNext: index < group.value.count - 1, segment: segments[item.id], highlighted: editingLogID == item.log.id, next: { focused = true },
                                     selection: selectionState(item.log.id), copy: { copyLogs([$0.id]) },
                                     edit: { beginLogEdit($0, on: $1) },
                                     preview: { ImageViewerController.shared.show(store: store, around: item.log, index: $0) })
@@ -379,13 +381,14 @@ struct DailyLogView: View {
     }
 
     private var dayStream: some View {
-        GeometryReader { geometry in
+        let segments = LogTimelineSegment.segments(in: store.allLogs(includeFocus: true).map(\.log))
+        return GeometryReader { geometry in
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         let logs = entry.logsInTimeOrder
                         ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
-                            DailyLogRow(store: store, date: date, log: log, hasPrevious: index > 0, hasNext: index < logs.count - 1, highlighted: editingLogID == log.id, next: { focused = true },
+                            DailyLogRow(store: store, date: date, log: log, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id], highlighted: editingLogID == log.id, next: { focused = true },
                                         selection: selectionState(log.id), copy: { copyLogs([$0.id]) },
                                         edit: { beginLogEdit($0, on: $1) },
                                         preview: { ImageViewerController.shared.show(store: store, around: log, index: $0) })
@@ -436,7 +439,7 @@ struct DailyLogView: View {
                         .buttonStyle(HitAreaButtonStyle(compact: true)).disabled(store.isReadOnly)
                 }.font(.system(size: typography.pt(10))).foregroundStyle(TerminalPalette.muted)
             }
-            if entry.logTaskID == nil, let task = store.focusTask, !store.focusPaused {
+            if !unlinked, entry.logTaskID == nil, let task = store.focusTask, !store.focusPaused {
                 HStack(spacing: 4) {
                     Image(systemName: "timer")
                     Text("专注中：日志会关联到 \(FocusHint.label(task))").lineLimit(1)
@@ -451,7 +454,7 @@ struct DailyLogView: View {
                     Spacer(minLength: 0)
                 }.font(.system(size: typography.pt(10))).foregroundStyle(TerminalPalette.muted)
             }
-            if entry.logTaskID == nil, store.focusTask == nil, let task = store.pinnedTask {
+            if !unlinked, entry.logTaskID == nil, store.focusTask == nil, let task = store.pinnedTask {
                 HStack(spacing: 4) {
                     Image(systemName: "pin.fill")
                     Text("固定关联：日志会记到 \(FocusHint.label(task))").lineLimit(1)
@@ -459,12 +462,11 @@ struct DailyLogView: View {
                     Button("取消固定") { store.pinTask(nil) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
                 }.font(.system(size: typography.pt(10))).foregroundStyle(TerminalPalette.muted)
             }
-            if !entry.logDraftTags.isEmpty {
-                LogChipsBar(store: store, link: .constant(nil), unlinked: .constant(false),
-                            tags: Binding(get: { entry.logDraftTags }, set: { new in
-                                for tag in entry.logDraftTags where !new.contains(tag) { store.removeDraftTag(tag, on: date) }
-                            }), showsLink: false)
-            }
+            LogChipsBar(store: store, link: Binding(get: { entry.logTaskID }, set: { store.setLogTask($0, on: date) }), unlinked: $unlinked,
+                        tags: Binding(get: { entry.logDraftTags }, set: { new in
+                            for tag in entry.logDraftTags where !new.contains(tag) { store.removeDraftTag(tag, on: date) }
+                            for tag in new { store.addDraftTag(tag, on: date) }
+                        }))
             HStack(spacing: 5) {
                 Text("❯").font(.system(size: typography.pt(15), weight: .semibold, design: .monospaced))
                     .foregroundStyle(TerminalPalette.green)
@@ -474,7 +476,6 @@ struct DailyLogView: View {
                     .disabled(store.isReadOnly)
                     .accessibilityLabel("日志命令输入，回车提交，Shift+回车换行")
                     .onChange(of: focused) { if $0 { interaction.activePane = .summary } }
-                taskMenu
                 Button(action: submit) { Image(systemName: "arrow.turn.down.left") }
                     .buttonStyle(HitAreaButtonStyle(compact: true)).help("提交日志")
                     .disabled(store.isReadOnly || (entry.logDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && entry.logDraftImages.isEmpty))
@@ -486,7 +487,7 @@ struct DailyLogView: View {
             }
         }
         .onAppear(perform: configureMention)
-        .onChange(of: date) { _ in configureMention() }
+        .onChange(of: date) { _ in unlinked = false; configureMention() }
     }
 
     /// 输入框里的 `@`：选中的待办成为下一条日志的关联（和「关联任务」按钮一样）。
@@ -496,18 +497,10 @@ struct DailyLogView: View {
         mention.provider = MentionProviders.make(store: store, chosenTags: { store.entry(for: date).logDraftTags })
         mention.onPick = { item in
             switch item {
-            case .task(let task): store.setLogTask(task.id, on: date)
+            case .task(let task): store.setLogTask(task.id, on: date); unlinked = false
             case .tag(let tag): store.addDraftTag(tag.name, on: date)
             }
         }
-    }
-
-    private var taskMenu: some View {
-        LinkPickerButton(store: store, current: entry.logTaskID, pick: { store.setLogTask($0, on: date); focused = true }) {
-            Label("关联任务", systemImage: "link")
-                .font(.system(size: typography.pt(11))).padding(.horizontal, 5).frame(height: 26).contentShape(Rectangle())
-        }.fixedSize()
-            .disabled(store.isReadOnly).help("选择关联的待办")
     }
 
     private var commandHelp: some View {
@@ -529,11 +522,12 @@ struct DailyLogView: View {
     private func submit() {
         guard !store.isReadOnly, !entry.logDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !entry.logDraftImages.isEmpty else { return }
         do {
-            let command = try store.commitLog(on: date)
+            let command = try store.commitLog(on: date, linkDefault: !unlinked)
             error = nil
             historyIndex = nil
             switch command {
             case .entry:
+                unlinked = false
                 focused = true
                 ImageIndexer.run(store: store)
             case .help: store.setLogDraft("", on: date); showingHelp = true
@@ -606,6 +600,7 @@ private struct DailyLogRow: View {
     let log: DailyLogEntry
     let hasPrevious: Bool
     let hasNext: Bool
+    let segment: LogTimelineSegment?
     let highlighted: Bool
     let next: () -> Void
     /// 这条是否被选中，以及点击右侧选择按钮时切换。
@@ -682,7 +677,7 @@ private struct DailyLogRow: View {
     }
 
     private var line: some View {
-        LogTimelineRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext) {
+        LogTimelineRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext, segment: segment) {
             VStack(alignment: .leading, spacing: 4) {
                 rowContent
                 if expanded, !log.images.isEmpty {
@@ -740,6 +735,7 @@ private struct DailyLogRow: View {
         if showsButtons || showsSelect {
             HStack(spacing: 0) {
                 if showsButtons {
+                    EntryMetadataButtons(store: store, log: log, date: date)
                     ItemActionButton(symbol: "doc.on.doc", title: log.copyText == nil ? "没有可复制的文字（只有图片）" : "复制文字", compact: true) { copy(log) }
                         .disabled(log.copyText == nil)
                     ItemActionButton(symbol: "pencil", title: "编辑这条日志", compact: true) { edit(log, date) }

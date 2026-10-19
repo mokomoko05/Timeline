@@ -73,6 +73,7 @@ struct ManagedTaskRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 0) {
+                TagSelectionButton(store: store, tags: Binding(get: { store.locate(task.id)?.task.tags ?? task.tags }, set: { store.setTags(task.id, $0) }))
                 if let focus, !task.completed {
                     FocusPlayButton(session: focus, task: ScheduledTask(date: date, task: task), url: FocusSession.link(in: task.title))
                 }

@@ -215,6 +215,7 @@ private struct UnifiedJournalView: View {
     @State private var editingDate: Date?
     @State private var editText = ""
     @State private var editFocused = false
+    @State private var unlinked = false
     /// 日记侧栏和笔记侧栏共用同一套搜索入口；日期、星期和日志正文都可检索。
     @State private var query = ""
 
@@ -249,7 +250,7 @@ private struct UnifiedJournalView: View {
         .background(Palette.background)
         .foregroundStyle(Palette.ink)
         .onAppear { configureMention() }
-        .onChange(of: date) { _ in saveEdit(); configureMention() }
+        .onChange(of: date) { _ in saveEdit(); unlinked = false; configureMention() }
         .onChange(of: navigationRequest) { _ in query = "" }
         .onReceive(NotificationCenter.default.publisher(for: .dayleafCommitEditing)) { _ in saveEdit() }
         .onDisappear { saveEdit() }
@@ -337,8 +338,9 @@ private struct UnifiedJournalView: View {
                         .frame(maxWidth: .infinity).padding(.vertical, 60)
                     } else {
                         let logs = entry.logsInTimeOrder
+                        let segments = LogTimelineSegment.segments(in: store.allLogs(includeFocus: true).map(\.log))
                         ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
-                            journalRow(log, hasPrevious: index > 0, hasNext: index < logs.count - 1)
+                            journalRow(log, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id])
                         }
                     }
                 }
@@ -370,9 +372,9 @@ private struct UnifiedJournalView: View {
         .padding(.horizontal, 20).padding(.vertical, 14)
     }
 
-    private func journalRow(_ log: DailyLogEntry, hasPrevious: Bool, hasNext: Bool) -> some View {
+    private func journalRow(_ log: DailyLogEntry, hasPrevious: Bool, hasNext: Bool, segment: LogTimelineSegment?) -> some View {
         let editing = editingID == log.id
-        return LogTimelineRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext) {
+        return LogTimelineRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext, segment: segment) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .top, spacing: 8) {
                     LogEventBadge(log: log)
@@ -383,6 +385,7 @@ private struct UnifiedJournalView: View {
                     Spacer(minLength: 0)
                     if !store.isReadOnly {
                         HStack(spacing: 0) {
+                            EntryMetadataButtons(store: store, log: log, date: date)
                             journalAction("pencil", "编辑这条日志") { beginEdit(log) }
                             journalAction("trash", "删除这条日志 · ⌘Z 撤销", destructive: true) {
                                 store.deleteLog(log.id, on: date); error = "已删除这条日志，⌘Z 可撤销"
@@ -451,6 +454,13 @@ private struct UnifiedJournalView: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
+            LogChipsBar(store: store,
+                        link: Binding(get: { entry.logTaskID }, set: { store.setLogTask($0, on: date) }),
+                        unlinked: $unlinked,
+                        tags: Binding(get: { entry.logDraftTags }, set: { tags in
+                            for tag in entry.logDraftTags where !tags.contains(tag) { store.removeDraftTag(tag, on: date) }
+                            for tag in tags { store.addDraftTag(tag, on: date) }
+                        }))
         }
         .padding(.horizontal, 20).padding(.vertical, 12)
         .popover(isPresented: Binding(get: { mention.isActive }, set: { if !$0 { mention.dismiss() } }), arrowEdge: .bottom) {
@@ -463,7 +473,7 @@ private struct UnifiedJournalView: View {
         mention.provider = MentionProviders.make(store: store, chosenTags: { store.entry(for: date).logDraftTags })
         mention.onPick = { item in
             switch item {
-            case .task(let task): store.setLogTask(task.id, on: date)
+            case .task(let task): store.setLogTask(task.id, on: date); unlinked = false
             case .tag(let tag): store.addDraftTag(tag.name, on: date)
             }
         }
@@ -473,8 +483,8 @@ private struct UnifiedJournalView: View {
         let draft = entry.logDraft
         guard !store.isReadOnly, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !entry.logDraftImages.isEmpty else { return }
         do {
-            let command = try store.commitLog(on: date)
-            if case .entry = command { error = nil; focused = true; ImageIndexer.run(store: store) }
+            let command = try store.commitLog(on: date, linkDefault: !unlinked)
+            if case .entry = command { error = nil; focused = true; unlinked = false; ImageIndexer.run(store: store) }
             else if case .help = command { store.setLogDraft("", on: date); error = "日志命令：/link、/done、/filter、/help" }
         } catch let issue { error = AppErrorDescription(issue) }
     }

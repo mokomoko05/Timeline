@@ -95,6 +95,7 @@ struct LogTimelineRow<Content: View>: View {
     let log: DailyLogEntry
     let hasPrevious: Bool
     let hasNext: Bool
+    var segment: LogTimelineSegment?
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -108,6 +109,21 @@ struct LogTimelineRow<Content: View>: View {
                 .overlay(alignment: .leading) {
                     LogTimelineRail(hasPrevious: hasPrevious, hasNext: hasNext, nodeY: typography.pt(9))
                         .stroke(Palette.line, lineWidth: 1)
+                        .overlay {
+                            GeometryReader { geometry in
+                                Path { path in
+                                    let nodeY = typography.pt(9)
+                                    if hasPrevious, segment?.focusBefore == true {
+                                        path.move(to: CGPoint(x: 8, y: 0))
+                                        path.addLine(to: CGPoint(x: 8, y: nodeY))
+                                    }
+                                    if hasNext, segment?.focusAfter == true {
+                                        path.move(to: CGPoint(x: 8, y: nodeY))
+                                        path.addLine(to: CGPoint(x: 8, y: geometry.size.height))
+                                    }
+                                }.stroke(Color.blue.opacity(0.8), lineWidth: 1.5)
+                            }
+                        }
                         .overlay(alignment: .topLeading) {
                             Circle().fill(LogEventStyle.color(log))
                                 .frame(width: log.isFocusMarker ? 7 : 5, height: log.isFocusMarker ? 7 : 5)

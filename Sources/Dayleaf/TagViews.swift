@@ -77,96 +77,10 @@ struct TaskTagLine: View {
 struct TagPickerView: View {
     @ObservedObject var store: JournalStore
     let task: Todo
-    @Environment(\.dismiss) private var dismiss
-    @State private var selected: [String]
-    @State private var added: [String] = []
-    @State private var draft = ""
-    @State private var message: String?
-    @FocusState private var typing: Bool
-
-    init(store: JournalStore, task: Todo) {
-        self.store = store
-        self.task = task
-        _selected = State(initialValue: task.tags)
-    }
-
-    /// 可选的标签：库里已有的（最近用过的在前）、这个待办自己的，以及刚输入的新标签。
-    private var choices: [String] {
-        TagText.merge(TagText.merge(task.tags, store.allTags().map(\.name)), added)
-    }
-
-    private func isSelected(_ tag: String) -> Bool { selected.contains { TagText.key($0) == TagText.key(tag) } }
-
-    private func toggle(_ tag: String) {
-        if isSelected(tag) { selected.removeAll { TagText.key($0) == TagText.key(tag) } } else { selected.append(tag) }
-        message = nil
-    }
-
-    private func commitDraft() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        let tags = TagText.parseList(text)
-        guard !tags.isEmpty else {
-            message = "标签不能含空格，也不能是纯数字（#3 表示任务编号）"
-            return
-        }
-        for tag in tags {
-            // 和已有标签只差大小写时，沿用已有写法。
-            let existing = choices.first { TagText.key($0) == TagText.key(tag) } ?? tag
-            if !choices.contains(existing) { added.append(existing) }
-            if !isSelected(existing) { selected.append(existing) }
-        }
-        draft = ""
-        message = nil
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("标签").font(.headline)
-                Text(String(TaskText.rendered(task.title).characters)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            }
-            if choices.isEmpty {
-                Text("还没有标签").font(.caption).foregroundStyle(.secondary)
-            } else {
-                ScrollView {
-                    FlowLayout(spacing: 6) {
-                        ForEach(choices, id: \.self) { tag in
-                            Button { toggle(tag) } label: { TagChip(name: tag, highlighted: isSelected(tag)) }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("#\(tag)").accessibilityValue(isSelected(tag) ? "已选中" : "未选中")
-                                .accessibilityAddTraits(.isButton)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 190)
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus").foregroundStyle(Palette.muted)
-                    TextField("新标签…", text: $draft)
-                        .textFieldStyle(.plain).focused($typing).onSubmit(commitDraft)
-                }
-                .padding(.horizontal, 9).padding(.vertical, 6)
-                .background(Palette.card, in: RoundedRectangle(cornerRadius: 7))
-                if let message { Text(LocalizedStringKey(message)).font(.caption).foregroundStyle(.orange) }
-            }
-            HStack {
-                Text(selected.isEmpty ? AppLocalized("未选标签") : AppLocalizedFormat("已选 %lld 个", selected.count)).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("保存") {
-                    commitDraft()
-                    store.setTags(task.id, selected)
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
-                .disabled(store.isReadOnly)
-            }
-        }
-        .padding(18).frame(width: 360)
-        .onAppear { typing = false }
+        TagSelectionPopover(store: store, tags: Binding(
+            get: { store.locate(task.id)?.task.tags ?? task.tags },
+            set: { store.setTags(task.id, $0) }))
     }
 }
 

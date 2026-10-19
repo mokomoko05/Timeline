@@ -38,7 +38,7 @@ struct LinkPickerView: View {
                 Button { pick(nil); dismiss() } label: {
                     Label("不关联任务", systemImage: current == nil ? "checkmark" : "xmark.circle").font(.system(size: 12))
                         .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                }.buttonStyle(.plain).foregroundStyle(Palette.muted)
+                }.buttonStyle(.plain).foregroundStyle(Palette.muted).raisedOnHover(radius: 6)
             }
             if list.isEmpty {
                 Text(query.isEmpty ? AppLocalized("没有未完成的待办") : AppLocalizedFormat("没有匹配「%@」的待办", query)).font(.caption).foregroundStyle(.secondary)
@@ -50,7 +50,7 @@ struct LinkPickerView: View {
                             ForEach(Array(list.enumerated()), id: \.element.id) { index, item in
                                 row(item, highlighted: index == selection).id(item.id)
                             }
-                        }
+                        }.padding(3)
                     }
                     .frame(height: min(CGFloat(list.count) * 46 + 4, 300))
                     .onChange(of: selection) { index in if list.indices.contains(index) { proxy.scrollTo(list[index].id) } }
@@ -105,6 +105,7 @@ struct LinkPickerView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .raisedOnHover(radius: 6)
         .accessibilityLabel((item.task.number.map { "#\($0) " } ?? "") + item.task.title)
     }
 }
@@ -129,7 +130,7 @@ struct LinkPickerButton<Label: View>: View {
 }
 
 /// 一条要写的日志会关联到哪个待办、带哪些标签：永远只占固定的一行（放不下就横向滚动），所以选了什么都不会让窗口变高。
-/// 关联和标签都在输入框里选：`@` 加几个字选待办，`#` 加几个字选标签（见 `MentionList`）；这里只显示结果，可以点 × 去掉。
+/// 点 `@` / `#` 打开浮窗，也可在输入框中补全；选中的结果可以点 × 去掉。
 /// 关联的优先级：明确选的 > 专注中的 > 固定的；选定的待办可以一键「固定」，之后的日志默认都记到它名下，不计时。
 struct LogChipsBar: View {
     @Environment(\.typography) private var typography
@@ -169,11 +170,13 @@ struct LogChipsBar: View {
             }
             if showsLink {
                 LinkPickerButton(store: store, current: explicit?.id, contextTags: contextTags, pick: choose) {
-                    Image(systemName: "link").font(.system(size: typography.pt(size))).frame(width: 22, height: 20).contentShape(Rectangle())
+                    MetadataSymbol(symbol: "@", active: explicit != nil)
                 }
+                .raisedOnHover(radius: 5)
                 .foregroundStyle(Palette.muted).help("选择关联的待办")
                 .accessibilityLabel("选择关联的待办")
             }
+            TagSelectionButton(store: store, tags: $tags)
         }
         .frame(height: Self.height)
         .disabled(store.isReadOnly)
@@ -190,7 +193,7 @@ struct LogChipsBar: View {
         } else if unlinked {
             pill("link.badge.plus", "这条不关联待办", tint: Palette.muted)
             small("arrow.uturn.backward", "恢复自动关联") { unlinked = false }
-        } else if let focus = store.focusTask {
+        } else if let focus = store.focusTask, !store.focusPaused {
             pill("timer", AppLocalized("专注中 ") + FocusHint.label(focus), tint: Palette.success)
             small("xmark", "这条不关联") { unlinked = true }
         } else if let pinned = store.pinnedTask {

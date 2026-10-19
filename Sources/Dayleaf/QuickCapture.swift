@@ -246,7 +246,15 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
         panel.makeKeyAndOrderFront(nil)
     }
 
-    func windowDidResignKey(_ notification: Notification) { panel?.close() }
+    func windowDidResignKey(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            guard let panel = self?.panel, !panel.isKeyWindow else { return }
+            // 选择浮窗接收键盘时仍在编辑这份草稿，不能连同宿主面板一起关闭。
+            let key = NSApp.keyWindow
+            if panel.attachedSheet != nil || key?.parent === panel || panel.childWindows?.contains(where: { $0 === key }) == true { return }
+            panel.close()
+        }
+    }
 
     /// 内容高度变化（出现缩略图）时调整窗口，保持顶边位置不动。
     private func resize(height: CGFloat) {
@@ -337,6 +345,9 @@ struct QuickCaptureView: View {
                           fontSize: 12, submit: submit, cancel: close, complete: { mode = mode == .todo ? .log : .todo },
                           onPasteImages: mode == .log ? addImages : nil,
                           minHeight: 42, maxLines: 4, allowsNewlines: mode == .log, mention: mode == .log ? mention : nil)
+                if mode == .todo {
+                    TodoDraftTagButton(store: store, text: $model.text)
+                }
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
             .background(Palette.background, in: RoundedRectangle(cornerRadius: 10))

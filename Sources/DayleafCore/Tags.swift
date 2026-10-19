@@ -59,6 +59,30 @@ public enum TagText {
         return title.isEmpty ? (text, []) : (title, tags)
     }
 
+    /// 草稿中的标签，包括还没写标题、只有标签的草稿。
+    public static func inlineTags(in text: String) -> [String] {
+        var (work, _) = QuickAdd.mask(text)
+        return take(from: &work)
+    }
+
+    /// 标签按钮修改草稿里的标签，保留日期、换行、Markdown 链接和网址。
+    public static func replacingTags(in text: String, with tags: [String]) -> String {
+        var (work, links) = QuickAdd.mask(text)
+        if let regex = try? NSRegularExpression(pattern: #"(?<!\S)#([^\s#]+)"#) {
+            let source = work as NSString
+            for match in regex.matches(in: work, range: NSRange(location: 0, length: source.length)).reversed() {
+                guard normalize(source.substring(with: match.range(at: 1))) != nil else { continue }
+                var range = match.range
+                // 连同标签旁的分隔空格移除，避免每次勾选都积累空格；保留换行和正文缩进。
+                while NSMaxRange(range) < source.length, [32, 9].contains(source.character(at: NSMaxRange(range))) { range.length += 1 }
+                work = (work as NSString).replacingCharacters(in: range, with: "")
+            }
+        }
+        let body = QuickAdd.unmask(work, links: links).trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffix = merge([], tags.compactMap(normalize)).map { "#" + $0 }.joined(separator: " ")
+        return [body, suffix].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
     /// 已经遮住链接的文字：取出所有标签并从原文里删掉。
     static func take(from work: inout String) -> [String] {
         guard let regex = try? NSRegularExpression(pattern: #"(?<!\S)#([^\s#]+)"#) else { return [] }
@@ -367,6 +391,12 @@ extension JournalStore {
 // MARK: - 标签候选（输入框里的 # 补全）
 
 public struct TagCandidate: Identifiable, Equatable {
+    public init(name: String, isNew: Bool, taskCount: Int, noteCount: Int) {
+        self.name = name
+        self.isNew = isNew
+        self.taskCount = taskCount
+        self.noteCount = noteCount
+    }
     public let name: String
     /// 还不存在，选中就是新建。
     public let isNew: Bool

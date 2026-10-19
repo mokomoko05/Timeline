@@ -965,6 +965,16 @@ struct FocusPanelView: View {
                 .popover(isPresented: Binding(get: { mention.isActive }, set: { if !$0 { mention.dismiss() } }), arrowEdge: .bottom) {
                     if let store { MentionList(state: mention, store: store, contextTags: draft.tags).frame(width: 320) }
                 }
+                if let store {
+                    VStack(spacing: 0) {
+                        TagSelectionButton(store: store, tags: $draft.tags)
+                        LinkPickerButton(store: store, current: draft.link ?? session.active?.taskID,
+                                         allowsNone: false, pick: { draft.link = $0 }) { MetadataSymbol(symbol: "@", active: draft.link != nil) }
+                            .raisedOnHover(radius: 5)
+                            .help("选择关联的待办").accessibilityLabel("选择关联的待办")
+                    }
+                    .disabled(session.isPaused || draft.pendingEntryID != nil)
+                }
                 Button(action: saveNote) {
                     Image(systemName: draft.pendingEntryID == nil ? "arrow.up.circle.fill" : "arrow.clockwise.circle.fill")
                         .font(.system(size: 18))
