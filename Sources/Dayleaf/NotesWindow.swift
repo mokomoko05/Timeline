@@ -7,6 +7,15 @@ private final class NotesWindow: QuietWindow {
     override func cancelOperation(_ sender: Any?) { close() }
 }
 
+enum NotesHotKeyAction: Equatable {
+    case open, close, bringForward
+
+    static func resolve(appWasActive: Bool, visible: Bool, onActiveSpace: Bool, isKey: Bool, miniaturized: Bool) -> Self {
+        guard visible else { return .open }
+        return appWasActive && onActiveSpace && isKey && !miniaturized ? .close : .bringForward
+    }
+}
+
 /// 笔记窗口：可以自由调整大小的独立窗口。它和主窗口、终端、快速记录窗口互不依赖：
 /// 各自用自己的快捷键开关，主窗口收起（⌃⌥D）时笔记照常留着；大小和位置会被记住。
 @MainActor
@@ -45,7 +54,7 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
         if let host = window.contentViewController as? NSHostingController<AnyView> {
             host.rootView = AnyView(LocalizedRoot { view })
         }
-        window.makeKeyAndOrderFront(nil)
+        bringToFront()
     }
 
     /// 打开合并窗口的日记模式。日期列表和右侧日志视图共用同一个窗口及窗口状态。
@@ -61,7 +70,22 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
         if let host = window.contentViewController as? NSHostingController<AnyView> {
             host.rootView = AnyView(LocalizedRoot { view })
         }
+        bringToFront()
+    }
+
+    /// 先把复用的窗口带到当前桌面，再激活应用，避免系统先切回窗口原来的桌面。
+    func bringToFront() {
+        guard let window else { return }
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        WindowFade.reset(window)
         window.makeKeyAndOrderFront(nil)
+        Headless.activateApp()
+    }
+
+    func hotKeyAction(_ appWasActive: Bool) -> NotesHotKeyAction {
+        NotesHotKeyAction.resolve(appWasActive: appWasActive, visible: isVisible,
+                                  onActiveSpace: window?.isOnActiveSpace == true,
+                                  isKey: isKey, miniaturized: window?.isMiniaturized == true)
     }
 
     func setDate(_ date: Date) {
@@ -73,10 +97,12 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
 
     func close() { window?.close() }
 
-    /// 快捷键（默认 ⌃N）：开着就关，关着就开。
+    /// 菜单切换：当前桌面开着就关，其他桌面开着就带到当前桌面。
     func toggle(store: JournalStore, taskID: UUID?,
                 reveal: @escaping (UUID) -> Void, openDay: @escaping (Date) -> Void) {
-        if isVisible { close() } else { show(store: store, taskID: taskID, reveal: reveal, openDay: openDay) }
+        if isVisible, window?.isOnActiveSpace == true { close() }
+        else if isVisible { bringToFront() }
+        else { show(store: store, taskID: taskID, reveal: reveal, openDay: openDay) }
     }
 
     private func makeWindow() -> NSWindow {
@@ -93,7 +119,7 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 640, height: 420)
-        window.collectionBehavior = [.fullScreenAuxiliary]
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.delegate = self
         if !window.setFrameUsingName(Self.frameName) {
             window.setContentSize(NSSize(width: 1000, height: 680))

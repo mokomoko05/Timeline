@@ -455,12 +455,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
     }
 
-    /// 全局快捷键：笔记窗口开着就关；没开就打开并把 Scheduler 调到前台。Scheduler 在后台时，笔记已开着则只是调到最前面。
+    /// 全局快捷键：先在当前桌面显示笔记，再激活应用，避免跳回旧桌面。
     private func toggleNotesGlobally() {
         let wasActive = NSApp.isActive
         PreviousApp.remember()
         NSApp.unhide(nil)
-        if !wasActive { NSApp.activate(ignoringOtherApps: true) }
         commands.send(.notesHotKey(appWasActive: wasActive))
     }
 

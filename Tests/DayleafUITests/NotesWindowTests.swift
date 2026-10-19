@@ -7,6 +7,55 @@ import DayleafCore
 final class NotesWindowTests: XCTestCase {
     private static var keepAlive: [AnyObject] = []
 
+    func testGlobalShortcutBringsOffSpaceOrBackgroundWindowForwardInsteadOfClosingIt() {
+        for active in [true, false] {
+            for key in [true, false] {
+                XCTAssertEqual(NotesHotKeyAction.resolve(appWasActive: active, visible: true,
+                                                        onActiveSpace: false, isKey: key, miniaturized: false), .bringForward)
+            }
+        }
+        XCTAssertEqual(NotesHotKeyAction.resolve(appWasActive: false, visible: true,
+                                                onActiveSpace: true, isKey: true, miniaturized: false), .bringForward)
+        XCTAssertEqual(NotesHotKeyAction.resolve(appWasActive: true, visible: true,
+                                                onActiveSpace: true, isKey: false, miniaturized: false), .bringForward)
+        XCTAssertEqual(NotesHotKeyAction.resolve(appWasActive: true, visible: true,
+                                                onActiveSpace: true, isKey: true, miniaturized: false), .close)
+        XCTAssertEqual(NotesHotKeyAction.resolve(appWasActive: true, visible: false,
+                                                onActiveSpace: false, isKey: false, miniaturized: false), .open)
+        XCTAssertEqual(NotesHotKeyAction.resolve(appWasActive: true, visible: true,
+                                                onActiveSpace: true, isKey: true, miniaturized: true), .bringForward)
+    }
+
+    func testBothModesAndReopenedWindowUseCurrentSpaceAndPreserveNavigation() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let date = JournalDates.calendar.startOfDay(for: Date()).addingTimeInterval(-86400)
+        let controller = NotesWindowController()
+        Self.keepAlive.append(controller)
+        defer { controller.close() }
+        controller.showJournal(store: store, date: date)
+        let window = try XCTUnwrap(controller.window)
+        XCTAssertTrue(window.collectionBehavior.contains(.moveToActiveSpace))
+        XCTAssertTrue(window.collectionBehavior.contains(.fullScreenAuxiliary))
+        XCTAssertFalse(window.collectionBehavior.contains(.canJoinAllSpaces))
+        controller.bringToFront()
+        XCTAssertTrue(controller.window === window)
+        XCTAssertEqual(controller.workspace.mode, .journal)
+        XCTAssertEqual(controller.journalDate, date)
+        window.orderOut(nil)
+        XCTAssertFalse(controller.isVisible)
+        controller.bringToFront()
+        XCTAssertTrue(controller.isVisible)
+        XCTAssertEqual(controller.workspace.mode, .journal)
+        XCTAssertEqual(controller.journalDate, date)
+        controller.close()
+        controller.show(store: store, taskID: nil, reveal: { _ in }, openDay: { _ in })
+        XCTAssertTrue(controller.window === window)
+        XCTAssertTrue(window.collectionBehavior.contains(.moveToActiveSpace))
+        XCTAssertEqual(controller.workspace.mode, .notes)
+    }
+
     func testJournalReusedWindowRendersTheRequestedDateAfterNotesAndOtherDates() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

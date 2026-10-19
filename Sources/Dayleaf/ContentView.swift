@@ -205,17 +205,24 @@ struct ContentView: View {
         case .notes: showNotes(tag: nil)
         case .notesForTask(let id): showNotes(tag: nil, taskID: id)
         case .notesHotKey(let appWasActive):
-            if !notesWindow.isVisible { showNotes(tag: nil) }
-            else if appWasActive { notesWindow.close() }
-            else { notesWindow.window?.makeKeyAndOrderFront(nil) }
+            switch notesWindow.hotKeyAction(appWasActive) {
+            case .open:
+                if notesWindow.window != nil { notesWindow.bringToFront() }
+                else { showNotes(tag: nil) }
+            case .close: notesWindow.close()
+            case .bringForward: notesWindow.bringToFront()
+            }
         case .toggleNotes:
-            if notesWindow.isVisible { notesWindow.close() } else { showNotes(tag: nil) }
+            if notesWindow.isVisible, notesWindow.window?.isOnActiveSpace == true { notesWindow.close() }
+            else if notesWindow.isVisible { notesWindow.bringToFront() }
+            else { showNotes(tag: nil) }
         case .agenda(let filter): agenda = filter
         case .shiftDay(let amount): shiftDay(amount)
         case .shiftMonth(let amount): shiftMonth(amount)
         case .toggleTasks: toggleTasks()
         case .toggleDayLog:
-            if notesWindow.isVisible { notesWindow.close() } else { notesWindow.showJournal(store: store, date: selectedDate) }
+            if notesWindow.isVisible, notesWindow.window?.isOnActiveSpace == true { notesWindow.close() }
+            else { notesWindow.showJournal(store: store, date: selectedDate) }
         case .rollover: rolloverToday()
         case .selectAdjacent(let amount): moveSelection(amount)
         case .toggleSelected:

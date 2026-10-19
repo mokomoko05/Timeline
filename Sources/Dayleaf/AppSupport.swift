@@ -192,7 +192,7 @@ enum AppCommand {
     case selectAdjacent(Int), toggleSelected, editSelected, deleteSelected, deselect
     case reveal(UUID)
     case export, backups, settings, quickCapture, notes, toggleNotes
-    /// 全局快捷键触发：`appWasActive` 为 false 表示按键时 Scheduler 在后台，此时只把笔记调到最前面。
+    /// 全局快捷键触发：只有笔记已在当前桌面前台时才关闭，否则在当前桌面唤起。
     case notesHotKey(appWasActive: Bool)
     /// 打开某个任务的笔记（扇形菜单、右键菜单）。
     case notesForTask(UUID)
