@@ -373,7 +373,6 @@ struct ContentView: View {
         }
     }
 
-    /// 任务分组：已逾期、今天、明天、未来 7 天、更晚、未设截止日期、已完成。
     private struct TaskGroup: Identifiable {
         let id: String
         let title: String
@@ -382,30 +381,20 @@ struct ContentView: View {
     }
 
     private func groups(for tasks: [ScheduledTask]) -> [TaskGroup] {
-        let calendar = JournalDates.calendar
         let now = Date()
-        let today = calendar.startOfDay(for: now)
-        func days(_ task: Todo) -> Int? {
-            task.dueDate.map { calendar.dateComponents([.day], from: today, to: calendar.startOfDay(for: $0)).day ?? 0 }
-        }
-        let open = tasks.filter { !$0.task.completed }
-        let specs: [(String, String, Color, (ScheduledTask) -> Bool)] = [
-            ("overdue", "已逾期", Palette.deadline, { $0.task.effectiveDeadline.map { $0 < now } == true }),
-            ("today", "今天", Palette.accent, { item in (days(item.task) ?? 1) == 0 && !(item.task.effectiveDeadline.map { $0 < now } == true) }),
-            ("tomorrow", "明天", Palette.ink, { days($0.task) == 1 }),
-            ("week", "未来 7 天", Palette.ink, { (2...7).contains(days($0.task) ?? 0) }),
-            ("later", "更晚", Palette.muted, { (days($0.task) ?? 0) > 7 }),
-            ("undated", "未设截止日期", Palette.muted, { $0.task.dueDate == nil }),
+        let specs: [(Int, String, String, Color)] = [
+            (0, "overdue", "更早", Palette.muted),
+            (1, "today", "今天", Palette.accent),
+            (2, "tomorrow", "明天", Palette.ink),
+            (3, "week", "未来 7 天", Palette.ink),
+            (4, "later", "更晚", Palette.muted),
+            (5, "undated", "未设截止日期", Palette.muted),
+            (7, "dropped", "已放弃", Palette.muted),
         ]
-        var result = specs.compactMap { id, title, tint, belongs -> TaskGroup? in
-            let items = open.filter(belongs)
+        return specs.compactMap { index, id, title, tint -> TaskGroup? in
+            let items = tasks.filter { TaskSortMode.group(for: $0.task, now: now) == index }
             return items.isEmpty ? nil : TaskGroup(id: id, title: title, tint: tint, items: items)
         }
-        let done = tasks.filter { $0.task.isDone }
-        if !done.isEmpty { result.append(TaskGroup(id: "done", title: "已完成", tint: Palette.success, items: done)) }
-        let dropped = tasks.filter { $0.task.isDropped }
-        if !dropped.isEmpty { result.append(TaskGroup(id: "dropped", title: "已放弃", tint: Palette.muted, items: dropped)) }
-        return result
     }
 
     /// 清单顶部：「3 逾期 · 5 今天 · 12 未完成」（点数字跳到对应分组）和今天的进度条（只统计今天截止的）。
@@ -494,12 +483,16 @@ struct ContentView: View {
                         VStack(alignment: .leading, spacing: TaskReorderModel.spacing) {
                             ForEach(groups(for: visible)) { group in
                                 HStack(spacing: 6) {
+                                    Circle().strokeBorder(group.tint.opacity(0.65), lineWidth: 1.5)
+                                        .frame(width: 6, height: 6).frame(width: 22)
                                     Text(LocalizedStringKey(group.title)).font(.system(size: typography.pt(12), weight: .semibold)).foregroundStyle(group.tint)
                                         .id("group-" + group.id)
-                                    Text("\(group.items.count)").font(.system(size: typography.pt(11), design: .monospaced)).foregroundStyle(Palette.muted)
-                                    Rectangle().fill(Palette.line).frame(height: 1)
+                                    Text("\(group.items.count)").font(.system(size: typography.pt(10), design: .monospaced)).foregroundStyle(Palette.muted)
+                                        .padding(.horizontal, 5).padding(.vertical, 1)
+                                        .background(Palette.soft.opacity(0.65), in: Capsule())
+                                    Spacer(minLength: 0)
                                 }
-                                .padding(.top, 8).padding(.horizontal, 2)
+                                .padding(.top, 10).padding(.bottom, 3)
                                 ForEach(Array(group.items.enumerated()), id: \.element.id) { index, item in
                                     ManagedTaskRow(store: store, date: item.date, task: item.task, requestedEdit: $requestedEdit,
                                                    emphasized: dueOnSelectedDay(item.task),

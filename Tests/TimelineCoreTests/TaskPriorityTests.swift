@@ -54,6 +54,42 @@ final class TaskPriorityTests: XCTestCase {
     }
 
     @MainActor
+    func testCompletionKeepsItsDateGroupAndPositionAcrossSortModesUndoAndReload() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let now = date(18, 8)
+        let tasks = try (0..<3).map { index in
+            try XCTUnwrap(store.addParsedTodo("Task \(index)", on: now))
+        }
+        for (index, task) in tasks.enumerated() {
+            store.setDeadline(task.id, to: date(18, 9 + index))
+        }
+        store.reorderTasks(tasks.reversed().map(\.id))
+        let orders = TaskSortMode.allCases.map { $0.sorted(store.tasks(), now: now).map(\.id) }
+        let target = tasks[1]
+        store.toggleTodo(target.id, on: target.date, now: now)
+        for (mode, order) in zip(TaskSortMode.allCases, orders) {
+            XCTAssertEqual(mode.sorted(store.tasks(), now: now).map(\.id), order)
+            XCTAssertEqual(TaskSortMode.group(for: try XCTUnwrap(store.locate(target.id)).task, now: now), 1)
+        }
+        store.undo()
+        XCTAssertFalse(try XCTUnwrap(store.locate(target.id)).task.completed)
+        store.redo()
+        store.save()
+        let reloaded = JournalStore(directory: directory)
+        for (mode, order) in zip(TaskSortMode.allCases, orders) {
+            XCTAssertEqual(mode.sorted(reloaded.tasks(), now: now).map(\.id), order)
+        }
+        reloaded.toggleTodo(target.id, on: target.date, now: now)
+        for (mode, order) in zip(TaskSortMode.allCases, orders) {
+            XCTAssertEqual(mode.sorted(reloaded.tasks(), now: now).map(\.id), order)
+        }
+        reloaded.dropTodo(target.id, on: target.date, now: now)
+        XCTAssertEqual(TaskSortMode.group(for: try XCTUnwrap(reloaded.locate(target.id)).task, now: now), 7)
+    }
+
+    @MainActor
     func testPriorityPersistenceUndoRecurrenceAndBackup() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

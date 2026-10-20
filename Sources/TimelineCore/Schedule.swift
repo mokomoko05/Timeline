@@ -32,7 +32,7 @@ public enum TaskSortMode: String, CaseIterable, Identifiable {
     }
 
     public static func group(for task: Todo, now: Date) -> Int {
-        if task.completed { return task.isDropped ? 7 : 6 }
+        if task.isDropped { return 7 }
         guard let due = task.dueDate else { return 5 }
         if task.effectiveDeadline.map({ $0 < now }) == true { return 0 }
         let calendar = JournalDates.calendar

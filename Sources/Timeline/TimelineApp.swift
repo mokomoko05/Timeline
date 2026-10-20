@@ -164,8 +164,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
             if let id = option("--theme") { AppTheme.current = AppTheme.theme(id: id) }
             if let mode = option("--appearance").flatMap(AppearanceMode.init(rawValue:)) { NSApp.appearance = mode.nsAppearance }
+            func panel<Content: View>(_ content: Content) -> NSWindow {
+                let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 158),
+                                     styleMask: [.borderless], backing: .buffered, defer: false)
+                panel.isReleasedWhenClosed = false
+                panel.contentView = NSHostingView(rootView: LocalizedRoot { content })
+                return panel
+            }
             var target: NSWindow = window
             switch option("--snapshot-window") {
+            case "focus":
+                if let task = TaskSortMode.deadline.sorted(store.tasks()).first(where: { !$0.task.completed }) {
+                    focus.start(task: task, url: nil, plannedSeconds: 25 * 60,
+                                goal: "读完方法部分，记下两个问题", now: Date().addingTimeInterval(-7 * 60))
+                    focus.tick(now: Date())
+                }
+                target = panel(FocusPanelView(session: focus))
+            case "capture":
+                let model = QuickCaptureModel()
+                model.mode = .log
+                target = panel(QuickCaptureView(store: store, model: model, close: {}, resize: { _ in }))
             case "daylog":
                 NotesWindowController.shared.showJournal(store: store, date: Date())
                 target = NotesWindowController.shared.window ?? window

@@ -32,18 +32,45 @@ struct ManagedTaskRow: View {
                 TaskPriorityButton(store: store, task: task)
                     .frame(width: 22).frame(maxHeight: .infinity)
                     .background {
-                        TaskTimelineConnector(position: timeline)
-                            .stroke(Palette.line, lineWidth: 1)
+                        TaskTimelineConnector(position: timeline, branch: !task.isDone)
+                            .stroke(selected ? Palette.accent.opacity(0.6) : Palette.line, lineWidth: 1)
+                            .allowsHitTesting(false)
+                    }
+                    .background {
+                        Circle().fill(PriorityMark(priority: task.priority).color.opacity(0.12))
+                            .frame(width: 20, height: 20)
+                            .opacity(hovered || selected ? 1 : 0)
                             .allowsHitTesting(false)
                     }
             }
-            card
+            rowContent
         }
         .fixedSize(horizontal: false, vertical: true)
+        .onHover { hovered = $0 }
+        .animation(Motion.quick, value: hovered)
+        .animation(Motion.quick, value: task.isDone)
+    }
+
+    private var completedRow: some View {
+        Button {
+            selectTask()
+            withAnimation(Motion.quick) { store.toggleTodo(task.id, on: date) }
+        } label: {
+            Text(String(TaskText.rendered(task.title).characters).replacingOccurrences(of: "\n", with: " "))
+                .font(.system(size: typography.pt(compact ? 11 : 12)))
+                .strikethrough().foregroundStyle(hovered ? Palette.ink : Palette.muted)
+                .lineLimit(1).truncationMode(.tail)
+                .frame(maxWidth: .infinity, minHeight: typography.pt(24), alignment: .leading)
+                .padding(.horizontal, 8)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("取消完成")
+        .accessibilityLabel(AppLocalizedFormat("标记未完成：%@", task.title))
     }
 
     private var completionButton: some View {
-        Button { selectTask(); store.toggleTodo(task.id, on: date) } label: {
+        Button { selectTask(); withAnimation(Motion.quick) { store.toggleTodo(task.id, on: date) } } label: {
             Image(systemName: task.isDropped ? "xmark.circle.fill" : (task.completed ? "checkmark.circle.fill" : "circle"))
                 .font(.system(size: typography.pt(compact ? 14 : 17), weight: .light))
                 .foregroundStyle(task.completed ? Palette.success : Palette.muted)
@@ -120,12 +147,18 @@ struct ManagedTaskRow: View {
             .fixedSize()
         }
         .padding(.horizontal, 6).padding(.vertical, compact ? 4 : 7)
-        .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
+        .background {
+            RoundedRectangle(cornerRadius: 8).fill(Palette.card)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(LinearGradient(colors: [.white.opacity(hovered ? 0.055 : 0.025), .clear],
+                                             startPoint: .topLeading, endPoint: .bottomTrailing))
+                }
+                .shadow(color: .black.opacity(hovered || selected ? 0.18 : 0.07),
+                        radius: hovered || selected ? 5 : 2, x: 0, y: hovered || selected ? 2 : 1)
+        }
         // 常驻一道很淡的细边（有质感但不花），悬停时浮起来：边变清晰、下面有一点阴影。
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line.opacity(hovered ? 0.9 : 0.35), lineWidth: 0.75).allowsHitTesting(false))
-        .shadow(color: .black.opacity(hovered && !selected ? 0.16 : 0), radius: hovered ? 4 : 0, x: 0, y: hovered ? 2 : 0)
-        .onHover { hovered = $0 }
-        .animation(Motion.quick, value: hovered)
         .overlay(alignment: .leading) {
             if emphasized { Capsule().fill(Palette.accent).frame(width: 3).padding(.vertical, 6).allowsHitTesting(false) }
         }
@@ -133,6 +166,16 @@ struct ManagedTaskRow: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(selected ? Palette.accent : .clear, lineWidth: 1.5)
                 .allowsHitTesting(false)
+        }
+    }
+
+    private var rowContent: some View {
+        Group {
+            if timeline != nil && task.isDone {
+                completedRow.transition(.opacity)
+            } else {
+                card.transition(.opacity)
+            }
         }
         .contentShape(RoundedRectangle(cornerRadius: 8))
         .simultaneousGesture(TapGesture().onEnded { selectTask() })
@@ -201,6 +244,11 @@ struct ManagedTaskRow: View {
     private var menuItems: [TextMenuItem] {
         guard !store.isReadOnly else { return [] }
         var list = radialItems.map { TextMenuItem(title: $0.title, symbol: $0.symbol, destructive: $0.destructive, action: $0.action) }
+        if task.isDone {
+            list.insert(TextMenuItem(title: "取消完成", symbol: "arrow.uturn.backward", action: {
+                withAnimation(Motion.quick) { store.toggleTodo(task.id, on: date) }
+            }), at: 0)
+        }
         // 环形菜单不再重复日期入口；完整设置仍可从右键或 D 打开。
         list.insert(TextMenuItem(title: "截止日期与月历短标题", symbol: "calendar.badge.clock", action: {
             selectTask()
