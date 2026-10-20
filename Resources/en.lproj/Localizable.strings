@@ -729,6 +729,7 @@
 "在同一日期内拖动排序" = "Drag to reorder within the same date group";
 "同一日期内上下排序；拖到日历修改日期" = "Drag vertically to reorder within a date; drag to the calendar to change the date";
 "排序任务或拖到日历修改日期" = "Reorder tasks or drag to the calendar to change the date";
+"拖到日历或左侧日期分组修改日期；拖到 No Due 清除日期；右键设置优先级" = "Drag to the calendar or a date group on the left to change the date; drag to No Due to clear it; right-click to set priority";
 "同一日期内上下排序；拖到日历修改日期；右键设置优先级" = "Drag vertically to reorder within a date; drag to the calendar to change the date; right-click to set priority";
 "同一日期内上下排序，拖到日历修改日期，右键选择优先级" = "Drag vertically to reorder within a date, drag to the calendar to change the date, or right-click to choose priority";
 "在同一日期内拖动任务排序" = "Drag tasks to reorder within the same date group";

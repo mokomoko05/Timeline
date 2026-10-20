@@ -86,7 +86,7 @@ struct DeadlineDayCell: View {
             .frame(height: ceil(max(18, typography.pt(15))))
             ForEach(items) { item in
                 HStack(alignment: .top, spacing: 0) {
-                    TaskPriorityButton(store: store, task: item.task)
+                    TaskPriorityButton(store: store, task: item.task, dragOrigin: .calendar)
                         .background(GeometryReader { proxy in
                             Color.clear.preference(key: CheckboxFramesKey.self, value: [item.id.uuidString + "-priority": proxy.frame(in: .named(Self.space))])
                         })

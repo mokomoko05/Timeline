@@ -215,6 +215,8 @@ struct TimelineDayView: View {
     let selectTask: () -> Void
     let next: () -> Void
     var showsFinishedTasks = false
+    @State private var calendarDropTargeted = false
+    @ObservedObject private var dragSession = TaskDragSession.shared
     @State private var reorder = TaskReorderModel()
     private var reorderSpace: String { "timeline-order-" + (date.map(TaskTimelineSection.dayID) ?? "undated") }
     private var displayed: [ScheduledTask] { tasks.sorted(by: TaskTimelineSection.precedes) }
@@ -255,6 +257,19 @@ struct TimelineDayView: View {
         .onAppear { configureReorder() }
         .onChange(of: visibleIDs) { _ in configureReorder() }
         .background { TimelineAxisStroke(highlighted: false, dashed: date == nil) }
+        .background {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(calendarDropTargeted ? Palette.soft : .clear)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(calendarDropTargeted ? Palette.accent : .clear, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .contentShape(Rectangle())
+        .onDrop(of: [TaskDragPayload.type], delegate: CalendarTaskDropTarget(store: store, destination: date,
+            calendarSourceOnly: true, targeted: $calendarDropTargeted))
+        .onChange(of: dragSession.activeID) { if $0 == nil { calendarDropTargeted = false } }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(date.map(TaskTimelineSection.dayID) ?? "undated")
     }

@@ -6,6 +6,56 @@ import TimelineCore
 
 final class TaskDragDropTests: XCTestCase {
     @MainActor
+    func testCalendarDotCanReturnToDateGroupsAndClearDateInNoDue() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory); TaskDragSession.shared.end() }
+        let store = JournalStore(directory: directory)
+        let source = try XCTUnwrap(JournalDates.date(for: "2026-10-20"))
+        let destination = try XCTUnwrap(JournalDates.date(for: "2026-10-21"))
+        let item = try XCTUnwrap(store.addParsedTodo("Move from calendar", on: source))
+        let due = try XCTUnwrap(JournalDates.calendar.date(bySettingHour: 14, minute: 30, second: 0, of: source))
+        store.updateTodo(item.id, scheduledDate: source, dueDate: due, dueHasTime: true, reminderMinutes: 15, repeatRule: .none)
+        let host = NSHostingView(rootView: DeadlineDayCell(store: store, date: source, selectedDate: source,
+            displayedMonth: source, height: 120, items: store.tasks(), select: {}, open: {}, editTask: { _ in })
+            .frame(width: 240, height: 120))
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 120), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        func handles(_ view: NSView) -> [TaskHandleView] {
+            (view as? TaskHandleView).map { [$0] } ?? view.subviews.flatMap(handles)
+        }
+        let dot = try XCTUnwrap(handles(host).first { $0.taskID == item.id })
+        XCTAssertEqual(dot.dragOrigin, .calendar, "日历圆点必须标记拖动来源")
+        let dateTarget = CalendarTaskDropTarget(store: store, destination: destination, calendarSourceOnly: true, targeted: .constant(false))
+        let noDueTarget = CalendarTaskDropTarget(store: store, destination: nil, calendarSourceOnly: true, targeted: .constant(false))
+        let provider = TaskDragPayload.provider(item.id)
+        TaskDragSession.shared.begin(item.id)
+        XCTAssertFalse(dateTarget.receive([provider]), "左侧任务仍不能跨日期放置")
+        XCTAssertFalse(noDueTarget.receive([provider]))
+        XCTAssertEqual(store.locate(item.id)?.task.dueDate, due)
+        TaskDragSession.shared.begin(item.id, origin: dot.dragOrigin)
+        XCTAssertTrue(dateTarget.receive([provider]))
+        let moved = try XCTUnwrap(store.locate(item.id)?.task)
+        XCTAssertTrue(JournalDates.calendar.isDate(try XCTUnwrap(moved.dueDate), inSameDayAs: destination))
+        XCTAssertEqual(JournalDates.calendar.component(.hour, from: moved.dueDate!), 14)
+        XCTAssertEqual(JournalDates.calendar.component(.minute, from: moved.dueDate!), 30)
+        XCTAssertEqual(store.calendarDeadlines[JournalDates.key(destination)]?.map(\.id), [item.id])
+        TaskDragSession.shared.begin(item.id, origin: .calendar)
+        XCTAssertTrue(noDueTarget.receive([provider]))
+        XCTAssertNil(store.locate(item.id)?.task.dueDate)
+        XCTAssertFalse(try XCTUnwrap(store.locate(item.id)?.task).dueHasTime)
+        XCTAssertTrue(store.calendarDeadlines[JournalDates.key(destination), default: []].isEmpty)
+        XCTAssertNil(JournalStore(directory: directory).locate(item.id)?.task.dueDate)
+        XCTAssertFalse(noDueTarget.acceptsSource, "结束拖动后不能留下日历来源状态")
+        store.undo()
+        XCTAssertEqual(store.locate(item.id)?.task.dueDate, moved.dueDate)
+        XCTAssertEqual(store.calendarDeadlines[JournalDates.key(destination)]?.map(\.id), [item.id])
+    }
+
+    @MainActor
     func testDotWithoutReorderDragsToCalendarAndRightClickOpensPalette() async throws {
         let dot = TaskHandleView(frame: NSRect(x: 0, y: 0, width: 22, height: 22))
         dot.taskID = UUID()

@@ -24,6 +24,7 @@ struct PriorityMark: View {
 struct TaskPriorityButton: View {
     @ObservedObject var store: JournalStore
     let task: Todo
+    var dragOrigin: TaskDragOrigin = .taskList
     @Environment(\.taskReorder) private var reorder
     var select: () -> Void = {}
     var items: [RadialItem] {
@@ -40,11 +41,11 @@ struct TaskPriorityButton: View {
                              TaskReorderHooks(begin: { model.begin(task.id) }, update: { model.update($0) },
                                  end: { model.finish() }, cancel: { model.cancel() })
                          }, priorityItems: items,
-                         priorityColor: NSColor(PriorityMark(priority: task.priority).color))
+                         priorityColor: NSColor(PriorityMark(priority: task.priority).color), dragOrigin: dragOrigin)
             .frame(width: 18, height: 22)
-            .help("同一日期内上下排序；拖到日历修改日期；右键设置优先级")
+            .help(dragOrigin == .calendar ? "拖到日历或左侧日期分组修改日期；拖到 No Due 清除日期；右键设置优先级" : "同一日期内上下排序；拖到日历修改日期；右键设置优先级")
             .accessibilityLabel(LocalizedStringKey(task.priority.title))
-            .accessibilityHint("同一日期内上下排序，拖到日历修改日期，右键选择优先级")
+            .accessibilityHint(dragOrigin == .calendar ? "拖到日历或左侧日期分组修改日期；拖到 No Due 清除日期；右键设置优先级" : "同一日期内上下排序，拖到日历修改日期，右键选择优先级")
             .accessibilityActions {
                 ForEach(items) { item in Button(LocalizedStringKey(item.title), action: item.action) }
             }

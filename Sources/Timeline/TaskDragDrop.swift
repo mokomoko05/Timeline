@@ -50,10 +50,12 @@ struct NativeTaskHandle: NSViewRepresentable {
     var reorder: TaskReorderHooks?
     var priorityItems: [RadialItem]?
     var priorityColor: NSColor?
+    var dragOrigin: TaskDragOrigin = .taskList
 
     func makeNSView(context: Context) -> TaskHandleView { TaskHandleView() }
     func updateNSView(_ view: TaskHandleView, context: Context) {
         view.priorityItems = priorityItems
+        view.dragOrigin = dragOrigin
         view.priorityColor = priorityColor
         view.reorder = reorder
         view.taskID = enabled ? task.id : nil
@@ -67,6 +69,7 @@ struct NativeTaskHandle: NSViewRepresentable {
 }
 
 final class TaskHandleView: NSView, NSDraggingSource {
+    var dragOrigin: TaskDragOrigin = .taskList
     var titleSource: (title: String, alias: String) = ("", "")
     var title: String { String(TaskText.rendered(titleSource.title, alias: titleSource.alias).characters) }
     var startNativeDrag: (UUID, String, TaskHandleView, NSEvent) -> Void = { id, title, view, event in
@@ -247,7 +250,7 @@ enum NativeTaskDrag {
     static func begin(id: UUID, title: String, view: NSView, source: NSDraggingSource, event: NSEvent) {
         guard view.window != nil else { return }
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
-        TaskDragSession.shared.begin(id)
+        TaskDragSession.shared.begin(id, origin: (view as? TaskHandleView)?.dragOrigin ?? .taskList)
         let pasteboard = NSPasteboardItem()
         pasteboard.setData(TaskDragPayload.encode(id), forType: TaskDragPayload.pasteboardType)
         let item = NSDraggingItem(pasteboardWriter: pasteboard)
