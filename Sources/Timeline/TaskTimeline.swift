@@ -224,8 +224,8 @@ struct TimelineDayView: View {
         if showsFinishedTasks { return displayed.map(\.id) }
         return TaskTimelineItem.items(for: displayed, expanded: expanded).filter { !$0.folded }.flatMap(\.tasks).map(\.id)
     }
-    private func configureReorder() {
-        let ids = visibleIDs
+    private func configureReorder(_ ids: [UUID]) {
+        // onChange 直接传入新值；重新读取视图属性可能取得刷新前的分组快照。
         reorder.groupProvider = { _ in ids }
         reorder.commit = { store.reorderTasks($0) }
     }
@@ -254,8 +254,8 @@ struct TimelineDayView: View {
         .environment(\.taskReorder, store.isReadOnly ? nil : reorder)
         .environment(\.timelineReorderSpace, reorderSpace)
         .onPreferenceChange(TaskRowFramesKey.self) { reorder.frames = $0 }
-        .onAppear { configureReorder() }
-        .onChange(of: visibleIDs) { _ in configureReorder() }
+        .onAppear { configureReorder(visibleIDs) }
+        .onChange(of: visibleIDs) { ids in configureReorder(ids) }
         .background { TimelineAxisStroke(highlighted: false, dashed: date == nil) }
         .background {
             RoundedRectangle(cornerRadius: 6)
