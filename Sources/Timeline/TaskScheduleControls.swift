@@ -38,14 +38,13 @@ struct TaskPriorityButton: View {
         NativeTaskHandle(task: task, enabled: !store.isReadOnly, drawsHandle: false,
                          select: select, reorder: reorder.map { model in
                              TaskReorderHooks(begin: { model.begin(task.id) }, update: { model.update($0) },
-                                 end: { model.finish() }, cancel: { model.cancel() },
-                                 leavesGroup: { model.leavesGroup($0) })
+                                 end: { model.finish() }, cancel: { model.cancel() })
                          }, priorityItems: items,
                          priorityColor: NSColor(PriorityMark(priority: task.priority).color))
             .frame(width: 18, height: 22)
-            .help("左键按住拖动；右键设置优先级")
+            .help("左键在同一日期内拖动排序；右键设置优先级")
             .accessibilityLabel(LocalizedStringKey(task.priority.title))
-            .accessibilityHint("左键按住拖动任务，右键选择优先级")
+            .accessibilityHint("左键在同一日期内拖动排序，右键选择优先级")
             .accessibilityActions {
                 ForEach(items) { item in Button(LocalizedStringKey(item.title), action: item.action) }
             }

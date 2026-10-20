@@ -6,7 +6,6 @@ struct ManagedTaskRow: View {
     @Environment(\.typography) private var typography
     @ObservedObject var store: JournalStore
     @EnvironmentObject private var interaction: WorkspaceInteraction
-    @ObservedObject private var dragSession = TaskDragSession.shared
     @Environment(\.focusSession) private var focus
     /// 主窗口的命令中心（搜索面板里的行没有它）。
     @Environment(\.appCommands) private var commands
@@ -17,14 +16,13 @@ struct ManagedTaskRow: View {
     /// 截止日期正好是日历里选中的那一天时，左侧加一条强调线。
     var emphasized = false
     var timeline = false
-    var placementPreview = false
     var next: () -> Void = {}
     var select: () -> Void = {}
     @State private var showingDetails = false
     @State private var showingTags = false
     @State private var hovered = false
 
-    private var selected: Bool { !placementPreview && (interaction.selectedTaskID == task.id || dragSession.activeID == task.id) }
+    private var selected: Bool { interaction.selectedTaskID == task.id }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -188,7 +186,6 @@ struct ManagedTaskRow: View {
         .contentShape(RoundedRectangle(cornerRadius: 8))
         .simultaneousGesture(TapGesture().onEnded { selectTask() })
         .animation(.easeInOut(duration: 0.12), value: selected)
-        .modifier(TaskDragSource(task: task, enabled: !store.isReadOnly, edgeDragging: false, placementPreview: placementPreview, select: selectTask))
         .contextMenu {
             ForEach(Array(menuItems.enumerated()), id: \.offset) { _, item in
                 if item.separator { Divider() } else {

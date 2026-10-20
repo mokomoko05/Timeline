@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 import TimelineCore
-import UniformTypeIdentifiers
 
 struct DeadlineDayCell: View {
     @Environment(\.typography) private var typography
@@ -16,13 +15,10 @@ struct DeadlineDayCell: View {
     /// 打开这一天的日志（选中的那一格常驻显示按钮，其他格子悬停时出现）。
     var openLog: () -> Void = {}
     let editTask: (ScheduledTask) -> Void
-    @State private var targeted = false
     @State private var checkboxFrames: [String: CGRect] = [:]
-    @State private var after = false
     @State private var hovered = false
     /// 日志按钮在 preference 里的固定标识：和勾选框一样，点它只打开日志，不触发「选中日期」。
     static let logButtonID = UUID(uuidString: "00000000-0000-0000-0000-00000000106E")!
-    @ObservedObject private var dragSession = TaskDragSession.shared
 
     /// 日历只在任务的截止日期那天显示它。
     static func previewItems(dueItems: [ScheduledTask], hideCompleted: Bool) -> [ScheduledTask] {
@@ -101,7 +97,7 @@ struct DeadlineDayCell: View {
                     TaskLinkText(source: item.task.title, completed: item.task.isDone, color: item.task.isDropped ? Palette.muted : Palette.ink, fontSize: 11,
                                  edit: { editTask(item) },
                                  open: SafariLinks.open,
-                                 maxLines: 1, displayName: item.task.calendarName, dragTaskID: item.id, compactLines: true)
+                                 maxLines: 1, displayName: item.task.calendarName, compactLines: true)
                         .disabled(store.isReadOnly)
                     Button { store.toggleTodo(item.id, on: item.date) } label: {
                         Image(systemName: item.task.isDropped ? "xmark.circle.fill" : (item.task.completed ? "checkmark.circle.fill" : "circle"))
@@ -115,13 +111,12 @@ struct DeadlineDayCell: View {
                 }.font(.system(size: typography.pt(11))).frame(height: typography.pt(22))
                     .background(Palette.background, in: RoundedRectangle(cornerRadius: 4))
                     .contentShape(RoundedRectangle(cornerRadius: 4))
-                    .modifier(TaskDragSource(task: item.task, enabled: !store.isReadOnly, edgeDragging: false))
             }
             Spacer(minLength: 0)
         }
         .padding(6).frame(maxWidth: .infinity, alignment: .topLeading).frame(height: height, alignment: .topLeading)
-        .background(selected || today || targeted ? Palette.soft : (inMonth ? Palette.card : Palette.background), in: RoundedRectangle(cornerRadius: 5))
-        .overlay(RoundedRectangle(cornerRadius: 5).stroke(selected || targeted ? Palette.accent : Palette.line.opacity(hovered ? 1 : 0.55), lineWidth: selected || targeted ? 1.5 : 0.5))
+        .background(selected || today ? Palette.soft : (inMonth ? Palette.card : Palette.background), in: RoundedRectangle(cornerRadius: 5))
+        .overlay(RoundedRectangle(cornerRadius: 5).stroke(selected ? Palette.accent : Palette.line.opacity(hovered ? 1 : 0.55), lineWidth: selected ? 1.5 : 0.5))
         // 悬停的格子浮起一点：能点的感觉。
         .shadow(color: .black.opacity(hovered && !selected ? 0.18 : 0), radius: hovered ? 4 : 0, x: 0, y: hovered ? 2 : 0)
         .animation(Motion.quick, value: hovered)
@@ -137,8 +132,6 @@ struct DeadlineDayCell: View {
         .accessibilityAction(named: "选择这一天", select)
         .accessibilityAction(named: "添加事项", open)
         .accessibilityAction(named: "打开这一天的日志", openLog)
-        .onDrop(of: [TaskDragPayload.type], delegate: TaskDropTarget(store: store, destination: date, targeted: $targeted, after: $after))
-        .onChange(of: dragSession.activeID) { if $0 == nil { targeted = false } }
     }
 }
 

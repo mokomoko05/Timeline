@@ -1209,7 +1209,7 @@ public final class JournalStore: ObservableObject {
         replaceDays(updated, action: "调整顺序")
     }
 
-    /// 设置或清除截止日期。`keepingTime` 为 true 时保留原来的时分，只换日期（拖到日历某天时使用）。
+    /// 设置或清除截止日期。`keepingTime` 为 true 时保留原来的时分，只换日期。
     public func setDeadline(_ id: UUID, to date: Date?, keepingTime: Bool = true) {
         guard !isReadOnly, let located = locate(id) else { return }
         let calendar = JournalDates.calendar

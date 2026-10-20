@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 import TimelineCore
-import UniformTypeIdentifiers
 
 /// 已结束事项在当天原位置展开、收起；不跨日期合并。
 struct TaskTimelineItem: Identifiable {
@@ -162,7 +161,7 @@ enum TaskTimelineLayout {
     static func cardInset(_ typography: AppTypography) -> CGFloat { timeWidth(typography) + 34 }
 }
 
-/// 时间轴内容与主窗口分离，空日期仍然有可拖入的轴线区域。
+/// 时间轴内容与主窗口分离，日期区间保留独立的轴线。
 struct TaskTimelineView: View {
     @ObservedObject var store: JournalStore
     let tasks: [ScheduledTask]
@@ -201,22 +200,6 @@ struct TaskTimelineView: View {
         }
         .animation(Motion.quick, value: tasks.map(\.id))
         .animation(Motion.quick, value: expanded)
-        .background(TimelineWheelScrollBridge())
-    }
-}
-
-enum TimelineDropPreview {
-    static func task(_ active: ScheduledTask?, destination: Date?, existing: [ScheduledTask]) -> ScheduledTask? {
-        guard let active, !existing.contains(where: { $0.id == active.id }) else { return nil }
-        var task = active.task
-        if let destination {
-            let calendar = JournalDates.calendar
-            if task.dueHasTime, let due = task.dueDate {
-                let time = calendar.dateComponents([.hour, .minute], from: due)
-                task.dueDate = calendar.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: 0, of: destination)
-            } else { task.dueDate = calendar.startOfDay(for: destination) }
-        } else { task.dueDate = nil; task.dueHasTime = false }
-        return ScheduledTask(date: active.date, task: task)
     }
 }
 
@@ -232,27 +215,9 @@ struct TimelineDayView: View {
     let selectTask: () -> Void
     let next: () -> Void
     var showsFinishedTasks = false
-    @ObservedObject private var dragSession = TaskDragSession.shared
-    @State private var landed = false
     @State private var reorder = TaskReorderModel()
-    private var reorderSpace: String { "timeline-order-" + targetID }
-
-    private var targetID: String { date.map(TaskTimelineSection.dayID) ?? "undated" }
-    private var targeted: Bool { dragSession.timelineTarget == targetID }
-    private var targetBinding: Binding<Bool> {
-        Binding(get: { targeted }, set: { value in
-            if value { dragSession.timelineTarget = targetID }
-            else if targeted { dragSession.timelineTarget = nil }
-        })
-    }
-
-    private var preview: ScheduledTask? {
-        guard targeted, let id = dragSession.activeID else { return nil }
-        return TimelineDropPreview.task(store.locate(id), destination: date, existing: tasks)
-    }
-    private var displayed: [ScheduledTask] {
-        (tasks + (preview.map { [$0] } ?? [])).sorted(by: TaskTimelineSection.precedes)
-    }
+    private var reorderSpace: String { "timeline-order-" + (date.map(TaskTimelineSection.dayID) ?? "undated") }
+    private var displayed: [ScheduledTask] { tasks.sorted(by: TaskTimelineSection.precedes) }
     private var visibleIDs: [UUID] {
         if showsFinishedTasks { return displayed.map(\.id) }
         return TaskTimelineItem.items(for: displayed, expanded: expanded).filter { !$0.folded }.flatMap(\.tasks).map(\.id)
@@ -266,7 +231,7 @@ struct TimelineDayView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             TimelineDateMarker(date: date, selectedDate: selectedDate, compact: true, navigate: navigate)
-            // 刻度属于边界；任务和放置预览始终位于边界之间。
+            // 刻度属于边界；任务始终位于边界之间。
             VStack(alignment: .leading, spacing: TaskTimelineLayout.spacing) {
                 if showsFinishedTasks {
                     ForEach(displayed) { taskRow($0) }
@@ -275,26 +240,12 @@ struct TimelineDayView: View {
                         if item.tasks.first?.task.completed == true {
                             FinishedTaskTimelineBlock(store: store, item: item, expanded: $expanded,
                                                       requestedEdit: $requestedEdit, selectTask: selectTask)
-                        } else if let pending = preview, item.tasks.contains(where: { $0.id == pending.id }) {
-                            ForEach(item.tasks) { task in
-                                if task.id == pending.id { previewRow(task) }
-                                else { taskRow(task) }
-                            }
                         } else if let task = item.tasks.first { taskRow(task) }
                     }
                 }
-                if displayed.isEmpty && (targeted || landed) {
-                    HStack(spacing: 6) {
-                        Color.clear.frame(width: TaskTimelineLayout.timeWidth(typography))
-                        Circle().strokeBorder(Palette.accent, lineWidth: 1.5).frame(width: 12, height: 12).frame(width: 22)
-                        Text(date == nil ? "移到未设日期" : "放到这个日期")
-                            .font(.system(size: typography.pt(11))).foregroundStyle(Palette.accent)
-                        Spacer(minLength: 0)
-                    }.frame(height: typography.pt(34))
-                }
             }
-            .padding(.top, displayed.isEmpty && !targeted ? 0 : 4)
-            .padding(.bottom, displayed.isEmpty && !targeted ? 4 : 10)
+            .padding(.top, displayed.isEmpty ? 0 : 4)
+            .padding(.bottom, displayed.isEmpty ? 4 : 10)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .coordinateSpace(name: reorderSpace)
@@ -303,35 +254,9 @@ struct TimelineDayView: View {
         .onPreferenceChange(TaskRowFramesKey.self) { reorder.frames = $0 }
         .onAppear { configureReorder() }
         .onChange(of: visibleIDs) { _ in configureReorder() }
-        .background {
-            TimelineAxisStroke(highlighted: targeted || landed, targeted: targeted, dashed: date == nil)
-        }
-        .background {
-            if targeted || landed {
-                RoundedRectangle(cornerRadius: 6).fill(Palette.accent.opacity(landed ? 0.07 : 0.035))
-                    .padding(.top, typography.pt(12)).allowsHitTesting(false)
-            }
-        }
-        .animation(Motion.quick, value: targeted)
-        .animation(Motion.quick, value: landed)
-        .onDrop(of: [TaskDragPayload.type], delegate: TimelineDateDropTarget(store: store, date: date,
-                 targeted: targetBinding, didDrop: {
-                     landed = true
-                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { withAnimation(Motion.quick) { landed = false } }
-                 }))
+        .background { TimelineAxisStroke(highlighted: false, dashed: date == nil) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(date.map(TaskTimelineSection.dayID) ?? "undated")
-    }
-
-    private func previewRow(_ item: ScheduledTask) -> some View {
-        ManagedTaskRow(store: store, date: item.date, task: item.task, requestedEdit: .constant(nil), timeline: true, placementPreview: true)
-            .opacity(0.5).disabled(true).allowsHitTesting(false)
-            .overlay(alignment: .leading) {
-                Circle().strokeBorder(Palette.accent, lineWidth: 1.5).frame(width: 14, height: 14)
-                    .offset(x: TaskTimelineLayout.axisX(typography) - 7)
-                    .allowsHitTesting(false)
-            }
-            .accessibilityLabel("放置预览：" + item.task.title)
     }
 
     private func taskRow(_ item: ScheduledTask) -> some View {

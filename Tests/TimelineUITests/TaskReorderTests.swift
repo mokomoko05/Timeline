@@ -160,7 +160,7 @@ final class TaskReorderTests: XCTestCase {
         let found = handles(in: host)
         XCTAssertEqual(found.count, 4)
         let first = try XCTUnwrap(found.min { host.convert($0.bounds, from: $0).minY < host.convert($1.bounds, from: $1).minY })
-        XCTAssertNotNil(first.enclosingScrollView, "把手能找到外层清单，用来判断是否拖出清单、自动滚动")
+        XCTAssertNotNil(first.enclosingScrollView, "把手能找到外层清单，用来自动滚动")
         let start = first.convert(NSPoint(x: first.bounds.midX, y: first.bounds.midY), to: nil)
 
         first.mouseDown(with: mouse(.leftMouseDown, at: start, in: window))
@@ -176,7 +176,7 @@ final class TaskReorderTests: XCTestCase {
         XCTAssertFalse(model.isActive)
     }
 
-    func testDraggingOutOfTheListSidewaysHandsOverToDraggingOntoTheCalendar() async throws {
+    func testDraggingOutsideTheGroupRemainsAClampedReorder() async throws {
         let todos = (1...3).map { Todo(title: "任务\($0)") }
         let model = TaskReorderModel()
         model.groupProvider = { _ in todos.map(\.id) }
@@ -195,18 +195,21 @@ final class TaskReorderTests: XCTestCase {
         }
         let first = try XCTUnwrap(handles(in: host).min { host.convert($0.bounds, from: $0).minY < host.convert($1.bounds, from: $1).minY })
         let start = first.convert(NSPoint(x: first.bounds.midX, y: first.bounds.midY), to: nil)
-        var nativeDrags: [UUID] = []
-        first.startNativeDrag = { id, _, _, _ in nativeDrags.append(id) }
         first.mouseDown(with: mouse(.leftMouseDown, at: start, in: window))
         first.mouseDragged(with: mouse(.leftMouseDragged, at: NSPoint(x: start.x, y: start.y - 60), in: window))
         XCTAssertTrue(model.isActive)
-        XCTAssertTrue(nativeDrags.isEmpty, "还在清单里时是排序，不是拖到日历")
-        // 指针移到清单右边很远处：取消排序（回到原位、不改顺序）。
+        // 横向拖出后继续保持当前组内重排；纵向拖远也只会停在组的首尾。
         first.mouseDragged(with: mouse(.leftMouseDragged, at: NSPoint(x: start.x + 400, y: start.y - 60), in: window))
         try await Task.sleep(nanoseconds: 500_000_000)
-        XCTAssertFalse(model.isActive)
+        XCTAssertTrue(model.isActive)
         XCTAssertEqual(commits, 0)
-        XCTAssertEqual(nativeDrags, [todos[0].id], "拖出清单后交给「拖到日历」")
+        let outside = NSPoint(x: start.x + 400, y: start.y - 1000)
+        first.mouseDragged(with: mouse(.leftMouseDragged, at: outside, in: window))
+        XCTAssertEqual(model.target, 2)
+        XCTAssertEqual(model.offset(for: todos[0].id), 92, accuracy: 1)
+        first.mouseUp(with: mouse(.leftMouseUp, at: outside, in: window))
+        XCTAssertFalse(model.isActive)
+        XCTAssertEqual(commits, 1)
     }
 
     /// 卡顿的根因回归测试：拖动时模型每秒更新几十次，持有模型的外层界面（真实应用里是整个 ContentView）一次都不能重新渲染。

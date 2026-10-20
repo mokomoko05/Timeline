@@ -519,7 +519,7 @@ struct ContentView: View {
                     addingTodo = false
                     requestedEdit = newest.id
                 }
-            }, startDrag: beginDraftDrag)
+            })
         }
         .disabled(store.isReadOnly)
         .modifier(Card())
@@ -700,21 +700,6 @@ struct ContentView: View {
                 reminders.refresh()
             }
         }
-    }
-
-    private func beginDraftDrag() -> Todo? {
-        guard !store.isReadOnly else { return nil }
-        let added = store.commitDraft(on: selectedDate, options: creationOptions)
-        guard let item = added.last else { return nil }
-        creationOptions = TaskCreationOptions()
-        addingTodo = true
-        if added.contains(where: { $0.task.reminderMinutes != nil }) {
-            Task { @MainActor in
-                _ = await reminders.requestPermission()
-                reminders.refresh()
-            }
-        }
-        return item.task
     }
 
     private func format(_ date: Date, _ pattern: String) -> String {

@@ -166,12 +166,15 @@ final class TaskTimelineTests: XCTestCase {
             let store = JournalStore(directory: directory)
             let items = try ["First", "Second", "Third"].map { try XCTUnwrap(store.addParsedTodo($0, on: today)) }
             if let due { for item in items { store.setDeadline(item.id, to: due) } }
+            let otherDay = try XCTUnwrap(JournalDates.calendar.date(byAdding: .day, value: 1, to: today))
+            let outsiders = try ["Other date first", "Other date second"].map { try XCTUnwrap(store.addParsedTodo($0, on: today)) }
+            for item in outsiders { store.setDeadline(item.id, to: otherDay) }
+            let originals = store.tasks()
             let host = NSHostingView(rootView: ScrollView {
-                TimelineDayView(store: store, date: due,
-                    tasks: store.tasks().sorted(by: TaskTimelineSection.precedes), selectedDate: today,
-                    expanded: .constant([]), requestedEdit: .constant(nil), navigate: { _ in }, selectTask: {}, next: {})
-            }.frame(width: 520, height: 350).environmentObject(WorkspaceInteraction()))
-            let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 350), styleMask: [.borderless], backing: .buffered, defer: false)
+                TaskTimelineView(store: store, tasks: store.tasks(), today: today, selectedDate: today,
+                    expanded: .constant([]), requestedEdit: .constant(nil), navigate: { _ in })
+            }.frame(width: 520, height: 700).environmentObject(WorkspaceInteraction()))
+            let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = host
             defer { window.contentView = nil; window.close() }
@@ -182,23 +185,33 @@ final class TaskTimelineTests: XCTestCase {
                 (view as? TaskHandleView).map { [$0] } ?? view.subviews.flatMap(handles)
             }
             let dot = try XCTUnwrap(handles(host).first { $0.taskID == items[0].id })
-            let hooks = try XCTUnwrap(dot.reorder)
-            XCTAssertTrue(hooks.begin(), "Actual priority dot must find every row in its date interval")
-            XCTAssertFalse(hooks.leavesGroup(10))
-            XCTAssertTrue(hooks.leavesGroup(10_000), "Dragging past this date hands over to changing dates")
-            hooks.update(10_000)
-            hooks.end()
+            XCTAssertNotNil(dot.reorder)
+            let start = dot.convert(NSPoint(x: dot.bounds.midX, y: dot.bounds.midY), to: nil)
+            let outside = NSPoint(x: start.x + 600, y: start.y - 10_000)
+            func mouse(_ type: NSEvent.EventType, at point: NSPoint) throws -> NSEvent {
+                try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            }
+            dot.mouseDown(with: try mouse(.leftMouseDown, at: start))
+            dot.mouseDragged(with: try mouse(.leftMouseDragged, at: outside))
+            XCTAssertTrue(dot.isReordering, "Actual priority dot must stay in its date interval even outside the timeline")
+            dot.mouseUp(with: try mouse(.leftMouseUp, at: outside))
             let saved = JournalStore(directory: directory).tasks().sorted(by: TaskTimelineSection.precedes)
-            XCTAssertEqual(saved.map(\.id), [items[1].id, items[2].id, items[0].id])
-            XCTAssertTrue(saved.allSatisfy { $0.task.dueDate == due })
+            let ownGroup = saved.filter { item in items.contains { $0.id == item.id } }
+            XCTAssertEqual(ownGroup.map(\.id), [items[1].id, items[2].id, items[0].id])
+            XCTAssertTrue(ownGroup.allSatisfy { $0.task.dueDate == due })
+            XCTAssertEqual(saved.filter { $0.task.dueDate == otherDay }.map(\.id), outsiders.map(\.id))
+            for outsider in outsiders {
+                XCTAssertEqual(saved.first { $0.id == outsider.id }?.task, originals.first { $0.id == outsider.id }?.task)
+            }
             store.undo()
-            XCTAssertEqual(store.tasks().sorted(by: TaskTimelineSection.precedes).map(\.id), items.map(\.id))
+            XCTAssertEqual(store.tasks().sorted(by: TaskTimelineSection.precedes).map(\.id), originals.sorted(by: TaskTimelineSection.precedes).map(\.id))
         }
     }
 
-    func testScrollingHasAFiniteTailWithVisibleUndatedTaskAndNoIdleTimer() async throws {
+    func testScrollingHasAFiniteTailWithVisibleUndatedTask() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory); TaskDragSession.shared.end() }
+        defer { try? FileManager.default.removeItem(at: directory) }
         let store = JournalStore(directory: directory)
         let tasks = [scheduled("Old record", offset: -10_000, completed: true),
                      scheduled("Distant plan", offset: 10_000), scheduled("Undated observation", offset: nil)]
@@ -221,10 +234,8 @@ final class TaskTimelineTests: XCTestCase {
         }
         let scroll = try XCTUnwrap(descendants(host, of: NSScrollView.self).first)
         let document = try XCTUnwrap(scroll.documentView)
-        let bridge = try XCTUnwrap(descendants(host, of: TimelineWheelScrollBridgeView.self).first)
         let height = document.frame.height
         XCTAssertLessThan(height, 800, "Large date spans must remain compact")
-        XCTAssertFalse(bridge.isAutoScrollRunning, "Normal scrolling must not run a background timer")
         for _ in 0..<5 {
             scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document.frame.height - scroll.contentView.bounds.height)))
             scroll.reflectScrolledClipView(scroll.contentView)
@@ -234,31 +245,6 @@ final class TaskTimelineTests: XCTestCase {
         XCTAssertEqual(document.frame.height, height, accuracy: 1, "Reaching the tail must not add more dates")
         let undated = try XCTUnwrap(descendants(host, of: InteractiveTaskText.self).first { $0.string.contains("Undated observation") })
         XCTAssertTrue(scroll.contentView.bounds.intersects(undated.convert(undated.bounds, to: document)), "Undated task must be reachable at the finite tail")
-        TaskDragSession.shared.begin(tasks[2].id)
-        XCTAssertTrue(bridge.isAutoScrollRunning)
-        TaskDragSession.shared.end()
-        XCTAssertFalse(bridge.isAutoScrollRunning, "Drop or cancel must stop edge scrolling immediately")
-    }
-
-    func testDropPreviewUsesDestinationLayoutWithoutChangingStoredDates() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = JournalStore(directory: directory)
-        let source = try XCTUnwrap(store.addParsedTodo("A title that needs enough space for placement", on: today))
-        let due = calendar.date(bySettingHour: 14, minute: 30, second: 0, of: today)!
-        store.setDeadline(source.id, to: due, keepingTime: false)
-        store.updateTodo(source.id, scheduledDate: source.date, dueDate: due, dueHasTime: true,
-                         reminderMinutes: nil, repeatRule: .none)
-        let active = try XCTUnwrap(store.locate(source.id))
-        let preview = try XCTUnwrap(TimelineDropPreview.task(active, destination: day(2), existing: []))
-        XCTAssertEqual(calendar.component(.hour, from: preview.task.dueDate!), 14)
-        XCTAssertEqual(calendar.component(.minute, from: preview.task.dueDate!), 30)
-        XCTAssertTrue(calendar.isDate(preview.task.dueDate!, inSameDayAs: day(2)))
-        XCTAssertEqual(store.locate(source.id)?.task.dueDate, due, "Hovering only previews layout")
-        XCTAssertNil(TimelineDropPreview.task(active, destination: today, existing: [active]))
-        let undated = try XCTUnwrap(TimelineDropPreview.task(active, destination: nil, existing: []))
-        XCTAssertNil(undated.task.dueDate)
-        XCTAssertFalse(undated.task.dueHasTime)
     }
 
     func testAxisIsIndependentOfTheTaskNodesAndFillsItsContainerHeight() {
@@ -291,36 +277,9 @@ final class TaskTimelineTests: XCTestCase {
         XCTAssertLessThan(height(finished), height([a]))
     }
 
-    func testTargetDatePreviewsTheSameIntervalHeightAsTheCommittedTask() throws {
+    func testTimelineViewportRendersFlatRows() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory); TaskDragSession.shared.end() }
-        let store = JournalStore(directory: directory)
-        let source = try XCTUnwrap(store.addParsedTodo("Read the paper and record observations", on: today))
-        let active = try XCTUnwrap(store.locate(source.id))
-        let destination = day(2)
-        func height(_ tasks: [ScheduledTask]) -> CGFloat {
-            let host = NSHostingView(rootView: TimelineDayView(store: store, date: destination, tasks: tasks,
-                selectedDate: today, expanded: .constant([]), requestedEdit: .constant(nil),
-                navigate: { _ in }, selectTask: {}, next: {}).frame(width: 480)
-                .environmentObject(WorkspaceInteraction()))
-            return host.fittingSize.height
-        }
-        let empty = height([])
-        TaskDragSession.shared.begin(active.id)
-        TaskDragSession.shared.timelineTarget = TaskTimelineSection.dayID(destination)
-        let hovering = height([])
-        XCTAssertGreaterThan(hovering, empty + 20, "Preview expands the interval between date ticks")
-        XCTAssertNil(store.locate(active.id)?.task.dueDate)
-        TaskDragSession.shared.end()
-        XCTAssertEqual(height([]), empty, accuracy: 0.5, "Leaving contracts the interval without saving")
-        store.setDeadline(active.id, to: destination)
-        let committed = try XCTUnwrap(store.locate(active.id))
-        XCTAssertEqual(hovering, height([committed]), accuracy: 0.5, "Preview must reserve the actual final height")
-    }
-
-    func testTimelineViewportRendersFlatRowsAndShowsTargetExpansion() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory); TaskDragSession.shared.end() }
+        defer { try? FileManager.default.removeItem(at: directory) }
         let store = JournalStore(directory: directory)
         let item = try XCTUnwrap(store.addParsedTodo("Read the paper and write observations", on: today))
         store.setDeadline(item.id, to: today)
@@ -356,10 +315,6 @@ final class TaskTimelineTests: XCTestCase {
                 try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: prefix + suffix + ".png"))
             }
             try snapshot("-viewport")
-            TaskDragSession.shared.begin(item.id)
-            TaskDragSession.shared.timelineTarget = TaskTimelineSection.dayID(day(1))
-            try await Task.sleep(for: .milliseconds(200))
-            try snapshot("-placement")
         }
         XCTAssertEqual(host.bounds.size, CGSize(width: 520, height: 540))
     }
