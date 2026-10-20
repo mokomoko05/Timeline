@@ -1,19 +1,44 @@
 import AppKit
 import SwiftUI
 import TimelineCore
+import UniformTypeIdentifiers
+
+enum TaskDragPayload {
+    static let type = UTType(exportedAs: "local.timeline.task", conformingTo: .data)
+    static var pasteboardType: NSPasteboard.PasteboardType { .init(type.identifier) }
+
+    static func encode(_ id: UUID) -> Data { Data(id.uuidString.utf8) }
+
+    static func decode(_ data: Data) -> UUID? {
+        guard data.count == 36, let value = String(data: data, encoding: .utf8) else { return nil }
+        return UUID(uuidString: value)
+    }
+
+    static func provider(_ id: UUID) -> NSItemProvider {
+        let provider = NSItemProvider()
+        let data = encode(id)
+        provider.registerDataRepresentation(forTypeIdentifier: type.identifier, visibility: .ownProcess) { completion in
+            completion(data, nil)
+            return nil
+        }
+        return provider
+    }
+}
+
+
 
 struct TaskDragHandle: View {
     let task: Todo
     let enabled: Bool
     var select: () -> Void = {}
-    /// 仅在当前日期分组中上下调整顺序。
+    /// 上下拖动仅在当前日期分组中排序，横向离开清单可拖至日历。
     var reorder: TaskReorderHooks?
 
     var body: some View {
         NativeTaskHandle(task: task, enabled: enabled, select: select, reorder: reorder)
             .frame(width: 30, height: 30)
-            .help("在同一日期内拖动排序")
-            .accessibilityLabel("在同一日期内拖动任务排序")
+            .help("同一日期内上下排序；拖到日历修改日期")
+            .accessibilityLabel("排序任务或拖到日历修改日期")
     }
 }
 
@@ -32,6 +57,7 @@ struct NativeTaskHandle: NSViewRepresentable {
         view.priorityColor = priorityColor
         view.reorder = reorder
         view.taskID = enabled ? task.id : nil
+        view.titleSource = (task.title, task.calendarName)
         view.drawsHandle = drawsHandle
         view.onSelect = select
         view.appearance = NSAppearance(named: context.environment.colorScheme == .dark ? .darkAqua : .aqua)
@@ -40,7 +66,12 @@ struct NativeTaskHandle: NSViewRepresentable {
     }
 }
 
-final class TaskHandleView: NSView {
+final class TaskHandleView: NSView, NSDraggingSource {
+    var titleSource: (title: String, alias: String) = ("", "")
+    var title: String { String(TaskText.rendered(titleSource.title, alias: titleSource.alias).characters) }
+    var startNativeDrag: (UUID, String, TaskHandleView, NSEvent) -> Void = { id, title, view, event in
+        NativeTaskDrag.begin(id: id, title: title, view: view, source: view, event: event)
+    }
     var taskID: UUID?
     var drawsHandle = true
     var onSelect: (() -> Void)?
@@ -70,7 +101,7 @@ final class TaskHandleView: NSView {
 
     override func resetCursorRects() {
         guard available else { return }
-        addCursorRect(bounds, cursor: reorder == nil ? .arrow : .openHand)
+        addCursorRect(bounds, cursor: .openHand)
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -86,7 +117,7 @@ final class TaskHandleView: NSView {
         PriorityPaletteController.shared.dismiss()
         initialEvent = event
         needsDisplay = true
-        if reorder != nil { NSCursor.closedHand.set() }
+        NSCursor.closedHand.set()
         onSelect?()
     }
 
@@ -108,21 +139,29 @@ final class TaskHandleView: NSView {
     override func mouseDragged(with event: NSEvent) {
         if reordering {
             NSCursor.closedHand.set()
+            // 只有横向离开清单才切换为日历拖放；越过日期分组仍按组内排序。
+            if leftList(event.locationInWindow), let id = taskID {
+                endReorder(commit: false)
+                startNativeDrag(id, title, self, event)
+                return
+            }
             track(event.locationInWindow)
             return
         }
-        guard taskID != nil, let initial = initialEvent,
+        guard let id = taskID, let initial = initialEvent,
               hypot(event.locationInWindow.x - initial.locationInWindow.x,
                     event.locationInWindow.y - initial.locationInWindow.y) > 3 else { return }
-        // 圆点只负责当前日期分组内重排；单项分组不发起拖放。
+        if reorder == nil || leftList(event.locationInWindow) {
+            initialEvent = nil
+            startNativeDrag(id, title, self, event)
+            return
+        }
         if let reorder, reorder.begin() {
             startReorder(from: initial)
             track(event.locationInWindow)
             return
         }
-        initialEvent = nil
-        needsDisplay = true
-        NSCursor.arrow.set()
+        // 单项分组继续等待横向离开清单，避免纵向拖动触发改日期。
     }
 
     // MARK: - 清单内排序
@@ -161,6 +200,12 @@ final class TaskHandleView: NSView {
         window?.invalidateCursorRects(for: self)
     }
 
+    private func leftList(_ point: NSPoint) -> Bool {
+        guard let scroll = scrollView else { return false }
+        let frame = scroll.convert(scroll.bounds, to: nil)
+        return point.x < frame.minX - 70 || point.x > frame.maxX + 70
+    }
+
     /// 指针（窗口坐标）相对按下位置在清单内容里向下的位移 = 指针本身向下移动的距离 + 清单滚动的距离。
     private func track(_ point: NSPoint) {
         reorder?.update(-(point.y - startY) + (scrollOffset() - startScroll))
@@ -183,5 +228,54 @@ final class TaskHandleView: NSView {
         clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: newY))
         scroll.reflectScrolledClipView(clip)
         track(point)
+    }
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        context == .withinApplication ? .move : []
+    }
+    func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) { NSCursor.closedHand.set() }
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        initialEvent = nil
+        TaskDragSession.shared.end()
+        needsDisplay = true
+        window?.invalidateCursorRects(for: self)
+    }
+}
+
+
+@MainActor
+enum NativeTaskDrag {
+    static func begin(id: UUID, title: String, view: NSView, source: NSDraggingSource, event: NSEvent) {
+        guard view.window != nil else { return }
+        NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
+        TaskDragSession.shared.begin(id)
+        let pasteboard = NSPasteboardItem()
+        pasteboard.setData(TaskDragPayload.encode(id), forType: TaskDragPayload.pasteboardType)
+        let item = NSDraggingItem(pasteboardWriter: pasteboard)
+        let titleWidth = (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width
+        let size = NSSize(width: min(290, max(120, titleWidth + 42)), height: 38)
+        let preview = NSImage(size: size, flipped: false) { rect in
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor.black.withAlphaComponent(0.25)
+            shadow.shadowBlurRadius = 5
+            shadow.shadowOffset = NSSize(width: 0, height: -2)
+            shadow.set()
+            NSColor.windowBackgroundColor.withAlphaComponent(0.88).setFill()
+            let card = rect.insetBy(dx: 6, dy: 6)
+            NSBezierPath(roundedRect: card, xRadius: 7, yRadius: 7).fill()
+            NSShadow().set()
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineBreakMode = .byTruncatingTail
+            let color = (view as? TaskHandleView)?.priorityColor ?? NSColor.controlAccentColor
+            color.setFill()
+            NSBezierPath(ovalIn: NSRect(x: card.minX + 9, y: card.midY - 3, width: 6, height: 6)).fill()
+            (title as NSString).draw(in: NSRect(x: card.minX + 22, y: card.minY + 5, width: card.width - 28, height: 17), withAttributes: [
+                .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph
+            ])
+            return true
+        }
+        let point = view.convert(event.locationInWindow, from: nil)
+        item.setDraggingFrame(NSRect(x: point.x - 18, y: point.y - size.height / 2, width: size.width, height: size.height), contents: preview)
+        let session = view.beginDraggingSession(with: [item], event: event, source: source)
+        session.animatesToStartingPositionsOnCancelOrFail = false
     }
 }

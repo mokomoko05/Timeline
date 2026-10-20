@@ -198,18 +198,25 @@ final class TaskReorderTests: XCTestCase {
         first.mouseDown(with: mouse(.leftMouseDown, at: start, in: window))
         first.mouseDragged(with: mouse(.leftMouseDragged, at: NSPoint(x: start.x, y: start.y - 60), in: window))
         XCTAssertTrue(model.isActive)
-        // 横向拖出后继续保持当前组内重排；纵向拖远也只会停在组的首尾。
-        first.mouseDragged(with: mouse(.leftMouseDragged, at: NSPoint(x: start.x + 400, y: start.y - 60), in: window))
-        try await Task.sleep(nanoseconds: 500_000_000)
-        XCTAssertTrue(model.isActive)
-        XCTAssertEqual(commits, 0)
-        let outside = NSPoint(x: start.x + 400, y: start.y - 1000)
+        // 纵向越过日期边界仍然只排本组，不能触发日历拖放。
+        var dragged: UUID?
+        first.startNativeDrag = { id, _, _, _ in dragged = id }
+        let outside = NSPoint(x: start.x, y: start.y - 1000)
         first.mouseDragged(with: mouse(.leftMouseDragged, at: outside, in: window))
         XCTAssertEqual(model.target, 2)
         XCTAssertEqual(model.offset(for: todos[0].id), 92, accuracy: 1)
         first.mouseUp(with: mouse(.leftMouseUp, at: outside, in: window))
         XCTAssertFalse(model.isActive)
         XCTAssertEqual(commits, 1)
+        XCTAssertNil(dragged)
+
+        first.mouseDown(with: mouse(.leftMouseDown, at: start, in: window))
+        first.mouseDragged(with: mouse(.leftMouseDragged, at: NSPoint(x: start.x, y: start.y - 60), in: window))
+        XCTAssertTrue(model.isActive)
+        first.mouseDragged(with: mouse(.leftMouseDragged, at: NSPoint(x: start.x + 500, y: start.y - 60), in: window))
+        XCTAssertEqual(dragged, todos[0].id)
+        XCTAssertFalse(model.isActive, "日历拖放接手时取消组内排序")
+        XCTAssertEqual(commits, 1, "取消排序不会写入顺序")
     }
 
     /// 卡顿的根因回归测试：拖动时模型每秒更新几十次，持有模型的外层界面（真实应用里是整个 ContentView）一次都不能重新渲染。

@@ -727,6 +727,10 @@
 "左键按住拖动；右键设置优先级" = "Hold left button to drag; right-click to set priority";
 "左键按住拖动任务，右键选择优先级" = "Hold left button to drag the task; right-click to choose priority";
 "在同一日期内拖动排序" = "Drag to reorder within the same date group";
+"同一日期内上下排序；拖到日历修改日期" = "Drag vertically to reorder within a date; drag to the calendar to change the date";
+"排序任务或拖到日历修改日期" = "Reorder tasks or drag to the calendar to change the date";
+"同一日期内上下排序；拖到日历修改日期；右键设置优先级" = "Drag vertically to reorder within a date; drag to the calendar to change the date; right-click to set priority";
+"同一日期内上下排序，拖到日历修改日期，右键选择优先级" = "Drag vertically to reorder within a date, drag to the calendar to change the date, or right-click to choose priority";
 "在同一日期内拖动任务排序" = "Drag tasks to reorder within the same date group";
 "左键在同一日期内拖动排序；右键设置优先级" = "Left-drag to reorder within the same date group; right-click to set priority";
 "左键在同一日期内拖动排序，右键选择优先级" = "Left-drag to reorder within the same date group; right-click to choose priority";

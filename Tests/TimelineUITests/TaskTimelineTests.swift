@@ -187,7 +187,7 @@ final class TaskTimelineTests: XCTestCase {
             let dot = try XCTUnwrap(handles(host).first { $0.taskID == items[0].id })
             XCTAssertNotNil(dot.reorder)
             let start = dot.convert(NSPoint(x: dot.bounds.midX, y: dot.bounds.midY), to: nil)
-            let outside = NSPoint(x: start.x + 600, y: start.y - 10_000)
+            let outside = NSPoint(x: start.x, y: start.y - 10_000)
             func mouse(_ type: NSEvent.EventType, at point: NSPoint) throws -> NSEvent {
                 try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
                     windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))

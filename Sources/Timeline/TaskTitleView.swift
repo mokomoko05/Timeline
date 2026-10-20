@@ -36,7 +36,7 @@ struct TaskTitleView: View {
                     .accessibilityLabel("编辑事项，支持 Markdown 链接")
             } else {
                 TaskLinkText(source: title, completed: completed, color: color, fontSize: fontSize,
-                             edit: startEditing, open: SafariLinks.open, select: prepare, menuItems: menuItems)
+                             edit: startEditing, open: SafariLinks.open, dragTaskID: itemID, select: prepare, menuItems: menuItems)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }

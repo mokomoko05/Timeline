@@ -14,6 +14,7 @@ struct TaskLinkText: NSViewRepresentable {
     var maxLines = 3
     var displayName: String?
     var monospaced = false
+    var dragTaskID: UUID?
     var markdown = false
     var compactLines = false
     var select: () -> Void = {}
@@ -51,6 +52,7 @@ struct TaskLinkText: NSViewRepresentable {
         view.onClick = click
         view.menuItems = menuItems
         view.interactionEnabled = enabled
+        view.dragTaskID = dragTaskID
         view.textContainerInset = NSSize(width: compactLines ? 2 : 5, height: compactLines ? 0 : 4)
         let foreground = NSColor(completed ? Palette.muted : color)
         if view.source != source || view.displayName != displayName || view.completed != completed || view.pointSize != fontSize || view.foreground != foreground || view.monospaced != monospaced || view.compactLines != compactLines || view.markdown != markdown || view.uiScaleFactor != typography.scale || view.configuredLineSpacing != Double(typography.lineSpacing) {
@@ -193,6 +195,7 @@ final class InteractiveTaskText: NSTextView {
     var foreground: NSColor?
     var monospaced = false
     var interactionEnabled = true
+    var dragTaskID: UUID?
     var compactLines = false
     var uiScaleFactor = 1.0
     var configuredLineSpacing = 2.0
@@ -268,6 +271,7 @@ final class InteractiveTaskText: NSTextView {
     override func resetCursorRects() {
         super.resetCursorRects()
         guard interactionEnabled else { return }
+        if dragTaskID != nil { addCursorRect(bounds, cursor: .openHand) }
         for region in linkRegions() { addCursorRect(region.rect, cursor: .pointingHand) }
     }
 
@@ -281,6 +285,9 @@ final class InteractiveTaskText: NSTextView {
 
     override func mouseMoved(with event: NSEvent) {
         hoveredURL = interactionEnabled ? link(at: convert(event.locationInWindow, from: nil)) : nil
+        if interactionEnabled, dragTaskID != nil {
+            (TaskDragSession.shared.activeID != nil ? NSCursor.closedHand : (hoveredURL == nil ? NSCursor.openHand : NSCursor.pointingHand)).set()
+        }
         needsDisplay = true
     }
 
@@ -319,6 +326,9 @@ final class InteractiveTaskText: NSTextView {
               hypot(event.locationInWindow.x - initial.locationInWindow.x,
                     event.locationInWindow.y - initial.locationInWindow.y) > 4 else { return }
         dragged = true
+        guard let id = dragTaskID, window != nil else { return }
+        onSelect?()
+        NativeTaskDrag.begin(id: id, title: string, view: self, source: self, event: initial)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -326,6 +336,20 @@ final class InteractiveTaskText: NSTextView {
         guard mouseDownEvent != nil, !dragged else { return }
         let point = convert(event.locationInWindow, from: nil)
         if bounds.contains(point) { activate(at: point, clickCount: event.clickCount) }
+    }
+
+    override func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        context == .withinApplication ? .move : []
+    }
+
+    override func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
+        NSCursor.closedHand.set()
+    }
+
+    override func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        mouseDownEvent = nil
+        TaskDragSession.shared.end()
+        window?.invalidateCursorRects(for: self)
     }
 
 }
