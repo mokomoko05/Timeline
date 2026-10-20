@@ -157,9 +157,9 @@ struct TaskTimelineAxis: Shape {
 
 enum TaskTimelineLayout {
     static let spacing: CGFloat = 6
-    static func timeWidth(_ typography: AppTypography) -> CGFloat { typography.pt(62) }
+    static func timeWidth(_ typography: AppTypography) -> CGFloat { typography.pt(54) }
     static func axisX(_ typography: AppTypography) -> CGFloat { timeWidth(typography) + 17 }
-    static func cardInset(_ typography: AppTypography) -> CGFloat { timeWidth(typography) + 34 }
+    static func cardInset(_ typography: AppTypography) -> CGFloat { timeWidth(typography) + 27 }
 }
 
 /// 时间轴内容与主窗口分离，空日期仍然有可拖入的轴线区域。

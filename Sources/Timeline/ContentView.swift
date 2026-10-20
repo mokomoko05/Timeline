@@ -30,7 +30,6 @@ struct ContentView: View {
     @State private var scrollTarget: UUID?
     /// 点摘要里的数字时，要定位的任务类型（`overdue` / `today`）。
     @State private var scrollGroup: String?
-    @State private var todayScrollRequest = 0
     @State private var expandedFinished: Set<UUID> = []
     /// 待办行的位置，用来判断一次点击是不是点在待办上（不是 @Published，更新它不会触发重绘）。
     @State private var rowRegions = TaskRowRegions()
@@ -205,7 +204,7 @@ struct ContentView: View {
             guard !store.isReadOnly else { return }
             linkInsertion = LinkInsertion()
             showingLinkComposer = true
-        case .today: select(Date()); todayScrollRequest += 1
+        case .today: select(Date()); scrollGroup = "today"
         case .search: agenda = .all
         case .notes: showNotes(tag: nil)
         case .notesForTask(let id): showNotes(tag: nil, taskID: id)
@@ -383,7 +382,7 @@ struct ContentView: View {
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 summaryChip(summary.overdue, "逾期", tint: Palette.deadline, group: "overdue")
-                summaryChip(summary.dueToday, "今天", tint: Palette.accent, group: "today")
+                summaryChip(summary.dueToday, "今天", tint: Palette.accent, group: "today", alwaysVisible: true)
                 summaryChip(summary.open, "未完成", tint: Palette.muted, group: nil)
                 summaryChip(orderedTasks.filter { $0.task.dueDate == nil }.count, "未设日期", tint: Palette.muted, group: "undated")
                 Spacer(minLength: 0)
@@ -401,9 +400,9 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func summaryChip(_ count: Int, _ title: String, tint: Color, group: String?) -> some View {
+    private func summaryChip(_ count: Int, _ title: String, tint: Color, group: String?, alwaysVisible: Bool = false) -> some View {
         // 数量为 0 的不显示（「未完成」始终显示，没有任务时也是 0）。
-        if count > 0 || group == nil {
+        if count > 0 || group == nil || alwaysVisible {
             Button { if let group { scrollGroup = group } } label: {
                 HStack(spacing: 4) {
                     Text("\(count)").font(.system(size: typography.pt(13), weight: .semibold, design: .rounded)).monospacedDigit()
@@ -414,8 +413,8 @@ struct ContentView: View {
                 .background(count > 0 ? tint.opacity(0.12) : Palette.soft.opacity(0.6), in: Capsule())
             }
             .buttonStyle(.plain)
-            .raisedOnHover(radius: 10, enabled: group != nil && count > 0)
-            .disabled(group == nil || count == 0)
+            .raisedOnHover(radius: 10, enabled: group != nil)
+            .disabled(group == nil)
             .help(group == nil ? "\(count) 项未完成" : "跳到\(title)的任务")
             .accessibilityLabel("\(count) 项\(title)")
         }
@@ -432,25 +431,18 @@ struct ContentView: View {
                 Text("待办清单").font(.system(size: typography.pt(16), weight: .semibold))
                     .foregroundStyle(interaction.activePane == .tasks ? Palette.accent : Palette.ink)
                 Spacer()
-                Button {
-                    select(Date())
-                    todayScrollRequest += 1
-                } label: {
-                    Label("回到今天", systemImage: "scope")
-                        .font(.system(size: typography.pt(11)))
-                }
-                .buttonStyle(HitAreaButtonStyle()).foregroundStyle(Palette.muted)
-                .help("定位到时间轴上的今天 · ⌘T")
                 let hidden = hideCompleted ? completed : 0
-                if hidden > 0 {
-                    Button { hideCompleted = false } label: {
-                        Label("已隐藏 \(hidden) 项", systemImage: "eye.slash")
-                            .font(.system(size: typography.pt(11)))
-                            .padding(.horizontal, 7).padding(.vertical, 2)
-                            .background(Palette.soft, in: Capsule())
+                HStack(spacing: 6) {
+                    if hidden > 0 {
+                        Button { hideCompleted = false } label: {
+                            Label("已隐藏 \(hidden) 项", systemImage: "eye.slash")
+                                .font(.system(size: typography.pt(11)))
+                                .padding(.horizontal, 7).padding(.vertical, 2)
+                                .background(Palette.soft, in: Capsule())
+                        }
+                        .buttonStyle(.plain).foregroundStyle(Palette.accent).raisedOnHover(radius: 10)
+                        .help("已完成的事项被隐藏，点击显示").accessibilityLabel("显示已隐藏的 \(hidden) 项已完成事项")
                     }
-                    .buttonStyle(.plain).foregroundStyle(Palette.accent).raisedOnHover(radius: 10)
-                    .help("已完成的事项被隐藏，点击显示").accessibilityLabel("显示已隐藏的 \(hidden) 项已完成事项")
                 }
             }
             summaryBar
@@ -471,9 +463,6 @@ struct ContentView: View {
                         proxy.scrollTo(TaskTimelineSection.dayID(Date()), anchor: .center)
                     }
                 }
-                .onChange(of: todayScrollRequest) { _ in
-                    withAnimation(Motion.quick) { proxy.scrollTo(TaskTimelineSection.dayID(Date()), anchor: .center) }
-                }
                 .onChange(of: scrollTarget) { id in
                     if let id {
                         if let item = store.locate(id), item.task.completed {
@@ -492,6 +481,8 @@ struct ContentView: View {
                     if let id {
                         if id == "undated" {
                             withAnimation(Motion.quick) { proxy.scrollTo("undated", anchor: .top) }
+                        } else if id == "today" {
+                            withAnimation(Motion.quick) { proxy.scrollTo(TaskTimelineSection.dayID(Date()), anchor: .center) }
                         } else if let item = visible.first(where: { !$0.task.completed && (id == "overdue" ? ($0.task.effectiveDeadline ?? .distantFuture) < Date() : JournalDates.calendar.isDateInToday($0.task.dueDate ?? .distantPast)) }) {
                             withAnimation(Motion.quick) { proxy.scrollTo(item.id, anchor: .top) }
                         }
