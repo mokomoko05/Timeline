@@ -522,14 +522,14 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         defer { refreshing = false }
         let hidden = defaults.bool(forKey: Prefs.focusPanelHidden)
         if workspaceShown && !hidden {
-            showPanel(size: Self.workspaceSize)
+            showPanel(size: panel?.frame.size ?? Self.workspaceSize)
         } else {
             panel?.orderOut(nil)
         }
         if session.active != nil { showStatusItem() } else { removeStatusItem() }
     }
 
-    // 工作台本身始终保持轻量；任务列表通过 popover 独立出现，不改变工作台大小。
+    // 空白输入保持原尺寸，正文输入区最多向下扩展至六行。
     private static let workspaceSize = NSSize(width: 340, height: 158)
 
     /// 全局快捷键入口：打开 / 收起工作台。专注中再次按下只收起面板，不结束专注。
@@ -552,7 +552,7 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
                 FocusPanelView(session: self.session, close: { [weak self] in
                     self?.workspaceShown = false
                     self?.refresh()
-                })
+                }, resize: { [weak self] height in self?.resize(height: height) })
             })
             host.setFrameSize(size)
             // 不激活的浮动窗口：点它不会抢走前台，否则会被判定为离开目标页面。
@@ -586,6 +586,14 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
     private func defaultTopLeft(for size: NSSize) -> NSPoint {
         let frame = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
         return NSPoint(x: frame.maxX - size.width - 18, y: frame.minY + size.height + 18)
+    }
+
+    private func resize(height: CGFloat) {
+        guard let panel, height >= Self.workspaceSize.height, abs(panel.frame.height - height) > 0.5 else { return }
+        var frame = panel.frame
+        frame.origin.y += frame.height - height
+        frame.size.height = height
+        panel.setFrame(frame, display: true)
     }
 
     private func savedTopLeft(for size: NSSize) -> NSPoint? {
@@ -745,6 +753,7 @@ struct FocusPanelView: View {
     @ObservedObject private var languages = LanguageStore.shared
     @ObservedObject var session: FocusSession
     let close: () -> Void
+    let resize: (CGFloat) -> Void
     @State private var selectedTaskID: UUID?
     @AppStorage(Prefs.focusDefaultMinutes) private var defaultMinutes = Prefs.defaultFocusMinutes
     @AppStorage(Prefs.taskSortMode) private var taskSort = TaskSortMode.deadline.rawValue
@@ -758,9 +767,10 @@ struct FocusPanelView: View {
     @StateObject private var reflectionDraft = FocusNoteDraft()
     @StateObject private var mention = MentionState()
 
-    init(session: FocusSession, close: @escaping () -> Void = {}) {
+    init(session: FocusSession, close: @escaping () -> Void = {}, resize: @escaping (CGFloat) -> Void = { _ in }) {
         self.session = session
         self.close = close
+        self.resize = resize
         _minutes = State(initialValue: String(Prefs.focusDurationMinutes()))
     }
 
@@ -784,11 +794,15 @@ struct FocusPanelView: View {
             } else { pickerView }
         }
         .padding(11)
-        .frame(width: 340, height: panelHeight, alignment: .topLeading)
+        .frame(width: 340, alignment: .leading)
+        .frame(minHeight: 158, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: true)
         .background(Palette.card, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.line))
         .foregroundStyle(Palette.ink)
         .tint(Palette.accent)
+        .background(GeometryReader { proxy in Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height) })
+        .onPreferenceChange(PanelHeightKey.self, perform: resize)
         .onAppear {
             configureMention()
             if selectedTaskID == nil { selectedTaskID = tasks.first?.id }
@@ -805,8 +819,6 @@ struct FocusPanelView: View {
     }
 
     private var clock: String { FocusSession.clock(session.elapsed) }
-
-    private var panelHeight: CGFloat { 158 }
 
     private var pickerView: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -847,10 +859,12 @@ struct FocusPanelView: View {
                 Label("时长", systemImage: "clock").font(.system(size: 11)).foregroundStyle(Palette.muted)
                 TextField(String(Prefs.focusDurationMinutes()), text: $minutes).textFieldStyle(.roundedBorder).frame(width: 52)
                 Text("分钟").font(.system(size: 11)).foregroundStyle(Palette.muted)
-                TextField("本轮目标（可选）", text: $goal).textFieldStyle(.roundedBorder)
+                Spacer(minLength: 0)
             }
-            HStack {
-                Spacer()
+            HStack(spacing: 7) {
+                Image(systemName: "flag.fill").font(.system(size: 11)).foregroundStyle(Palette.accent)
+                TextField("本轮目标（可选）", text: $goal).textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
                 Button("开始专注") { startFocus() }
                     .buttonStyle(HitAreaButtonStyle())
                     .foregroundStyle(Palette.accent)
@@ -983,13 +997,14 @@ struct FocusPanelView: View {
                     TaskInput(text: $draft.text, focused: $focused,
                               placeholder: "记下想法…",
                               fontSize: 12, submit: saveNote, cancel: close,
-                              onPasteImages: addNoteImages, minHeight: 24, maxLines: 1,
+                              onPasteImages: addNoteImages, minHeight: 24, maxLines: 6,
                               mention: mention, returnSubmits: true)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(minWidth: 0, maxWidth: .infinity)
                 }
                 .disabled(draft.pendingEntryID != nil)
                 .padding(.horizontal, 9).padding(.vertical, 4)
-                .frame(height: 32)
+                .frame(minHeight: 32)
                 .background(Palette.background, in: RoundedRectangle(cornerRadius: 9))
                 .popover(isPresented: Binding(get: { mention.isActive }, set: { if !$0 { mention.dismiss() } }), arrowEdge: .bottom) {
                     if let store { MentionList(state: mention, store: store, contextTags: draft.tags).frame(width: 320) }
@@ -1002,6 +1017,7 @@ struct FocusPanelView: View {
                             .raisedOnHover(radius: 5)
                             .help("选择关联的待办").accessibilityLabel("选择关联的待办")
                     }
+                    .frame(height: 42)
                     .disabled(session.isPaused || draft.pendingEntryID != nil)
                 }
                 Button(action: saveNote) {
@@ -1013,7 +1029,7 @@ struct FocusPanelView: View {
                 .help(draft.pendingEntryID == nil ? "保存" : "重试保存")
                 .disabled(draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.images.isEmpty)
             }
-            .frame(height: 42)
+            .frame(minHeight: 42)
             HStack(spacing: 4) {
                 if let error = draft.error {
                     Button { showingSaveError.toggle() } label: {
@@ -1055,7 +1071,7 @@ struct FocusPanelView: View {
             .font(.system(size: 11, weight: .medium))
             .frame(height: 30)
         }
-        .frame(height: 120, alignment: .top)
+        .frame(minHeight: 120, alignment: .top)
     }
 
     private func reflectionView(_ active: FocusSession.Active) -> some View {
@@ -1071,9 +1087,10 @@ struct FocusPanelView: View {
                 .frame(height: 14)
             TaskInput(text: $reflectionDraft.text, focused: $focused,
                       placeholder: "完成了什么？下一步是什么？", fontSize: 12,
-                      submit: saveReflection, cancel: close, minHeight: 24, maxLines: 1, returnSubmits: true)
+                      submit: saveReflection, cancel: close, minHeight: 24, maxLines: 6, returnSubmits: true)
+                .fixedSize(horizontal: false, vertical: true)
                 .disabled(reflectionDraft.pendingEntryID != nil)
-                .padding(.horizontal, 9).padding(.vertical, 4).frame(height: 32)
+                .padding(.horizontal, 9).padding(.vertical, 4).frame(minHeight: 32)
                 .background(Palette.background, in: RoundedRectangle(cornerRadius: 9))
             HStack(spacing: 3) {
                 if let error = reflectionDraft.error {
@@ -1090,7 +1107,7 @@ struct FocusPanelView: View {
             }
             .buttonStyle(HitAreaButtonStyle(compact: true, pressedScale: 0.98))
             .font(.system(size: 11, weight: .medium)).frame(height: 26)
-        }.frame(height: 120, alignment: .top)
+        }.frame(minHeight: 120, alignment: .top)
     }
 
     private func saveReflection() {

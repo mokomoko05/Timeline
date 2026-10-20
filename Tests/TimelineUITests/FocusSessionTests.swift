@@ -709,7 +709,56 @@ final class FocusPanelStyleTests: XCTestCase {
         XCTAssertNil(FocusPanelStyle(rawValue: "nonsense"))
     }
 
-    func testEveryStyleRendersAtItsPanelSize() throws {
+    func testFocusWindowGrowsDownwardAndShrinksForNotesAndReflection() async throws {
+        let defaults = makeDefaults()
+        let (session, task) = try makeSession()
+        let controller = FocusPanelController(session: session, defaults: defaults)
+        let existing = Set(NSApp.windows.map(\.windowNumber))
+        controller.toggleWorkspace()
+        let panel = try XCTUnwrap(NSApp.windows.first { !existing.contains($0.windowNumber) && $0 is NSPanel })
+        defer { panel.close() }
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(panel.frame.height, 158, accuracy: 1, "选择任务时保持默认尺寸")
+        session.start(task: task, url: nil, plannedSeconds: 120)
+        try await Task.sleep(for: .milliseconds(80))
+        let original = panel.frame
+        XCTAssertEqual(original.height, 158, accuracy: 1)
+        func editor(_ view: NSView) -> ImagePasteTextView? {
+            (view as? ImagePasteTextView) ?? view.subviews.lazy.compactMap(editor).first
+        }
+        for reflection in [false, true] {
+            if reflection {
+                let active = try XCTUnwrap(session.active)
+                session.tick(now: active.started.addingTimeInterval(121))
+                try await Task.sleep(for: .milliseconds(80))
+            }
+            let input = try XCTUnwrap(editor(try XCTUnwrap(panel.contentView)))
+            let scroll = try XCTUnwrap(input.enclosingScrollView)
+            input.string = String(repeating: "A paragraph that wraps over several lines. ", count: 20)
+            input.didChangeText()
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertGreaterThan(panel.frame.height, original.height + 40)
+            XCTAssertEqual(panel.frame.maxY, original.maxY, accuracy: 1)
+            let capped = scroll.frame.height
+            input.string += String(repeating: "More text. ", count: 500)
+            input.didChangeText()
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(scroll.frame.height, capped, accuracy: 1, "达到上限后改为框内滚动")
+            XCTAssertGreaterThan(input.frame.height, scroll.contentSize.height)
+            let grown = panel.frame
+            controller.refresh()
+            XCTAssertEqual(panel.frame.height, grown.height, accuracy: 1, "刷新不重置长输入的高度")
+            input.string = ""
+            input.didChangeText()
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(panel.frame.height, original.height, accuracy: 1)
+            XCTAssertEqual(panel.frame.maxY, original.maxY, accuracy: 1)
+        }
+        session.stop(reason: "测试结束")
+        controller.toggleWorkspace()
+    }
+
+    func testEveryStyleStartsAtOriginalSizeAndGrowsForLongInput() async throws {
         let (session, task) = try makeSession()
         session.start(task: task, url: URL(string: "https://example.com/a")!)
         addTeardownBlock { session.stop(reason: "测试结束") }
@@ -732,9 +781,12 @@ final class FocusPanelStyleTests: XCTestCase {
             XCTAssertLessThanOrEqual(try XCTUnwrap(editor.enclosingScrollView).frame.height, 26)
             editor.string = String(repeating: "A long focus note with several lines. ", count: 20)
             editor.didChangeText()
+            try await Task.sleep(for: .milliseconds(80))
             host.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(try XCTUnwrap(editor.enclosingScrollView).frame.height, 50)
+            XCTAssertLessThanOrEqual(try XCTUnwrap(editor.enclosingScrollView).frame.height, 110)
             XCTAssertGreaterThan(editor.frame.height, try XCTUnwrap(editor.enclosingScrollView).contentSize.height)
-            XCTAssertEqual(host.fittingSize.height, 158, accuracy: 1)
+            XCTAssertGreaterThan(host.fittingSize.height, 158)
         }
         let current = try XCTUnwrap(session.active)
         session.tick(now: current.started.addingTimeInterval(current.plannedSeconds + 1))

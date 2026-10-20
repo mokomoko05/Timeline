@@ -123,6 +123,7 @@ final class TagViewsTests: XCTestCase {
         anchor.makeKeyAndOrderFront(nil)
         host.layoutSubtreeIfNeeded()
         defer { anchor.contentView = nil; anchor.close() }
+        let existingWindows = Set(NSApp.windows.map(\.windowNumber))
         for (confirms, focusesInput) in [(true, true), (true, false), (false, true)] {
             state.presented = true
             try await Task.sleep(for: .milliseconds(200))
@@ -130,7 +131,7 @@ final class TagViewsTests: XCTestCase {
                 if let field = view as? NSTextField, field.isEditable { return field }
                 return view.subviews.lazy.compactMap(input).first
             }
-            let popup = try XCTUnwrap(NSApp.windows.first { $0 !== anchor && $0.isVisible && $0.contentView.flatMap(input) != nil })
+            let popup = try XCTUnwrap(NSApp.windows.first { !existingWindows.contains($0.windowNumber) && $0.isVisible && $0.contentView.flatMap(input) != nil })
             let content = try XCTUnwrap(popup.contentView)
             let field = try XCTUnwrap(input(in: content))
             popup.makeKey()

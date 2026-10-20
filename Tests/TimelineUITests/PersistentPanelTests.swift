@@ -6,7 +6,7 @@ import TimelineCore
 
 @MainActor
 final class PersistentPanelTests: XCTestCase {
-    func testQuickTodoWrapsAndScrollsInsideOneLineWithoutGrowingThePanel() async throws {
+    func testQuickTodoAndLogGrowToSixLinesThenScrollAndShrink() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = JournalStore(directory: directory)
@@ -29,8 +29,9 @@ final class PersistentPanelTests: XCTestCase {
         model.text = String(repeating: "A long task that wraps onto several lines. ", count: 20)
         try await Task.sleep(for: .milliseconds(100))
         host.layoutSubtreeIfNeeded()
-        XCTAssertEqual(scroll.frame.height, inputHeight, accuracy: 1)
-        XCTAssertEqual(host.fittingSize.height, panelHeight, accuracy: 1)
+        let cappedHeight = TaskInput.height(for: model.text, font: try XCTUnwrap(input.font), width: scroll.frame.width, minHeight: 24, maxLines: 6)
+        XCTAssertEqual(scroll.frame.height, cappedHeight, accuracy: 1)
+        XCTAssertGreaterThan(host.fittingSize.height, panelHeight + 40)
         XCTAssertGreaterThan(input.frame.height, scroll.contentSize.height)
         XCTAssertFalse(input.returnSubmits)
         input.scrollRangeToVisible(NSRange(location: (input.string as NSString).length, length: 0))
@@ -50,8 +51,8 @@ final class PersistentPanelTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(50))
             host.layoutSubtreeIfNeeded()
             XCTAssertTrue(editor(host) === input, "Switching must retain the active native editor")
-            XCTAssertEqual(host.fittingSize.height, panelHeight, accuracy: 1, "Both modes use the same panel height")
-            XCTAssertEqual(scroll.frame.height, inputHeight, accuracy: 1)
+            XCTAssertGreaterThan(host.fittingSize.height, panelHeight)
+            XCTAssertEqual(scroll.frame.height, cappedHeight, accuracy: 1, "Both modes cap the editor at six lines")
             XCTAssertEqual(model.mode, choice, "A click switches modes while the editor has focus")
             XCTAssertTrue(window.firstResponder === input, "Mode clicks preserve editing focus")
             XCTAssertFalse(input.returnSubmits)
@@ -107,11 +108,14 @@ final class PersistentPanelTests: XCTestCase {
         XCTAssertEqual(editor.string, "Unfinished draft")
         let inputHeight = try XCTUnwrap(editor.enclosingScrollView).frame.height
         XCTAssertLessThanOrEqual(inputHeight, 26)
+        let originalFrame = panel.frame
         editor.string = String(repeating: "A long entry with several wrapped lines. ", count: 20)
         editor.didChangeText()
         panel.contentView?.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(100))
-        XCTAssertEqual(try XCTUnwrap(editor.enclosingScrollView).frame.height, inputHeight, accuracy: 1)
+        XCTAssertGreaterThan(try XCTUnwrap(editor.enclosingScrollView).frame.height, inputHeight)
+        XCTAssertGreaterThan(panel.frame.height, originalFrame.height)
+        XCTAssertEqual(panel.frame.maxY, originalFrame.maxY, accuracy: 1, "Growing input keeps the top edge anchored")
         XCTAssertGreaterThan(editor.frame.height, inputHeight)
         panel.resignKey()
         controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: panel))

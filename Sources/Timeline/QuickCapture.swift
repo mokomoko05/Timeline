@@ -252,7 +252,7 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
     // 失焦仅交出键盘，面板继续置顶显示。
     func windowDidResignKey(_ notification: Notification) {}
 
-    /// 内容高度变化（出现缩略图）时调整窗口，保持顶边位置不动。
+    /// 内容高度变化（多行输入或缩略图）时调整窗口，保持顶边位置不动。
     private func resize(height: CGFloat) {
         guard let panel, abs(panel.frame.height - height) > 0.5 else { return }
         var frame = panel.frame
@@ -351,8 +351,9 @@ struct QuickCaptureView: View {
                           placeholder: mode == .todo ? "添加待办…" : "记录…  @ 待办 · # 标签",
                           fontSize: 12, submit: submit, cancel: close,
                           complete: { switchMode(to: mode == .todo ? .log : .todo) },
-                          onPasteImages: mode == .log ? addImages : nil, minHeight: 24, maxLines: 1,
+                          onPasteImages: mode == .log ? addImages : nil, minHeight: 24, maxLines: 6,
                           mention: mode == .log ? mention : nil)
+                    .fixedSize(horizontal: false, vertical: true)
                 if mode == .todo {
                     DraftDeadlineButton(options: $model.creationOptions,
                                         initial: model.creationOptions.applying(to: parsed.resolve(defaultDay: Date()).todo))
@@ -503,7 +504,7 @@ struct ParsedChips: View {
     }
 }
 
-private struct PanelHeightKey: PreferenceKey {
+struct PanelHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 160
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
