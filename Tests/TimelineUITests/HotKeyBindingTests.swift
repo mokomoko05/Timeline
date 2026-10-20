@@ -18,15 +18,17 @@ final class HotKeyBindingTests: XCTestCase {
 
     func testDefaultsAndLabels() {
         XCTAssertEqual(HotKeyAction.main.defaultBinding.label, "⌃⌥D")
-        XCTAssertEqual(HotKeyAction.shell.defaultBinding.label, "⌃⌥T")
+        XCTAssertEqual(HotKeyAction.shell.defaultBinding.label, "⌃⇥")
+        XCTAssertEqual(HotKeyAction.log.defaultBinding.label, "⌃⌥L")
+        XCTAssertEqual(HotKeyAction.focusPanel.defaultBinding.label, "⌃⌥F")
         XCTAssertEqual(HotKeyBinding(keyCode: kVK_Space, modifiers: cmdKey | shiftKey).label, "⇧⌘空格")
         XCTAssertEqual(HotKeyBinding(keyCode: kVK_ANSI_Grave, modifiers: controlKey).label, "⌃`")
         XCTAssertEqual(Set(HotKeyAction.allCases.map(\.identifier)).count, HotKeyAction.allCases.count, "每个动作的注册标识唯一")
     }
 
-    func testNotesShortcutIsAGlobalBindingDefaultingToControlN() {
+    func testNotesShortcutIsAGlobalBindingDefaultingToControlOptionN() {
         let defaults = defaults()
-        XCTAssertEqual(HotKeyAction.notes.defaultBinding.label, "⌃N")
+        XCTAssertEqual(HotKeyAction.notes.defaultBinding.label, "⌃⌥N")
         XCTAssertEqual(Set(HotKeyAction.allCases), [.main, .shell, .log, .notes, .focusPanel], "笔记是全局快捷键之一；快速待办不再有快捷键；专注计时可以一键隐藏 / 显示")
         XCTAssertFalse(HotKeyAction.allCases.map(\.rawValue).contains("todo"))
         let custom = HotKeyBinding(keyCode: kVK_ANSI_K, modifiers: cmdKey | optionKey)
@@ -34,13 +36,13 @@ final class HotKeyBindingTests: XCTestCase {
         XCTAssertEqual(HotKeyStore.binding(for: .notes, defaults: defaults), custom)
         XCTAssertEqual(HotKeyStore.conflict(of: custom, excluding: .log, defaults: defaults), .notes, "和其他动作互相检查冲突")
         HotKeyStore.save(nil, for: .notes, defaults: defaults)
-        XCTAssertEqual(HotKeyStore.binding(for: .notes, defaults: defaults).label, "⌃N", "恢复默认")
+        XCTAssertEqual(HotKeyStore.binding(for: .notes, defaults: defaults).label, "⌃⌥N", "恢复默认")
     }
 
     func testMenuEquivalentFollowsTheBinding() {
         var equivalent = HotKeyAction.notes.defaultBinding.menuEquivalent
         XCTAssertEqual(equivalent.key, "n")
-        XCTAssertEqual(equivalent.mask, [.control])
+        XCTAssertEqual(equivalent.mask, [.control, .option])
         equivalent = HotKeyBinding(keyCode: kVK_ANSI_K, modifiers: cmdKey | shiftKey).menuEquivalent
         XCTAssertEqual(equivalent.key, "k")
         XCTAssertEqual(equivalent.mask, [.command, .shift])

@@ -25,7 +25,6 @@ struct TaskPriorityButton: View {
     @ObservedObject var store: JournalStore
     let task: Todo
     var select: () -> Void = {}
-    var reorder: TaskReorderHooks?
     var items: [RadialItem] {
         TaskPriority.allCases.map { priority in
             RadialItem(id: priority.rawValue, symbol: "circle.fill", title: priority.title,
@@ -36,12 +35,12 @@ struct TaskPriorityButton: View {
 
     var body: some View {
         NativeTaskHandle(task: task, enabled: !store.isReadOnly, drawsHandle: false,
-                         select: select, reorder: reorder, priorityItems: items,
+                         select: select, priorityItems: items,
                          priorityColor: NSColor(PriorityMark(priority: task.priority).color))
             .frame(width: 18, height: 22)
-            .help("悬停设置优先级；按住圆点拖动排序或更改日期")
+            .help("左键按住拖动；右键设置优先级")
             .accessibilityLabel(LocalizedStringKey(task.priority.title))
-            .accessibilityHint("悬停选择优先级，按住拖动任务")
+            .accessibilityHint("左键按住拖动任务，右键选择优先级")
             .accessibilityActions {
                 ForEach(items) { item in Button(LocalizedStringKey(item.title), action: item.action) }
             }
@@ -52,28 +51,16 @@ struct PrioritySelectionButton: View {
     let priority: TaskPriority
     let items: [RadialItem]
     var enabled = true
-    @State private var anchor = AnchorBox()
+    @State private var showing = false
 
     var body: some View {
-        Button {
-            RadialMenuController.shared.present(items: items, anchor: anchor.view ?? NSView(), kind: .priority)
-        } label: {
-            PriorityMark(priority: priority)
-                .frame(width: 18, height: 22).contentShape(Rectangle())
+        Button { showing = true } label: {
+            PriorityMark(priority: priority).frame(width: 18, height: 22).contentShape(Rectangle())
         }
         .buttonStyle(.plain).disabled(!enabled)
-        .raisedOnHover(radius: 4, enabled: enabled)
-        .background(AnchorReader(box: anchor))
-        .onHover { inside in
-            if inside && enabled {
-                RadialMenuController.shared.scheduleOpen(items: { items }, anchor: anchor.view, kind: .priority)
-            } else { RadialMenuController.shared.cancelOpen() }
-        }
-        .help(LocalizedStringKey(priority.title))
-        .accessibilityLabel(LocalizedStringKey(priority.title))
-        .accessibilityHint("选择优先级")
-        .accessibilityActions {
-            ForEach(items) { item in Button(LocalizedStringKey(item.title), action: item.action) }
+        .help("设置优先级").accessibilityLabel(LocalizedStringKey(priority.title))
+        .popover(isPresented: $showing, arrowEdge: .leading) {
+            PriorityPaletteView(items: items, close: { showing = false })
         }
     }
 }
@@ -82,7 +69,6 @@ struct TaskDeadlineButton: View {
     @ObservedObject var store: JournalStore
     let task: Todo
     var compact = false
-    var axis = false
     @State private var showing = false
 
     static func time(_ date: Date) -> String {
@@ -94,8 +80,7 @@ struct TaskDeadlineButton: View {
         Button { showing = true } label: {
             Text(task.dueDate.map(label) ?? AppLocalized("未设日期"))
                 .font(.system(size: compact ? 9 : 10, weight: .medium, design: .monospaced))
-                .lineLimit(axis ? 2 : 1).multilineTextAlignment(.trailing)
-                .fixedSize(horizontal: !axis, vertical: true)
+                .lineLimit(1).fixedSize()
                 .foregroundStyle(!task.completed && task.effectiveDeadline.map({ $0 < Date() }) == true ? Palette.deadline : Palette.muted)
                 .padding(.horizontal, compact ? 2 : 4).padding(.vertical, 2)
         }
@@ -108,10 +93,6 @@ struct TaskDeadlineButton: View {
     }
 
     private func label(_ due: Date) -> String {
-        if axis {
-            let date = due.formatted(.dateTime.month(.twoDigits).day(.twoDigits).locale(AppLanguage.current.locale))
-            return task.dueHasTime ? date + "\n" + Self.time(due) : date
-        }
         if compact { return Self.time(due) }
         if task.dueHasTime {
             return JournalDates.calendar.isDateInToday(due)
@@ -147,5 +128,61 @@ private struct TaskDeadlineEditor: View {
                 }.keyboardShortcut(.defaultAction)
             }
         }.padding(14)
+    }
+}
+
+
+@MainActor
+final class PriorityPaletteController {
+    static let shared = PriorityPaletteController()
+    private(set) var popover: NSPopover?
+    var isOpen: Bool { popover?.isShown == true }
+
+    func dismiss() { popover?.performClose(nil); popover = nil }
+
+    func present(items: [RadialItem], anchor: NSView) {
+        guard anchor.window != nil, !items.isEmpty else { return }
+        dismiss()
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = !Headless.active
+        let content = PriorityPaletteView(items: items, close: { [weak self] in self?.dismiss() })
+        let host = NSHostingController(rootView: LocalizedRoot { content })
+        popover.contentViewController = host
+        popover.contentSize = host.view.fittingSize
+        self.popover = popover
+        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minX)
+        if Headless.active { popover.contentViewController?.view.window?.alphaValue = 0 }
+    }
+}
+
+struct PriorityPaletteView: View {
+    @Environment(\.typography) private var typography
+    let items: [RadialItem]
+    var close: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("优先级").font(.headline)
+            FlowLayout(spacing: 6) {
+                ForEach(items) { item in
+                    Button {
+                        item.action()
+                        close()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Circle().fill(item.tint ?? Palette.muted).frame(width: 8, height: 8)
+                            Text(LocalizedStringKey(item.title)).font(.system(size: typography.pt(12)))
+                            if item.active { Image(systemName: "checkmark").font(.system(size: 10)) }
+                        }
+                        .padding(.horizontal, 9).padding(.vertical, 5)
+                        .background(item.active ? Palette.accent.opacity(0.18) : Palette.card, in: RoundedRectangle(cornerRadius: 7))
+                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(item.active ? Palette.accent : Palette.line, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain).accessibilityLabel(LocalizedStringKey(item.title))
+                    .accessibilityAddTraits(item.active ? .isSelected : [])
+                }
+            }.frame(width: 270)
+        }.padding(16).foregroundStyle(Palette.ink)
     }
 }

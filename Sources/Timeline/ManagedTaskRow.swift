@@ -8,7 +8,6 @@ struct ManagedTaskRow: View {
     @EnvironmentObject private var interaction: WorkspaceInteraction
     @ObservedObject private var dragSession = TaskDragSession.shared
     @Environment(\.focusSession) private var focus
-    @Environment(\.taskReorder) private var reorder
     /// 主窗口的命令中心（搜索面板里的行没有它）。
     @Environment(\.appCommands) private var commands
     let date: Date
@@ -17,27 +16,26 @@ struct ManagedTaskRow: View {
     @Binding var requestedEdit: UUID?
     /// 截止日期正好是日历里选中的那一天时，左侧加一条强调线。
     var emphasized = false
-    var timeline: TaskTimelinePosition?
+    var timeline = false
+    var placementPreview = false
     var next: () -> Void = {}
     var select: () -> Void = {}
     @State private var showingDetails = false
     @State private var showingTags = false
     @State private var hovered = false
 
-    private var selected: Bool { interaction.selectedTaskID == task.id || dragSession.activeID == task.id }
+    private var selected: Bool { !placementPreview && (interaction.selectedTaskID == task.id || dragSession.activeID == task.id) }
 
     var body: some View {
         HStack(spacing: 6) {
-            if let timeline {
-                TaskDeadlineButton(store: store, task: task, axis: true)
-                    .frame(width: TaskTimelineLayout.timeWidth(typography), alignment: .trailing)
+            if timeline {
+                Group {
+                    if task.dueHasTime { TaskDeadlineButton(store: store, task: task, compact: true) }
+                    else { Color.clear }
+                }
+                .frame(width: TaskTimelineLayout.timeWidth(typography), alignment: .trailing)
                 priorityControl
                     .frame(width: 22).frame(maxHeight: .infinity)
-                    .background {
-                        TaskTimelineConnector(position: timeline, branch: !task.completed)
-                            .stroke(selected ? Palette.accent.opacity(0.6) : Palette.line, lineWidth: 1)
-                            .allowsHitTesting(false)
-                    }
                     .background {
                         Circle().fill(PriorityMark(priority: task.priority).color.opacity(0.12))
                             .frame(width: 20, height: 20)
@@ -55,11 +53,8 @@ struct ManagedTaskRow: View {
 
     private var priorityControl: some View {
         TaskPriorityButton(store: store, task: task, select: {
-            reorder?.suppressScroll = true
+            if interaction.selectedTaskID != task.id { interaction.suppressNextTaskScroll = true }
             selectTask()
-        }, reorder: reorder.map { model in
-            TaskReorderHooks(begin: { model.begin(task.id) }, update: { model.update($0) },
-                             end: { model.finish() }, cancel: { model.cancel() })
         })
     }
 
@@ -90,7 +85,7 @@ struct ManagedTaskRow: View {
                 .transition(Motion.reduced ? .identity : .scale(scale: 0.4).combined(with: .opacity))
                 .animation(Motion.spring, value: task.completed)
         }
-        .buttonStyle(HitAreaButtonStyle(compact: timeline != nil && task.completed))
+        .buttonStyle(HitAreaButtonStyle(compact: timeline && task.completed))
         .accessibilityLabel((task.isDropped ? "恢复已放弃的待办：" : (task.completed ? "标记未完成：" : "标记完成：")) + task.title)
         .help(task.isDropped ? "已放弃：点一下恢复成未完成" : "")
     }
@@ -100,18 +95,18 @@ struct ManagedTaskRow: View {
             HStack(alignment: .center, spacing: 1) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .center, spacing: 1) {
-                        if timeline == nil {
+                        if !timeline {
                             priorityControl
                                 .frame(width: 18, height: 26)
                         }
-                        if let number = task.number {
+                        if let number = task.number, !timeline {
                             Text("#\(number)").font(.system(size: typography.pt(10), design: .monospaced))
                                 .foregroundStyle(Palette.muted).fixedSize()
                         }
                         TaskTitleView(title: Binding(
                             get: { store.entry(for: date).todos.first(where: { $0.id == task.id })?.title ?? task.title },
                             set: { store.renameTodo(task.id, title: $0, on: date) }
-                        ), completed: task.completed, color: Palette.ink, fontSize: compact ? 12 : 14,
+                        ), completed: task.isDone, color: task.isDropped ? Palette.muted : Palette.ink, fontSize: compact ? 12 : 14,
                                       next: next, itemID: task.id, requestedEdit: $requestedEdit,
                                       prepare: selectTask, menuItems: menuItems)
                     }
@@ -133,12 +128,14 @@ struct ManagedTaskRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // 日期与计时覆盖整块正文的高度，不再挤在标题行中。
                 VStack(alignment: .trailing, spacing: 2) {
-                    if timeline == nil { TaskDeadlineButton(store: store, task: task) }
+                    if !timeline { TaskDeadlineButton(store: store, task: task) }
                     if let focus {
                         Spacer(minLength: 2)
                         TaskFocusButton(session: focus, task: ScheduledTask(date: date, task: task))
                     }
                 }
+                .opacity(!timeline || hovered || selected ? 1 : 0)
+                .allowsHitTesting(!timeline || hovered || selected)
                 .padding(.vertical, 2)
                 .frame(maxHeight: .infinity)
             }
@@ -146,28 +143,33 @@ struct ManagedTaskRow: View {
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 0) {
-                TagSelectionButton(store: store, tags: Binding(get: { store.locate(task.id)?.task.tags ?? task.tags }, set: { store.setTags(task.id, $0) }))
-                RadialMenuButton(items: { radialItems }, help: "更多操作：笔记、标签、固定、放弃、删除")
-                    .popover(isPresented: $showingTags, arrowEdge: .leading) { TagPickerView(store: store, task: task) }
+                HStack(spacing: 0) {
+                    TagSelectionButton(store: store, tags: Binding(get: { store.locate(task.id)?.task.tags ?? task.tags }, set: { store.setTags(task.id, $0) }))
+                    RadialMenuButton(items: { radialItems }, help: "更多操作：笔记、标签、固定、放弃、删除")
+                        .popover(isPresented: $showingTags, arrowEdge: .leading) { TagPickerView(store: store, task: task) }
+                }
+                .opacity(!timeline || hovered || selected ? 1 : 0)
+                .allowsHitTesting(!timeline || hovered || selected)
+                .accessibilityHidden(timeline && !hovered && !selected)
                 completionButton
             }
             .fixedSize()
         }
         .padding(.horizontal, 6).padding(.vertical, compact ? 4 : 7)
         .background {
-            RoundedRectangle(cornerRadius: 8).fill(Palette.card)
+            RoundedRectangle(cornerRadius: 6).fill(timeline ? (hovered || selected ? Palette.soft.opacity(0.6) : .clear) : Palette.card)
                 .overlay {
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(LinearGradient(colors: [.white.opacity(hovered ? 0.055 : 0.025), .clear],
+                        .fill(LinearGradient(colors: [.white.opacity(timeline ? 0 : (hovered ? 0.055 : 0.025)), .clear],
                                              startPoint: .topLeading, endPoint: .bottomTrailing))
                 }
-                .shadow(color: .black.opacity(hovered || selected ? 0.18 : 0.07),
+                .shadow(color: .black.opacity(timeline ? 0 : (hovered || selected ? 0.18 : 0.07)),
                         radius: hovered || selected ? 5 : 2, x: 0, y: hovered || selected ? 2 : 1)
         }
         // 常驻一道很淡的细边（有质感但不花），悬停时浮起来：边变清晰、下面有一点阴影。
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line.opacity(hovered ? 0.9 : 0.35), lineWidth: 0.75).allowsHitTesting(false))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line.opacity(timeline ? 0 : (hovered ? 0.9 : 0.35)), lineWidth: 0.75).allowsHitTesting(false))
         .overlay(alignment: .leading) {
-            if emphasized { Capsule().fill(Palette.accent).frame(width: 3).padding(.vertical, 6).allowsHitTesting(false) }
+            if emphasized && !timeline { Capsule().fill(Palette.accent).frame(width: 3).padding(.vertical, 6).allowsHitTesting(false) }
         }
         .overlay {
             RoundedRectangle(cornerRadius: 8)
@@ -178,7 +180,7 @@ struct ManagedTaskRow: View {
 
     private var rowContent: some View {
         Group {
-            if timeline != nil && task.completed {
+            if timeline && task.completed {
                 completedRow.transition(.opacity)
             } else {
                 card.transition(.opacity)
@@ -187,7 +189,7 @@ struct ManagedTaskRow: View {
         .contentShape(RoundedRectangle(cornerRadius: 8))
         .simultaneousGesture(TapGesture().onEnded { selectTask() })
         .animation(.easeInOut(duration: 0.12), value: selected)
-        .modifier(TaskDragSource(task: task, enabled: !store.isReadOnly, edgeDragging: false, select: selectTask))
+        .modifier(TaskDragSource(task: task, enabled: !store.isReadOnly, edgeDragging: false, placementPreview: placementPreview, select: selectTask))
         .contextMenu {
             ForEach(Array(menuItems.enumerated()), id: \.offset) { _, item in
                 if item.separator { Divider() } else {

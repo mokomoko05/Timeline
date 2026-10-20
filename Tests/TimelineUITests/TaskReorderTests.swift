@@ -138,44 +138,6 @@ final class TaskReorderTests: XCTestCase {
                            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
     }
 
-    func testPressingPriorityDotDismissesMenuAndStillReorders() async throws {
-        let todos = (1...3).map { Todo(title: "Task \($0)") }
-        let model = TaskReorderModel()
-        model.groupProvider = { _ in todos.map(\.id) }
-        for (index, task) in todos.enumerated() { model.frames[task.id] = rect(index) }
-        var commits: [[UUID]] = []
-        model.commit = { commits.append($0) }
-        let dot = TaskHandleView(frame: NSRect(x: 0, y: 0, width: 22, height: 22))
-        dot.taskID = todos[0].id
-        dot.drawsHandle = false
-        dot.priorityColor = .systemBlue
-        dot.priorityItems = [RadialItem(id: "normal", symbol: "circle.fill", title: "Normal", action: {})]
-        dot.reorder = TaskReorderHooks(begin: { model.begin(todos[0].id) }, update: { model.update($0) },
-                                       end: { model.finish() }, cancel: { model.cancel() })
-        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 240),
-                                 styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = dot
-        defer { window.contentView = nil; window.close() }
-        let menu = RadialMenuController.shared
-        menu.present(items: dot.priorityItems!, hubAt: CGPoint(x: 100, y: 100), kind: .priority)
-        XCTAssertTrue(menu.isOpen)
-        let start = NSPoint(x: 10, y: 150)
-        dot.mouseDown(with: mouse(.leftMouseDown, at: start, in: window))
-        XCTAssertFalse(menu.isOpen, "Pressing closes the coloring menu before any movement")
-        dot.mouseDragged(with: mouse(.leftMouseDragged, at: NSPoint(x: 10, y: 50), in: window))
-        XCTAssertEqual(model.activeID, todos[0].id)
-        dot.mouseUp(with: mouse(.leftMouseUp, at: NSPoint(x: 10, y: 50), in: window))
-        XCTAssertEqual(commits, [[todos[1].id, todos[2].id, todos[0].id]])
-        XCTAssertFalse(model.isActive)
-        // A pending hover must also be cancelled by pressing, even if it has not opened yet.
-        menu.scheduleOpen(items: { dot.priorityItems! }, anchor: dot, kind: .priority)
-        dot.mouseDown(with: mouse(.leftMouseDown, at: start, in: window))
-        try await Task.sleep(for: .milliseconds(160))
-        XCTAssertFalse(menu.isOpen)
-        dot.mouseUp(with: mouse(.leftMouseUp, at: start, in: window))
-    }
-
     func testDraggingTheRealHandleLetsOtherRowsMakeRoomAndCommitsTheOrder() async throws {
         let todos = (1...4).map { Todo(title: "任务\($0)") }
         let model = TaskReorderModel()

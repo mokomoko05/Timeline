@@ -8,6 +8,7 @@ enum WorkspacePane: String {
 @MainActor
 final class WorkspaceInteraction: ObservableObject {
     @Published var activePane: WorkspacePane = .tasks
+    var suppressNextTaskScroll = false
     @Published var selectedTaskID: UUID?
     @Published var logFocusRequest = 0
     /// 日志按这些任务筛选（跨日期）；为空表示显示当天全部日志。

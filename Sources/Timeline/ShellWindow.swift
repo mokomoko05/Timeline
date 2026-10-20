@@ -268,7 +268,7 @@ enum ShellProcessInfo {
 }
 
 /// 内置 zsh 终端：真正的 PTY 终端（能运行 vim、htop、agent 等）。
-/// 可以同时开多个窗口，每个窗口还能有多个原生标签页；`⌃⌥T` 把所有终端窗口一起显示 / 隐藏（隐藏只是收起，里面的程序继续运行）。
+/// 可以同时开多个窗口，每个窗口还能有多个原生标签页；终端全局快捷键把所有终端窗口一起显示 / 隐藏（隐藏只是收起，里面的程序继续运行）。
 /// 关闭标签页或窗口会结束里面的 shell；有程序在前台运行时会先确认。
 @MainActor
 final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTerminalViewDelegate {

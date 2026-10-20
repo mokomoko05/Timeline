@@ -1,9 +1,59 @@
 import AppKit
+import SwiftUI
 import XCTest
 import TimelineCore
 @testable import Timeline
 
 final class TaskDragDropTests: XCTestCase {
+    @MainActor
+    func testDraftDotCreatesOnceOnPressAndDragsTheCreatedTaskWithoutASecondSubmission() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory); PriorityPaletteController.shared.dismiss() }
+        let store = JournalStore(directory: directory)
+        let source = try XCTUnwrap(JournalDates.date(for: "2026-10-20"))
+        let target = try XCTUnwrap(JournalDates.date(for: "2026-10-24"))
+        store.setDeadlineDraft("Write report #work", on: source)
+        var options = TaskCreationOptions()
+        options.priority = .high
+        let dot = TaskHandleView(frame: NSRect(x: 0, y: 0, width: 22, height: 22))
+        dot.draftEnabled = true
+        var submissions = 0
+        dot.prepareTask = {
+            submissions += 1
+            return store.commitDraft(on: source, options: options).last?.task
+        }
+        dot.priorityItems = [RadialItem(id: "high", symbol: "circle.fill", title: "High", action: {})]
+        func event(_ type: NSEvent.EventType, x: CGFloat = 10) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: 10), modifierFlags: [], timestamp: 0,
+                              windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        dot.rightMouseDown(with: event(.rightMouseDown))
+        XCTAssertEqual(submissions, 0, "Choosing a color must not create a task")
+        dot.mouseDown(with: event(.leftMouseDown))
+        let created = try XCTUnwrap(store.tasks().first)
+        XCTAssertEqual(created.id, dot.taskID)
+        XCTAssertEqual(created.task.priority, .high)
+        XCTAssertEqual(created.task.tags, ["work"])
+        XCTAssertEqual(store.entry(for: source).deadlineDraft, "")
+        var dragged: UUID?
+        dot.startNativeDrag = { id, title, _, _ in
+            dragged = id
+            XCTAssertEqual(title, created.task.title)
+            TaskDragSession.shared.begin(id)
+            XCTAssertTrue(TaskDragDrop.receive([TaskDragPayload.provider(id)], store: store, destination: target))
+        }
+        dot.mouseDragged(with: event(.leftMouseDragged, x: 30))
+        dot.mouseDragged(with: event(.leftMouseDragged, x: 40))
+        dot.mouseUp(with: event(.leftMouseUp, x: 40))
+        XCTAssertEqual(dragged, created.id)
+        XCTAssertEqual(submissions, 1)
+        XCTAssertEqual(store.tasks().count, 1)
+        XCTAssertEqual(store.locate(created.id)?.task.dueDate, target)
+        dot.mouseDown(with: event(.leftMouseDown))
+        XCTAssertNil(dot.taskID, "Pressing an empty draft cannot pick up the previous task")
+        XCTAssertEqual(store.tasks().count, 1)
+    }
+
     @MainActor
     func testCardDragSurfacePassesThroughButtonAndEditorRegions() async {
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
@@ -51,6 +101,74 @@ final class TaskDragDropTests: XCTestCase {
         TaskDragSession.shared.end()
         XCTAssertNil(TaskDragSession.shared.activeID)
         XCTAssertEqual(store.days, beforeCancel)
+    }
+
+    @MainActor
+    func testAxisDropMovesCalendarEntryKeepsTimeAndCanClearDeadline() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory); TaskDragSession.shared.end() }
+        let store = JournalStore(directory: directory)
+        let source = try XCTUnwrap(JournalDates.date(for: "2026-10-20"))
+        let destination = try XCTUnwrap(JournalDates.date(for: "2026-10-23"))
+        let item = try XCTUnwrap(store.addParsedTodo("Write report", on: source))
+        let due = try XCTUnwrap(JournalDates.calendar.date(bySettingHour: 14, minute: 30, second: 0, of: source))
+        store.updateTodo(item.id, scheduledDate: item.date, dueDate: due, dueHasTime: true, reminderMinutes: 15, repeatRule: .none)
+        _ = store.calendarDeadlines // Populate the index before moving.
+        TaskDragSession.shared.begin(item.id)
+        XCTAssertTrue(TaskDragDrop.receive([TaskDragPayload.provider(item.id)], store: store, destination: destination))
+        let moved = try XCTUnwrap(store.locate(item.id))
+        XCTAssertEqual(JournalDates.calendar.component(.hour, from: moved.task.dueDate!), 14)
+        XCTAssertEqual(JournalDates.calendar.component(.minute, from: moved.task.dueDate!), 30)
+        XCTAssertTrue(store.calendarDeadlines[JournalDates.key(source), default: []].isEmpty)
+        XCTAssertEqual(store.calendarDeadlines[JournalDates.key(destination)]?.map(\.id), [item.id])
+        TaskDragSession.shared.begin(item.id)
+        XCTAssertTrue(TaskDragDrop.receive([TaskDragPayload.provider(item.id)], store: store, destination: nil))
+        XCTAssertNil(store.locate(item.id)?.task.dueDate)
+        XCTAssertTrue(store.calendarDeadlines[JournalDates.key(destination), default: []].isEmpty)
+        store.undo()
+        XCTAssertEqual(store.calendarDeadlines[JournalDates.key(destination)]?.map(\.id), [item.id])
+    }
+
+    @MainActor
+    func testDotHoverDoesNothingLeftDragMovesAndRightClickOpensPalette() async throws {
+        let dot = TaskHandleView(frame: NSRect(x: 0, y: 0, width: 22, height: 22))
+        dot.taskID = UUID()
+        dot.priorityColor = .systemBlue
+        dot.priorityItems = TaskPriority.allCases.map { priority in
+            RadialItem(id: priority.rawValue, symbol: "circle.fill", title: priority.title,
+                       active: priority == .normal, tint: PriorityMark(priority: priority).color, action: {})
+        }
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = dot
+        window.orderFront(nil)
+        defer { PriorityPaletteController.shared.dismiss(); window.contentView = nil; window.close() }
+        func event(_ type: NSEvent.EventType, x: CGFloat = 10) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: 10), modifierFlags: [], timestamp: 0,
+                              windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        dot.mouseEntered(with: event(.leftMouseDown))
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertFalse(PriorityPaletteController.shared.isOpen)
+        XCTAssertFalse(RadialMenuController.shared.isOpen)
+        dot.rightMouseDown(with: event(.rightMouseDown))
+        XCTAssertTrue(PriorityPaletteController.shared.isOpen)
+        XCTAssertFalse(RadialMenuController.shared.isOpen)
+        if let prefix = ProcessInfo.processInfo.environment["TIMELINE_AXIS_SNAPSHOT"],
+           let view = PriorityPaletteController.shared.popover?.contentViewController?.view {
+            view.layoutSubtreeIfNeeded()
+            if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: prefix + "-palette.png"))
+            }
+        }
+        var dragged: UUID?
+        dot.startNativeDrag = { id, _, _, _ in dragged = id }
+        dot.mouseDown(with: event(.leftMouseDown))
+        XCTAssertFalse(PriorityPaletteController.shared.isOpen)
+        dot.mouseDragged(with: event(.leftMouseDragged, x: 30))
+        XCTAssertEqual(dragged, dot.taskID)
+        dot.mouseUp(with: event(.leftMouseUp, x: 30))
     }
 
     @MainActor

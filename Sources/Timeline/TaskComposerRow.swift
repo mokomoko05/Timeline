@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import TimelineCore
 
@@ -14,18 +15,20 @@ struct TaskComposerRow: View {
     var cancel: () -> Void = {}
     var previous: () -> Void = {}
     var complete: (() -> Void)?
+    var startDrag: (() -> Todo?)?
 
     private var preview: Todo { options.applying(to: QuickAdd.parse(text).resolve(defaultDay: defaultDate).todo) }
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: "plus.circle").font(.system(size: compact ? 14 : 17, weight: .light))
-                .foregroundStyle(Palette.muted).frame(width: 18)
-            PrioritySelectionButton(priority: options.priority, items: TaskPriority.allCases.map { priority in
+            NativeTaskHandle(task: preview, enabled: !store.isReadOnly, drawsHandle: false,
+                             priorityItems: TaskPriority.allCases.map { priority in
                 RadialItem(id: priority.rawValue, symbol: "circle.fill", title: priority.title,
                            active: options.priority == priority, tint: PriorityMark(priority: priority).color,
                            action: { options.priority = priority })
-            }, enabled: !store.isReadOnly)
+            }, priorityColor: NSColor(PriorityMark(priority: options.priority).color), prepareTask: startDrag)
+                .frame(width: 22, height: 22)
+                .help("左键按住创建并拖动；右键设置优先级")
             VStack(alignment: .leading, spacing: 2) {
                 TaskInput(text: $text, focused: $focused, placeholder: "添加待办…", fontSize: compact ? 12 : 14,
                           submit: submit, cancel: cancel, previous: previous, complete: complete,

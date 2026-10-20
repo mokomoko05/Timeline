@@ -28,25 +28,39 @@ enum TaskDragPayload {
 @MainActor
 final class TaskDragSession: ObservableObject {
     static let shared = TaskDragSession()
-    static let animation = Animation.interactiveSpring(response: 0.24, dampingFraction: 0.88)
+    static var animation: Animation? { Motion.reduced ? nil : .interactiveSpring(response: 0.22, dampingFraction: 0.92) }
     @Published private(set) var activeID: UUID?
+    @Published var timelineTarget: String?
+    private var lastDateTarget: String?
+
+    func focusDate(_ date: Date?) {
+        guard activeID != nil else { return }
+        let key = date.map(JournalDates.key) ?? "undated"
+        guard key != lastDateTarget else { return }
+        lastDateTarget = key
+        if !Headless.active {
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        }
+    }
 
     func begin(_ id: UUID) {
+        lastDateTarget = nil
         withAnimation(.easeOut(duration: 0.14)) { activeID = id }
         NSCursor.closedHand.set()
     }
 
     func end() {
+        lastDateTarget = nil
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
-        withTransaction(transaction) { activeID = nil }
+        withTransaction(transaction) { activeID = nil; timelineTarget = nil }
         NSCursor.arrow.set()
     }
 }
 
 @MainActor
 enum TaskDragDrop {
-    static func receive(_ providers: [NSItemProvider], store: JournalStore, destination: Date,
+    static func receive(_ providers: [NSItemProvider], store: JournalStore, destination: Date?,
                         anchorID: UUID? = nil, after: Bool = false, reorder: Bool = false) -> Bool {
         guard !store.isReadOnly,
               let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(TaskDragPayload.type.identifier) }) else { return false }
@@ -63,11 +77,12 @@ enum TaskDragDrop {
     }
 
     /// 拖到日历的某一天，就是把那天设为任务的截止日期（保留原来的时分）。清单按截止时间排序，不再手动排序。
-    static func move(_ id: UUID, store: JournalStore, destination: Date,
+    static func move(_ id: UUID, store: JournalStore, destination: Date?,
                      anchorID: UUID? = nil, after: Bool = false, reorder: Bool = false) {
         guard !store.isReadOnly, !reorder, let task = store.locate(id) else { return }
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
-        if let due = task.task.dueDate, JournalDates.calendar.isDate(due, inSameDayAs: destination) { return }
+        if let due = task.task.dueDate, let destination, JournalDates.calendar.isDate(due, inSameDayAs: destination) { return }
+        if task.task.dueDate == nil && destination == nil { return }
         withAnimation(TaskDragSession.animation) {
             store.setDeadline(id, to: destination)
         }
@@ -78,13 +93,13 @@ struct TaskDragSource: ViewModifier {
     let task: Todo
     let enabled: Bool
     var edgeDragging = true
+    var placementPreview = false
     var select: () -> Void = {}
     @ObservedObject private var session = TaskDragSession.shared
 
     func body(content: Content) -> some View {
-        content.opacity(session.activeID == task.id ? 0.28 : 1)
-            .scaleEffect(session.activeID == task.id ? 0.98 : 1)
-            .transaction { if session.activeID != task.id { $0.animation = nil; $0.disablesAnimations = true } }
+        content.opacity(!placementPreview && session.activeID == task.id ? 0.25 : 1)
+            .animation(Motion.quick, value: session.activeID)
             .overlay {
                 if edgeDragging {
                     NativeTaskHandle(task: task, enabled: enabled, drawsHandle: false, edgeOnly: true, select: select)
@@ -117,18 +132,22 @@ struct NativeTaskHandle: NSViewRepresentable {
     var reorder: TaskReorderHooks?
     var priorityItems: [RadialItem]?
     var priorityColor: NSColor?
+    var prepareTask: (() -> Todo?)?
 
     func makeNSView(context: Context) -> TaskHandleView { TaskHandleView() }
     func updateNSView(_ view: TaskHandleView, context: Context) {
         view.priorityItems = priorityItems
-        view.priorityColor = priorityColor
+        if prepareTask == nil || view.taskID == nil { view.priorityColor = priorityColor }
+        view.restingPriorityColor = priorityColor
         view.reorder = reorder
-        view.taskID = enabled ? task.id : nil
+        if prepareTask == nil { view.taskID = enabled ? task.id : nil }
+        view.prepareTask = prepareTask
+        view.draftEnabled = enabled
         view.drawsHandle = drawsHandle
         view.edgeOnly = edgeOnly
         view.onSelect = select
         // 标题只在开始拖动时才用到：解析 Markdown 和链接检测不便宜，缩放窗口时每帧都会走到这里，所以只存原文。
-        view.titleSource = (task.title, task.calendarName)
+        if prepareTask == nil || view.taskID == nil { view.titleSource = (task.title, task.calendarName) }
         view.appearance = NSAppearance(named: context.environment.colorScheme == .dark ? .darkAqua : .aqua)
         view.needsDisplay = true
         view.window?.invalidateCursorRects(for: view)
@@ -143,6 +162,11 @@ final class TaskHandleView: NSView, NSDraggingSource {
     var drawsHandle = true
     var edgeOnly = false
     var onSelect: (() -> Void)?
+    /// 输入框圆点在按下时提交草稿；创建后继续使用同一原生视图拖动。
+    var prepareTask: (() -> Todo?)?
+    var draftEnabled = false
+    var isPressed: Bool { initialEvent != nil }
+    private var available: Bool { taskID != nil || (prepareTask != nil && draftEnabled) }
     var reorder: TaskReorderHooks?
     /// 开始「拖到日历」的系统拖拽（会一直占着事件循环到松手）；测试里替换掉。
     var startNativeDrag: (UUID, String, TaskHandleView, NSEvent) -> Void = { id, title, view, event in
@@ -150,30 +174,14 @@ final class TaskHandleView: NSView, NSDraggingSource {
     }
     var priorityItems: [RadialItem]?
     var priorityColor: NSColor?
-    private var hoverArea: NSTrackingArea?
+    var restingPriorityColor: NSColor?
     private var initialEvent: NSEvent?
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let hoverArea { removeTrackingArea(hoverArea) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
-        addTrackingArea(area)
-        hoverArea = area
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        guard taskID != nil, let priorityItems, initialEvent == nil else { return }
-        RadialMenuController.shared.scheduleOpen(items: { priorityItems }, anchor: self, kind: .priority)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        if priorityItems != nil { RadialMenuController.shared.cancelOpen() }
-    }
 
     override func draw(_ dirtyRect: NSRect) {
         if let priorityColor {
             priorityColor.setFill()
-            NSBezierPath(ovalIn: NSRect(x: bounds.midX - 3.5, y: bounds.midY - 3.5, width: 7, height: 7)).fill()
+            let radius: CGFloat = isPressed ? 4.5 : 3.5
+            NSBezierPath(ovalIn: NSRect(x: bounds.midX - radius, y: bounds.midY - radius, width: radius * 2, height: radius * 2)).fill()
             return
         }
         guard drawsHandle else { return }
@@ -187,7 +195,7 @@ final class TaskHandleView: NSView, NSDraggingSource {
     }
 
     override func resetCursorRects() {
-        guard taskID != nil else { return }
+        guard available else { return }
         if edgeOnly {
             addCursorRect(NSRect(x: 0, y: 0, width: bounds.width, height: 6), cursor: .openHand)
             addCursorRect(NSRect(x: 0, y: bounds.height - 6, width: bounds.width, height: 6), cursor: .openHand)
@@ -197,21 +205,44 @@ final class TaskHandleView: NSView, NSDraggingSource {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard taskID != nil else { return nil }
+        guard available else { return nil }
         let local = convert(point, from: superview)
         if edgeOnly, bounds.insetBy(dx: 6, dy: 6).contains(local) { return nil }
         return super.hitTest(point)
     }
 
     override func mouseDown(with event: NSEvent) {
-        RadialMenuController.shared.dismiss()
+        guard available else { return }
+        if event.modifierFlags.contains(.control), priorityItems != nil {
+            rightMouseDown(with: event)
+            return
+        }
+        PriorityPaletteController.shared.dismiss()
+        if let prepareTask {
+            guard draftEnabled, let task = prepareTask() else { return }
+            taskID = task.id
+            titleSource = (task.title, task.calendarName)
+        }
         initialEvent = event
+        needsDisplay = true
+        NSCursor.closedHand.set()
         onSelect?()
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard available, let priorityItems else { return }
+        initialEvent = nil
+        needsDisplay = true
+        onSelect?()
+        PriorityPaletteController.shared.present(items: priorityItems, anchor: self)
     }
 
     override func mouseUp(with event: NSEvent) {
         initialEvent = nil
+        if prepareTask != nil { taskID = nil; priorityColor = restingPriorityColor }
+        needsDisplay = true
         if reordering { endReorder(commit: true) }
+        else { NSCursor.arrow.set(); window?.invalidateCursorRects(for: self) }
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -311,6 +342,8 @@ final class TaskHandleView: NSView, NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) { NSCursor.closedHand.set() }
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         TaskDragSession.shared.end()
+        if prepareTask != nil { taskID = nil; priorityColor = restingPriorityColor }
+        needsDisplay = true
         window?.invalidateCursorRects(for: self)
     }
 }
@@ -324,7 +357,8 @@ enum NativeTaskDrag {
         let pasteboard = NSPasteboardItem()
         pasteboard.setData(TaskDragPayload.encode(id), forType: TaskDragPayload.pasteboardType)
         let item = NSDraggingItem(pasteboardWriter: pasteboard)
-        let size = NSSize(width: min(280, max(160, view.bounds.width)), height: 42)
+        let titleWidth = (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width
+        let size = NSSize(width: min(290, max(120, titleWidth + 42)), height: 38)
         let preview = NSImage(size: size, flipped: false) { rect in
             let shadow = NSShadow()
             shadow.shadowColor = NSColor.black.withAlphaComponent(0.25)
@@ -337,12 +371,16 @@ enum NativeTaskDrag {
             NSShadow().set()
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineBreakMode = .byTruncatingTail
-            (title as NSString).draw(in: card.insetBy(dx: 8, dy: 7), withAttributes: [
+            let color = (view as? TaskHandleView)?.priorityColor ?? NSColor.controlAccentColor
+            color.setFill()
+            NSBezierPath(ovalIn: NSRect(x: card.minX + 9, y: card.midY - 3, width: 6, height: 6)).fill()
+            (title as NSString).draw(in: NSRect(x: card.minX + 22, y: card.minY + 5, width: card.width - 28, height: 17), withAttributes: [
                 .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph
             ])
             return true
         }
-        item.setDraggingFrame(NSRect(origin: .zero, size: size), contents: preview)
+        let point = view.convert(event.locationInWindow, from: nil)
+        item.setDraggingFrame(NSRect(x: point.x - 18, y: point.y - size.height / 2, width: size.width, height: size.height), contents: preview)
         let session = view.beginDraggingSession(with: [item], event: event, source: source)
         session.animatesToStartingPositionsOnCancelOrFail = false
     }
@@ -403,5 +441,37 @@ struct TaskReorderTarget: ViewModifier {
             .onDrop(of: [TaskDragPayload.type], delegate: TaskDropTarget(store: store, destination: date,
                      anchorID: anchorID, height: height, reorder: true, targeted: $targeted, after: $after))
             .onChange(of: session.activeID) { if $0 == nil { targeted = false } }
+    }
+}
+
+
+struct TimelineDateDropTarget: DropDelegate {
+    let store: JournalStore
+    let date: Date?
+    @Binding var targeted: Bool
+    var didDrop: () -> Void = {}
+
+    func validateDrop(info: DropInfo) -> Bool {
+        !store.isReadOnly && info.hasItemsConforming(to: [TaskDragPayload.type])
+    }
+    func dropEntered(info: DropInfo) {
+        targeted = validateDrop(info: info)
+        if targeted { TaskDragSession.shared.focusDate(date) }
+    }
+    func dropExited(info: DropInfo) { targeted = false }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        let accepted = validateDrop(info: info)
+        if accepted && !targeted {
+            targeted = true
+            TaskDragSession.shared.focusDate(date)
+        }
+        return DropProposal(operation: accepted ? .move : .forbidden)
+    }
+    func performDrop(info: DropInfo) -> Bool {
+        targeted = false
+        guard validateDrop(info: info) else { return false }
+        let accepted = TaskDragDrop.receive(info.itemProviders(for: [TaskDragPayload.type]), store: store, destination: date)
+        if accepted { didDrop() }
+        return accepted
     }
 }
