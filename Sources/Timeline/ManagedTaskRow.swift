@@ -29,10 +29,12 @@ struct ManagedTaskRow: View {
     var body: some View {
         HStack(spacing: 6) {
             if let timeline {
-                TaskPriorityButton(store: store, task: task)
+                TaskDeadlineButton(store: store, task: task, axis: true)
+                    .frame(width: TaskTimelineLayout.timeWidth(typography), alignment: .trailing)
+                priorityControl
                     .frame(width: 22).frame(maxHeight: .infinity)
                     .background {
-                        TaskTimelineConnector(position: timeline, branch: !task.isDone)
+                        TaskTimelineConnector(position: timeline, branch: !task.completed)
                             .stroke(selected ? Palette.accent.opacity(0.6) : Palette.line, lineWidth: 1)
                             .allowsHitTesting(false)
                     }
@@ -48,50 +50,58 @@ struct ManagedTaskRow: View {
         .fixedSize(horizontal: false, vertical: true)
         .onHover { hovered = $0 }
         .animation(Motion.quick, value: hovered)
-        .animation(Motion.quick, value: task.isDone)
+        .animation(Motion.quick, value: task.completed)
+    }
+
+    private var priorityControl: some View {
+        TaskPriorityButton(store: store, task: task, select: {
+            reorder?.suppressScroll = true
+            selectTask()
+        }, reorder: reorder.map { model in
+            TaskReorderHooks(begin: { model.begin(task.id) }, update: { model.update($0) },
+                             end: { model.finish() }, cancel: { model.cancel() })
+        })
     }
 
     private var completedRow: some View {
-        Button {
-            selectTask()
-            withAnimation(Motion.quick) { store.toggleTodo(task.id, on: date) }
-        } label: {
+        HStack(spacing: 6) {
             Text(String(TaskText.rendered(task.title).characters).replacingOccurrences(of: "\n", with: " "))
                 .font(.system(size: typography.pt(compact ? 11 : 12)))
-                .strikethrough().foregroundStyle(hovered ? Palette.ink : Palette.muted)
+                .strikethrough(task.isDone)
+                .foregroundStyle(Palette.muted)
                 .lineLimit(1).truncationMode(.tail)
-                .frame(maxWidth: .infinity, minHeight: typography.pt(24), alignment: .leading)
-                .padding(.horizontal, 8)
-                .contentShape(Rectangle())
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if task.isDropped {
+                Text("已放弃").font(.system(size: typography.pt(10))).foregroundStyle(Palette.muted)
+            }
+            completionButton
         }
-        .buttonStyle(.plain)
-        .help("取消完成")
-        .accessibilityLabel(AppLocalizedFormat("标记未完成：%@", task.title))
+        .frame(minHeight: typography.pt(24))
+        .padding(.horizontal, 8)
     }
 
     private var completionButton: some View {
         Button { selectTask(); withAnimation(Motion.quick) { store.toggleTodo(task.id, on: date) } } label: {
             Image(systemName: task.isDropped ? "xmark.circle.fill" : (task.completed ? "checkmark.circle.fill" : "circle"))
                 .font(.system(size: typography.pt(compact ? 14 : 17), weight: .light))
-                .foregroundStyle(task.completed ? Palette.success : Palette.muted)
+                .foregroundStyle(task.isDone ? Palette.success : Palette.muted)
                 .frame(width: 18, height: 22)
                 .id(task.completed)
                 .transition(Motion.reduced ? .identity : .scale(scale: 0.4).combined(with: .opacity))
                 .animation(Motion.spring, value: task.completed)
         }
-        .buttonStyle(HitAreaButtonStyle())
+        .buttonStyle(HitAreaButtonStyle(compact: timeline != nil && task.completed))
         .accessibilityLabel((task.isDropped ? "恢复已放弃的待办：" : (task.completed ? "标记未完成：" : "标记完成：")) + task.title)
         .help(task.isDropped ? "已放弃：点一下恢复成未完成" : "")
     }
 
     private var card: some View {
         HStack(alignment: .center, spacing: 4) {
-            completionButton
             HStack(alignment: .center, spacing: 1) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .center, spacing: 1) {
                         if timeline == nil {
-                            TaskPriorityButton(store: store, task: task)
+                            priorityControl
                                 .frame(width: 18, height: 26)
                         }
                         if let number = task.number {
@@ -123,7 +133,7 @@ struct ManagedTaskRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // 日期与计时覆盖整块正文的高度，不再挤在标题行中。
                 VStack(alignment: .trailing, spacing: 2) {
-                    TaskDeadlineButton(store: store, task: task)
+                    if timeline == nil { TaskDeadlineButton(store: store, task: task) }
                     if let focus {
                         Spacer(minLength: 2)
                         TaskFocusButton(session: focus, task: ScheduledTask(date: date, task: task))
@@ -139,10 +149,7 @@ struct ManagedTaskRow: View {
                 TagSelectionButton(store: store, tags: Binding(get: { store.locate(task.id)?.task.tags ?? task.tags }, set: { store.setTags(task.id, $0) }))
                 RadialMenuButton(items: { radialItems }, help: "更多操作：笔记、标签、固定、放弃、删除")
                     .popover(isPresented: $showingTags, arrowEdge: .leading) { TagPickerView(store: store, task: task) }
-                TaskDragHandle(task: task, enabled: !store.isReadOnly, select: { reorder?.suppressScroll = true; selectTask() }, reorder: reorder.map { model in
-                    TaskReorderHooks(begin: { model.begin(task.id) }, update: { model.update($0) },
-                                     end: { model.finish() }, cancel: { model.cancel() })
-                })
+                completionButton
             }
             .fixedSize()
         }
@@ -171,7 +178,7 @@ struct ManagedTaskRow: View {
 
     private var rowContent: some View {
         Group {
-            if timeline != nil && task.isDone {
+            if timeline != nil && task.completed {
                 completedRow.transition(.opacity)
             } else {
                 card.transition(.opacity)
@@ -180,7 +187,7 @@ struct ManagedTaskRow: View {
         .contentShape(RoundedRectangle(cornerRadius: 8))
         .simultaneousGesture(TapGesture().onEnded { selectTask() })
         .animation(.easeInOut(duration: 0.12), value: selected)
-        .modifier(TaskDragSource(task: task, enabled: !store.isReadOnly, select: selectTask))
+        .modifier(TaskDragSource(task: task, enabled: !store.isReadOnly, edgeDragging: false, select: selectTask))
         .contextMenu {
             ForEach(Array(menuItems.enumerated()), id: \.offset) { _, item in
                 if item.separator { Divider() } else {
@@ -244,8 +251,8 @@ struct ManagedTaskRow: View {
     private var menuItems: [TextMenuItem] {
         guard !store.isReadOnly else { return [] }
         var list = radialItems.map { TextMenuItem(title: $0.title, symbol: $0.symbol, destructive: $0.destructive, action: $0.action) }
-        if task.isDone {
-            list.insert(TextMenuItem(title: "取消完成", symbol: "arrow.uturn.backward", action: {
+        if task.completed {
+            list.insert(TextMenuItem(title: task.isDropped ? "恢复" : "取消完成", symbol: "arrow.uturn.backward", action: {
                 withAnimation(Motion.quick) { store.toggleTodo(task.id, on: date) }
             }), at: 0)
         }

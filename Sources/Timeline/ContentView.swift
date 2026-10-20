@@ -30,8 +30,9 @@ struct ContentView: View {
     @State private var reorder = TaskReorderModel()
     @State private var overdueCount = 0
     @State private var scrollTarget: UUID?
-    /// 点摘要里的数字时，要滚动到的分组（`overdue` / `today` 等）。
+    /// 点摘要里的数字时，要定位的任务类型（`overdue` / `today`）。
     @State private var scrollGroup: String?
+    @State private var expandedFinished: Set<UUID> = []
     /// 待办行的位置，用来判断一次点击是不是点在待办上（不是 @Published，更新它不会触发重绘）。
     @State private var rowRegions = TaskRowRegions()
     @AppStorage(Prefs.hideCompleted) private var hideCompleted = false
@@ -51,7 +52,12 @@ struct ContentView: View {
     private let dayTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     private var entry: DayEntry { store.entry(for: selectedDate) }
     /// 全部任务（不属于某一天），按截止时间排序；隐藏已完成时过滤掉已完成的。
-    private var visibleTasks: [ScheduledTask] { (TaskSortMode(rawValue: taskSort) ?? .deadline).sorted(store.tasks()).filter { !hideCompleted || !$0.task.completed } }
+    private var orderedTasks: [ScheduledTask] {
+        store.tasks().sorted(by: (TaskSortMode(rawValue: taskSort) ?? .deadline).precedes)
+            .filter { !hideCompleted || !$0.task.completed }
+    }
+    private var timelineItems: [TaskTimelineItem] { TaskTimelineItem.items(for: orderedTasks, expanded: expandedFinished) }
+    private var visibleTasks: [ScheduledTask] { timelineItems.filter { !$0.folded }.flatMap(\.tasks) }
     private var weekStart: Int { weekStartsSunday ? 1 : 2 }
     private var footerVisible: Bool { store.errorMessage != nil || !reminders.status.isEmpty }
     private var draft: Binding<String> {
@@ -120,8 +126,12 @@ struct ContentView: View {
         }
         .onAppear {
             refreshOverview()
-            reorder.groupProvider = { id in groups(for: visibleTasks).first { $0.items.contains { $0.id == id } }?.items.map(\.id) ?? [] }
-            reorder.commit = { store.reorderTasks($0); taskSort = TaskSortMode.manual.rawValue }
+            reorder.groupProvider = { _ in timelineItems.map(\.id) }
+            reorder.commit = { order in
+                let tasksByRow = Dictionary(uniqueKeysWithValues: timelineItems.map { ($0.id, $0.tasks.map(\.id)) })
+                store.reorderTasks(order.flatMap { tasksByRow[$0] ?? [] })
+                taskSort = TaskSortMode.manual.rawValue
+            }
         }
         .onReceive(dayTimer) { now in
             refreshOverview()
@@ -373,31 +383,7 @@ struct ContentView: View {
         }
     }
 
-    private struct TaskGroup: Identifiable {
-        let id: String
-        let title: String
-        let tint: Color
-        let items: [ScheduledTask]
-    }
-
-    private func groups(for tasks: [ScheduledTask]) -> [TaskGroup] {
-        let now = Date()
-        let specs: [(Int, String, String, Color)] = [
-            (0, "overdue", "更早", Palette.muted),
-            (1, "today", "今天", Palette.accent),
-            (2, "tomorrow", "明天", Palette.ink),
-            (3, "week", "未来 7 天", Palette.ink),
-            (4, "later", "更晚", Palette.muted),
-            (5, "undated", "未设截止日期", Palette.muted),
-            (7, "dropped", "已放弃", Palette.muted),
-        ]
-        return specs.compactMap { index, id, title, tint -> TaskGroup? in
-            let items = tasks.filter { TaskSortMode.group(for: $0.task, now: now) == index }
-            return items.isEmpty ? nil : TaskGroup(id: id, title: title, tint: tint, items: items)
-        }
-    }
-
-    /// 清单顶部：「3 逾期 · 5 今天 · 12 未完成」（点数字跳到对应分组）和今天的进度条（只统计今天截止的）。
+    /// 清单顶部的数量可直接定位到对应任务，时间线不按日期分段。
     private var summaryBar: some View {
         let summary = store.taskSummary()
         return VStack(alignment: .leading, spacing: 6) {
@@ -435,14 +421,16 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .raisedOnHover(radius: 10, enabled: group != nil && count > 0)
             .disabled(group == nil || count == 0)
-            .help(group == nil ? "\(count) 项未完成" : "跳到「\(title)」分组")
+            .help(group == nil ? "\(count) 项未完成" : "跳到\(title)的任务")
             .accessibilityLabel("\(count) 项\(title)")
         }
     }
 
     private var todoCard: some View {
-        let all = (TaskSortMode(rawValue: taskSort) ?? .deadline).sorted(store.tasks())
-        let visible = all.filter { !hideCompleted || !$0.task.completed }
+        let all = store.tasks()
+        let visible = orderedTasks
+        let rows = timelineItems
+        let finished = visible.filter(\.task.completed)
         let completed = all.filter(\.task.completed).count
         return VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 9) {
@@ -462,6 +450,19 @@ struct ContentView: View {
                 .menuStyle(.borderlessButton).fixedSize()
                 .help(LocalizedStringKey((TaskSortMode(rawValue: taskSort) ?? .deadline).title))
                 .accessibilityLabel("排序")
+                if !finished.isEmpty {
+                    let expanded = finished.contains { expandedFinished.contains($0.id) }
+                    Button {
+                        withAnimation(Motion.quick) {
+                            if expanded { expandedFinished = [] }
+                            else { expandedFinished.formUnion(finished.map(\.id)) }
+                        }
+                    } label: {
+                        Label(expanded ? "收起已结束" : "展开已结束 \(finished.count) 项",
+                              systemImage: expanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: typography.pt(11)))
+                    }.buttonStyle(.plain).foregroundStyle(Palette.muted)
+                }
                 if hidden > 0 {
                     Button { hideCompleted = false } label: {
                         Label("已隐藏 \(hidden) 项", systemImage: "eye.slash")
@@ -479,24 +480,19 @@ struct ContentView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        // 不用 LazyVStack：排序拖动要知道同一分组里每一行的位置，行不能是懒加载的。
+                        // 排序拖动需要所有可见任务的几何位置。
                         VStack(alignment: .leading, spacing: TaskReorderModel.spacing) {
-                            ForEach(groups(for: visible)) { group in
-                                HStack(spacing: 6) {
-                                    Circle().strokeBorder(group.tint.opacity(0.65), lineWidth: 1.5)
-                                        .frame(width: 6, height: 6).frame(width: 22)
-                                    Text(LocalizedStringKey(group.title)).font(.system(size: typography.pt(12), weight: .semibold)).foregroundStyle(group.tint)
-                                        .id("group-" + group.id)
-                                    Text("\(group.items.count)").font(.system(size: typography.pt(10), design: .monospaced)).foregroundStyle(Palette.muted)
-                                        .padding(.horizontal, 5).padding(.vertical, 1)
-                                        .background(Palette.soft.opacity(0.65), in: Capsule())
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(.top, 10).padding(.bottom, 3)
-                                ForEach(Array(group.items.enumerated()), id: \.element.id) { index, item in
+                            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                                let position = TaskTimelinePosition(hasPrevious: index > 0, hasNext: index < rows.count - 1)
+                                if row.folded {
+                                    FoldedTaskTimelineRow(tasks: row.tasks, position: position) {
+                                        withAnimation(Motion.quick) { expandedFinished.formUnion(row.tasks.map(\.id)) }
+                                    }
+                                    .id(row.id)
+                                    .taskReorderRow(id: row.id, model: reorder, space: "taskList")
+                                } else if let item = row.tasks.first {
                                     ManagedTaskRow(store: store, date: item.date, task: item.task, requestedEdit: $requestedEdit,
-                                                   emphasized: dueOnSelectedDay(item.task),
-                                                   timeline: TaskTimelinePosition(hasPrevious: index > 0, hasNext: index < group.items.count - 1),
+                                                   emphasized: dueOnSelectedDay(item.task), timeline: position,
                                                    next: { addingTodo = true }, select: { interaction.activePane = .tasks })
                                         .id(item.id)
                                         .taskReorderRow(id: item.id, model: reorder, space: "taskList")
@@ -516,24 +512,44 @@ struct ContentView: View {
                         Color.clear.onAppear { rowRegions.viewport = proxy.frame(in: .global) }
                             .onChange(of: proxy.frame(in: .global)) { rowRegions.viewport = $0 }
                     })
+                    .onAppear {
+                        if let first = visible.first(where: { !$0.task.completed }) {
+                            DispatchQueue.main.async { proxy.scrollTo(first.id, anchor: .top) }
+                        }
+                    }
                     .onChange(of: scrollTarget) { id in
-                        if let id { withAnimation(Motion.quick) { proxy.scrollTo(id, anchor: .center) }; scrollTarget = nil }
+                        if let id {
+                            if store.locate(id)?.task.completed == true { expandedFinished.insert(id) }
+                            DispatchQueue.main.async { withAnimation(Motion.quick) { proxy.scrollTo(id, anchor: .center) } }
+                            scrollTarget = nil
+                        }
                     }
                     .onChange(of: selectedDate) { date in
                         // 日志窗口开着：跟着主窗口换到同一天。
                         if notesWindow.isVisible { notesWindow.showJournal(store: store, date: date) }
                     }
                     .onChange(of: scrollGroup) { id in
-                        if let id { withAnimation(Motion.quick) { proxy.scrollTo("group-" + id, anchor: .top) }; scrollGroup = nil }
+                        if let id {
+                            let group = id == "overdue" ? 0 : 1
+                            if let item = visible.first(where: { !$0.task.completed && TaskSortMode.group(for: $0.task, now: Date()) == group }) {
+                                withAnimation(Motion.quick) { proxy.scrollTo(item.id, anchor: .top) }
+                            }
+                            scrollGroup = nil
+                        }
                     }
-                    .onChange(of: requestedEdit) { if let id = $0 { proxy.scrollTo(id, anchor: .center) } }
+                    .onChange(of: requestedEdit) { id in
+                        if let id {
+                            if store.locate(id)?.task.completed == true { expandedFinished.insert(id) }
+                            DispatchQueue.main.async { proxy.scrollTo(id, anchor: .center) }
+                        }
+                    }
                     .onChange(of: interaction.selectedTaskID) { id in
                         if reorder.suppressScroll { reorder.suppressScroll = false; return }
                         if let id { withAnimation(Motion.quick) { proxy.scrollTo(id) } }
                     }
                     // 在日历里选了某一天：清单滚动到那天截止的第一项。
                     .onChange(of: selectedDate) { _ in
-                        if let first = visible.first(where: { dueOnSelectedDay($0.task) }) {
+                        if let first = visible.first(where: { !$0.task.completed && dueOnSelectedDay($0.task) }) {
                             withAnimation(Motion.quick) { proxy.scrollTo(first.id, anchor: .top) }
                         }
                     }

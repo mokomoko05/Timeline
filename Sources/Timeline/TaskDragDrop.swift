@@ -115,9 +115,13 @@ struct NativeTaskHandle: NSViewRepresentable {
     var edgeOnly = false
     var select: () -> Void = {}
     var reorder: TaskReorderHooks?
+    var priorityItems: [RadialItem]?
+    var priorityColor: NSColor?
 
     func makeNSView(context: Context) -> TaskHandleView { TaskHandleView() }
     func updateNSView(_ view: TaskHandleView, context: Context) {
+        view.priorityItems = priorityItems
+        view.priorityColor = priorityColor
         view.reorder = reorder
         view.taskID = enabled ? task.id : nil
         view.drawsHandle = drawsHandle
@@ -144,9 +148,34 @@ final class TaskHandleView: NSView, NSDraggingSource {
     var startNativeDrag: (UUID, String, TaskHandleView, NSEvent) -> Void = { id, title, view, event in
         NativeTaskDrag.begin(id: id, title: title, view: view, source: view, event: event)
     }
+    var priorityItems: [RadialItem]?
+    var priorityColor: NSColor?
+    private var hoverArea: NSTrackingArea?
     private var initialEvent: NSEvent?
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        guard taskID != nil, let priorityItems, initialEvent == nil else { return }
+        RadialMenuController.shared.scheduleOpen(items: { priorityItems }, anchor: self, kind: .priority)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if priorityItems != nil { RadialMenuController.shared.cancelOpen() }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
+        if let priorityColor {
+            priorityColor.setFill()
+            NSBezierPath(ovalIn: NSRect(x: bounds.midX - 3.5, y: bounds.midY - 3.5, width: 7, height: 7)).fill()
+            return
+        }
         guard drawsHandle else { return }
         NSColor.secondaryLabelColor.setFill()
         for column in 0..<2 {
@@ -175,6 +204,7 @@ final class TaskHandleView: NSView, NSDraggingSource {
     }
 
     override func mouseDown(with event: NSEvent) {
+        RadialMenuController.shared.dismiss()
         initialEvent = event
         onSelect?()
     }
@@ -247,7 +277,7 @@ final class TaskHandleView: NSView, NSDraggingSource {
     private func leftList(_ point: NSPoint) -> Bool {
         guard let scroll = scrollView else { return false }
         let frame = scroll.convert(scroll.bounds, to: nil)
-        // 把手就在清单右边缘，排序时手难免左右晃；必须明显进入旁边的月历才算「拖到日历」，晃一下不能打断排序。
+        // 必须明显拖出清单才切换为系统拖拽，避免左右晃动打断排序。
         return point.x < frame.minX - 70 || point.x > frame.maxX + 70
     }
 

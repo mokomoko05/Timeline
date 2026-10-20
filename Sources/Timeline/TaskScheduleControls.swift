@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import TimelineCore
 
@@ -23,6 +24,8 @@ struct PriorityMark: View {
 struct TaskPriorityButton: View {
     @ObservedObject var store: JournalStore
     let task: Todo
+    var select: () -> Void = {}
+    var reorder: TaskReorderHooks?
     var items: [RadialItem] {
         TaskPriority.allCases.map { priority in
             RadialItem(id: priority.rawValue, symbol: "circle.fill", title: priority.title,
@@ -32,7 +35,16 @@ struct TaskPriorityButton: View {
     }
 
     var body: some View {
-        PrioritySelectionButton(priority: task.priority, items: items, enabled: !store.isReadOnly)
+        NativeTaskHandle(task: task, enabled: !store.isReadOnly, drawsHandle: false,
+                         select: select, reorder: reorder, priorityItems: items,
+                         priorityColor: NSColor(PriorityMark(priority: task.priority).color))
+            .frame(width: 18, height: 22)
+            .help("悬停设置优先级；按住圆点拖动排序或更改日期")
+            .accessibilityLabel(LocalizedStringKey(task.priority.title))
+            .accessibilityHint("悬停选择优先级，按住拖动任务")
+            .accessibilityActions {
+                ForEach(items) { item in Button(LocalizedStringKey(item.title), action: item.action) }
+            }
     }
 }
 
@@ -70,6 +82,7 @@ struct TaskDeadlineButton: View {
     @ObservedObject var store: JournalStore
     let task: Todo
     var compact = false
+    var axis = false
     @State private var showing = false
 
     static func time(_ date: Date) -> String {
@@ -79,8 +92,10 @@ struct TaskDeadlineButton: View {
 
     var body: some View {
         Button { showing = true } label: {
-            Text(task.dueDate.map(label) ?? "No Due").font(.system(size: compact ? 9 : 10, weight: .medium, design: .monospaced))
-                .lineLimit(1).fixedSize()
+            Text(task.dueDate.map(label) ?? AppLocalized("未设日期"))
+                .font(.system(size: compact ? 9 : 10, weight: .medium, design: .monospaced))
+                .lineLimit(axis ? 2 : 1).multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: !axis, vertical: true)
                 .foregroundStyle(!task.completed && task.effectiveDeadline.map({ $0 < Date() }) == true ? Palette.deadline : Palette.muted)
                 .padding(.horizontal, compact ? 2 : 4).padding(.vertical, 2)
         }
@@ -93,6 +108,10 @@ struct TaskDeadlineButton: View {
     }
 
     private func label(_ due: Date) -> String {
+        if axis {
+            let date = due.formatted(.dateTime.month(.twoDigits).day(.twoDigits).locale(AppLanguage.current.locale))
+            return task.dueHasTime ? date + "\n" + Self.time(due) : date
+        }
         if compact { return Self.time(due) }
         if task.dueHasTime {
             return JournalDates.calendar.isDateInToday(due)

@@ -27,7 +27,7 @@ enum RadialMenuKind {
     }
 }
 
-/// 环形菜单的几何：以「三点」按钮为圆心，向左展开成一段扇形环（按钮在行的最右边，右边是拖动把手，所以不向右展开）。
+/// 环形菜单的几何：以「三点」按钮为圆心，向左展开成一段扇形环（按钮在行的最右边，右边是完成按钮，所以不向右展开）。
 /// 角度是数学角度：0 = 右，90 = 上，180 = 左。
 enum RadialLayout {
     static let radius: CGFloat = 58
@@ -248,6 +248,7 @@ final class RadialMenuController {
         parent?.addChildWindow(panel, ordered: .above)
         panel.orderFrontRegardless()
         self.panel = panel
+        if kind == .priority { panel.ignoresMouseEvents = true }
         isCollapsing = false
         startTracking()
     }
@@ -290,6 +291,10 @@ final class RadialMenuController {
     func update(mouse: CGPoint) {
         guard let model else { return }
         let relative = model.kind.relative(CGPoint(x: mouse.x - hubScreen.x, y: mouse.y - hubScreen.y))
+        // 圆心处的按下事件交给底下的任务圆点，让菜单展开时仍可直接拖动。
+        if model.kind == .priority, !Headless.active {
+            panel?.ignoresMouseEvents = hypot(relative.x, relative.y) <= RadialLayout.hubRadius + 6
+        }
         let inside = RadialLayout.contains(relative)
         let hovered = inside ? RadialLayout.item(at: relative, count: model.items.count) : nil
         if model.hovered != hovered { model.hovered = hovered }

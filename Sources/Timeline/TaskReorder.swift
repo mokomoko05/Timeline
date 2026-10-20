@@ -61,7 +61,7 @@ final class DragOffset: ObservableObject {
 /// 清单排序拖动的状态：哪一行在被拖、拖了多远、其他行该让多少。
 @MainActor
 final class TaskReorderModel: ObservableObject {
-    static let spacing: CGFloat = 6
+    nonisolated static let spacing: CGFloat = 6
 
     /// 各行在清单内容坐标里的位置（不随滚动变化），由布局回传；不需要触发刷新。
     var frames: [UUID: CGRect] = [:]

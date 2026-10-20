@@ -717,3 +717,10 @@
 "⌘Enter 记录" = "⌘Enter to save";
 
 "更早" = "Earlier";
+"收起已结束" = "Collapse finished";
+"展开已结束 %lld 项" = "Expand %lld finished tasks";
+"已完成 %lld 项" = "%lld completed";
+"已放弃 %lld 项" = "%lld dropped";
+"展开已结束事项" = "Expand finished tasks";
+"悬停设置优先级；按住圆点拖动排序或更改日期" = "Hover to set priority; hold the dot to reorder or change the date";
+"悬停选择优先级，按住拖动任务" = "Hover to select priority; hold to drag the task";

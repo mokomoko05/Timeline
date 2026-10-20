@@ -88,15 +88,6 @@ struct DeadlineDayCell: View {
             .frame(height: ceil(max(18, typography.pt(15))))
             ForEach(items) { item in
                 HStack(alignment: .top, spacing: 0) {
-                    Button { store.toggleTodo(item.id, on: item.date) } label: {
-                        Image(systemName: item.task.isDropped ? "xmark.circle.fill" : (item.task.completed ? "checkmark.circle.fill" : "circle"))
-                            .foregroundStyle(item.task.isDropped ? Palette.muted : (item.task.completed ? Palette.success : Palette.deadline))
-                            .frame(width: 16, alignment: .trailing)
-                    }.buttonStyle(HitAreaButtonStyle(compact: true)).disabled(store.isReadOnly)
-                        .background(GeometryReader { proxy in
-                            Color.clear.preference(key: CheckboxFramesKey.self, value: [item.id.uuidString: proxy.frame(in: .named(Self.space))])
-                        })
-                        .accessibilityLabel((item.task.isDropped ? "恢复已放弃的待办：" : (item.task.completed ? "标记未完成：" : "标记完成：")) + item.task.title)
                     TaskPriorityButton(store: store, task: item.task)
                         .background(GeometryReader { proxy in
                             Color.clear.preference(key: CheckboxFramesKey.self, value: [item.id.uuidString + "-priority": proxy.frame(in: .named(Self.space))])
@@ -107,11 +98,20 @@ struct DeadlineDayCell: View {
                                 Color.clear.preference(key: CheckboxFramesKey.self, value: [item.id.uuidString + "-time": proxy.frame(in: .named(Self.space))])
                             })
                     }
-                    TaskLinkText(source: item.task.title, completed: item.task.completed, color: Palette.ink, fontSize: 11,
+                    TaskLinkText(source: item.task.title, completed: item.task.isDone, color: item.task.isDropped ? Palette.muted : Palette.ink, fontSize: 11,
                                  edit: { editTask(item) },
                                  open: SafariLinks.open,
                                  maxLines: 1, displayName: item.task.calendarName, dragTaskID: item.id, compactLines: true)
                         .disabled(store.isReadOnly)
+                    Button { store.toggleTodo(item.id, on: item.date) } label: {
+                        Image(systemName: item.task.isDropped ? "xmark.circle.fill" : (item.task.completed ? "checkmark.circle.fill" : "circle"))
+                            .foregroundStyle(item.task.isDropped ? Palette.muted : (item.task.completed ? Palette.success : Palette.deadline))
+                            .frame(width: 16, alignment: .trailing)
+                    }.buttonStyle(HitAreaButtonStyle(compact: true)).disabled(store.isReadOnly)
+                        .background(GeometryReader { proxy in
+                            Color.clear.preference(key: CheckboxFramesKey.self, value: [item.id.uuidString: proxy.frame(in: .named(Self.space))])
+                        })
+                        .accessibilityLabel((item.task.isDropped ? "恢复已放弃的待办：" : (item.task.completed ? "标记未完成：" : "标记完成：")) + item.task.title)
                 }.font(.system(size: typography.pt(11))).frame(height: typography.pt(22))
                     .background(Palette.background, in: RoundedRectangle(cornerRadius: 4))
                     .contentShape(RoundedRectangle(cornerRadius: 4))
