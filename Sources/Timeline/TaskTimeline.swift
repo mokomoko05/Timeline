@@ -7,7 +7,7 @@ struct TaskTimelinePosition {
 
 struct TaskTimelineConnector: Shape {
     let position: TaskTimelinePosition
-    var nodeRadius: CGFloat = 12
+    var nodeRadius: CGFloat = 6
 
     func path(in rect: CGRect) -> Path {
         var path = Path()

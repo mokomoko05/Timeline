@@ -31,6 +31,7 @@ done
 echo "迁移前备份：$BACKUP"
 mkdir -p "$HOME/Applications"
 ditto "dist/Timeline.app" "$TARGET"
+rm -rf "$TARGET/Contents/Resources/bin"
 "$TARGET/Contents/MacOS/Timeline" --migrate-legacy
 "$TARGET/Contents/MacOS/Timeline" --configure-login
 LEGACY_AGENT="$HOME/Library/LaunchAgents/local.dayleaf.app.plist"
@@ -38,17 +39,14 @@ if [ -f "$LEGACY_AGENT" ]; then
     launchctl bootout "gui/$(id -u)/local.dayleaf.app" >/dev/null 2>&1 || true
     mv "$LEGACY_AGENT" "$BACKUP/LaunchAgents/local.dayleaf.app.disabled.plist"
 fi
-# 命令行工具：链接到默认 PATH 里的 ~/.local/bin，任何终端都能直接运行 timeline。
-BIN_DIR="$HOME/.local/bin"
-mkdir -p "$BIN_DIR"
 for NAME in timeline sched scheduler; do
-    ln -sf "$TARGET/Contents/Resources/bin/timeline" "$BIN_DIR/$NAME"
+    LINK="$HOME/.local/bin/$NAME"
+    if [ -L "$LINK" ]; then
+        case "$(readlink "$LINK")" in
+            "$HOME/Applications/Timeline.app/Contents/Resources/bin/"*|"$HOME/Applications/Scheduler.app/Contents/Resources/bin/"*|"$HOME/Applications/Dayleaf.app/Contents/Resources/bin/"*) rm "$LINK" ;;
+        esac
+    fi
 done
-echo "已安装 timeline 命令；sched 和 scheduler 保留为兼容入口。旧应用和原数据未删除。"
-case ":$PATH:" in
-    *":$BIN_DIR:"*) ;;
-    *) echo "提示：$BIN_DIR 不在当前 PATH 里，请把 export PATH=\"\$HOME/.local/bin:\$PATH\" 加进 ~/.zshrc。" ;;
-esac
 if open "$TARGET"; then
     echo "已安装并请求打开 Timeline；登录启动状态可在应用右上角菜单查看。"
 else

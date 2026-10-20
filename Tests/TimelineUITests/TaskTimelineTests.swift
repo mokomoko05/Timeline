@@ -11,11 +11,11 @@ final class TaskTimelineTests: XCTestCase {
         let first = TaskTimelineConnector(position: .init(hasPrevious: false, hasNext: true)).path(in: size).boundingRect
         let middle = TaskTimelineConnector(position: .init(hasPrevious: true, hasNext: true)).path(in: size).boundingRect
         let last = TaskTimelineConnector(position: .init(hasPrevious: true, hasNext: false)).path(in: size).boundingRect
-        XCTAssertEqual(first.minY, size.midY + 12)
+        XCTAssertEqual(first.minY, size.midY + 6)
         XCTAssertEqual(first.maxY, size.maxY + TaskReorderModel.spacing / 2)
         XCTAssertEqual(middle.minY, -TaskReorderModel.spacing / 2)
         XCTAssertEqual(middle.maxY, first.maxY)
-        XCTAssertEqual(last.maxY, size.midY - 12)
+        XCTAssertEqual(last.maxY, size.midY - 6)
         XCTAssertTrue(TaskTimelineConnector(position: .init(hasPrevious: false, hasNext: false)).path(in: size).isEmpty)
     }
 

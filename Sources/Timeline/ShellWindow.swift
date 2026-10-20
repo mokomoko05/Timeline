@@ -284,50 +284,13 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
     var layout: TerminalLayout {
         layoutOverride ?? TerminalLayout(rawValue: UserDefaults.standard.string(forKey: Prefs.terminalLayout) ?? "") ?? .threePanes
     }
-    /// 应用包里放命令行工具 `timeline` 的目录。
-    static var bundledToolsDirectory: String? {
-        let url = Bundle.main.resourceURL?.appendingPathComponent("bin", isDirectory: true)
-        return url.flatMap { FileManager.default.fileExists(atPath: $0.appendingPathComponent("timeline").path) ? $0.path : nil }
-    }
-
-    /// 终端里的环境变量。`PATH` 里加上应用包里的 bin：在应用内终端任何时候都能直接运行 `timeline`，
-    /// 即使用户的 shell 配置里没有 ~/.local/bin。登录 shell 的 path_helper 会保留这一项，再补上系统路径。
     static func shellEnvironment(base environment: [String: String] = ProcessInfo.processInfo.environment) -> [String] {
         var result = Terminal.getEnvironmentVariables(termName: "xterm-256color") + ["SHELL=/bin/zsh", "TERM_PROGRAM=Timeline"]
-        var path = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
-        if let tools = bundledToolsDirectory { path.insert(tools, at: 0) }
-        result.append("PATH=" + path.joined(separator: ":"))
-        // zsh 自带 sched 内置命令；为旧命令保留的兼容入口关闭这个内置命令，
-        // 并把你原来的 ZDOTDIR（没有就是主目录）里的 .zshenv、.zshrc 等照常加载，不改你的任何配置文件。
-        if let zdotdir = startupDirectory() {
-            result.append("ZDOTDIR=\(zdotdir)")
-            if let original = environment["ZDOTDIR"], !original.isEmpty { result.append("TIMELINE_REAL_ZDOTDIR=\(original)") }
-        }
-        // 用环境变量指定了数据目录（测试、多份数据）时，终端里的 timeline 读同一份。
-        if let dir = environment["TIMELINE_DATA_DIR"], !dir.isEmpty {
-            result.append("TIMELINE_DATA_DIR=\(dir)")
-        } else if let dir = environment["DAYLEAF_DATA_DIR"], !dir.isEmpty {
-            result.append("TIMELINE_DATA_DIR=\(dir)")
+        result.append("PATH=" + (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"))
+        if let directory = environment["ZDOTDIR"], !directory.isEmpty {
+            result.append("ZDOTDIR=\(directory)")
         }
         return result
-    }
-
-    static let startupZshenv = """
-    # Timeline 内置终端：保留旧 sched 命令的兼容入口，加载原来的 shell 配置。
-    if [[ -n "$TIMELINE_REAL_ZDOTDIR" ]]; then ZDOTDIR="$TIMELINE_REAL_ZDOTDIR"; else unset ZDOTDIR; fi
-    [[ -r "${ZDOTDIR:-$HOME}/.zshenv" ]] && source "${ZDOTDIR:-$HOME}/.zshenv"
-    disable sched 2>/dev/null
-    """
-
-    /// 写出（或更新）启动目录并返回路径；写不出来就返回 nil，终端照常启动，只是 zsh 里要用 timeline 这个名字。
-    static func startupDirectory(base: URL = FileManager.default.temporaryDirectory) -> String? {
-        let directory = base.appendingPathComponent("timeline-zdotdir-\(getuid())", isDirectory: true)
-        let file = directory.appendingPathComponent(".zshenv")
-        do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            if (try? String(contentsOf: file, encoding: .utf8)) != startupZshenv { try startupZshenv.write(to: file, atomically: true, encoding: .utf8) }
-            return directory.path
-        } catch { return nil }
     }
 
     /// 前台有程序时关闭前的确认；测试里可替换。

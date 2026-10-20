@@ -5,11 +5,7 @@ swift build --disable-sandbox -c release
 APP="$(pwd)/dist/Timeline.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" .build/AppIcon.iconset
 cp .build/release/TimelineApp "$APP/Contents/MacOS/Timeline"
-# 命令行工具 timeline：放在应用包里，安装脚本再链接到 ~/.local/bin；应用内终端也会把这个目录加进 PATH。
-mkdir -p "$APP/Contents/Resources/bin"
-cp .build/release/timeline "$APP/Contents/Resources/bin/timeline"
-ln -sf timeline "$APP/Contents/Resources/bin/sched"
-ln -sf timeline "$APP/Contents/Resources/bin/scheduler"
+rm -rf "$APP/Contents/Resources/bin"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 if [ -d Resources/en.lproj ]; then cp -R Resources/en.lproj "$APP/Contents/Resources/"; fi
 if [ -d Resources/zh-Hans.lproj ]; then cp -R Resources/zh-Hans.lproj "$APP/Contents/Resources/"; fi

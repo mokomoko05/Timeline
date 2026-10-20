@@ -239,7 +239,7 @@ public final class JournalStore: ObservableObject {
     public var fileURL: URL { directory.appendingPathComponent("journal.json") }
     public var backupURL: URL { directory.appendingPathComponent("journal.backup.json") }
 
-    /// 默认的数据目录；命令行和应用共用，`TIMELINE_DATA_DIR` 可以覆盖。
+    /// 默认的数据目录；`TIMELINE_DATA_DIR` 可以覆盖。
     public nonisolated static func defaultDirectory(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
         if let override = environment["TIMELINE_DATA_DIR"], !override.isEmpty { return URL(fileURLWithPath: override, isDirectory: true) }
         if let override = environment["DAYLEAF_DATA_DIR"], !override.isEmpty { return URL(fileURLWithPath: override, isDirectory: true) }
@@ -274,7 +274,7 @@ public final class JournalStore: ObservableObject {
         return true
     }
 
-    /// `readOnlySnapshot`：给命令行用的纯只读打开——不创建目录、不写备份、不做迁移落盘，任何修改接口都不生效。
+    /// `readOnlySnapshot`：纯只读打开，不创建目录、不写备份、不做迁移落盘，任何修改接口都不生效。
     /// 数据里的旧格式仍会在内存里按新模型解读，所以读到的内容和应用里一致。
     public init(directory: URL? = nil, readOnlySnapshot: Bool = false) {
         self.directory = directory ?? Self.defaultDirectory()

@@ -53,8 +53,6 @@ private final class MenuAction: NSObject {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
     private var window: NSWindow!
     private var store: JournalStore!
-    private var timelineServer: TimelineServer?
-    private var timelineService: TimelineService?
     private var reminders: ReminderScheduler!
     private var loginItem: LoginItem!
     private var quickCapture: QuickCaptureController!
@@ -85,7 +83,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         reminders = ReminderScheduler(store: store)
         reminders.isEnabled = !snapshotRun
         focus.store = store
-        if !snapshotRun { startTimelineServer() }
         focusPanel = FocusPanelController(session: focus)
         loginItem = LoginItem()
         settings = SettingsWindowController(loginItem: loginItem, failedHotKeys: { [weak self] in self?.failedHotKeys })
@@ -272,21 +269,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.setFrameOrigin(NSPoint(x: area.midX - size.width / 2, y: area.midY - size.height / 2))
     }
 
-    /// 启动命令行用的 socket 服务：`timeline log / todo / done` 通过它写入。启动失败（比如另一个实例已经在监听）不影响应用使用。
-    private func startTimelineServer() {
-        let service = TimelineService(store: store)
-        let server = TimelineServer(path: TimelineWire.socketPath(directory: store.directory)) { [service] request in service.handle(request) }
-        do {
-            try server.start()
-            timelineService = service
-            timelineServer = server
-        } catch TimelineServer.StartError.alreadyRunning {
-            NSLog("Timeline: 命令行 socket 已被另一个实例占用，本实例不启动命令行服务。")
-        } catch {
-            NSLog("Timeline: 命令行 socket 启动失败：\(error)")
-        }
-    }
-
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
         store.save()
@@ -385,7 +367,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// 真正退出时才关 socket：退出被取消（有终端在运行、保存失败）时命令行服务要继续可用。
     func applicationWillTerminate(_ notification: Notification) {
-        timelineServer?.stop()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

@@ -29,11 +29,11 @@ struct ManagedTaskRow: View {
     var body: some View {
         HStack(spacing: 6) {
             if let timeline {
-                completionButton
-                    .frame(width: 30).frame(maxHeight: .infinity)
+                TaskPriorityButton(store: store, task: task)
+                    .frame(width: 22).frame(maxHeight: .infinity)
                     .background {
-                        TaskTimelineConnector(position: timeline, nodeRadius: typography.pt(12))
-                            .stroke(Palette.line, lineWidth: 1.5)
+                        TaskTimelineConnector(position: timeline)
+                            .stroke(Palette.line, lineWidth: 1)
                             .allowsHitTesting(false)
                     }
             }
@@ -46,7 +46,7 @@ struct ManagedTaskRow: View {
         Button { selectTask(); store.toggleTodo(task.id, on: date) } label: {
             Image(systemName: task.isDropped ? "xmark.circle.fill" : (task.completed ? "checkmark.circle.fill" : "circle"))
                 .font(.system(size: typography.pt(compact ? 14 : 17), weight: .light))
-                .foregroundStyle(task.isDropped ? Palette.muted : (task.completed ? Palette.success : (timeline == nil ? Palette.muted : Palette.accent)))
+                .foregroundStyle(task.completed ? Palette.success : Palette.muted)
                 .frame(width: 18, height: 22)
                 .id(task.completed)
                 .transition(Motion.reduced ? .identity : .scale(scale: 0.4).combined(with: .opacity))
@@ -59,12 +59,14 @@ struct ManagedTaskRow: View {
 
     private var card: some View {
         HStack(alignment: .center, spacing: 4) {
-            if timeline == nil { completionButton }
+            completionButton
             HStack(alignment: .center, spacing: 1) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .center, spacing: 1) {
-                        TaskPriorityButton(store: store, task: task)
-                            .frame(width: 18, height: 26)
+                        if timeline == nil {
+                            TaskPriorityButton(store: store, task: task)
+                                .frame(width: 18, height: 26)
+                        }
                         if let number = task.number {
                             Text("#\(number)").font(.system(size: typography.pt(10), design: .monospaced))
                                 .foregroundStyle(Palette.muted).fixedSize()
