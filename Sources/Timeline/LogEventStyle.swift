@@ -7,12 +7,22 @@ enum LogEventStyle {
         case "FOCUS": return .blue
         case "NOTE": return .teal
         case "REVIEW": return .purple
-        case "END": return .green
+        case "END": return log.focusMetMinimum == false ? Color(red: 0.973, green: 0.318, blue: 0.286) : Color(red: 0.247, green: 0.725, blue: 0.314)
         case "PLAN": return Palette.accent
         case "DONE": return Palette.success
         case "BLOCK": return Palette.deadline
         default: return Palette.muted
         }
+    }
+
+    static func symbol(_ log: DailyLogEntry) -> String? {
+        guard log.focusMarker == "END" else { return nil }
+        return log.focusMetMinimum == false ? "xmark" : "checkmark"
+    }
+
+    static func status(_ log: DailyLogEntry) -> String {
+        guard log.focusMarker == "END" else { return log.focusMarker }
+        return log.focusMetMinimum == false ? "未达到最低专注时长" : "结束专注"
     }
 
     static func time(_ date: Date) -> String {
@@ -29,7 +39,10 @@ enum LogEventStyle {
             let duration = log.focusElapsedSeconds.map(FocusSession.duration)
                 ?? parts.first(where: { $0.hasPrefix("用时 ") }).map { String($0.dropFirst(3)) }
             let reason = log.focusEndReason ?? (parts.count > 3 ? parts.last : nil)
-            let summary = duration.map { AppLocalizedFormat("有效专注 %@", $0) } ?? AppLocalized("结束专注")
+            let summary = duration.map {
+                let duration = AppLocalizedFormat("有效专注 %@", $0)
+                return log.focusMetMinimum == false ? duration + " · " + AppLocalized(status(log)) : duration
+            } ?? AppLocalized("结束专注")
             return reason.map { summary + " · " + AppLocalized($0) } ?? summary
         }
         if log.focusEvent == nil, log.focusMarker == "REVIEW" {
@@ -52,13 +65,16 @@ struct LogEventBadge: View {
     let log: DailyLogEntry
 
     var body: some View {
-        Text(log.focusMarker)
+        HStack(spacing: 3) {
+            if let symbol = LogEventStyle.symbol(log) { Image(systemName: symbol) }
+            Text(log.focusMarker).tracking(0.3)
+        }
             .font(.system(size: typography.pt(10), weight: .semibold, design: .monospaced))
-            .tracking(0.3)
             .foregroundStyle(LogEventStyle.color(log))
             .frame(width: typography.pt(46), height: typography.pt(18), alignment: .leading)
             .fixedSize()
-            .accessibilityLabel(log.focusMarker)
+            .help(LocalizedStringKey(LogEventStyle.status(log)))
+            .accessibilityLabel(log.focusMarker == "END" ? AppLocalized(LogEventStyle.status(log)) : log.focusMarker)
     }
 }
 
@@ -125,8 +141,18 @@ struct LogTimelineRow<Content: View>: View {
                             }
                         }
                         .overlay(alignment: .topLeading) {
-                            Circle().fill(LogEventStyle.color(log))
-                                .frame(width: log.isFocusMarker ? 7 : 5, height: log.isFocusMarker ? 7 : 5)
+                            Group {
+                                if let symbol = LogEventStyle.symbol(log) {
+                                    Image(systemName: symbol)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(LogEventStyle.color(log))
+                                        .frame(width: 12, height: 12)
+                                        .background(Palette.background)
+                                } else {
+                                    Circle().fill(LogEventStyle.color(log))
+                                        .frame(width: log.isFocusMarker ? 7 : 5, height: log.isFocusMarker ? 7 : 5)
+                                }
+                            }
                                 .position(x: 8, y: typography.pt(9))
                         }
                         .frame(width: 16).allowsHitTesting(false)

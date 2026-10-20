@@ -17,17 +17,13 @@ final class ThemeTests: XCTestCase {
         return defaults
     }
 
-    func testThereAreSeveralDistinctThemesWithUniqueIDs() {
-        XCTAssertGreaterThanOrEqual(AppTheme.all.count, 8)
-        XCTAssertEqual(Set(AppTheme.all.map(\.id)).count, AppTheme.all.count, "id 唯一")
-        XCTAssertEqual(Set(AppTheme.all.map(\.name)).count, AppTheme.all.count, "名字唯一")
+    func testOnlyGitHubThemeRemainsWithLightAndDarkAppearances() {
+        XCTAssertEqual(AppTheme.all.map(\.id), ["github"])
         XCTAssertEqual(AppTheme.all.first?.id, AppTheme.defaultID)
         for theme in AppTheme.all {
             XCTAssertNotEqual(theme.light, theme.dark, "\(theme.name) 的浅色和深色不一样")
             XCTAssertGreaterThan(ThemeColors.luminance(theme.light.background), ThemeColors.luminance(theme.dark.background), "\(theme.name)：浅色版比深色版亮")
         }
-        let accents = Set(AppTheme.all.map { $0.light.accent })
-        XCTAssertEqual(accents.count, AppTheme.all.count, "每套的强调色各不相同")
     }
 
     func testDefaultThemeKeepsTheOriginalColors() {
@@ -69,8 +65,8 @@ final class ThemeTests: XCTestCase {
 
     func testOnAccentPicksTheReadableOfBlackAndWhite() {
         XCTAssertEqual(ThemeColors.contrast(0xFFFFFF, 0x000000), 21, accuracy: 0.01)
-        let dark = AppTheme.theme(id: "ink").light      // 红色强调色：白字
-        let bright = AppTheme.theme(id: "amber").dark   // 亮琥珀：黑字
+        let dark = AppTheme.theme(id: "github").light
+        let bright = AppTheme.theme(id: "github").dark
         XCTAssertEqual(dark.onAccent, 0xFFFFFF)
         XCTAssertEqual(bright.onAccent, 0x000000)
     }
@@ -96,17 +92,20 @@ final class ThemeTests: XCTestCase {
         }
     }
 
-    func testStorePersistsSelectionAndAppearanceAndRejectsUnknownIDs() {
+    func testStoreMigratesRemovedThemesAndPreservesAppearance() {
         let defaults = defaults()
+        defaults.set("forest", forKey: ThemeStore.themeKey)
+        defaults.set("light", forKey: ThemeStore.appearanceKey)
         let store = ThemeStore(defaults: defaults, applyAppearance: false)
         XCTAssertEqual(store.themeID, AppTheme.defaultID)
-        XCTAssertEqual(store.appearance, .system)
+        XCTAssertEqual(defaults.string(forKey: ThemeStore.themeKey), AppTheme.defaultID)
+        XCTAssertEqual(store.appearance, .light)
         store.select("forest")
         store.select("没有这个主题")
-        XCTAssertEqual(store.themeID, "forest")
+        XCTAssertEqual(store.themeID, AppTheme.defaultID)
         store.setAppearance(.dark)
         let reopened = ThemeStore(defaults: defaults, applyAppearance: false)
-        XCTAssertEqual(reopened.themeID, "forest", "重启后还是上次选的配色")
+        XCTAssertEqual(reopened.themeID, AppTheme.defaultID)
         XCTAssertEqual(reopened.appearance, .dark)
         defaults.set("损坏的值", forKey: ThemeStore.themeKey)
         XCTAssertEqual(ThemeStore(defaults: defaults, applyAppearance: false).themeID, AppTheme.defaultID, "偏好里的值坏了就用默认")
@@ -114,7 +113,7 @@ final class ThemeTests: XCTestCase {
         XCTAssertEqual(AppearanceMode.dark.nsAppearance?.name, .darkAqua)
     }
 
-    func testThemePickerAndRootsRenderForEveryTheme() {
+    func testAppearancePickerRendersCompactlyWithoutThemeCards() {
         let defaults = defaults()
         let store = ThemeStore(defaults: defaults, applyAppearance: false)
         let host = NSHostingView(rootView: ThemePicker(themes: store).frame(width: 460))
@@ -123,6 +122,7 @@ final class ThemeTests: XCTestCase {
         window.contentView = host
         host.layoutSubtreeIfNeeded()
         Self.keepAlive += [window, host]
-        XCTAssertGreaterThan(host.fittingSize.height, 150, "九张配色卡片都排得下")
+        XCTAssertGreaterThan(host.fittingSize.height, 0)
+        XCTAssertLessThan(host.fittingSize.height, 100, "只显示外观选项，不再排列配色卡片")
     }
 }

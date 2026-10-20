@@ -387,25 +387,7 @@
 "浅色" = "Light";
 "深色" = "Dark";
 "默认 · 墨蓝" = "Default · Ink blue";
-"森林" = "Forest";
-"暖砂" = "Warm sand";
-"暮紫" = "Violet";
-"海盐" = "Sea salt";
-"樱粉" = "Sakura";
-"北欧" = "Nord";
-"琥珀" = "Amber";
-"墨红" = "Ink";
 "GitHub 风格的冷静蓝灰" = "Calm blue-gray inspired by GitHub";
-"苔绿与暖灰，护眼" = "Moss green and warm gray";
-"纸张米色与陶土红" = "Paper beige and terracotta";
-"夜色里的紫罗兰" = "Violet in the evening";
-"青碧与浅灰蓝" = "Teal and pale blue-gray";
-"柔和的粉与莓红" = "Soft pink and berry red";
-"Nord 冰蓝与雾灰" = "Nord ice blue and mist gray";
-"复古终端的琥珀黄" = "Vintage terminal amber";
-"高对比的黑白加一点红" = "High contrast black and white with a touch of red";
-"%@：%@。每套配色都有浅色和深色两个版本，随上面的外观切换。" = "%@: %@. Each theme has light and dark versions, controlled by the appearance setting above.";
-"配色：%@" = "Theme: %@";
 "Tab 切换 · %@ · 可拖动" = "Tab to switch · %@ · Drag to move";
 "Esc 关闭" = "Esc to close";
 "再按 %@ 关闭" = "Press %@ again to close";
@@ -664,8 +646,9 @@
 "完成后生成下一次" = "Create the next occurrence on completion";
 "阅读与记录\n留一点时间给想法。" = "Read and write\nMake time for your thoughts.";
 "默认专注时长" = "Default focus duration";
-"日志记录门槛" = "Minimum logged duration";
-"低于门槛不记日志，0 表示全部记录。" = "Skip shorter sessions. Set 0 to log all.";
+"最低专注时长" = "Minimum focus duration";
+"达标显示绿色勾；未达标但含目标或反馈的记录显示红色叉。" = "Sessions meeting the minimum show a green check. Shorter sessions with a goal or reflection show a red X.";
+"不足最低时长且没有目标或反馈时不留日志；0 表示全部记录。" = "Shorter sessions without a goal or reflection are not logged. Set 0 to log all sessions.";
 "优先级" = "Priority";
 "高优先级" = "High priority";
 "普通优先级" = "Normal priority";
@@ -749,3 +732,5 @@
 "历史记录" = "History";
 "已结束 %lld 项" = "%lld finished";
 "滚轮浏览历史日期，点击日期展开" = "Scroll to browse history; click a date to reveal it";
+
+"未达到最低专注时长" = "Below minimum focus duration";

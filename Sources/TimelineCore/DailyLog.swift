@@ -53,11 +53,13 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
     public var focusPlannedSeconds: TimeInterval?
     public var focusElapsedSeconds: TimeInterval?
     public var focusEndReason: String?
+    /// 结束时的最低专注时长；历史记录未保存此值时按默认 5 分钟判断。
+    public var focusMinimumSeconds: TimeInterval?
 
     public init(id: UUID = UUID(), createdAt: Date, kind: DailyLogKind, text: String, taskID: UUID? = nil, taskTitle: String? = nil, taskNumber: Int? = nil, taskTags: [String] = [], tags: [String] = [],
                 images: [String] = [], imageText: [String: String] = [:], focus: Bool = false,
                 focusEvent: FocusLogEvent? = nil, focusGoal: String? = nil, focusPlannedSeconds: TimeInterval? = nil,
-                focusElapsedSeconds: TimeInterval? = nil, focusEndReason: String? = nil) {
+                focusElapsedSeconds: TimeInterval? = nil, focusEndReason: String? = nil, focusMinimumSeconds: TimeInterval? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.kind = kind
@@ -75,10 +77,11 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
         self.focusPlannedSeconds = focusPlannedSeconds
         self.focusElapsedSeconds = focusElapsedSeconds
         self.focusEndReason = focusEndReason
+        self.focusMinimumSeconds = focusMinimumSeconds
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, createdAt, kind, text, taskID, taskTitle, taskNumber, taskTags, tags, images, imageText, focus, focusEvent, focusGoal, focusPlannedSeconds, focusElapsedSeconds, focusEndReason
+        case id, createdAt, kind, text, taskID, taskTitle, taskNumber, taskTags, tags, images, imageText, focus, focusEvent, focusGoal, focusPlannedSeconds, focusElapsedSeconds, focusEndReason, focusMinimumSeconds
     }
 
     public init(from decoder: Decoder) throws {
@@ -100,6 +103,7 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
         focusPlannedSeconds = try values.decodeIfPresent(TimeInterval.self, forKey: .focusPlannedSeconds)
         focusElapsedSeconds = try values.decodeIfPresent(TimeInterval.self, forKey: .focusElapsedSeconds)
         focusEndReason = try values.decodeIfPresent(String.self, forKey: .focusEndReason)
+        focusMinimumSeconds = try values.decodeIfPresent(TimeInterval.self, forKey: .focusMinimumSeconds)
     }
 
     /// 没有图片时不写入新字段，旧数据的 JSON 保持原样。
@@ -122,6 +126,7 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
         try values.encodeIfPresent(focusPlannedSeconds, forKey: .focusPlannedSeconds)
         try values.encodeIfPresent(focusElapsedSeconds, forKey: .focusElapsedSeconds)
         try values.encodeIfPresent(focusEndReason, forKey: .focusEndReason)
+        try values.encodeIfPresent(focusMinimumSeconds, forKey: .focusMinimumSeconds)
     }
 
     public var command: String { "/\(kind.rawValue) \(text)" }
@@ -141,6 +146,12 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
             if kind == .note && (text.hasPrefix("阶段反馈 · ") || text.hasPrefix("Session reflection · ")) { return "REVIEW" }
             return kind.label
         }
+    }
+
+    /// nil 表示不是结束记录，或旧记录没有可用的结构化时长。
+    public var focusMetMinimum: Bool? {
+        guard focusMarker == "END", let elapsed = focusElapsedSeconds else { return nil }
+        return elapsed >= max(0, focusMinimumSeconds ?? 300)
     }
 
     public var isFocusMarker: Bool { focusEvent != nil || ["FOCUS", "REVIEW", "END"].contains(focusMarker) }

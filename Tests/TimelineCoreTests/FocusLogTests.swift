@@ -2,6 +2,23 @@ import XCTest
 @testable import TimelineCore
 
 final class FocusLogTests: XCTestCase {
+    func testMinimumStatusRoundTripsAndExistingStructuredEndsUseFiveMinuteDefault() throws {
+        for seconds in [0.0, 299, 300, 301] {
+            let record = DailyLogEntry(createdAt: Date(), kind: .note, text: "End", focus: true,
+                                       focusEvent: .end, focusElapsedSeconds: seconds, focusMinimumSeconds: 300)
+            let decoded = try JSONDecoder().decode(DailyLogEntry.self, from: JSONEncoder().encode(record))
+            XCTAssertEqual(decoded, record)
+            XCTAssertEqual(decoded.focusMetMinimum, seconds >= 300)
+        }
+        let existing = DailyLogEntry(createdAt: Date(), kind: .note, text: "■ 结束专注", focus: true,
+                                     focusEvent: .end, focusElapsedSeconds: 30)
+        XCTAssertEqual(existing.focusMetMinimum, false)
+        let unstructured = DailyLogEntry(createdAt: Date(), kind: .note, text: "■ 结束专注", focus: true)
+        XCTAssertNil(unstructured.focusMetMinimum, "旧记录缺少时长时不猜测是否达标")
+        let start = DailyLogEntry(createdAt: Date(), kind: .note, text: "Start", focusEvent: .start)
+        XCTAssertNil(start.focusMetMinimum)
+    }
+
     func testMetadataRoundTripsAndOldEntriesKeepTheirTextAndTimestamp() throws {
         let now = Date(timeIntervalSince1970: 1_790_000_027)
         let record = DailyLogEntry(createdAt: now, kind: .note, text: "▶ 开始专注", focus: true,

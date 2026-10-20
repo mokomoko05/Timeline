@@ -6,6 +6,28 @@ import TimelineCore
 
 @MainActor
 final class LogEventStyleTests: XCTestCase {
+    func testShortFocusHasXAndMinimumBoundaryHasGreenCheckEvenAfterTextEditing() {
+        var log = DailyLogEntry(createdAt: Date(), kind: .note, text: "■ 结束专注 · raw details", focus: true,
+                                focusEvent: .end, focusElapsedSeconds: 299, focusMinimumSeconds: 300)
+        XCTAssertEqual(LogEventStyle.symbol(log), "xmark")
+        XCTAssertEqual(LogEventStyle.color(log), Color(red: 0.973, green: 0.318, blue: 0.286))
+        XCTAssertTrue(LogEventStyle.body(log).contains(AppLocalized("未达到最低专注时长")))
+        log.text = "Edited end note"
+        XCTAssertEqual(LogEventStyle.symbol(log), "xmark")
+        XCTAssertEqual(LogEventStyle.body(log), "Edited end note")
+        log.focusElapsedSeconds = 300
+        XCTAssertEqual(LogEventStyle.symbol(log), "checkmark")
+        XCTAssertEqual(LogEventStyle.color(log), Color(red: 0.247, green: 0.725, blue: 0.314))
+        log.focusElapsedSeconds = 301
+        XCTAssertEqual(LogEventStyle.symbol(log), "checkmark")
+        log.focusMinimumSeconds = 600
+        XCTAssertEqual(LogEventStyle.symbol(log), "xmark")
+        log.focusMinimumSeconds = 0
+        XCTAssertEqual(LogEventStyle.symbol(log), "checkmark")
+        let note = DailyLogEntry(createdAt: Date(), kind: .note, text: "Ordinary note")
+        XCTAssertNil(LogEventStyle.symbol(note))
+    }
+
     func testTypedDisplayKeepsRawRecordsAndHonorsEditedText() {
         var start = DailyLogEntry(createdAt: Date(), kind: .note, text: "▶ 开始专注", focus: true,
                                   focusEvent: .start, focusGoal: "Read methods", focusPlannedSeconds: 1500)

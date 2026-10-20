@@ -713,7 +713,7 @@ public final class JournalStore: ObservableObject {
     @discardableResult
     public func addFocusLog(_ text: String, taskID: UUID, now: Date = Date(), seconds: TimeInterval = 0,
                             fallback: (title: String, number: Int?)? = nil, event: FocusLogEvent? = nil,
-                            goal: String? = nil, plannedSeconds: TimeInterval? = nil, endReason: String? = nil) -> UUID? {
+                            goal: String? = nil, plannedSeconds: TimeInterval? = nil, endReason: String? = nil, minimumSeconds: TimeInterval? = nil) -> UUID? {
         // 任务已经删了（比如专注中把它删掉）：用开始时记下的名字写这条结束记录，时长没地方累加就不加。
         let located = locate(taskID)
         guard !isReadOnly, located != nil || fallback != nil else { return nil }
@@ -730,7 +730,8 @@ public final class JournalStore: ObservableObject {
                                 taskTitle: located.map { String(TaskText.rendered($0.task.title).characters) } ?? fallback?.title,
                                 taskNumber: located?.task.number ?? fallback?.number, taskTags: located?.task.tags ?? [], focus: true,
                                 focusEvent: event, focusGoal: goal, focusPlannedSeconds: plannedSeconds,
-                                focusElapsedSeconds: event == .end ? seconds : nil, focusEndReason: endReason)
+                                focusElapsedSeconds: event == .end ? seconds : nil, focusEndReason: endReason,
+                                focusMinimumSeconds: event == .end ? minimumSeconds : nil)
         entry.logs.append(log)
         updated[key] = entry
         replaceDays(updated, action: "专注记录")

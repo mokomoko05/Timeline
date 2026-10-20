@@ -25,7 +25,7 @@ struct SettingsView: View {
                 Toggle("单击日期时自动展开待办清单", isOn: $clickExpands)
                 Toggle("隐藏已完成事项", isOn: $hideCompleted)
             }
-            Section("配色") {
+            Section("外观") {
                 ThemePicker(themes: themes)
             }
             Section("文字显示") {
@@ -35,9 +35,11 @@ struct SettingsView: View {
                 Toggle("隐藏专注工作台", isOn: $focusPanelHidden)
                 FocusMinutesSetting(title: "默认专注时长", key: Prefs.focusDefaultMinutes,
                                     fallback: Prefs.defaultFocusMinutes, minimum: 1)
-                FocusMinutesSetting(title: "日志记录门槛", key: Prefs.focusMinLogMinutes,
+                FocusMinutesSetting(title: "最低专注时长", key: Prefs.focusMinLogMinutes,
                                     fallback: Prefs.defaultFocusMinLogMinutes, minimum: 0)
-                Text("低于门槛不记日志，0 表示全部记录。")
+                Text("达标显示绿色勾；未达标但含目标或反馈的记录显示红色叉。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("不足最低时长且没有目标或反馈时不留日志；0 表示全部记录。")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("暂停不计时，切换应用不影响专注。")
                     .font(.caption).foregroundStyle(.secondary)

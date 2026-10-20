@@ -42,7 +42,7 @@ enum Prefs {
     static let globalHotKey = "globalHotKeyEnabled"
     /// 新建终端的布局：threePanes（左上下两格、右一栏）或 single。
     static let terminalLayout = "terminalLayout"
-    /// 专注不足这么多分钟就不在日志里留记录（0 表示都记）。
+    /// 最低专注分钟数；未达标且无目标或反馈时不留日志，有内容则以红叉保留（0 表示都记）。
     static let focusMinLogMinutes = "focusMinLogMinutes"
     static let defaultFocusMinLogMinutes = 5
     static let focusDefaultMinutes = "focusDefaultMinutes"

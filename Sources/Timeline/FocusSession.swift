@@ -142,13 +142,14 @@ final class FocusSession: ObservableObject {
         let hasReflection = store?.allLogs().contains {
             $0.log.taskID == session.taskID && $0.log.focusEvent == .review && $0.log.createdAt >= session.started
         } == true
-        if seconds < minLoggedSeconds(), session.goal.isEmpty, !hasReflection {
+        let minimumSeconds = max(0, minLoggedSeconds())
+        if seconds < minimumSeconds, session.goal.isEmpty, !hasReflection {
             // 太短且没有目标或反馈：撤掉开始记录、不写结束记录，时间照常累加。
             store?.discardShortFocus(startLogID: session.startLogID, taskID: session.taskID, seconds: seconds, now: now)
         } else {
             let total = (store?.locate(session.taskID)?.task.focusSeconds ?? 0) + seconds
             store?.addFocusLog("■ 结束专注 · 用时 \(Self.duration(seconds)) · 累计 \(Self.duration(total)) · \(reason)",
-                               taskID: session.taskID, now: now, seconds: seconds, fallback: (session.title, session.number), event: .end, endReason: reason)
+                               taskID: session.taskID, now: now, seconds: seconds, fallback: (session.title, session.number), event: .end, endReason: reason, minimumSeconds: minimumSeconds)
         }
         store?.setFocusTask(nil)
         active = nil

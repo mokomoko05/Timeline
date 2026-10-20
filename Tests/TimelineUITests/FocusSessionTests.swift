@@ -384,6 +384,34 @@ final class FocusSessionTests: XCTestCase {
         XCTAssertEqual(store.allLogs(includeFocus: true).map { $0.log.focusMarker }, ["FOCUS", "END"])
         XCTAssertEqual(store.allLogs(includeFocus: true).first?.log.focusGoal, "Keep this goal")
         XCTAssertEqual(store.locate(task.id)?.task.focusSeconds, 30)
+        let end = try XCTUnwrap(store.allLogs(includeFocus: true).last?.log)
+        XCTAssertEqual(end.focusMinimumSeconds, 300)
+        XCTAssertEqual(end.focusMetMinimum, false)
+        XCTAssertEqual(LogEventStyle.symbol(end), "xmark")
+        let reloaded = JournalStore(directory: store.directory)
+        XCTAssertEqual(reloaded.allLogs(includeFocus: true).last?.log.focusMetMinimum, false)
+        session.minLoggedSeconds = { 0 }
+        XCTAssertEqual(reloaded.allLogs(includeFocus: true).last?.log.focusMinimumSeconds, 300, "后续设置改变不影响历史判定")
+    }
+
+    func testShortFocusWithReflectionUsesEffectiveTimeForMinimumStatus() throws {
+        let (session, store, task) = try makeSession()
+        session.minLoggedSeconds = { 300 }
+        let start = Date()
+        session.start(task: task, url: nil, now: start)
+        session.pause(now: start.addingTimeInterval(299))
+        _ = try store.quickLogEntry("Reflection below minimum", taskID: task.id, on: start,
+                                   now: start.addingTimeInterval(400), focusEvent: .review)
+        session.stop(reason: "手动结束", now: start.addingTimeInterval(900))
+        let end = try XCTUnwrap(store.allLogs(includeFocus: true).last?.log)
+        XCTAssertEqual(end.focusElapsedSeconds, 299)
+        XCTAssertEqual(end.focusMetMinimum, false)
+        XCTAssertEqual(LogEventStyle.symbol(end), "xmark")
+        session.start(task: task, url: nil, now: start.addingTimeInterval(1000))
+        session.stop(reason: "手动结束", now: start.addingTimeInterval(1300))
+        let qualified = try XCTUnwrap(store.allLogs(includeFocus: true).last?.log)
+        XCTAssertEqual(qualified.focusMetMinimum, true)
+        XCTAssertEqual(LogEventStyle.symbol(qualified), "checkmark")
     }
 
     func testCountdownRequestsReflectionOnceAndDoesNotCountTimeSpentReflecting() throws {
