@@ -32,6 +32,19 @@ final class GrowingInputTests: XCTestCase {
         XCTAssertEqual(capped, 5 * ceil(font.ascender - font.descender + font.leading) + (24 - ceil(font.ascender - font.descender + font.leading)), accuracy: 0.5, "到上限为止")
     }
 
+    func testGrowingHeightChangesOnlyByWholeLinesNearWrapBoundaries() {
+        var previous: CGFloat = 24
+        let line = ceil(font.ascender - font.descender + font.leading)
+        for count in 1...240 {
+            let height = TaskInput.height(for: String(repeating: "中文 English ", count: count),
+                                          font: font, width: 180, minHeight: 24, maxLines: 6)
+            XCTAssertGreaterThanOrEqual(height, previous, "输入变长时高度不能回跳")
+            XCTAssertTrue(height == previous || abs(height - previous - line) < 0.5 || height == 24 + 5 * line,
+                          "高度只应按完整行变化，不应出现亚像素抖动")
+            previous = height
+        }
+    }
+
     /// 估算的高度不能比真实排版矮，否则最后一行会被裁掉。
     func testEstimateIsNeverShorterThanRealTextFieldLayout() {
         for width in [180.0, 260, 340, 480, 700] {

@@ -123,7 +123,9 @@ final class TextMeasurer {
         storage.addLayoutManager(manager)
         manager.addTextContainer(container)
         container.lineFragmentPadding = 0
-        container.lineBreakMode = .byTruncatingTail
+        // 输入框会按词／字符换行；截断模式会在接近行尾时算出不同的行数，
+        // 导致 SwiftUI 高度在编辑器实际排版前后抖动一帧。
+        container.lineBreakMode = .byWordWrapping
         container.widthTracksTextView = false
     }
 
