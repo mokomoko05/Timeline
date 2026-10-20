@@ -459,9 +459,9 @@ enum FocusPanelStyle: String, CaseIterable, Identifiable {
         active && !hidden && style.panelSize != nil
     }
 
-    /// 菜单栏的计时要不要显示。
+    /// 专注期间始终显示菜单栏计时，不受浮窗样式或隐藏状态影响。
     static func menuBarVisible(active: Bool, hidden: Bool, style: FocusPanelStyle) -> Bool {
-        active && !hidden && style == .menuBar
+        active
     }
 }
 
@@ -473,9 +473,11 @@ private final class FocusPanel: NSPanel {
 final class FocusPanelController: NSObject, NSWindowDelegate {
     private var panel: FocusPanel?
     private var statusItem: NSStatusItem?
+    private var workspaceMenuItem: NSMenuItem?
+    private var pauseMenuItem: NSMenuItem?
     private let session: FocusSession
     private var observers: [NSObjectProtocol] = []
-    private var elapsedSink: AnyCancellable?
+    private var statusSink: AnyCancellable?
     private let defaults: UserDefaults
     private var workspaceShown = false
     private var refreshing = false
@@ -493,18 +495,24 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
             refresh()
             if !Headless.active { NSSound(named: "Glass")?.play() }
         }
-        // 设置里改了样式、按了隐藏快捷键，立刻生效。
+        // 设置里改了隐藏偏好，立刻生效。
         observers.append(NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         })
-        elapsedSink = session.$elapsed.sink { [weak self] _ in self?.updateStatusTitle() }
+        observers.append(NotificationCenter.default.addObserver(forName: .appLanguageDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.removeStatusItem()
+                self?.refresh()
+            }
+        })
+        // @Published 在赋值前发出新值，直接使用发布的快照，避免计时落后一秒。
+        statusSink = Publishers.CombineLatest4(session.$active, session.$elapsed, session.$isPaused, session.$needsReflection)
+            .sink { [weak self] active, elapsed, paused, needsReflection in
+                self?.updateStatusTitle(active: active, elapsed: elapsed, paused: paused, needsReflection: needsReflection)
+            }
     }
 
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
-
-    private var style: FocusPanelStyle {
-        defaults.string(forKey: Prefs.focusPanelStyle).flatMap(FocusPanelStyle.init(rawValue:)) ?? .card
-    }
 
     /// 专注工作台：未专注时显示任务选择器，专注中显示目标与输入栏。
     func refresh() {
@@ -518,15 +526,15 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         } else {
             panel?.orderOut(nil)
         }
-        removeStatusItem()
+        if session.active != nil { showStatusItem() } else { removeStatusItem() }
     }
 
     // 工作台本身始终保持轻量；任务列表通过 popover 独立出现，不改变工作台大小。
     private static let workspaceSize = NSSize(width: 340, height: 158)
 
     /// 全局快捷键入口：打开 / 收起工作台。专注中再次按下只收起面板，不结束专注。
-    func toggleWorkspace() {
-        workspaceShown.toggle()
+    @objc func toggleWorkspace() {
+        workspaceShown = !(workspaceShown && !defaults.bool(forKey: Prefs.focusPanelHidden))
         if workspaceShown { defaults.set(false, forKey: Prefs.focusPanelHidden) }
         refresh()
     }
@@ -535,6 +543,7 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
     var isPanelVisible: Bool { panel?.isVisible == true }
     /// 菜单栏里该不该有计时（测试环境不真的创建菜单栏项目，免得在用户的菜单栏上闪一下）。
     private(set) var showsMenuBarTimer = false
+    private(set) var menuBarTimerTitle = ""
 
     private func showPanel(size: NSSize) {
         let created = panel == nil
@@ -596,37 +605,53 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
 
     private func showStatusItem() {
         showsMenuBarTimer = true
-        guard !Headless.active else { return }
-        if statusItem == nil {
+        if statusItem == nil, !Headless.active {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
             let menu = NSMenu()
-            let stop = menu.addItem(withTitle: "结束专注", action: #selector(stopFocus), keyEquivalent: "")
+            menu.autoenablesItems = false
+            let workspace = menu.addItem(withTitle: "", action: #selector(toggleWorkspace), keyEquivalent: "")
+            workspace.target = self
+            workspaceMenuItem = workspace
+            let pause = menu.addItem(withTitle: "", action: #selector(togglePause), keyEquivalent: "")
+            pause.target = self
+            pauseMenuItem = pause
+            menu.addItem(.separator())
+            let stop = menu.addItem(withTitle: AppLocalized("结束专注"), action: #selector(stopFocus), keyEquivalent: "")
             stop.target = self
-            let hide = menu.addItem(withTitle: "隐藏计时", action: #selector(hideTimer), keyEquivalent: "")
-            hide.target = self
             item.menu = menu
-            item.button?.image = NSImage(systemSymbolName: "timer", accessibilityDescription: "专注计时")
             item.button?.imagePosition = .imageLeading
             statusItem = item
         }
-        updateStatusTitle()
+        workspaceMenuItem?.title = AppLocalized(workspaceShown && !defaults.bool(forKey: Prefs.focusPanelHidden) ? "隐藏专注工作台" : "显示专注工作台")
+        updateStatusTitle(active: session.active, elapsed: session.elapsed, paused: session.isPaused, needsReflection: session.needsReflection)
     }
 
     private func removeStatusItem() {
         showsMenuBarTimer = false
+        menuBarTimerTitle = ""
         if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
         statusItem = nil
+        workspaceMenuItem = nil
+        pauseMenuItem = nil
     }
 
-    private func updateStatusTitle() {
+    private func updateStatusTitle(active: FocusSession.Active?, elapsed: TimeInterval, paused: Bool, needsReflection: Bool) {
+        guard let active else { menuBarTimerTitle = ""; return }
+        menuBarTimerTitle = FocusSession.clock(max(0, active.plannedSeconds - elapsed))
+        pauseMenuItem?.title = AppLocalized(paused ? "继续" : "暂停")
+        pauseMenuItem?.isEnabled = !needsReflection
         guard let button = statusItem?.button else { return }
-        button.attributedTitle = NSAttributedString(string: " " + FocusSession.clock(session.elapsed),
+        let symbol = needsReflection ? "checkmark.bubble" : (paused ? "pause.circle" : "timer")
+        let state = AppLocalized(needsReflection ? "阶段反馈" : (paused ? "Paused" : "专注中"))
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: state)
+        button.attributedTitle = NSAttributedString(string: " " + menuBarTimerTitle,
                                                     attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)])
-        button.toolTip = session.active.map { "专注中：\($0.number.map { "#\($0) " } ?? "")\($0.title)" }
+        button.toolTip = state + " · " + (active.number.map { "#\($0) " } ?? "") + active.title
+        button.setAccessibilityLabel(state + " · " + menuBarTimerTitle)
     }
 
     @objc private func stopFocus() { session.stop(reason: "手动结束") }
-    @objc private func hideTimer() { workspaceShown = false; refresh() }
+    @objc private func togglePause() { session.togglePause() }
 }
 
 @MainActor

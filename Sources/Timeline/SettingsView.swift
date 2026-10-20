@@ -37,9 +37,9 @@ struct SettingsView: View {
                                     fallback: Prefs.defaultFocusMinutes, minimum: 1)
                 FocusMinutesSetting(title: "最低专注时长", key: Prefs.focusMinLogMinutes,
                                     fallback: Prefs.defaultFocusMinLogMinutes, minimum: 0)
-                Text("达标显示绿色勾；未达标但含目标或反馈的记录显示红色叉。")
+                Text("专注记录达标显示绿色勾，未达标显示红色叉。")
                     .font(.caption).foregroundStyle(.secondary)
-                Text("不足最低时长且没有目标或反馈时不留日志；0 表示全部记录。")
+                Text("专注期间菜单栏显示倒计时，隐藏工作台后仍可查看。")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("暂停不计时，切换应用不影响专注。")
                     .font(.caption).foregroundStyle(.secondary)

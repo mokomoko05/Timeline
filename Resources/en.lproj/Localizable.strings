@@ -500,7 +500,6 @@
 "结束专注" = "Stop focus";
 "隐藏计时" = "Hide timer";
 "结束专注计时" = "Stop focus timer";
-"专注期间可以自由切换网页、终端和笔记，不会因为离开任务链接而自动停止。手滑点了播放键、很快就结束的专注，不会在日志里留下记录；用过的时间仍然累加到任务上。" = "You can switch between websites, terminals, and notes during focus. Leaving the task link will not stop the timer. Very short sessions are omitted from the log, while elapsed time is still accumulated on the task.";
 "不开浮窗，时间显示在菜单栏里" = "Don't show a floating panel; show the time in the menu bar";
 "卡片" = "Card";
 "胶囊" = "Pill";
@@ -595,7 +594,6 @@
 "宽松" = "Relaxed";
 "字号和行间距会应用到任务、笔记、日记和搜索结果；修改后立即生效。" = "Text size and line spacing apply to tasks, notes, journal entries, and search results immediately.";
 "所有专注都记入日志" = "Log every focus session";
-"专注不足 %lld 分钟不记日志" = "Don't log focus sessions shorter than %lld minutes";
 "关闭后，单击日期只选中它；双击或点标题栏的日期按钮再展开清单，日历不会随点击改变布局。" = "When off, a single click selects a date; double-click or use the date button to expand its task list.";
 "三窗格：左边上下两格，右边一栏" = "Three panes: two on the left and one on the right";
 "回到今天" = "Today";
@@ -647,8 +645,7 @@
 "阅读与记录\n留一点时间给想法。" = "Read and write\nMake time for your thoughts.";
 "默认专注时长" = "Default focus duration";
 "最低专注时长" = "Minimum focus duration";
-"达标显示绿色勾；未达标但含目标或反馈的记录显示红色叉。" = "Sessions meeting the minimum show a green check. Shorter sessions with a goal or reflection show a red X.";
-"不足最低时长且没有目标或反馈时不留日志；0 表示全部记录。" = "Shorter sessions without a goal or reflection are not logged. Set 0 to log all sessions.";
+"专注记录达标显示绿色勾，未达标显示红色叉。" = "Focus records meeting the minimum show a green check; those below it show a red X.";
 "优先级" = "Priority";
 "高优先级" = "High priority";
 "普通优先级" = "Normal priority";
@@ -734,3 +731,5 @@
 "滚轮浏览历史日期，点击日期展开" = "Scroll to browse history; click a date to reveal it";
 
 "未达到最低专注时长" = "Below minimum focus duration";
+"专注期间菜单栏显示倒计时，隐藏工作台后仍可查看。" = "The menu bar shows the countdown during focus, even when the workspace is hidden.";
+"显示专注工作台" = "Show focus workspace";
