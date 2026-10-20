@@ -3,100 +3,17 @@ import Combine
 import SwiftUI
 import TimelineCore
 
-private struct TimelineViewportKey: EnvironmentKey { static let defaultValue = CGRect.zero }
-extension EnvironmentValues {
-    var timelineViewport: CGRect {
-        get { self[TimelineViewportKey.self] }
-        set { self[TimelineViewportKey.self] = newValue }
-    }
-}
-
-/// 统一的圆柱投影：条目只缩小和平移，始终保持平直。
-enum TimelineWheelProjection {
-    static func depth(y: CGFloat, viewport: CGRect) -> CGFloat {
-        guard viewport.height > 0 else { return 0 }
-        return min(1, abs((y - viewport.midY) / (viewport.height * 0.55)))
-    }
-    static func scale(y: CGFloat, viewport: CGRect) -> CGFloat {
-        let d = depth(y: y, viewport: viewport)
-        return 1 - 0.16 * d * d
-    }
-    static func inset(y: CGFloat, viewport: CGRect) -> CGFloat {
-        let d = depth(y: y, viewport: viewport)
-        return 10 * d * d
-    }
-}
-
-struct TimelineWheelDepth: ViewModifier {
-    @Environment(\.timelineViewport) private var viewport
-    @Environment(\.typography) private var typography
-    func body(content: Content) -> some View {
-        if #available(macOS 14.0, *) {
-            content.visualEffect { effect, geometry in
-                let frame = geometry.frame(in: .global)
-                let d = TimelineWheelProjection.depth(y: frame.midY, viewport: viewport)
-                return effect
-                    .scaleEffect(TimelineWheelProjection.scale(y: frame.midY, viewport: viewport),
-                                 anchor: UnitPoint(x: TaskTimelineLayout.axisX(typography) / max(1, frame.width), y: 0.5))
-                    .offset(x: -TimelineWheelProjection.inset(y: frame.midY, viewport: viewport))
-                    .opacity(1 - 0.45 * d * d)
-            }
-        } else {
-            content.modifier(LegacyTimelineWheelDepth())
-        }
-    }
-}
-
-private struct LegacyTimelineWheelDepth: ViewModifier {
-    @Environment(\.timelineViewport) private var viewport
-    @Environment(\.typography) private var typography
-    @State private var frame = CGRect.zero
-    func body(content: Content) -> some View {
-        let d = TimelineWheelProjection.depth(y: frame.midY, viewport: viewport)
-        content
-            .scaleEffect(TimelineWheelProjection.scale(y: frame.midY, viewport: viewport),
-                         anchor: UnitPoint(x: TaskTimelineLayout.axisX(typography) / max(1, frame.width), y: 0.5))
-            .offset(x: -TimelineWheelProjection.inset(y: frame.midY, viewport: viewport))
-            .opacity(1 - 0.45 * d * d)
-            .background(GeometryReader { geometry in
-                Color.clear.onAppear { frame = geometry.frame(in: .global) }
-                    .onChange(of: geometry.frame(in: .global)) { frame = $0 }
-            })
-    }
-}
-
-struct TimelineWheelAxis: Shape {
-    let x: CGFloat
-    let originY: CGFloat
-    let viewport: CGRect
-    func path(in rect: CGRect) -> Path {
-        Path { path in
-            for step in 0...24 {
-                let y = rect.height * CGFloat(step) / 24
-                let point = CGPoint(x: x - TimelineWheelProjection.inset(y: originY + y, viewport: viewport), y: y)
-                if step == 0 { path.move(to: point) } else { path.addLine(to: point) }
-            }
-        }
-    }
-}
-
-/// 单独更新轴线的投影，滚动时不使整个日期段及其任务重新求值。
-struct TimelineWheelAxisStroke: View {
-    @Environment(\.timelineViewport) private var viewport
+/// 轴线只随日期区间高度伸缩，滚动时保持笔直。
+struct TimelineAxisStroke: View {
     @Environment(\.typography) private var typography
     let highlighted: Bool
     var targeted = false
     var dashed = false
-    @State private var originY: CGFloat = 0
 
     var body: some View {
-        TimelineWheelAxis(x: TaskTimelineLayout.axisX(typography), originY: originY, viewport: viewport)
+        TaskTimelineAxis(x: TaskTimelineLayout.axisX(typography))
             .stroke(highlighted ? Palette.accent : Palette.line.opacity(0.65),
                     style: StrokeStyle(lineWidth: targeted ? 1.5 : 1, dash: dashed ? [3, 4] : []))
-            .background(GeometryReader { geometry in
-                Color.clear.onAppear { originY = geometry.frame(in: .global).minY }
-                    .onChange(of: geometry.frame(in: .global).minY) { originY = $0 }
-            })
             .allowsHitTesting(false)
     }
 }

@@ -54,10 +54,10 @@ final class TaskTimelineTests: XCTestCase {
         sections.compactMap { if case .day(let date, _) = $0 { return date }; return nil }
     }
 
-    func testEmptyTimelineAlwaysIncludesTodayAndTheNextThreeDays() {
+    func testEmptyTimelineAlwaysIncludesTodayAndTomorrow() {
         let sections = TaskTimelineSection.sections(for: [], today: today)
-        XCTAssertEqual(dates(sections), (0...3).map(day))
-        XCTAssertEqual(sections.count, 7, "Four days plus two open gaps and the undated section")
+        XCTAssertEqual(dates(sections), (0...1).map(day))
+        XCTAssertEqual(sections.count, 5, "Two days plus two open gaps and the undated section")
         XCTAssertTrue(sections.allSatisfy { $0.tasks.isEmpty })
     }
 
@@ -65,14 +65,14 @@ final class TaskTimelineTests: XCTestCase {
         let tasks = [scheduled("late", offset: 20), scheduled("early", offset: -5),
                      scheduled("next day", offset: 21), scheduled("no date", offset: nil)]
         let sections = TaskTimelineSection.sections(for: tasks, today: today)
-        XCTAssertEqual(dates(sections), [-5, 0, 1, 2, 3, 20, 21].map(day))
+        XCTAssertEqual(dates(sections), [-5, 0, 1, 20, 21].map(day))
         XCTAssertEqual(sections.compactMap { section -> [Int]? in
             if case .gap(let a?, let b?) = section { return [calendar.dateComponents([.day], from: today, to: a).day!, calendar.dateComponents([.day], from: today, to: b).day!] }
             return nil
-        }, [[-5, 0], [3, 20]])
+        }, [[-5, 0], [1, 20]])
         XCTAssertEqual(sections.flatMap(\.tasks).map(\.id), [tasks[1].id, tasks[0].id, tasks[2].id, tasks[3].id])
         let distant = TaskTimelineSection.sections(for: [scheduled("far future", offset: 30_000)], today: today)
-        XCTAssertEqual(dates(distant), [0, 1, 2, 3, 30_000].map(day), "A huge empty gap must not create empty ticks")
+        XCTAssertEqual(dates(distant), [0, 1, 30_000].map(day), "A huge empty gap must not create empty ticks")
         guard case .undated(let undated) = sections.last else { return XCTFail("Undated tasks must remain at the finite tail") }
         XCTAssertEqual(undated.map(\.id), [tasks[3].id])
     }
@@ -89,7 +89,7 @@ final class TaskTimelineTests: XCTestCase {
         XCTAssertTrue(dates(sections).contains(day(8)))
         XCTAssertFalse(dates(sections).contains(day(9)))
         let removed = TaskTimelineSection.sections(for: [first], today: today)
-        XCTAssertEqual(dates(removed), [0, 1, 2, 3].map(day))
+        XCTAssertEqual(dates(removed), [0, 1].map(day))
         lastTodo.dueDate = day(2)
         last = ScheduledTask(date: last.date, task: lastTodo)
         let moved = TaskTimelineSection.sections(for: [last, first], today: today)
@@ -100,8 +100,8 @@ final class TaskTimelineTests: XCTestCase {
     func testEmptyDatesOutsideTheNearTermWindowDoNotCreateTicks() {
         let sections = TaskTimelineSection.sections(for: [], today: today)
         XCTAssertFalse(dates(sections).contains(day(90)))
-        XCTAssertEqual(dates(sections), (0...3).map(day))
-        XCTAssertEqual(TaskTimelineSection.navigationID(for: day(90), in: sections), sections[5].id)
+        XCTAssertEqual(dates(sections), (0...1).map(day))
+        XCTAssertEqual(TaskTimelineSection.navigationID(for: day(90), in: sections), sections[3].id)
         XCTAssertEqual(TaskTimelineSection.navigationID(for: day(-90), in: sections), sections[0].id)
         XCTAssertEqual(TaskTimelineSection.navigationID(for: day(1), in: sections), TaskTimelineSection.dayID(day(1)))
     }
@@ -117,25 +117,83 @@ final class TaskTimelineTests: XCTestCase {
         let finished = offsets.map { scheduled("Finished", offset: $0, completed: true) }
         let overdue = scheduled("Still open", offset: -12)
         let sections = TaskTimelineSection.sections(for: finished + [overdue], today: today)
-        XCTAssertEqual(dates(sections), [-1000, -400, -20, -12, -5, 0, 1, 2, 3].map(day))
+        XCTAssertEqual(dates(sections), [-12, 0, 1].map(day))
         XCTAssertEqual(sections.flatMap(\.tasks).count, finished.count + 1)
         XCTAssertEqual(Set(sections.flatMap(\.tasks).map(\.id)), Set((finished + [overdue]).map(\.id)))
     }
 
-    func testWheelPerspectiveShrinksBothEndsWithoutRotatingTextAndAxisJoinsAcrossSections() {
-        let viewport = CGRect(x: 0, y: 100, width: 520, height: 600)
-        XCTAssertEqual(TimelineWheelProjection.scale(y: viewport.midY, viewport: viewport), 1)
-        let upper = TimelineWheelProjection.scale(y: viewport.minY, viewport: viewport)
-        XCTAssertLessThan(upper, 1)
-        XCTAssertGreaterThan(upper, 0.8)
-        XCTAssertEqual(upper, TimelineWheelProjection.scale(y: viewport.maxY, viewport: viewport), accuracy: 0.001)
-        let first = TimelineWheelAxis(x: 79, originY: 100, viewport: viewport).path(in: CGRect(x: 0, y: 0, width: 520, height: 200))
-        let second = TimelineWheelAxis(x: 79, originY: 300, viewport: viewport).path(in: CGRect(x: 0, y: 0, width: 520, height: 200))
-        var last: CGPoint?
-        first.forEach { if case .line(let p) = $0 { last = p } }
-        var start: CGPoint?
-        second.forEach { if case .move(let p) = $0 { start = p } }
-        XCTAssertEqual(last!.x, start!.x, accuracy: 0.001)
+    func testFinishedOnlyDatesMergeAcrossGapsButStopAtOpenTasksAndNearTermDates() {
+        let finished = [-30, -20, -8, -3, 0, 1, 10, 18].map { scheduled("Finished", offset: $0, completed: true) }
+        let open = scheduled("Unfinished", offset: -12)
+        let undated = scheduled("Undated", offset: nil, completed: true)
+        let sections = TaskTimelineSection.sections(for: finished + [open, undated], today: today)
+        let runs = sections.compactMap { section -> [Date]? in
+            if case .finished(let dates, _) = section { return dates }; return nil
+        }
+        XCTAssertEqual(runs, [[-30, -20], [-8, -3], [10, 18]].map { $0.map(day) })
+        XCTAssertEqual(dates(sections), [-12, 0, 1].map(day))
+        XCTAssertEqual(sections.flatMap(\.tasks).count, finished.count + 2)
+        XCTAssertEqual(Set(sections.map(\.id)).count, sections.count)
+        let group = sections.first { if case .finished = $0 { return true }; return false }!
+        XCTAssertTrue(group.visibleTasks(expanded: []).isEmpty)
+        XCTAssertEqual(group.visibleTasks(expanded: [finished[1].id]).map(\.id), [finished[0].id, finished[1].id])
+        XCTAssertEqual(TaskTimelineSection.navigationID(for: day(-25), in: sections), group.id)
+        guard case .undated(let tail) = sections.last else { return XCTFail("No Due must remain separate") }
+        XCTAssertEqual(tail.map(\.id), [undated.id])
+    }
+
+    func testMergedFinishedDatesExpandWithoutMovingTheirToggleAndCollapseToOneRow() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let tasks = [-30, -20, -8].map { scheduled("Finished", offset: $0, completed: true) }
+        func height(expanded: Set<UUID>) -> CGFloat {
+            let host = NSHostingView(rootView: FinishedTimelineDatesView(store: store, dates: [-30, -20, -8].map(day),
+                tasks: tasks, selectedDate: today, expanded: .constant(expanded), requestedEdit: .constant(nil),
+                navigate: { _ in }, selectTask: {}, next: {}).frame(width: 520)
+                .environmentObject(WorkspaceInteraction()))
+            return host.fittingSize.height
+        }
+        XCTAssertEqual(height(expanded: []), 32, accuracy: 1)
+        XCTAssertGreaterThan(height(expanded: [tasks[0].id]), height(expanded: []) + 120)
+        XCTAssertEqual(height(expanded: Set(tasks.map(\.id))), height(expanded: [tasks[0].id]), accuracy: 1)
+    }
+
+    func testDateAndNoDueDotsReorderPersistentlyWithoutChangingDeadlines() async throws {
+        for due in [today, nil] as [Date?] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = JournalStore(directory: directory)
+            let items = try ["First", "Second", "Third"].map { try XCTUnwrap(store.addParsedTodo($0, on: today)) }
+            if let due { for item in items { store.setDeadline(item.id, to: due) } }
+            let host = NSHostingView(rootView: ScrollView {
+                TimelineDayView(store: store, date: due,
+                    tasks: store.tasks().sorted(by: TaskTimelineSection.precedes), selectedDate: today,
+                    expanded: .constant([]), requestedEdit: .constant(nil), navigate: { _ in }, selectTask: {}, next: {})
+            }.frame(width: 520, height: 350).environmentObject(WorkspaceInteraction()))
+            let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 350), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+            host.layoutSubtreeIfNeeded()
+            func handles(_ view: NSView) -> [TaskHandleView] {
+                (view as? TaskHandleView).map { [$0] } ?? view.subviews.flatMap(handles)
+            }
+            let dot = try XCTUnwrap(handles(host).first { $0.taskID == items[0].id })
+            let hooks = try XCTUnwrap(dot.reorder)
+            XCTAssertTrue(hooks.begin(), "Actual priority dot must find every row in its date interval")
+            XCTAssertFalse(hooks.leavesGroup(10))
+            XCTAssertTrue(hooks.leavesGroup(10_000), "Dragging past this date hands over to changing dates")
+            hooks.update(10_000)
+            hooks.end()
+            let saved = JournalStore(directory: directory).tasks().sorted(by: TaskTimelineSection.precedes)
+            XCTAssertEqual(saved.map(\.id), [items[1].id, items[2].id, items[0].id])
+            XCTAssertTrue(saved.allSatisfy { $0.task.dueDate == due })
+            store.undo()
+            XCTAssertEqual(store.tasks().sorted(by: TaskTimelineSection.precedes).map(\.id), items.map(\.id))
+        }
     }
 
     func testScrollingHasAFiniteTailWithVisibleUndatedTaskAndNoIdleTimer() async throws {
@@ -148,7 +206,6 @@ final class TaskTimelineTests: XCTestCase {
             ScrollView {
                 TaskTimelineView(store: store, tasks: tasks, today: self.today, selectedDate: self.today,
                     expanded: .constant([]), requestedEdit: .constant(nil), navigate: { _ in })
-                    .environment(\.timelineViewport, geometry.frame(in: .global))
                     .padding(.vertical, 12)
             }
         }.frame(width: 520, height: 300).environmentObject(WorkspaceInteraction())
@@ -261,7 +318,7 @@ final class TaskTimelineTests: XCTestCase {
         XCTAssertEqual(hovering, height([committed]), accuracy: 0.5, "Preview must reserve the actual final height")
     }
 
-    func testWholeTimelineWheelViewportRendersFlatRowsAndShowsTargetExpansion() async throws {
+    func testTimelineViewportRendersFlatRowsAndShowsTargetExpansion() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory); TaskDragSession.shared.end() }
         let store = JournalStore(directory: directory)
@@ -276,7 +333,6 @@ final class TaskTimelineTests: XCTestCase {
                 ScrollView {
                     TaskTimelineView(store: store, tasks: store.tasks(), today: self.today, selectedDate: self.today,
                         expanded: .constant([]), requestedEdit: .constant(nil), navigate: { _ in })
-                        .environment(\.timelineViewport, geometry.frame(in: .global))
                         .padding(.vertical, 12).padding(.horizontal, 16)
                 }.onAppear {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {

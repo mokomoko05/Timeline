@@ -24,6 +24,7 @@ struct PriorityMark: View {
 struct TaskPriorityButton: View {
     @ObservedObject var store: JournalStore
     let task: Todo
+    @Environment(\.taskReorder) private var reorder
     var select: () -> Void = {}
     var items: [RadialItem] {
         TaskPriority.allCases.map { priority in
@@ -35,7 +36,11 @@ struct TaskPriorityButton: View {
 
     var body: some View {
         NativeTaskHandle(task: task, enabled: !store.isReadOnly, drawsHandle: false,
-                         select: select, priorityItems: items,
+                         select: select, reorder: reorder.map { model in
+                             TaskReorderHooks(begin: { model.begin(task.id) }, update: { model.update($0) },
+                                 end: { model.finish() }, cancel: { model.cancel() },
+                                 leavesGroup: { model.leavesGroup($0) })
+                         }, priorityItems: items,
                          priorityColor: NSColor(PriorityMark(priority: task.priority).color))
             .frame(width: 18, height: 22)
             .help("左键按住拖动；右键设置优先级")

@@ -31,7 +31,6 @@ struct ContentView: View {
     /// 点摘要里的数字时，要定位的任务类型（`overdue` / `today`）。
     @State private var scrollGroup: String?
     @State private var todayScrollRequest = 0
-    @State private var timelineViewport = CGRect.zero
     @State private var expandedFinished: Set<UUID> = []
     /// 待办行的位置，用来判断一次点击是不是点在待办上（不是 @Published，更新它不会触发重绘）。
     @State private var rowRegions = TaskRowRegions()
@@ -52,12 +51,12 @@ struct ContentView: View {
     private var entry: DayEntry { store.entry(for: selectedDate) }
     /// 全部任务（不属于某一天），按截止时间排序；隐藏已完成时过滤掉已完成的。
     private var orderedTasks: [ScheduledTask] {
-        store.tasks().sorted(by: TaskSortMode.deadline.precedes)
+        store.tasks().sorted(by: TaskTimelineSection.precedes)
             .filter { !hideCompleted || !$0.task.completed }
     }
     private var visibleTasks: [ScheduledTask] {
         TaskTimelineSection.sections(for: orderedTasks, today: JournalDates.date(for: currentDayKey) ?? Date())
-            .flatMap { TaskTimelineItem.items(for: $0.tasks, expanded: expandedFinished).filter { !$0.folded }.flatMap(\.tasks) }
+            .flatMap { $0.visibleTasks(expanded: expandedFinished) }
     }
     private var weekStart: Int { weekStartsSunday ? 1 : 2 }
     private var footerVisible: Bool { store.errorMessage != nil || !reminders.status.isEmpty }
@@ -440,7 +439,7 @@ struct ContentView: View {
                     Label("回到今天", systemImage: "scope")
                         .font(.system(size: typography.pt(11)))
                 }
-                .buttonStyle(.plain).foregroundStyle(Palette.muted)
+                .buttonStyle(HitAreaButtonStyle()).foregroundStyle(Palette.muted)
                 .help("定位到时间轴上的今天 · ⌘T")
                 let hidden = hideCompleted ? completed : 0
                 if hidden > 0 {
@@ -460,13 +459,12 @@ struct ContentView: View {
                     TaskTimelineView(store: store, tasks: orderedTasks, today: JournalDates.date(for: currentDayKey) ?? Date(),
                                      selectedDate: selectedDate, expanded: $expandedFinished, requestedEdit: $requestedEdit,
                                      navigate: select, selectTask: { interaction.activePane = .tasks }, next: { addingTodo = true })
-                        .environment(\.timelineViewport, timelineViewport)
                         .padding(.vertical, 12)
                         .onPreferenceChange(TaskRowGlobalFramesKey.self) { rowRegions.rows = $0 }
                 }
                 .background(GeometryReader { proxy in
-                    Color.clear.onAppear { rowRegions.viewport = proxy.frame(in: .global); timelineViewport = proxy.frame(in: .global) }
-                        .onChange(of: proxy.frame(in: .global)) { rowRegions.viewport = $0; timelineViewport = $0 }
+                    Color.clear.onAppear { rowRegions.viewport = proxy.frame(in: .global) }
+                        .onChange(of: proxy.frame(in: .global)) { rowRegions.viewport = $0 }
                 })
                 .onAppear {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {

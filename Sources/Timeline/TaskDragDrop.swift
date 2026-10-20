@@ -249,7 +249,8 @@ final class TaskHandleView: NSView, NSDraggingSource {
         if reordering {
             NSCursor.closedHand.set()
             // 向右（或向左）拖出了清单：改成拖到日历上设置截止日期。
-            if leftList(event.locationInWindow), let id = taskID {
+            let translation = -(event.locationInWindow.y - startY) + (scrollOffset() - startScroll)
+            if (leftList(event.locationInWindow) || reorder?.leavesGroup(translation) == true), let id = taskID {
                 endReorder(commit: false)
                 startNativeDrag(id, title, self, event)
                 return

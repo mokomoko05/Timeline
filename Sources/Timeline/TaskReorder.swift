@@ -49,6 +49,7 @@ struct TaskReorderHooks {
     var update: (CGFloat) -> Void
     var end: () -> Void
     var cancel: () -> Void
+    var leavesGroup: (CGFloat) -> Bool = { _ in false }
 }
 
 /// 被拖那一行的实时位移，单独成一个对象：它每次鼠标移动都会变，只让被拖的那一行订阅，其他行不用跟着重算。
@@ -82,6 +83,11 @@ final class TaskReorderModel: ObservableObject {
     private var groupFrames: [CGRect] = []
 
     var isActive: Bool { activeID != nil }
+
+    func leavesGroup(_ translation: CGFloat) -> Bool {
+        guard activeID != nil else { return false }
+        return abs(translation - ReorderMath.clamp(translation, frames: groupFrames, active: activeIndex)) > 28
+    }
 
     @discardableResult
     func begin(_ id: UUID) -> Bool {

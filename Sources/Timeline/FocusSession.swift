@@ -1143,6 +1143,7 @@ private struct PastedImageToken: View {
 
 /// 截止日期下方的专注入口：播放 / 结束状态和累计时间共用一个按钮。
 struct TaskFocusButton: View {
+    @Environment(\.typography) private var typography
     @ObservedObject var session: FocusSession
     let task: ScheduledTask
     private var running: Bool { session.active?.taskID == task.id }
@@ -1153,13 +1154,19 @@ struct TaskFocusButton: View {
             if running { session.stop(reason: "手动结束") }
             else { session.start(task: task, url: FocusSession.link(in: task.task.title)) }
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: running ? "stop.fill" : "play.fill")
-                    .font(.system(size: 8))
+            ZStack {
                 Text(running ? FocusSession.clock(total) : FocusSession.brief(total))
-                    .font(.system(size: 10, design: .monospaced)).monospacedDigit()
+                    .font(.system(size: typography.pt(11), design: .monospaced)).monospacedDigit()
+                    .padding(.horizontal, 22)
+                HStack {
+                    Image(systemName: running ? "stop.fill" : "play.fill")
+                        .font(.system(size: typography.pt(10)))
+                    Spacer(minLength: 0)
+                }.padding(.leading, 6)
             }
-            .padding(.horizontal, 4).padding(.vertical, 2).contentShape(Rectangle())
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(minWidth: typography.pt(68), minHeight: typography.pt(28))
+            .contentShape(RoundedRectangle(cornerRadius: 5))
         }
         .buttonStyle(.plain).raisedOnHover(radius: 4)
         .foregroundStyle(running ? Color.red : Palette.muted)

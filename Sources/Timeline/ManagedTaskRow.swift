@@ -130,7 +130,6 @@ struct ManagedTaskRow: View {
                 VStack(alignment: .trailing, spacing: 2) {
                     if !timeline { TaskDeadlineButton(store: store, task: task) }
                     if let focus {
-                        Spacer(minLength: 2)
                         TaskFocusButton(session: focus, task: ScheduledTask(date: date, task: task))
                     }
                 }
