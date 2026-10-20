@@ -5,7 +5,7 @@ bash scripts/build.sh
 TARGET="$HOME/Applications/Timeline.app"
 for NAME in Timeline Scheduler Dayleaf; do
     if pgrep -f "$HOME/Applications/$NAME.app/Contents/MacOS/$NAME" >/dev/null 2>&1; then
-        echo "请先退出 $NAME，再重新运行安装脚本。应用及数据会保留。"
+        echo "请先退出 ${NAME}，再重新运行安装脚本。应用及数据会保留。"
         exit 1
     fi
 done

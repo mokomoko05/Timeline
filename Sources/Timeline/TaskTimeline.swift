@@ -157,9 +157,9 @@ struct TaskTimelineAxis: Shape {
 
 enum TaskTimelineLayout {
     static let spacing: CGFloat = 6
-    static func timeWidth(_ typography: AppTypography) -> CGFloat { typography.pt(54) }
+    static func timeWidth(_ typography: AppTypography) -> CGFloat { typography.pt(40) }
     static func axisX(_ typography: AppTypography) -> CGFloat { timeWidth(typography) + 17 }
-    static func cardInset(_ typography: AppTypography) -> CGFloat { timeWidth(typography) + 27 }
+    static func cardInset(_ typography: AppTypography) -> CGFloat { timeWidth(typography) + 34 }
 }
 
 /// 时间轴内容与主窗口分离，空日期仍然有可拖入的轴线区域。
@@ -266,7 +266,6 @@ struct TimelineDayView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             TimelineDateMarker(date: date, selectedDate: selectedDate, compact: true, navigate: navigate)
-                .offset(y: -typography.pt(12))
             // 刻度属于边界；任务和放置预览始终位于边界之间。
             VStack(alignment: .leading, spacing: TaskTimelineLayout.spacing) {
                 if showsFinishedTasks {
@@ -448,7 +447,9 @@ struct FinishedTimelineDatesView: View {
                 .padding(.horizontal, 6).frame(minHeight: 32).contentShape(Rectangle())
             }
             .buttonStyle(.plain).foregroundStyle(Palette.muted).raisedOnHover()
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.leading, TaskTimelineLayout.cardInset(typography))
+            .padding(.vertical, 6)
             .help(isExpanded ? "收起这段已结束事项" : "展开已结束事项")
             .background { TimelineAxisStroke(highlighted: false) }
             if isExpanded {

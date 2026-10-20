@@ -401,9 +401,12 @@ struct ContentView: View {
 
     @ViewBuilder
     private func summaryChip(_ count: Int, _ title: String, tint: Color, group: String?, alwaysVisible: Bool = false) -> some View {
-        // 数量为 0 的不显示（「未完成」始终显示，没有任务时也是 0）。
+        // 今天与未完成始终显示；今天即使为零也可定位日期区间。
         if count > 0 || group == nil || alwaysVisible {
-            Button { if let group { scrollGroup = group } } label: {
+            Button {
+                if group == "today" { select(Date()) }
+                if let group { scrollGroup = group }
+            } label: {
                 HStack(spacing: 4) {
                     Text("\(count)").font(.system(size: typography.pt(13), weight: .semibold, design: .rounded)).monospacedDigit()
                     Text(LocalizedStringKey(title)).font(.system(size: typography.pt(11)))
@@ -460,7 +463,7 @@ struct ContentView: View {
                 })
                 .onAppear {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        proxy.scrollTo(TaskTimelineSection.dayID(Date()), anchor: .center)
+                        proxy.scrollTo(TaskTimelineSection.dayID(Date()), anchor: .top)
                     }
                 }
                 .onChange(of: scrollTarget) { id in
@@ -482,7 +485,7 @@ struct ContentView: View {
                         if id == "undated" {
                             withAnimation(Motion.quick) { proxy.scrollTo("undated", anchor: .top) }
                         } else if id == "today" {
-                            withAnimation(Motion.quick) { proxy.scrollTo(TaskTimelineSection.dayID(Date()), anchor: .center) }
+                            withAnimation(Motion.quick) { proxy.scrollTo(TaskTimelineSection.dayID(Date()), anchor: .top) }
                         } else if let item = visible.first(where: { !$0.task.completed && (id == "overdue" ? ($0.task.effectiveDeadline ?? .distantFuture) < Date() : JournalDates.calendar.isDateInToday($0.task.dueDate ?? .distantPast)) }) {
                             withAnimation(Motion.quick) { proxy.scrollTo(item.id, anchor: .top) }
                         }
@@ -504,7 +507,7 @@ struct ContentView: View {
                     DispatchQueue.main.async {
                         let sections = TaskTimelineSection.sections(for: orderedTasks, today: JournalDates.date(for: currentDayKey) ?? Date())
                         if let id = TaskTimelineSection.navigationID(for: selectedDate, in: sections) {
-                            withAnimation(Motion.quick) { proxy.scrollTo(id, anchor: .center) }
+                            withAnimation(Motion.quick) { proxy.scrollTo(id, anchor: .top) }
                         }
                     }
                 }

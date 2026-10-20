@@ -154,7 +154,7 @@ final class TaskTimelineTests: XCTestCase {
                 .environmentObject(WorkspaceInteraction()))
             return host.fittingSize.height
         }
-        XCTAssertEqual(height(expanded: []), 32, accuracy: 1)
+        XCTAssertEqual(height(expanded: []), 44, accuracy: 1)
         XCTAssertGreaterThan(height(expanded: [tasks[0].id]), height(expanded: []) + 120)
         XCTAssertEqual(height(expanded: Set(tasks.map(\.id))), height(expanded: [tasks[0].id]), accuracy: 1)
     }
