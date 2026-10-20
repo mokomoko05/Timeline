@@ -30,7 +30,7 @@ struct TaskComposerRow: View {
                 TaskInput(text: $text, focused: $focused, placeholder: "添加待办…", fontSize: compact ? 12 : 14,
                           submit: submit, cancel: cancel, previous: previous, complete: complete,
                           minHeight: compact ? 24 : typography.pt(22), maxLines: compact ? 1 : 3, allowsNewlines: compact,
-                          collapsesPastedNewlines: false, returnSubmits: compact, submitsOnBlur: false)
+                          collapsesPastedNewlines: false, returnSubmits: compact)
                 if !preview.tags.isEmpty || preview.reminderMinutes != nil || preview.repeatRule != .none {
                     HStack(spacing: 4) {
                         if preview.reminderMinutes != nil { Image(systemName: "bell") }

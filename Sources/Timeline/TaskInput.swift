@@ -20,7 +20,7 @@ struct TaskInput: View {
     /// 设置后，粘贴图片会交给它处理（文字照常粘贴）。
     var onPasteImages: (([Data]) -> Void)?
     /// 设置后输入框自动换行、随内容向下增高：这是单行时的高度，最多长到 `maxLines` 行，到顶后框内自己滚动。
-    /// Enter 换行，⌘Enter 提交；点击框外失焦也会提交（和 Esc 取消区分开）。
+    /// Enter 换行，⌘Enter 提交；失焦保留编辑内容。
     var minHeight: CGFloat?
     var maxLines = 10
     /// 能不能有多行：回车是换行（true）还是始终提交（false）。待办标题、添加待办这种一行一条内容为 false。
@@ -34,7 +34,8 @@ struct TaskInput: View {
     /// 快速日志命令行这种「主要是单行命令，偶尔需要在框内滚动」的场景用它：既要保留 `GrowingTaskInput`
     /// 的框内滚动、mention 候选等能力，又要回车直接提交。
     var returnSubmits = false
-    var submitsOnBlur = true
+    /// 编辑已有条目时仅接受 ⌘Enter；新建输入框仍可用普通 Enter。
+    var commandReturnOnly = false
 
     private var growing: Bool { minHeight != nil && allowsNewlines }
 
@@ -48,12 +49,13 @@ struct TaskInput: View {
             GrowingTaskInput(text: $text, focused: $focused, placeholder: AppLocalized(placeholder), fontSize: fontSize, submit: submit,
                               cancel: cancel, monospaced: monospaced, historyUp: historyUp, historyDown: historyDown,
                               complete: complete, onPasteImages: onPasteImages, minHeight: minHeight ?? 24, maxLines: maxLines,
-                              returnSubmits: returnSubmits, mention: mention, submitsOnBlur: submitsOnBlur)
+                              returnSubmits: returnSubmits, mention: mention)
         } else {
             SingleLineTaskInput(text: $text, focused: $focused, placeholder: AppLocalized(placeholder), fontSize: fontSize, submit: submit,
                                  cancel: cancel, previous: previous, monospaced: monospaced, onPasteImages: onPasteImages,
                                  minHeight: minHeight, maxLines: maxLines, allowsNewlines: allowsNewlines,
-                                 collapsesPastedNewlines: collapsesPastedNewlines ?? !allowsNewlines, complete: complete)
+                                 collapsesPastedNewlines: collapsesPastedNewlines ?? !allowsNewlines, complete: complete,
+                                 commandReturnOnly: commandReturnOnly)
         }
     }
 }
@@ -101,6 +103,7 @@ struct SingleLineTaskInput: NSViewRepresentable {
     /// 粘贴进来的换行要不要变成空格。省略时跟 `allowsNewlines` 相反。
     var collapsesPastedNewlines: Bool?
     var complete: (() -> Void)?
+    var commandReturnOnly = false
     private var collapsesNewlines: Bool { collapsesPastedNewlines ?? !allowsNewlines }
 
     private var growing: Bool { minHeight != nil }
@@ -147,11 +150,16 @@ struct SingleLineTaskInput: NSViewRepresentable {
         context.coordinator.parent = self
         field.appearance = NSAppearance(named: context.environment.colorScheme == .dark ? .darkAqua : .aqua)
         field.placeholderString = placeholder
-        field.font = resolvedFont
+        if field.font != resolvedFont { field.font = resolvedFont }
         field.textColor = .labelColor
         field.isEditable = enabled
         field.isSelectable = true
         (field as? TaskTextField)?.onPasteImages = onPasteImages
+        (field as? TaskTextField)?.onCommandReturn = commandReturnOnly ? { [weak coordinator = context.coordinator, weak field] in
+            guard let coordinator, let field else { return }
+            coordinator.parent.text = (field.currentEditor() as? NSTextView)?.string ?? field.stringValue
+            coordinator.parent.submit()
+        } : nil
         if field.stringValue != text, (field.currentEditor() as? NSTextView)?.hasMarkedText() != true { field.stringValue = text }
         let wantsFocus = focused && enabled
         if wantsFocus, !context.coordinator.focusRequested { context.coordinator.requestFocus(field) }
@@ -195,8 +203,9 @@ struct SingleLineTaskInput: NSViewRepresentable {
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             guard !textView.hasMarkedText() else { return false }
             // 这里走到的都是 allowsNewlines == false 的单行场景（`allowsNewlines == true` 时 `TaskInput.body`
-            // 选的是 `GrowingTaskInput`），回车始终提交，不需要考虑换行。
+            // 选的是 `GrowingTaskInput`）；编辑已有标题时只允许 ⌘Enter 保存。
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                guard !parent.commandReturnOnly else { return true }
                 parent.text = textView.string
                 parent.submit()
                 return true
@@ -222,7 +231,7 @@ struct SingleLineTaskInput: NSViewRepresentable {
 
 /// 多行自动增高场景：`NSScrollView` + `NSTextView`，封顶高度后框内滚动。
 /// Enter 换行，⌘Enter 提交（`returnSubmits` 为 true 时反过来：Enter 直接提交，Shift+Enter 换行）；
-/// 点击框外失焦也提交，Esc 取消。
+/// 失焦保留编辑内容，Esc 取消。
 struct GrowingTaskInput: NSViewRepresentable {
     @Environment(\.typography) private var typography
     @Environment(\.isEnabled) private var enabled
@@ -242,7 +251,6 @@ struct GrowingTaskInput: NSViewRepresentable {
     /// true 时回车直接提交（Shift+Enter 换行），而不是回车换行、⌘Enter 提交。
     var returnSubmits = false
     var mention: MentionState?
-    var submitsOnBlur = true
 
     private var resolvedFont: NSFont {
         monospaced ? .monospacedSystemFont(ofSize: typography.pt(fontSize), weight: .regular) : .systemFont(ofSize: typography.pt(fontSize))
@@ -299,7 +307,7 @@ struct GrowingTaskInput: NSViewRepresentable {
         context.coordinator.parent = self
         guard let editor = scroll.documentView as? ImagePasteTextView else { return }
         scroll.appearance = NSAppearance(named: context.environment.colorScheme == .dark ? .darkAqua : .aqua)
-        editor.font = resolvedFont
+        if editor.font != resolvedFont { editor.font = resolvedFont }
         editor.textColor = .labelColor
         editor.onPasteImages = onPasteImages
         editor.returnSubmits = returnSubmits
@@ -383,7 +391,7 @@ struct GrowingTaskInput: NSViewRepresentable {
             }
         }
 
-        /// 点击框外、切窗口等失去第一响应者：当成提交（Esc 取消走 `cancelOperation`，不经过这里的保存）。
+        /// 失去第一响应者只更新草稿与焦点，不提交条目。
         func textDidEndEditing(_ notification: Notification) {
             focusRequested = false
             parent.focused = false
@@ -397,7 +405,6 @@ struct GrowingTaskInput: NSViewRepresentable {
             }
             guard let editor = notification.object as? NSTextView else { return }
             parent.text = editor.string
-            if parent.submitsOnBlur { parent.submit() }
         }
 
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
@@ -491,6 +498,7 @@ final class ImagePasteTextView: NSTextView {
 final class TaskTextField: NSTextField {
     var onAttach: (() -> Void)?
     var onPasteImages: (([Data]) -> Void)?
+    var onCommandReturn: (() -> Void)?
     override class var cellClass: AnyClass? {
         get { ImagePasteCell.self }
         set {}
@@ -503,6 +511,16 @@ final class TaskTextField: NSTextField {
 
 /// 单行输入框（`SingleLineTaskInput`）的字段编辑器：同样支持 ⌘V 粘贴图片。
 final class ImagePasteFieldEditorView: NSTextView {
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36,
+           event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
+           !hasMarkedText(), let submit = (delegate as? TaskTextField)?.onCommandReturn {
+            submit()
+            return
+        }
+        super.keyDown(with: event)
+    }
+
     override func paste(_ sender: Any?) {
         if let field = delegate as? TaskTextField, let handler = field.onPasteImages {
             let images = ImageTools.images(from: .general)

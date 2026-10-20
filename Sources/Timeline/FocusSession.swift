@@ -958,7 +958,7 @@ struct FocusPanelView: View {
                               placeholder: "记下想法…",
                               fontSize: 12, submit: saveNote, cancel: close,
                               onPasteImages: addNoteImages, minHeight: 24, maxLines: 1,
-                              mention: mention, returnSubmits: true, submitsOnBlur: false)
+                              mention: mention, returnSubmits: true)
                         .frame(minWidth: 0, maxWidth: .infinity)
                 }
                 .disabled(draft.pendingEntryID != nil)
@@ -1045,7 +1045,7 @@ struct FocusPanelView: View {
                 .frame(height: 14)
             TaskInput(text: $reflectionDraft.text, focused: $focused,
                       placeholder: "完成了什么？下一步是什么？", fontSize: 12,
-                      submit: saveReflection, cancel: close, minHeight: 24, maxLines: 1, returnSubmits: true, submitsOnBlur: false)
+                      submit: saveReflection, cancel: close, minHeight: 24, maxLines: 1, returnSubmits: true)
                 .disabled(reflectionDraft.pendingEntryID != nil)
                 .padding(.horizontal, 9).padding(.vertical, 4).frame(height: 32)
                 .background(Palette.background, in: RoundedRectangle(cornerRadius: 9))

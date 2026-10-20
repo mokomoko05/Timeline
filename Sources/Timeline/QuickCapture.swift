@@ -352,7 +352,7 @@ struct QuickCaptureView: View {
                           fontSize: 12, submit: submit, cancel: close,
                           complete: { switchMode(to: mode == .todo ? .log : .todo) },
                           onPasteImages: mode == .log ? addImages : nil, minHeight: 24, maxLines: 1,
-                          mention: mode == .log ? mention : nil, submitsOnBlur: false)
+                          mention: mode == .log ? mention : nil)
                 if mode == .todo {
                     DraftDeadlineButton(options: $model.creationOptions,
                                         initial: model.creationOptions.applying(to: parsed.resolve(defaultDay: Date()).todo))

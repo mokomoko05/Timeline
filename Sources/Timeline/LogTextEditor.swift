@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// 复盘区里编辑单条日志的文本框：Enter 换行，⌘Enter 保存，点击别处失焦也保存，Esc 取消；输入法组词时不拦截。
+/// 复盘区里编辑单条日志的文本框：Enter 换行，⌘Enter 保存，Esc 取消；输入法组词时不拦截。
 struct LogTextEditor: NSViewRepresentable {
     @Environment(\.typography) private var typography
     @Binding var text: String
@@ -59,11 +59,10 @@ struct LogTextEditor: NSViewRepresentable {
             if let editor = notification.object as? NSTextView { parent.text = editor.string }
         }
 
-        /// 点击别处、切换窗口等导致失去第一响应者时，当成提交保存（和 Esc 取消区分开）。
+        /// 失焦只同步草稿，保存仅由 ⌘Enter 触发。
         func textDidEndEditing(_ notification: Notification) {
             guard let editor = notification.object as? NSTextView else { return }
             parent.text = editor.string
-            parent.commit()
         }
 
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {

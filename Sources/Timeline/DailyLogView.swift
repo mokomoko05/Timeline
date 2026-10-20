@@ -161,9 +161,6 @@ struct DailyLogView: View {
                     Button("取消") { cancelLogEdit() }
                         .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: typography.pt(12)))
                         .help("取消编辑 · Esc")
-                    Button("保存") { saveLogEdit() }
-                        .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: typography.pt(12), weight: .semibold))
-                        .foregroundStyle(TerminalPalette.blue).help("保存 · ⌘Enter")
                 } else {
                     Image(systemName: "doc.text").foregroundStyle(TerminalPalette.amber)
                     Text("复盘").font(.system(size: typography.pt(12), weight: .semibold))
@@ -201,8 +198,6 @@ struct DailyLogView: View {
             }
         }
         .padding(.leading, 10).padding(.trailing, 16).padding(.bottom, 12)
-        .onReceive(NotificationCenter.default.publisher(for: .timelineCommitEditing)) { _ in saveLogEdit() }
-        .onDisappear { saveLogEdit() }
     }
 
     /// 给这条日志（包括历史日志）选择或更换关联的任务。
@@ -225,7 +220,7 @@ struct DailyLogView: View {
     private func beginLogEdit(_ log: DailyLogEntry, on logDate: Date) {
         guard !store.isReadOnly else { return }
         // 不能在这里广播「提交编辑」：复盘区自己也监听它，会把刚打开的编辑框立刻保存并关闭。
-        saveLogEdit()
+        guard editingLogID == nil else { return }
         interaction.activePane = .summary
         editText = log.text
         editingLogDate = logDate
@@ -399,8 +394,6 @@ struct DailyLogView: View {
                     // 内容比窗口短时顶对齐，不会被滚到下面留出一片空白。
                     .frame(maxWidth: .infinity, minHeight: geometry.size.height, alignment: .topLeading)
                     .contentShape(Rectangle())
-                    // 点日志之间、列表下方的空白处：如果正在编辑一条日志，当成点击别处失焦保存。
-                    .onTapGesture { if editingLogID != nil { NSApp.keyWindow?.makeFirstResponder(nil) } }
                 }
                 .background(TerminalPalette.surface)
                 .overlay(alignment: .bottomTrailing) {

@@ -99,8 +99,8 @@ final class GrowingInputTests: XCTestCase {
         XCTAssertEqual(text, "明天 开会\n买牛奶", "添加待办框粘贴多行不会被压成一行")
     }
 
-    /// 日志、笔记这类多行输入框：普通 Enter 不拦截（交给系统换行），失焦（点击别处）当成提交保存。
-    func testGrowingInputPlainEnterIsNotInterceptedAndBlurSaves() {
+    /// 日志、笔记这类多行输入框：普通 Enter 不拦截（交给系统换行），失焦只保留草稿。
+    func testGrowingInputPlainEnterAndBlurDoNotSubmit() {
         var submitted = 0
         var text = ""
         let input = GrowingTaskInput(text: Binding(get: { text }, set: { text = $0 }), focused: .constant(true),
@@ -113,7 +113,8 @@ final class GrowingInputTests: XCTestCase {
         XCTAssertEqual(submitted, 0)
 
         coordinator.textDidEndEditing(Notification(name: NSText.didEndEditingNotification, object: editor))
-        XCTAssertEqual(submitted, 1, "失焦（点击别处）当成提交保存")
+        XCTAssertEqual(submitted, 0, "失焦只保留草稿")
+        XCTAssertEqual(text, "第一行")
     }
 
     private func keyEvent(modifiers: NSEvent.ModifierFlags) -> NSEvent {

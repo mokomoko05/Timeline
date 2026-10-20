@@ -3,7 +3,7 @@ import SwiftUI
 import XCTest
 @testable import Timeline
 
-/// 复盘里编辑单条日志的输入框：Enter 换行，⌘Enter 或失焦（点击别处）保存，Esc 取消。
+/// 复盘里编辑单条日志的输入框：Enter 换行，⌘Enter 保存，失焦保留草稿，Esc 取消。
 @MainActor
 final class LogTextEditorTests: XCTestCase {
     private func keyEvent(modifiers: NSEvent.ModifierFlags) -> NSEvent {
@@ -19,7 +19,7 @@ final class LogTextEditorTests: XCTestCase {
         XCTAssertTrue(editor.shouldInterceptReturn(keyEvent(modifiers: .command)), "⌘Enter 拦截去保存")
     }
 
-    func testBlurSaves() {
+    func testBlurKeepsDraftWithoutSaving() {
         var committed = 0
         var text = ""
         let view = LogTextEditor(text: Binding(get: { text }, set: { text = $0 }), commit: { committed += 1 }, cancel: {})
@@ -29,7 +29,7 @@ final class LogTextEditorTests: XCTestCase {
         editor.string = "改好的内容"
 
         coordinator.textDidEndEditing(Notification(name: NSText.didEndEditingNotification, object: editor))
-        XCTAssertEqual(committed, 1, "失焦（点击别处）当成保存")
+        XCTAssertEqual(committed, 0, "失焦不能保存或退出编辑")
         XCTAssertEqual(text, "改好的内容")
     }
 

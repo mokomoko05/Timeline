@@ -27,11 +27,10 @@ struct TaskTitleView: View {
         HStack(spacing: 0) {
             if editing {
                 TaskInput(text: $editText, focused: $focused, fontSize: fontSize,
-                          submit: { finishEditing(); next() }, cancel: finishEditing)
+                          submit: { finishEditing(); next() }, cancel: cancelEditing, commandReturnOnly: true)
                     .frame(height: typography.pt(fontSize) + 7)
                     .padding(.horizontal, 4).padding(.vertical, 2)
                     .background(Palette.soft, in: RoundedRectangle(cornerRadius: 4))
-                    .onChange(of: focused) { if !$0, !LinkInsertion.presenting { finishEditing() } }
                     .onAppear { focused = true }
                     .accessibilityLabel("编辑事项，支持 Markdown 链接")
             } else {
@@ -43,19 +42,21 @@ struct TaskTitleView: View {
         .font(.system(size: typography.pt(fontSize)))
         .foregroundStyle(completed ? Palette.muted : color)
         .tint(Palette.accent)
-        .onReceive(NotificationCenter.default.publisher(for: .timelineCommitEditing)) { _ in finishEditing() }
-        .onDisappear { finishEditing() }
         .onChange(of: requestedEdit) { if $0 == itemID { requestedEdit = nil; startEditing() } }
         .onAppear { if requestedEdit == itemID { requestedEdit = nil; startEditing() } }
     }
 
     private func startEditing() {
+        guard enabled, !editing else { return }
         prepare()
-        guard enabled else { return }
-        NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
         editText = title
         focused = false
         editing = true
+    }
+
+    private func cancelEditing() {
+        focused = false
+        editing = false
     }
 
     private func finishEditing() {

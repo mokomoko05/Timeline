@@ -119,7 +119,6 @@ struct NotesView: View {
             nav.validate(in: store)
             configureMention()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .timelineCommitEditing)) { _ in commitNoteEditIfAny() }
     }
 
     /// 输入框里 `@` / `#` 的候选：标签页里，正在写的标签名下的待办排前面；选中后记进对应输入框的草稿。
@@ -234,14 +233,12 @@ struct NotesView: View {
     }
 
     private func select(task id: UUID) {
-        commitNoteEditIfAny()
         selection = id
         tagSelection = nil
         error = nil
     }
 
     private func select(tag: String) {
-        commitNoteEditIfAny()
         tagSelection = tag
         selection = nil
         error = nil
@@ -365,8 +362,6 @@ struct NotesView: View {
                         }.padding(20)
                     }
                     .contentShape(Rectangle())
-                    // 点笔记之间、列表下方的空白处：如果正在编辑一条笔记，当成点击别处失焦保存。
-                    .onTapGesture { if editingNoteID != nil { NSApp.keyWindow?.makeFirstResponder(nil) } }
                     .onAppear { proxy.scrollTo("end", anchor: .bottom) }
                     .onChange(of: notes.count) { _ in withAnimation(Motion.quick) { proxy.scrollTo("end", anchor: .bottom) } }
                     .onChange(of: selection) { _ in proxy.scrollTo("end", anchor: .bottom) }
@@ -524,8 +519,7 @@ struct NotesView: View {
     }
 
     private func beginNoteEdit(_ item: JournalStore.LoggedLog) {
-        // 换到编辑另一条之前，先把手头正在编辑的那条保存掉，不然内容会直接丢。
-        commitNoteEditIfAny()
+        guard editingNoteID == nil else { return }
         editingNoteID = item.log.id
         editingNoteDate = item.date
         noteEditText = item.log.text
@@ -536,14 +530,6 @@ struct NotesView: View {
         editingNoteID = nil
         editingNoteDate = nil
         noteEditFocused = false
-    }
-
-    /// 点击别处、切到另一条笔记、切换左侧选择等场景下，把正在编辑的笔记当成保存，而不是丢弃。
-    private func commitNoteEditIfAny() {
-        guard let id = editingNoteID, let date = editingNoteDate else { return }
-        editingNoteID = nil
-        editingNoteDate = nil
-        store.updateLog(id, text: noteEditText, on: date)
     }
 
     private func saveNoteEdit(_ item: JournalStore.LoggedLog) {
@@ -596,8 +582,6 @@ struct NotesView: View {
                             }.padding(20)
                         }
                         .contentShape(Rectangle())
-                        // 点笔记之间、列表下方的空白处：如果正在编辑一条笔记，当成点击别处失焦保存。
-                        .onTapGesture { if editingNoteID != nil { NSApp.keyWindow?.makeFirstResponder(nil) } }
                         .onAppear { proxy.scrollTo("end", anchor: .bottom) }
                         .onChange(of: tagSelection) { _ in proxy.scrollTo("end", anchor: .bottom) }
                         .onChange(of: notes.count) { _ in withAnimation(Motion.quick) { proxy.scrollTo("end", anchor: .bottom) } }

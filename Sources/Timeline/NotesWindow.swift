@@ -207,7 +207,7 @@ struct UnifiedNotesView: View {
 }
 
 /// 笔记窗口里的日记模式：沿用笔记的侧栏、卡片和编辑器，不再嵌入带复盘区的 DayLogView。
-private struct UnifiedJournalView: View {
+struct UnifiedJournalView: View {
     @Environment(\.locale) private var locale
     @Environment(\.typography) private var typography
     @ObservedObject var store: JournalStore
@@ -255,10 +255,8 @@ private struct UnifiedJournalView: View {
         .background(Palette.background)
         .foregroundStyle(Palette.ink)
         .onAppear { configureMention() }
-        .onChange(of: date) { _ in saveEdit(); unlinked = false; configureMention() }
+        .onChange(of: date) { _ in unlinked = false; configureMention() }
         .onChange(of: navigationRequest) { _ in query = "" }
-        .onReceive(NotificationCenter.default.publisher(for: .timelineCommitEditing)) { _ in saveEdit() }
-        .onDisappear { saveEdit() }
     }
 
     private var sidebar: some View {
@@ -360,7 +358,6 @@ private struct UnifiedJournalView: View {
                 }
                 .id(JournalDates.key(date))
                 .contentShape(Rectangle())
-                .onTapGesture { if editingID != nil { NSApp.keyWindow?.makeFirstResponder(nil) } }
                 Divider()
                 composer
             }
@@ -412,6 +409,7 @@ private struct UnifiedJournalView: View {
                         .padding(.horizontal, 8).padding(.vertical, 2)
                         .background(Palette.card, in: RoundedRectangle(cornerRadius: 6))
                         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Palette.accent.opacity(0.6)))
+                    Text("⌘Enter 保存 · Esc 取消").font(.system(size: 10)).foregroundStyle(Palette.muted)
                 } else if !LogEventStyle.body(log).isEmpty {
                     TaskLinkText(source: LogEventStyle.body(log), completed: false, color: Palette.ink, fontSize: 13,
                                  edit: { beginEdit(log) }, open: SafariLinks.open, maxLines: 0,
@@ -446,39 +444,8 @@ private struct UnifiedJournalView: View {
     }
 
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if !entry.logDraftImages.isEmpty {
-                PendingImagesStrip(store: store, names: entry.logDraftImages,
-                                   remove: { store.removeDraftImage($0, on: date) },
-                                   preview: { ImageViewerController.shared.show(store: store, names: entry.logDraftImages, index: $0) })
-            }
-            HStack(spacing: 8) {
-                Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent)
-                TaskInput(text: Binding(get: { store.entry(for: date).logDraft }, set: { store.setLogDraft($0, on: date) }),
-                          focused: $focused, placeholder: "写下日志…", fontSize: 13,
-                          submit: submit, onPasteImages: { datas in
-                    for name in ImageTools.save(datas, in: store) { store.addDraftImage(name, on: date) }
-                    focused = true
-                }, minHeight: 24, maxLines: 10, mention: mention)
-                .disabled(store.isReadOnly)
-                Button(action: submit) { Image(systemName: "arrow.turn.down.left") }
-                    .buttonStyle(HitAreaButtonStyle())
-                    .disabled(store.isReadOnly || (entry.logDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && entry.logDraftImages.isEmpty))
-            }
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
-            LogChipsBar(store: store,
-                        link: Binding(get: { entry.logTaskID }, set: { store.setLogTask($0, on: date) }),
-                        unlinked: $unlinked,
-                        tags: Binding(get: { entry.logDraftTags }, set: { tags in
-                            for tag in entry.logDraftTags where !tags.contains(tag) { store.removeDraftTag(tag, on: date) }
-                            for tag in tags { store.addDraftTag(tag, on: date) }
-                        }))
-        }
-        .padding(.horizontal, 20).padding(.vertical, 12)
-        .popover(isPresented: Binding(get: { mention.isActive }, set: { if !$0 { mention.dismiss() } }), arrowEdge: .bottom) {
-            MentionList(state: mention, store: store).frame(width: 340)
-        }
+        JournalComposer(store: store, date: date, focused: $focused, unlinked: $unlinked, mention: mention, submit: submit)
+            .id(JournalDates.key(date))
     }
 
     private func configureMention() {
@@ -502,7 +469,10 @@ private struct UnifiedJournalView: View {
         } catch let issue { error = AppErrorDescription(issue) }
     }
 
-    private func beginEdit(_ log: DailyLogEntry) { saveEdit(); editingID = log.id; editingDate = date; editText = log.text; editFocused = true }
+    private func beginEdit(_ log: DailyLogEntry) {
+        guard editingID == nil else { return }
+        editingID = log.id; editingDate = date; editText = log.text; editFocused = true
+    }
     private func saveEdit() {
         guard let id = editingID else { return }
         editingID = nil; editFocused = false
