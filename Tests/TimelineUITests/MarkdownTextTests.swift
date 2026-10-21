@@ -49,6 +49,20 @@ final class MarkdownTextTests: XCTestCase {
         XCTAssertNil(attributes("https://example.org", in: text)[.link])
     }
 
+    func testInteractiveTaskCirclesKeepSourceLinesAndIgnoreCode() {
+        let source = "# 中文标题\n\n- [ ] 同名\n  - [X] 嵌套\n\n- [ ] 第二项\n\n~~~\n- [ ] code\n~~~"
+        let text = MarkdownText.render(source, color: .labelColor, fontSize: 13, interactiveTasks: true)
+        var lines: [Int] = []
+        text.enumerateAttribute(MarkdownText.taskLineKey, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+            guard let line = value as? Int else { return }
+            lines.append(line)
+            XCTAssertNotNil(text.attribute(.attachment, at: range.location, effectiveRange: nil))
+            XCTAssertNil(text.attribute(.link, at: range.location, effectiveRange: nil))
+        }
+        XCTAssertEqual(lines, [3, 4, 6])
+        XCTAssertTrue(text.string.contains("- [ ] code"))
+    }
+
     func testLinksAndRawHTML() {
         let text = render("[网站](https://example.com) [文件](file:///tmp/a.pdf) [危险](javascript:alert) https://example.org\n\n<script>alert(1)</script>")
         XCTAssertEqual(attributes("网站", in: text)[.link] as? URL, URL(string: "https://example.com"))

@@ -182,7 +182,7 @@ public struct ActionEvent: Equatable {
 }
 
 private struct JournalDocument: Codable {
-    var version = 7
+    var version = 8
     var days: [String: DayEntry] = [:]
     var nextTaskNumber: Int?
     /// 标签注册表：显式创建的标签（可以是还没有任何内容的空标签）。用过的标签不需要在这里。
@@ -194,7 +194,10 @@ private struct JournalDocument: Codable {
 
 @MainActor
 public final class JournalStore: ObservableObject {
-    @Published public private(set) var boards: [Board] = []
+    @Published public private(set) var boards: [Board] = [] {
+        didSet { cachedBoardIndices = nil }
+    }
+    var cachedBoardIndices: [BoardOwner: Int]?
     @Published public private(set) var days: [String: DayEntry] = [:]
     @Published public private(set) var errorMessage: String?
     @Published public private(set) var lastSaved: Date?
@@ -261,7 +264,7 @@ public final class JournalStore: ObservableObject {
         }
         let original = try Data(contentsOf: journal)
         let document = try JSONDecoder().decode(JournalDocument.self, from: original)
-        guard (1...7).contains(document.version) else { throw CocoaError(.fileReadUnknown) }
+        guard (1...8).contains(document.version) else { throw CocoaError(.fileReadUnknown) }
         let staging = applicationSupport.appendingPathComponent(".Timeline-migration-\(UUID().uuidString)", isDirectory: true)
         try manager.createDirectory(at: staging, withIntermediateDirectories: false)
         defer { try? manager.removeItem(at: staging) }
@@ -286,7 +289,7 @@ public final class JournalStore: ObservableObject {
             if FileManager.default.fileExists(atPath: fileURL.path) {
                 let data = try Data(contentsOf: fileURL)
                 let document = try JSONDecoder().decode(JournalDocument.self, from: data)
-                guard (1...7).contains(document.version) else {
+                guard (1...8).contains(document.version) else {
                     throw CocoaError(.fileReadUnknown)
                 }
                 days = document.days
@@ -294,6 +297,13 @@ public final class JournalStore: ObservableObject {
                 pinnedTaskID = document.pinnedTask
                 boards = document.boards ?? []
                 if !readOnlySnapshot { try data.write(to: backupURL, options: .atomic) }
+                if document.version < 8, !boards.isEmpty {
+                    if !readOnlySnapshot {
+                        try FileManager.default.createDirectory(at: backupsDirectory, withIntermediateDirectories: true)
+                        try data.write(to: backupsDirectory.appendingPathComponent("before-board-markdown-v\(document.version).json"), options: .atomic)
+                    }
+                    hasPendingSave = true
+                }
                 nextTaskNumber = max(document.nextTaskNumber ?? 1, (days.values.flatMap(\.todos).compactMap(\.number).max() ?? 0) + 1)
                 if document.version < 6 {
                     // 旧版本里任务属于某一天；新模型里那一天就是它的截止日期。迁移前先单独留一份原文件。
@@ -1345,14 +1355,13 @@ public final class JournalStore: ObservableObject {
 
     private func readBackup(_ url: URL) throws -> JournalDocument {
         let document = try JSONDecoder().decode(JournalDocument.self, from: Data(contentsOf: url))
-        guard (1...7).contains(document.version), document.days.keys.allSatisfy({ JournalDates.date(for: $0) != nil }) else { throw CocoaError(.fileReadCorruptFile) }
+        guard (1...8).contains(document.version), document.days.keys.allSatisfy({ JournalDates.date(for: $0) != nil }) else { throw CocoaError(.fileReadCorruptFile) }
         let ids = document.days.values.flatMap { $0.todos.map(\.id) }
         guard Set(ids).count == ids.count else { throw CocoaError(.fileReadCorruptFile) }
         let logIDs = document.days.values.flatMap { $0.logs.map(\.id) }
         guard Set(logIDs).count == logIDs.count else { throw CocoaError(.fileReadCorruptFile) }
         let boards = document.boards ?? []
-        guard Set(boards.map(\.id)).count == boards.count,
-              boards.allSatisfy({ Set($0.items.map(\.id)).count == $0.items.count }) else { throw CocoaError(.fileReadCorruptFile) }
+        guard Set(boards.map(\.id)).count == boards.count else { throw CocoaError(.fileReadCorruptFile) }
         return document
     }
 
@@ -1450,7 +1459,9 @@ public final class JournalStore: ObservableObject {
         undoManager.setActionName(action)
         if grouping { undoManager.endUndoGrouping() }
         boards = updated
-        cachedTagSummaries = nil
+        if previous.map(\.owner) != updated.map(\.owner) || previous.map(\.archived) != updated.map(\.archived) {
+            cachedTagSummaries = nil
+        }
         hasPendingSave = true
         if debounce { scheduleSave() } else { save() }
     }

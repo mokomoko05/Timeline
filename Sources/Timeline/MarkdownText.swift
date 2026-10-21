@@ -5,8 +5,10 @@ import TimelineCore
 /// CommonMark/GFM 语法树直接排进 TextKit；表格使用原生 NSTextTable。
 /// 不执行 HTML，不自动请求远程图片。
 enum MarkdownText {
-    static func render(_ source: String, color: NSColor, fontSize: CGFloat, monospaced: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing, scale: CGFloat = UIScale.factor, document: Document? = nil) -> NSAttributedString {
-        let renderer = Renderer(color: color, size: fontSize * scale, monospaced: monospaced, lineSpacing: lineSpacing)
+    static let taskLineKey = NSAttributedString.Key("TimelineMarkdownTaskLine")
+
+    static func render(_ source: String, color: NSColor, fontSize: CGFloat, monospaced: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing, scale: CGFloat = UIScale.factor, document: Document? = nil, interactiveTasks: Bool = false) -> NSAttributedString {
+        let renderer = Renderer(color: color, size: fontSize * scale, monospaced: monospaced, lineSpacing: lineSpacing, interactiveTasks: interactiveTasks)
         renderer.blocks(document ?? Document(parsing: source))
         return renderer.output
     }
@@ -18,10 +20,12 @@ enum MarkdownText {
         let size: CGFloat
         let font: NSFont
         let lineSpacing: CGFloat
-        init(color: NSColor, size: CGFloat, monospaced: Bool, lineSpacing: CGFloat) {
+        let interactiveTasks: Bool
+        init(color: NSColor, size: CGFloat, monospaced: Bool, lineSpacing: CGFloat, interactiveTasks: Bool) {
             self.color = color
             self.size = size
             self.lineSpacing = lineSpacing
+            self.interactiveTasks = interactiveTasks
             font = monospaced ? .monospacedSystemFont(ofSize: size, weight: .regular) : .systemFont(ofSize: size)
         }
 
@@ -121,7 +125,13 @@ enum MarkdownText {
                 else { marker = start.map { "\($0 + index)." } ?? "•" }
                 for (blockIndex, child) in item.children.enumerated() {
                     if blockIndex == 0, child is Paragraph {
-                        let content = text(marker + "\t")
+                        let content: NSMutableAttributedString
+                        if interactiveTasks, let checkbox = item.checkbox, let line = item.range?.lowerBound.line {
+                            content = taskCircle(checked: checkbox == .checked, line: line)
+                            content.append(text("\t"))
+                        } else {
+                            content = text(marker + "\t")
+                        }
                         content.append(inline(child))
                         let paragraphStyle = style(indent: indent + 22)
                         paragraphStyle.firstLineHeadIndent = indent
@@ -131,6 +141,36 @@ enum MarkdownText {
                     } else { block(child, indent: indent + 22) }
                 }
             }
+        }
+
+        func taskCircle(checked: Bool, line: Int) -> NSMutableAttributedString {
+            let side = size + 2
+            let attachment = NSTextAttachment()
+            let foreground = color
+            attachment.bounds = NSRect(x: 0, y: font.descender, width: side, height: side)
+            attachment.image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+                let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1))
+                circle.lineWidth = 1.3
+                if checked {
+                    NSColor.controlAccentColor.setFill()
+                    circle.fill()
+                    NSColor.white.setStroke()
+                    let check = NSBezierPath()
+                    check.lineWidth = 1.5
+                    check.lineCapStyle = .round
+                    check.move(to: NSPoint(x: side * 0.27, y: side * 0.5))
+                    check.line(to: NSPoint(x: side * 0.43, y: side * 0.34))
+                    check.line(to: NSPoint(x: side * 0.73, y: side * 0.67))
+                    check.stroke()
+                } else {
+                    foreground.withAlphaComponent(0.65).setStroke()
+                    circle.stroke()
+                }
+                return true
+            }
+            let result = NSMutableAttributedString(attachment: attachment)
+            result.addAttribute(MarkdownText.taskLineKey, value: line, range: result.fullRange)
+            return result
         }
 
         func renderTable(_ node: Markdown.Table, indent: CGFloat) {

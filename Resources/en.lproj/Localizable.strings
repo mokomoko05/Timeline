@@ -775,3 +775,16 @@
 "设置截止日期与时间" = "Set due date and time";
 "截止日期与时间…（D）" = "Due date and time… (D)";
 "任务设置…" = "Task settings…";
+"常用工作板" = "Favorite boards";
+"看板内容" = "Board content";
+"拖动调整顺序" = "Drag to reorder";
+"向左移" = "Move left";
+"向右移" = "Move right";
+"取消常用固定" = "Remove from favorites";
+"固定到常用" = "Pin to favorites";
+"把内容和资料放在眼前" = "Keep notes and references in view";
+"工作板 Markdown 内容" = "Board Markdown content";
+"暂无内容，点击编辑开始书写。" = "No content yet. Click Edit to start writing.";
+"插入模板" = "Insert template";
+"直接编辑 Markdown，⌘↩ 预览" = "Edit Markdown · ⌘↩ to preview";
+"⌘↩ 编辑 · 点击链接打开网页" = "⌘↩ to edit · Click links to open webpages";

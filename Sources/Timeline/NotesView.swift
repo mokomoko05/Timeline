@@ -354,6 +354,7 @@ struct NotesView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 4) {
+                            BoardNotesSection(store: store, owner: .task(id)).id("board-start")
                             ForEach(Dictionary(grouping: notes, by: \.key).sorted { $0.key < $1.key }, id: \.key) { group in
                                 dayHeader(group.key, date: group.value[0].date)
                                 ForEach(group.value) { item in noteRow(item) }
@@ -362,9 +363,15 @@ struct NotesView: View {
                         }.padding(20)
                     }
                     .contentShape(Rectangle())
-                    .onAppear { proxy.scrollTo("end", anchor: .bottom) }
+                    .onAppear {
+                        if store.board(for: .task(id))?.hasContent == true { proxy.scrollTo("board-start", anchor: .top) }
+                        else { proxy.scrollTo("end", anchor: .bottom) }
+                    }
                     .onChange(of: notes.count) { _ in withAnimation(Motion.quick) { proxy.scrollTo("end", anchor: .bottom) } }
-                    .onChange(of: selection) { _ in proxy.scrollTo("end", anchor: .bottom) }
+                    .onChange(of: selection) { _ in
+                        if store.board(for: .task(id))?.hasContent == true { proxy.scrollTo("board-start", anchor: .top) }
+                        else { proxy.scrollTo("end", anchor: .bottom) }
+                    }
                 }
                 Divider()
                 composer(topic)
@@ -566,6 +573,8 @@ struct NotesView: View {
         let tasks = store.tasks(taggedWith: tag)
         let notes = store.notes(forTag: tag)
         let chapters = chapterView ? store.chapters(forTag: tag) : []
+        let hasBoardContent = store.board(for: .tag(tag))?.hasContent == true
+            || tasks.contains { store.board(for: .task($0.id))?.hasContent == true }
         return VStack(spacing: 0) {
             tagHeader(tag, tasks: tasks, notes: notes)
             Divider()
@@ -574,6 +583,8 @@ struct NotesView: View {
                     HStack(spacing: 0) {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 4) {
+                                Color.clear.frame(height: 1).id("board-start")
+                                BoardNotesSection(store: store, owner: .tag(tag))
                                 if notes.isEmpty && tasks.isEmpty {
                                     Text("还没有笔记")
                                         .font(.system(size: 12)).foregroundStyle(Palette.muted).padding(.vertical, 12)
@@ -583,8 +594,10 @@ struct NotesView: View {
                             }.padding(20)
                         }
                         .contentShape(Rectangle())
-                        .onAppear { proxy.scrollTo("end", anchor: .bottom) }
-                        .onChange(of: tagSelection) { _ in proxy.scrollTo("end", anchor: .bottom) }
+                        .onAppear { proxy.scrollTo(hasBoardContent ? "board-start" : "end", anchor: hasBoardContent ? .top : .bottom) }
+                        .onChange(of: tagSelection) { _ in
+                            proxy.scrollTo(hasBoardContent ? "board-start" : "end", anchor: hasBoardContent ? .top : .bottom)
+                        }
                         .onChange(of: notes.count) { _ in withAnimation(Motion.quick) { proxy.scrollTo("end", anchor: .bottom) } }
                         if showsOutline(chapters: chapters, width: geometry.size.width) {
                             Divider()
@@ -664,6 +677,7 @@ struct NotesView: View {
             let folded = nav.isCollapsed(tag: tag, chapter: chapter.id)
             chapterHeader(tag, chapter, folded: folded).id(Self.chapterAnchor(chapter))
             if !folded {
+                if let id = chapter.taskID { BoardNotesSection(store: store, owner: .task(id)) }
                 if chapter.notes.isEmpty {
                     Text("还没有笔记").font(.system(size: 11)).foregroundStyle(Palette.muted).padding(.leading, 4).padding(.bottom, 6)
                 }

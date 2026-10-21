@@ -16,6 +16,7 @@ struct TaskLinkText: NSViewRepresentable {
     var monospaced = false
     var dragTaskID: UUID?
     var markdown = false
+    var toggleMarkdownTask: ((Int) -> Void)?
     var compactLines = false
     var select: () -> Void = {}
     /// 单击正文（非链接）时调用。
@@ -50,12 +51,13 @@ struct TaskLinkText: NSViewRepresentable {
         view.onOpen = open
         view.onSelect = select
         view.onClick = click
+        view.onToggleMarkdownTask = toggleMarkdownTask
         view.menuItems = menuItems
         view.interactionEnabled = enabled
         view.dragTaskID = dragTaskID
         view.textContainerInset = NSSize(width: compactLines ? 2 : 5, height: compactLines ? 0 : 4)
         let foreground = NSColor(completed ? Palette.muted : color)
-        if view.source != source || view.displayName != displayName || view.completed != completed || view.pointSize != fontSize || view.foreground != foreground || view.monospaced != monospaced || view.compactLines != compactLines || view.markdown != markdown || view.uiScaleFactor != typography.scale || view.configuredLineSpacing != Double(typography.lineSpacing) {
+        if view.source != source || view.displayName != displayName || view.completed != completed || view.pointSize != fontSize || view.foreground != foreground || view.monospaced != monospaced || view.compactLines != compactLines || view.markdown != markdown || view.interactiveTasks != (toggleMarkdownTask != nil) || view.uiScaleFactor != typography.scale || view.configuredLineSpacing != Double(typography.lineSpacing) {
             let sourceChanged = view.source != source || view.displayName != displayName || view.markdown != markdown
             let selection = view.selectedRanges
             if sourceChanged {
@@ -70,10 +72,11 @@ struct TaskLinkText: NSViewRepresentable {
             view.monospaced = monospaced
             view.compactLines = compactLines
             view.markdown = markdown
+            view.interactiveTasks = toggleMarkdownTask != nil
             view.uiScaleFactor = typography.scale
             view.configuredLineSpacing = Double(typography.lineSpacing)
             let styled = markdown
-                ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced, lineSpacing: typography.lineSpacing, scale: typography.scale, document: view.markdownDocument)
+                ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced, lineSpacing: typography.lineSpacing, scale: typography.scale, document: view.markdownDocument, interactiveTasks: view.interactiveTasks)
                 : Self.styledText(source, completed: completed, color: foreground, fontSize: fontSize, displayName: displayName, monospaced: monospaced, compactLines: compactLines, lineSpacing: compactLines ? 0 : typography.lineSpacing, scale: typography.scale, rendered: view.inlineText)
             view.textStorage?.setAttributedString(styled)
             if !sourceChanged { view.selectedRanges = selection }
@@ -188,6 +191,8 @@ final class InteractiveTaskText: NSTextView {
     var markdownDocument: Document?
     var inlineText: NSAttributedString?
     var markdown = false
+    var interactiveTasks = false
+    var onToggleMarkdownTask: ((Int) -> Void)?
     let measurer = TextMeasurer()
     var menuItems: [TextMenuItem] = []
     var source: String?
@@ -258,6 +263,21 @@ final class InteractiveTaskText: NSTextView {
         linkRegions().first { $0.rect.contains(point) }?.url
     }
 
+    func taskRegions() -> [(line: Int, rect: NSRect)] {
+        guard let storage = textStorage, let manager = layoutManager, let container = textContainer else { return [] }
+        manager.ensureLayout(for: container)
+        var regions: [(line: Int, rect: NSRect)] = []
+        storage.enumerateAttribute(MarkdownText.taskLineKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard let line = value as? Int else { return }
+            let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let rect = manager.boundingRect(forGlyphRange: glyphs, in: container)
+                .offsetBy(dx: self.textContainerOrigin.x, dy: self.textContainerOrigin.y)
+                .insetBy(dx: -3, dy: -3).intersection(self.bounds)
+            if !rect.isEmpty { regions.append((line, rect)) }
+        }
+        return regions
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         for region in linkRegions() where region.rect.intersects(dirtyRect) {
             NSColor.controlAccentColor.withAlphaComponent(hoveredURL == region.url ? 0.18 : 0.09).setFill()
@@ -275,6 +295,9 @@ final class InteractiveTaskText: NSTextView {
         guard interactionEnabled else { return }
         if dragTaskID != nil { addCursorRect(bounds, cursor: .openHand) }
         for region in linkRegions() { addCursorRect(region.rect, cursor: .pointingHand) }
+        if onToggleMarkdownTask != nil {
+            for region in taskRegions() { addCursorRect(region.rect, cursor: .pointingHand) }
+        }
     }
 
     override func updateTrackingAreas() {
@@ -301,7 +324,9 @@ final class InteractiveTaskText: NSTextView {
     func activate(at point: NSPoint, clickCount: Int = 1) {
         guard interactionEnabled else { return }
         onSelect?()
-        if clickCount == 1, let url = link(at: point) {
+        if let task = taskRegions().first(where: { $0.rect.contains(point) }), let onToggleMarkdownTask {
+            onToggleMarkdownTask(task.line)
+        } else if clickCount == 1, let url = link(at: point) {
             onOpen?(url)
         } else if clickCount == 1 {
             onClick?()
@@ -313,7 +338,10 @@ final class InteractiveTaskText: NSTextView {
     override func mouseDown(with event: NSEvent) {
         if markdown {
             let point = convert(event.locationInWindow, from: nil)
-            if event.clickCount == 2 || link(at: point) != nil { activate(at: point, clickCount: event.clickCount); return }
+            if event.clickCount == 2 || link(at: point) != nil || taskRegions().contains(where: { $0.rect.contains(point) }) {
+                activate(at: point, clickCount: event.clickCount)
+                return
+            }
             onSelect?()
             onClick?()
             super.mouseDown(with: event)

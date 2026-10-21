@@ -9,20 +9,35 @@ final class BoardNavigation: ObservableObject {
     @Published var selection: UUID? {
         didSet { defaults.set(selection?.uuidString, forKey: "board.selection") }
     }
-    @Published var floating: Bool {
-        didSet { defaults.set(floating, forKey: "board.floating") }
+    @Published private(set) var favoriteBoardIDs: [UUID] {
+        didSet { defaults.set(favoriteBoardIDs.map(\.uuidString), forKey: "board.favorites") }
     }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         selection = defaults.string(forKey: "board.selection").flatMap(UUID.init(uuidString:))
-        floating = defaults.object(forKey: "board.floating") as? Bool ?? true
+        var seen = Set<UUID>()
+        favoriteBoardIDs = (defaults.stringArray(forKey: "board.favorites") ?? [])
+            .compactMap(UUID.init(uuidString:)).filter { seen.insert($0).inserted }
     }
 
-    func collapsed(_ id: UUID) -> Bool { defaults.bool(forKey: "board.collapsed." + id.uuidString) }
-    func toggleCollapsed(_ id: UUID) {
-        objectWillChange.send()
-        defaults.set(!collapsed(id), forKey: "board.collapsed." + id.uuidString)
+    func isFavorite(_ id: UUID) -> Bool { favoriteBoardIDs.contains(id) }
+
+    func toggleFavorite(_ id: UUID) {
+        if isFavorite(id) { favoriteBoardIDs.removeAll { $0 == id } }
+        else { favoriteBoardIDs.append(id) }
+    }
+
+    func favoriteBoards(in store: JournalStore) -> [Board] {
+        favoriteBoardIDs.compactMap { id in store.boards.first { $0.id == id } }
+    }
+
+    func moveFavorite(_ id: UUID, to destination: Int) {
+        guard let source = favoriteBoardIDs.firstIndex(of: id) else { return }
+        var reordered = favoriteBoardIDs
+        reordered.remove(at: source)
+        reordered.insert(id, at: max(0, min(destination, reordered.count)))
+        favoriteBoardIDs = reordered
     }
 }
 
@@ -43,6 +58,8 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
     }
 
     func show(store: JournalStore, owner: BoardOwner? = nil) {
+        panel?.makeFirstResponder(nil)
+        self.store?.save()
         self.store = store
         if let owner, let board = store.ensureBoard(for: owner) { navigation.selection = board.id }
         if panel == nil {
@@ -55,6 +72,7 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
             panel.isFloatingPanel = true
+            panel.level = .floating
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             panel.minSize = NSSize(width: 350, height: 300)
             panel.delegate = self
@@ -68,13 +86,13 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
         guard let panel else { return }
         panel.contentView = NSHostingView(rootView: LocalizedRoot {
             BoardWorkspaceView(store: store, navigation: self.navigation,
-                               close: { [weak self] in self?.hide() },
-                               changeLevel: { [weak self] in self?.updateLevel() })
+                               close: { [weak self] in self?.hide() })
         })
-        updateLevel()
+        panel.level = .floating
         if Headless.active { panel.alphaValue = 0; panel.ignoresMouseEvents = true }
         if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(panel.frame) }) { panel.center() }
         panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
     }
 
     func toggle(store: JournalStore) {
@@ -88,8 +106,6 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool { hide(); return false }
-
-    private func updateLevel() { panel?.level = navigation.floating ? .floating : .normal }
 }
 
 struct BoardOpenButton: View {
@@ -98,11 +114,7 @@ struct BoardOpenButton: View {
 
     var body: some View {
         Button { BoardWindowController.shared.show(store: store, owner: owner) } label: {
-            if let board = store.board(for: owner), board.stepCount > 0 {
-                Label("\(board.completedCount)/\(board.stepCount)", systemImage: "list.bullet.rectangle")
-            } else {
-                Label("工作板", systemImage: "list.bullet.rectangle")
-            }
+            Label("工作板", systemImage: "list.bullet.rectangle")
         }
         .help("打开工作板").accessibilityLabel("打开工作板")
     }
@@ -112,8 +124,8 @@ struct BoardWorkspaceView: View {
     @ObservedObject var store: JournalStore
     @ObservedObject var navigation: BoardNavigation
     var close: () -> Void = {}
-    var changeLevel: () -> Void = {}
     @State private var choosing = false
+    @State private var draggedFavorite: UUID?
 
     private var board: Board? { store.boards.first { $0.id == navigation.selection } }
 
@@ -127,22 +139,20 @@ struct BoardWorkspaceView: View {
                     .popover(isPresented: $choosing) {
                         BoardChooser(store: store, navigation: navigation, close: { choosing = false })
                     }
-                Button {
-                    navigation.floating.toggle()
-                    changeLevel()
-                } label: { Image(systemName: navigation.floating ? "pin.fill" : "pin") }
-                    .help(navigation.floating ? "取消置顶" : "窗口置顶")
-                    .accessibilityLabel(navigation.floating ? "取消置顶" : "窗口置顶")
                 Button(action: close) { Image(systemName: "xmark") }.accessibilityLabel("关闭工作板")
             }
             .buttonStyle(.plain).foregroundStyle(Palette.muted).padding(14)
             Divider()
+            if !navigation.favoriteBoards(in: store).isEmpty {
+                favoritesBar
+                Divider()
+            }
             if let board {
                 BoardContentView(store: store, navigation: navigation, board: board).id(board.id)
             } else {
                 VStack(spacing: 14) {
                     Image(systemName: "list.bullet.rectangle").font(.system(size: 34)).foregroundStyle(Palette.accent)
-                    Text("把步骤和资料放在眼前").font(.headline)
+                    Text("把内容和资料放在眼前").font(.headline)
                     Text("选择一个待办或标签，整理议程、阅读目标与参考链接。")
                         .font(.system(size: 12)).foregroundStyle(Palette.muted).multilineTextAlignment(.center)
                     Button("选择待办或标签") { choosing = true }.buttonStyle(.borderedProminent)
@@ -157,6 +167,53 @@ struct BoardWorkspaceView: View {
         }
         .background(Palette.background).foregroundStyle(Palette.ink).tint(Palette.accent)
     }
+
+    private var favoritesBar: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 6) {
+                ForEach(navigation.favoriteBoards(in: store)) { favorite in
+                    Button {
+                        NSApp.keyWindow?.makeFirstResponder(nil)
+                        store.save()
+                        navigation.selection = favorite.id
+                    } label: {
+                        Text(store.boardTitle(favorite))
+                            .font(.system(size: 11, weight: navigation.selection == favorite.id ? .semibold : .regular))
+                            .lineLimit(1).truncationMode(.tail).frame(maxWidth: 140)
+                            .padding(.horizontal, 10).padding(.vertical, 7)
+                            .foregroundStyle(navigation.selection == favorite.id ? Palette.accent : Palette.muted)
+                            .background(navigation.selection == favorite.id ? Palette.soft : Palette.card, in: RoundedRectangle(cornerRadius: 7))
+                    }
+                    .buttonStyle(.plain)
+                    .help(store.boardTitle(favorite) + " · " + AppLocalized("拖动调整顺序"))
+                    .accessibilityAddTraits(navigation.selection == favorite.id ? .isSelected : [])
+                    .onDrag {
+                        draggedFavorite = favorite.id
+                        return NSItemProvider(item: favorite.id.uuidString as NSString,
+                                              typeIdentifier: "local.timeline.board-favorite")
+                    }
+                    .onDrop(of: [UTType(exportedAs: "local.timeline.board-favorite")], isTargeted: nil) { providers in
+                        guard !providers.isEmpty, let draggedFavorite, draggedFavorite != favorite.id,
+                              let destination = navigation.favoriteBoardIDs.firstIndex(of: favorite.id) else { return false }
+                        navigation.moveFavorite(draggedFavorite, to: destination)
+                        self.draggedFavorite = nil
+                        return true
+                    }
+                    .contextMenu {
+                        let index = navigation.favoriteBoardIDs.firstIndex(of: favorite.id) ?? 0
+                        Button("向左移") { navigation.moveFavorite(favorite.id, to: index - 1) }
+                            .disabled(index == 0)
+                        Button("向右移") { navigation.moveFavorite(favorite.id, to: index + 1) }
+                            .disabled(index == navigation.favoriteBoardIDs.count - 1)
+                        Divider()
+                        Button("取消常用固定") { navigation.toggleFavorite(favorite.id) }
+                    }
+                }
+            }.padding(.horizontal, 14).padding(.vertical, 8)
+        }
+        .frame(height: 46)
+        .accessibilityLabel("常用工作板")
+    }
 }
 
 private struct BoardChooser: View {
@@ -167,6 +224,8 @@ private struct BoardChooser: View {
 
     private func matches(_ title: String) -> Bool { query.isEmpty || title.localizedStandardContains(query) }
     private func select(_ owner: BoardOwner) {
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        store.save()
         guard let board = store.ensureBoard(for: owner) else { return }
         navigation.selection = board.id
         close()
@@ -177,22 +236,16 @@ private struct BoardChooser: View {
             TextField("搜索待办、标签和工作板", text: $query).textFieldStyle(.roundedBorder)
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
-                    if !store.boards.isEmpty {
+                    let favorites = navigation.favoriteBoards(in: store).filter { matches(store.boardTitle($0)) }
+                    if !favorites.isEmpty {
+                        Text("常用工作板").font(.caption).foregroundStyle(Palette.muted)
+                        ForEach(favorites) { board in boardRow(board) }
+                        Divider()
+                    }
+                    let remaining = store.boards.filter { !navigation.isFavorite($0.id) && matches(store.boardTitle($0)) }
+                    if !remaining.isEmpty {
                         Text("已有工作板").font(.caption).foregroundStyle(Palette.muted)
-                        ForEach(store.boards.filter { matches(store.boardTitle($0)) }.sorted { $0.updatedAt > $1.updatedAt }) { board in
-                            Button {
-                                navigation.selection = board.id
-                                close()
-                            } label: {
-                                HStack {
-                                    Image(systemName: store.isBoardArchived(board) ? "archivebox" : "list.bullet.rectangle")
-                                    Text(store.boardTitle(board)).lineLimit(2)
-                                    Spacer()
-                                    Text("\(board.completedCount)/\(board.stepCount)").monospacedDigit()
-                                    if navigation.selection == board.id { Image(systemName: "checkmark") }
-                                }.padding(.vertical, 5).contentShape(Rectangle())
-                            }
-                        }
+                        ForEach(remaining.sorted { $0.updatedAt > $1.updatedAt }) { board in boardRow(board) }
                         Divider()
                     }
                     Text("待办").font(.caption).foregroundStyle(Palette.muted)
@@ -214,72 +267,133 @@ private struct BoardChooser: View {
             }.frame(height: 340)
         }.padding(14).frame(width: 310).foregroundStyle(Palette.ink).background(Palette.background)
     }
+
+    private func boardRow(_ board: Board) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                NSApp.keyWindow?.makeFirstResponder(nil)
+                store.save()
+                navigation.selection = board.id
+                close()
+            } label: {
+                HStack {
+                    Image(systemName: store.isBoardArchived(board) ? "archivebox" : "list.bullet.rectangle")
+                    Text(store.boardTitle(board)).lineLimit(2)
+                    Spacer()
+                    if navigation.selection == board.id { Image(systemName: "checkmark") }
+                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }
+            Button { navigation.toggleFavorite(board.id) } label: {
+                Image(systemName: navigation.isFavorite(board.id) ? "star.fill" : "star")
+                    .foregroundStyle(navigation.isFavorite(board.id) ? Palette.accent : Palette.muted)
+                    .frame(width: 24, height: 24)
+            }
+            .help(navigation.isFavorite(board.id) ? "取消常用固定" : "固定到常用")
+            .accessibilityLabel(navigation.isFavorite(board.id) ? "取消常用固定" : "固定到常用")
+        }.padding(.vertical, 4)
+    }
 }
 
 struct BoardContentView: View {
     @ObservedObject var store: JournalStore
     @ObservedObject var navigation: BoardNavigation
     let board: Board
-    @State private var editing: UUID?
-    @State private var dragged: UUID?
+    @State private var editing: Bool
+    @FocusState private var editorFocused: Bool
 
-    private func finishEditing() {
+    init(store: JournalStore, navigation: BoardNavigation, board: Board) {
+        self.store = store
+        self.navigation = navigation
+        self.board = board
+        _editing = State(initialValue: board.markdown.isEmpty && !store.isReadOnly)
+    }
+
+    private var markdown: Binding<String> {
+        Binding(get: { store.boards.first { $0.id == board.id }?.markdown ?? board.markdown },
+                set: { store.setBoardMarkdown($0, for: board.id) })
+    }
+
+    private func setEditing(_ value: Bool) {
         NSApp.keyWindow?.makeFirstResponder(nil)
-        editing = nil
         store.save()
+        editing = value
+        editorFocused = value
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(store.boardTitle(board)).font(.system(size: 18, weight: .semibold)).textSelection(.enabled)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 10) {
+                    Text(store.boardTitle(board)).font(.system(size: 18, weight: .semibold))
+                        .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    Button { navigation.toggleFavorite(board.id) } label: {
+                        Image(systemName: navigation.isFavorite(board.id) ? "star.fill" : "star")
+                            .foregroundStyle(navigation.isFavorite(board.id) ? Palette.accent : Palette.muted)
+                            .frame(width: 26, height: 26)
+                    }
+                    .buttonStyle(.plain)
+                    .help(navigation.isFavorite(board.id) ? "取消常用固定" : "固定到常用")
+                    .accessibilityLabel(navigation.isFavorite(board.id) ? "取消常用固定" : "固定到常用")
+                }
                 HStack {
                     if store.isBoardArchived(board) { Label("已归档 · 内容保留", systemImage: "archivebox") }
                     else if case .task(let id) = board.owner, store.locate(id)?.task.completed == true {
                         Label("任务已结束", systemImage: "checkmark.circle")
                     }
-                    Text("\(board.completedCount) / \(board.stepCount)").monospacedDigit()
+                    Text("Markdown").foregroundStyle(Palette.muted)
                     Spacer()
                     if case .task(let id) = board.owner, store.locate(id) != nil {
                         Button { AppRouter.openNotes(id) } label: { Label("笔记", systemImage: "note.text") }
                     }
-                }.font(.system(size: 11)).foregroundStyle(Palette.muted).buttonStyle(.plain)
-                if board.stepCount > 0 { ProgressView(value: Double(board.completedCount), total: Double(board.stepCount)).tint(Palette.accent) }
-            }.padding(16)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 9) {
-                    if board.items.isEmpty { emptyBoard }
-                    ForEach(Array(board.items.enumerated()), id: \.element.id) { index, item in
-                        itemView(item, index: index)
-                            .onDrop(of: [UTType(exportedAs: "local.timeline.board-item")], isTargeted: nil) { providers in
-                                guard !providers.isEmpty, !store.isReadOnly, let dragged, dragged != item.id else { return false }
-                                store.moveBoardItem(dragged, in: board.id, to: index)
-                                self.dragged = nil
-                                return true
-                            }
+                    Button { setEditing(!editing) } label: {
+                        Label(editing ? "预览" : "编辑", systemImage: editing ? "eye" : "pencil")
                     }
-                    relatedBoards
-                }.padding(.horizontal, 14).padding(.bottom, 14)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(store.isReadOnly)
+                }.font(.system(size: 11)).foregroundStyle(Palette.muted).buttonStyle(.plain)
+            }.padding(16)
+            Divider()
+            if editing {
+                TextEditor(text: markdown)
+                    .font(.system(size: 13, design: .monospaced))
+                    .scrollContentBackground(.hidden)
+                    .focused($editorFocused)
+                    .padding(10)
+                    .accessibilityLabel("工作板 Markdown 内容")
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if markdown.wrappedValue.isEmpty {
+                            Text("暂无内容，点击编辑开始书写。")
+                                .font(.system(size: 12)).foregroundStyle(Palette.muted)
+                        } else {
+                            BoardMarkdownPreview(store: store, board: board,
+                                                 edit: { if !store.isReadOnly { setEditing(true) } })
+                        }
+                        relatedBoards
+                    }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             Divider()
             HStack {
-                Button { add(.step) } label: { Label("添加步骤", systemImage: "plus.circle") }
-                Button { add(.note) } label: { Label("添加资料", systemImage: "note.text.badge.plus") }
+                if editing && markdown.wrappedValue.isEmpty {
+                    Menu("插入模板") {
+                        Button("论文阅读") {
+                            markdown.wrappedValue = "# 论文阅读\n\n- [ ] Intro & Abstract\n- [ ] Background\n- [ ] Design\n- [ ] Experiment\n\n## 阅读笔记\n\n"
+                        }
+                        Button("会议议程") {
+                            markdown.wrappedValue = "# " + AppLocalized("会议议程") + "\n\n## " + AppLocalized("进展同步")
+                                + "\n\n## " + AppLocalized("讨论事项") + "\n\n## " + AppLocalized("结论与后续行动") + "\n\n"
+                        }
+                    }.menuStyle(.borderlessButton).fixedSize()
+                } else {
+                    Text(editing ? "直接编辑 Markdown，⌘↩ 预览" : "⌘↩ 编辑 · 点击链接打开网页")
+                }
                 Spacer()
-                Text("自动保存").font(.system(size: 10)).foregroundStyle(Palette.muted)
-            }.font(.system(size: 12)).buttonStyle(.plain).padding(14).disabled(store.isReadOnly)
+                Text(store.isReadOnly ? "只读" : "自动保存")
+            }.font(.system(size: 10)).foregroundStyle(Palette.muted).padding(12)
         }
         .onDisappear { store.save() }
-    }
-
-    private var emptyBoard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("从一个步骤开始，也可以使用模板。").font(.system(size: 12)).foregroundStyle(Palette.muted)
-            HStack {
-                Button("论文阅读") { store.applyBoardTemplate(["Intro & Abstract", "Background", "Design", "Experiment"], to: board.id) }
-                Button("会议议程") { store.applyBoardTemplate([AppLocalized("进展同步"), AppLocalized("讨论事项"), AppLocalized("结论与后续行动")], to: board.id) }
-            }.buttonStyle(.bordered).disabled(store.isReadOnly)
-        }.padding(.vertical, 18)
     }
 
     @ViewBuilder private var relatedBoards: some View {
@@ -293,7 +407,11 @@ struct BoardContentView: View {
                 Divider().padding(.top, 12)
                 Text("标签下的工作板").font(.caption).foregroundStyle(Palette.muted)
                 ForEach(related) { candidate in
-                    Button { finishEditing(); navigation.selection = candidate.id } label: {
+                    Button {
+                        NSApp.keyWindow?.makeFirstResponder(nil)
+                        store.save()
+                        navigation.selection = candidate.id
+                    } label: {
                         Label(store.boardTitle(candidate), systemImage: "list.bullet.rectangle")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }.buttonStyle(.plain)
@@ -301,90 +419,49 @@ struct BoardContentView: View {
             }
         }
     }
+}
 
-    private func add(_ kind: BoardItem.Kind) {
-        finishEditing()
-        if let id = store.addBoardItem(to: board.id, kind: kind) { editing = id }
+struct BoardMarkdownPreview: View {
+    @ObservedObject var store: JournalStore
+    let board: Board
+    var edit: () -> Void = {}
+
+    var body: some View {
+        TaskLinkText(source: board.markdown, completed: false, color: Palette.ink,
+                     fontSize: 13, edit: edit, open: { NSWorkspace.shared.open($0) },
+                     maxLines: 0, markdown: true,
+                     toggleMarkdownTask: store.isReadOnly ? nil : { line in
+                         store.toggleBoardMarkdownTask(atLine: line, in: board.id)
+                     })
     }
+}
 
-    private func binding(_ item: BoardItem, body: Bool) -> Binding<String> {
-        Binding(get: {
-            let current = store.boards.first { $0.id == board.id }?.items.first { $0.id == item.id } ?? item
-            return body ? current.body : current.title
-        }, set: { value in
-            store.updateBoardItem(item.id, in: board.id, title: body ? nil : value, body: body ? value : nil)
-        })
-    }
+struct BoardNotesSection: View {
+    @ObservedObject var store: JournalStore
+    let owner: BoardOwner
+    @Environment(\.colorScheme) private var colorScheme
 
-    private func itemView(_ item: BoardItem, index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
-                if !store.isReadOnly {
-                    Image(systemName: "line.3.horizontal").foregroundStyle(Palette.muted.opacity(0.5))
-                        .help("拖动排序")
-                        .onDrag {
-                            finishEditing()
-                            dragged = item.id
-                            return NSItemProvider(item: item.id.uuidString as NSString, typeIdentifier: "local.timeline.board-item")
-                        }
-                }
-                if item.kind == .step {
-                    Button { store.updateBoardItem(item.id, in: board.id, completed: !item.completed) } label: {
-                        Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 17)).foregroundStyle(item.completed ? Palette.success : Palette.muted)
-                    }.accessibilityLabel(item.completed ? "标记未完成" : "标记完成")
-                        .disabled(store.isReadOnly)
-                } else { Image(systemName: "doc.text").foregroundStyle(Palette.accent) }
-                if editing == item.id {
-                    TextField("条目标题", text: binding(item, body: false)).textFieldStyle(.plain)
-                        .onSubmit { finishEditing() }
-                } else {
-                    Text(item.title.isEmpty ? AppLocalized("未命名条目") : item.title)
-                        .strikethrough(item.kind == .step && item.completed)
-                        .foregroundStyle(item.completed ? Palette.muted : Palette.ink)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .onTapGesture(count: 2) { if !store.isReadOnly { editing = item.id } }
-                }
-                Spacer(minLength: 0)
-                if !item.body.isEmpty && editing != item.id {
-                    Button { navigation.toggleCollapsed(item.id) } label: {
-                        Image(systemName: navigation.collapsed(item.id) ? "chevron.right" : "chevron.down")
-                    }.accessibilityLabel("展开或折叠内容")
-                }
-                if !store.isReadOnly {
-                    Button {
-                        if editing == item.id { finishEditing() } else { finishEditing(); editing = item.id }
-                    } label: { Image(systemName: editing == item.id ? "checkmark" : "pencil") }
-                        .accessibilityLabel(editing == item.id ? "完成编辑" : "编辑条目")
-                }
-            }.buttonStyle(.plain).font(.system(size: 13, weight: .medium))
-            if editing == item.id {
-                Text("说明、要点与 Markdown 链接").font(.system(size: 10)).foregroundStyle(Palette.muted)
-                TextEditor(text: binding(item, body: true))
-                    .font(.system(size: 12)).scrollContentBackground(.hidden)
-                    .frame(minHeight: 120).padding(5)
-                    .background(Palette.background, in: RoundedRectangle(cornerRadius: 6))
+    var body: some View {
+        if let board = store.board(for: owner), board.hasContent {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Button("完成编辑") { finishEditing() }.keyboardShortcut(.return, modifiers: .command)
+                    Label("看板内容", systemImage: "list.bullet.rectangle")
+                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)
                     Spacer()
-                    Text("自动保存").font(.caption).foregroundStyle(Palette.muted)
-                }.font(.system(size: 11))
-            } else if !item.body.isEmpty && !navigation.collapsed(item.id) {
-                TaskLinkText(source: item.body, completed: false, color: Palette.ink, fontSize: 12,
-                             edit: { if !store.isReadOnly { editing = item.id } },
-                             open: { NSWorkspace.shared.open($0) }, maxLines: 0, markdown: true)
+                    Button {
+                        BoardWindowController.shared.show(store: store, owner: owner)
+                    } label: { Label("打开工作板", systemImage: "arrow.up.forward.square") }
+                        .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Palette.accent)
+                }
+                BoardMarkdownPreview(store: store, board: board)
             }
-        }
-        .padding(12).background(Palette.card, in: RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(editing == item.id ? Palette.accent.opacity(0.6) : Palette.line.opacity(0.5)))
-        .contextMenu {
-            if !store.isReadOnly {
-                Button("编辑条目") { finishEditing(); editing = item.id }
-                Button("上移") { store.moveBoardItem(item.id, in: board.id, to: index - 1) }.disabled(index == 0)
-                Button("下移") { store.moveBoardItem(item.id, in: board.id, to: index + 1) }.disabled(index == board.items.count - 1)
-                Divider()
-                Button("删除条目", role: .destructive) { store.deleteBoardItem(item.id, in: board.id) }
+            .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 9).fill(Palette.background)
+                    .overlay { RoundedRectangle(cornerRadius: 9).fill(Color.black.opacity(colorScheme == .dark ? 0.28 : 0.07)) }
             }
+            .overlay { RoundedRectangle(cornerRadius: 9).strokeBorder(Palette.line.opacity(0.7)) }
+            .accessibilityElement(children: .contain).accessibilityLabel("看板内容")
         }
     }
 }
