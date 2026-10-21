@@ -7,6 +7,53 @@ import TimelineCore
 
 @MainActor
 final class BoardWindowTests: XCTestCase {
+    func testNativeControlBracketAndRepeatedEscapeDoNotHideBoard() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "timeline-board-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            defaults.removePersistentDomain(forName: suite)
+        }
+        let store = JournalStore(directory: directory)
+        let board = try XCTUnwrap(store.ensureBoard(for: .tag("Keyboard")))
+        store.setBoardMarkdown("Keyboard input", for: board.id)
+        let controller = BoardWindowController(defaults: defaults)
+        controller.show(store: store, owner: board.owner)
+        defer { controller.hide() }
+        let panel = try XCTUnwrap(controller.panel)
+        panel.contentView?.layoutSubtreeIfNeeded()
+        let editor = try boardWebView(in: XCTUnwrap(panel.contentView))
+        try await waitForBoardEditor(editor)
+        let session = controller.navigation.editorSession(for: try XCTUnwrap(store.board(for: board.owner)), store: store)
+        session.configure(vim: true, fontSize: 13, dark: true)
+        panel.makeKey()
+        panel.makeFirstResponder(editor)
+        _ = try await editor.evaluateJavaScript("window.boardEditor.focus();document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:'i',bubbles:true,cancelable:true}))")
+        XCTAssertTrue(session.handleModeKey(try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: panel.windowNumber, context: nil,
+            characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))))
+        _ = try await editor.evaluateJavaScript("document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:'i',bubbles:true,cancelable:true}))")
+        let controlBracket = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: .control, timestamp: 0, windowNumber: panel.windowNumber, context: nil,
+            characters: "\u{1b}", charactersIgnoringModifiers: "[", isARepeat: false, keyCode: 33))
+        panel.sendEvent(controlBracket)
+        try await Task.sleep(for: .milliseconds(50))
+        let normal = try await editor.evaluateJavaScript("!window.boardEditor.view().cm.state.vim.insertMode") as? Bool
+        XCTAssertEqual(normal, true)
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: panel.windowNumber, context: nil,
+            characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        panel.sendEvent(escape)
+        panel.sendEvent(escape)
+        panel.cancelOperation(nil)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertTrue(panel.firstResponder === editor || (panel.firstResponder as? NSView)?.isDescendant(of: editor) == true)
+        let snapshot = try await editor.evaluateJavaScript("window.boardEditor.snapshot()") as? [String: Any]
+        XCTAssertEqual(snapshot?["source"] as? String, "Keyboard input")
+    }
+
     func testPanelStaysVisibleAcrossFocusLossAndRemembersSelectionWhenHidden() throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

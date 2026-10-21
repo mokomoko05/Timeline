@@ -1,4 +1,4 @@
-import {EditorState, StateField, StateEffect, Compartment, Transaction, Annotation} from "@codemirror/state";
+import {EditorState, StateField, StateEffect, Compartment, Transaction, Annotation, Prec} from "@codemirror/state";
 import {EditorView, Decoration, WidgetType, keymap, drawSelection, rectangularSelection} from "@codemirror/view";
 import {defaultKeymap, history, historyKeymap, indentWithTab} from "@codemirror/commands";
 import {markdown, markdownLanguage, markdownKeymap} from "@codemirror/lang-markdown";
@@ -246,13 +246,18 @@ window.boardEditor = {
       view = new EditorView({parent: document.getElementById("editor"), state: EditorState.create({
         doc: config.source,
         selection: {anchor: config.readOnly ? 0 : config.source.length},
-        extensions: [history(), drawSelection(), rectangularSelection(), EditorView.lineWrapping,
+        extensions: [history(), drawSelection({cursorBlinkRate: 0}), rectangularSelection(), EditorView.lineWrapping,
           indentOnInput(), bracketMatching(), markdown({base: markdownLanguage}), syntaxHighlighting(highlighting),
           livePreview.of(config.sourceMode ? [] : live),
           EditorView.atomicRanges.of(view => view.state.field(live, false)?.decorations.update({filter: (_from, _to, decoration) => decoration.spec.atomic === true}) ?? Decoration.none),
-          vimMode.of(config.vim ? vim({status: true}) : []),
+          vimMode.of(config.vim ? Prec.highest(vim({status: true})) : []),
           editable.of([EditorState.readOnly.of(config.readOnly), EditorView.editable.of(!config.readOnly)]),
           keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
+          Prec.lowest(EditorView.domEventHandlers({keydown(event) {
+            if (event.key !== "Escape" || event.isComposing || composing || view.composing) return false;
+            event.stopPropagation();
+            return true;
+          }})),
           EditorView.contentAttributes.of({"aria-label": "工作板 Markdown 内容", spellcheck: "false"}),
           EditorView.updateListener.of(update => {
             if (update.docChanged && !update.transactions.some(transaction => transaction.annotation(external))) {
@@ -278,7 +283,7 @@ window.boardEditor = {
                        annotations: [externalChange, Transaction.addToHistory.of(false)]});
       }
       const effects = [];
-      if (currentVim !== config.vim) effects.push(vimMode.reconfigure(config.vim ? vim({status: true}) : []));
+      if (currentVim !== config.vim) effects.push(vimMode.reconfigure(config.vim ? Prec.highest(vim({status: true})) : []));
       if (currentReadOnly !== config.readOnly) effects.push(editable.reconfigure([EditorState.readOnly.of(config.readOnly), EditorView.editable.of(!config.readOnly)]));
       if (currentSourceMode !== config.sourceMode) effects.push(livePreview.reconfigure(config.sourceMode ? [] : live));
       if (effects.length) view.dispatch({effects});
@@ -292,6 +297,10 @@ window.boardEditor = {
   },
   snapshot,
   focus() { view.focus(); },
+  escape() {
+    const target = view.dom.contains(document.activeElement) ? document.activeElement : view.contentDOM;
+    target.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", code: "Escape", bubbles: true, cancelable: true}));
+  },
   insertTemplate(kind, labels) {
     const selection = view.state.selection.main;
     const selected = view.state.doc.sliceString(selection.from, selection.to);

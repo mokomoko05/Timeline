@@ -134,6 +134,58 @@ final class BoardLiveEditorTests: XCTestCase {
         }
     }
 
+    func testControlBracketAndRepeatedEscapeKeepVimNormalAndDisclosuresOpen() async throws {
+        let source = "<details open>\n<summary>Agenda</summary>\n\nDiscussion\n\n</details>\n\nEnd"
+        let fixture = try LiveFixture(source: source, vim: true)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.focus()")
+        for mode in ["i", "v"] {
+            _ = try await fixture.pressKey(mode)
+            let controlBracketHandled = try await fixture.pressKey("[", control: true)
+            XCTAssertTrue(controlBracketHandled)
+            let normal = try await fixture.webView.evaluateJavaScript("(()=>{const vim=window.boardEditor.view().cm.state.vim;return !vim.insertMode&&!vim.visualMode})()") as? Bool
+            XCTAssertEqual(normal, true)
+        }
+        _ = try await fixture.pressKey("i")
+        for _ in 0..<3 {
+            let escapeHandled = try await fixture.pressKey("Escape")
+            XCTAssertTrue(escapeHandled)
+        }
+        _ = try await fixture.pressKey("v")
+        _ = try await fixture.pressKey("l")
+        _ = try await fixture.pressKey("Escape")
+        let state = try await fixture.webView.evaluateJavaScript("({normal:!window.boardEditor.view().cm.state.vim.insertMode&&!window.boardEditor.view().cm.state.vim.visualMode,focused:document.activeElement===document.querySelector('.cm-content'),open:document.querySelector('.board-details').getAttribute('aria-expanded')==='true'})") as? [String: Bool]
+        XCTAssertEqual(state, ["normal": true, "focused": true, "open": true])
+        let snapshot = try await fixture.snapshot()
+        XCTAssertEqual(snapshot["source"] as? String, source)
+        fixture.session.configure(vim: false, fontSize: 13, dark: true)
+        try await Task.sleep(for: .milliseconds(30))
+        let escapeHandled = try await fixture.pressKey("Escape")
+        XCTAssertTrue(escapeHandled)
+    }
+
+    func testCursorsRemainVisibleWithStrongContrastInBothAppearances() async throws {
+        let fixture = try LiveFixture(source: "Cursor visibility", vim: true)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        for dark in [true, false] {
+            fixture.session.configure(vim: true, fontSize: 13, dark: dark)
+            _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.focus();window.boardEditor.select(3);window.boardEditor.view().measure();window.boardEditor.view().dom.classList.add('cm-focused')")
+            try await Task.sleep(for: .milliseconds(60))
+            let normal = try await fixture.webView.evaluateJavaScript("(()=>{const cursor=document.querySelector('.cm-fat-cursor');if(!cursor)return {contrast:false,visible:false};const style=getComputedStyle(cursor);const contentStyle=getComputedStyle(document.querySelector('.cm-content'));return {contrast:style.backgroundColor===contentStyle.color&&style.color!==style.backgroundColor,visible:cursor.getBoundingClientRect().width>2&&getComputedStyle(cursor.parentElement).animationName==='none'}})()") as? [String: Bool]
+            XCTAssertEqual(normal, ["contrast": true, "visible": true])
+            _ = try await fixture.pressKey("i")
+            try await Task.sleep(for: .milliseconds(60))
+            _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.view().measure();window.boardEditor.view().dom.classList.add('cm-focused')")
+            let insert = try await fixture.webView.evaluateJavaScript("(()=>{const cursor=document.querySelector('.cm-cursor');if(!cursor)return {width:0,steady:false,visible:false};const style=getComputedStyle(cursor);return {width:parseFloat(style.borderLeftWidth),steady:getComputedStyle(cursor.parentElement).animationName==='none',visible:style.display!=='none'}})()") as? [String: Any]
+            XCTAssertGreaterThanOrEqual(insert?["width"] as? Double ?? 0, 2)
+            XCTAssertEqual(insert?["steady"] as? Bool, true)
+            XCTAssertEqual(insert?["visible"] as? Bool, true)
+            _ = try await fixture.pressKey("Escape")
+        }
+    }
+
     func testFoldCanCloseWhileEditingItsBodyAndNestedFencesStayLiteral() async throws {
         let source = "<details open>\n<summary>Outer</summary>\n\nBody\n\n<details>\n<summary>Inner</summary>\n\nNested\n\n</details>\n\n</details>\n\n~~~html\n<details><summary>Code</summary>\nLiteral\n</details>\n~~~\n"
         let fixture = try LiveFixture(source: source)
@@ -216,6 +268,12 @@ private final class LiveFixture {
     func snapshot() async throws -> [String: Any] {
         let result = try await webView.evaluateJavaScript("window.boardEditor.snapshot()")
         return try XCTUnwrap(result as? [String: Any])
+    }
+
+    func pressKey(_ key: String, control: Bool = false) async throws -> Bool {
+        let json = String(decoding: try JSONEncoder().encode(key), as: UTF8.self)
+        let result = try await webView.evaluateJavaScript("!document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:\(json),ctrlKey:\(control),bubbles:true,cancelable:true}))")
+        return result as? Bool == true
     }
 
     func commit() async {

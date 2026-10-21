@@ -37,13 +37,28 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     private var sourceNeedsSynchronization = true
 
     var handlesTextCommands: Bool {
-        guard let webView, webView.window === NSApp.keyWindow,
-              let responder = webView.window?.firstResponder as? NSView else { return false }
+        webView?.window === NSApp.keyWindow && hasTextFocus
+    }
+
+    private var hasTextFocus: Bool {
+        guard let webView, let responder = webView.window?.firstResponder as? NSView else { return false }
         return responder === webView || responder.isDescendant(of: webView)
     }
 
     func undo() { webView?.evaluateJavaScript("window.boardEditor.undo()") }
     func redo() { webView?.evaluateJavaScript("window.boardEditor.redo()") }
+
+    func handleModeKey(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, ready, settings["vim"] as? Bool == true,
+              event.window === webView?.window, hasTextFocus, !composing else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        let escape = event.keyCode == 53 && modifiers.isEmpty
+        let controlBracket = modifiers == .control && (event.charactersIgnoringModifiers == "["
+            || event.characters == "\u{1b}" || event.keyCode == 33)
+        guard escape || controlBracket else { return false }
+        webView?.evaluateJavaScript("window.boardEditor.escape()")
+        return true
+    }
 
     init(store: JournalStore, board: Board) {
         self.store = store

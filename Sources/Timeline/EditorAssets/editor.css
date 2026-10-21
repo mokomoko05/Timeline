@@ -5,9 +5,12 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 .cm-editor { height: 100%; background: transparent; }
 .cm-editor.cm-focused { outline: none; }
 #editor .cm-scroller { overflow: auto; font-family: -apple-system, BlinkMacSystemFont, sans-serif; line-height: 1.65; overscroll-behavior: contain; }
-#editor .cm-content { padding: 8px 0 24px; caret-color: var(--ink); }
+#editor .cm-content { padding: 8px 0 24px; caret-color: var(--accent); }
 #editor .cm-line { padding: 0 14px; min-height: 1.65em; }
-.cm-cursor, .cm-dropCursor { border-left-color: var(--ink); }
+#editor .cm-cursor, #editor .cm-dropCursor { border-left: 2.5px solid var(--accent); margin-left: -1.25px; }
+#editor .cm-cursorLayer { animation: none !important; }
+#editor .cm-fat-cursor { background: var(--ink); color: var(--background) !important; outline: 1px solid var(--ink); min-width: .55em; }
+#editor .cm-editor:not(.cm-focused) .cm-fat-cursor { background: transparent; color: transparent !important; }
 .cm-selectionBackground, .cm-focused .cm-selectionBackground, ::selection { background: var(--soft) !important; }
 .cm-heading-1 { color: var(--heading-1, #dd9179); font-size: 1.6em; font-weight: 700; }
 .cm-heading-2 { color: var(--heading-2, #d4ae62); font-size: 1.4em; font-weight: 650; }

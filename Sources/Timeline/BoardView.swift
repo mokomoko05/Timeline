@@ -69,6 +69,14 @@ final class BoardNavigation: ObservableObject {
 
 private final class BoardPanel: NSPanel {
     override var canBecomeKey: Bool { true }
+
+    override func sendEvent(_ event: NSEvent) {
+        if let editor = BoardLiveEditorSession.active, editor.webView?.window === self,
+           editor.handleModeKey(event) { return }
+        super.sendEvent(event)
+    }
+
+    override func cancelOperation(_ sender: Any?) {}
 }
 
 @MainActor
@@ -356,7 +364,7 @@ struct BoardContentView: View {
                         Text("Vim").font(.system(size: 10, weight: .medium, design: .monospaced))
                             .foregroundStyle(vim ? Palette.accent : Palette.muted)
                     }
-                    .help("Vim：Esc 普通模式，i 插入，v 可视，支持移动、删除、撤销和搜索")
+                    .help("Vim：Esc 或 Ctrl+[ 普通模式，i 插入，v 可视，支持移动、删除、撤销和搜索")
                     .accessibilityLabel("Vim 模式").accessibilityValue(vim ? "开启" : "关闭")
                     Button { setEditing(!editing) } label: {
                         Image(systemName: editing ? "eye" : "chevron.left.forwardslash.chevron.right")
