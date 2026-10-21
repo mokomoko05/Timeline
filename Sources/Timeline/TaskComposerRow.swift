@@ -66,13 +66,11 @@ struct DraftDeadlineButton: View {
 
     var body: some View {
         Button { showing = true } label: {
-            Text(initial.dueDate.map { due in
-                initial.dueHasTime ? due.relativeLabel + " " + TaskDeadlineButton.time(due) : due.relativeLabel
-            } ?? "No Due")
+            Label(TaskDeadlineButton.label(for: initial), systemImage: initial.dueHasTime ? "clock" : "calendar")
                 .font(.system(size: 10, weight: .medium, design: .monospaced)).lineLimit(1)
                 .padding(.horizontal, 4).padding(.vertical, 2)
         }
-        .buttonStyle(.plain).raisedOnHover(radius: 4).help("修改截止时间")
+        .buttonStyle(.plain).raisedOnHover(radius: 4).help("设置截止日期与时间")
         .popover(isPresented: $showing, arrowEdge: .bottom) {
             DraftDeadlineEditor(options: $options, initial: initial, defaultDate: defaultDate)
         }
@@ -87,12 +85,13 @@ private struct DraftDeadlineEditor: View {
 
     init(options: Binding<TaskCreationOptions>, initial: Todo, defaultDate: Date) {
         _options = options
-        _due = State(initialValue: initial.dueDate ?? defaultDate)
+        _due = State(initialValue: DeadlineSelection.initialDate(initial.dueDate ?? defaultDate, hasTime: initial.dueHasTime))
         _timed = State(initialValue: initial.dueHasTime)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Text("截止日期与时间").font(.system(size: 14, weight: .semibold))
             DeadlineSelectionView(due: $due, timed: $timed)
             HStack {
                 Button("清除") {
@@ -102,10 +101,11 @@ private struct DraftDeadlineEditor: View {
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存") {
+                    NSApp.keyWindow?.makeFirstResponder(nil)
                     options.overridesDeadline = true; options.dueDate = due; options.dueHasTime = timed
                     dismiss()
                 }.keyboardShortcut(.defaultAction)
             }
-        }.padding(14)
+        }.padding(16).foregroundStyle(Palette.ink).background(Palette.background)
     }
 }

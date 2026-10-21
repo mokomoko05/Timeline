@@ -218,7 +218,7 @@ final class DeadlineModelTests: XCTestCase {
         XCTAssertEqual(tasks.compactMap(\.task.number).sorted(), [1, 2])
         XCTAssertTrue(FileManager.default.fileExists(atPath: store.backupsDirectory.appendingPathComponent("before-ddl-migration-v5.json").path))
         let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("journal.json"))) as? [String: Any]
-        XCTAssertEqual(raw?["version"] as? Int, 6)
+        XCTAssertEqual(raw?["version"] as? Int, 7)
         // 再次打开不会重复迁移：清除截止日期后保持无日期。
         store.setDeadline(migrated.id, to: nil)
         let reopened = JournalStore(directory: directory)

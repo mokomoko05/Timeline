@@ -67,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private let focusHotKey = GlobalHotKey(action: .focusPanel)
     private let mainHotKey = GlobalHotKey(action: .main)
     private let shellHotKey = GlobalHotKey(action: .shell)
+    private let boardHotKey = GlobalHotKey(action: .board)
     private let shell = ShellWindowController()
     private let interaction = WorkspaceInteraction()
     private let commands = CommandCenter()
@@ -147,6 +148,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             focusHotKey.onPress = { [weak self] in self?.focusPanel?.toggleWorkspace() }
             mainHotKey.onPress = { [weak self] in self?.toggleMainWindow() }
             shellHotKey.onPress = { [weak self] in self?.shell.toggle() }
+            boardHotKey.onPress = { [weak self] in
+                guard let self else { return }
+                BoardWindowController.shared.toggle(store: self.store)
+            }
             applyHotKeyPreference()
             NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.applyHotKeyPreference() }
@@ -296,7 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     // MARK: - 全局快捷键
 
     private var allHotKeys: [(HotKeyAction, GlobalHotKey)] {
-        [(.main, mainHotKey), (.shell, shellHotKey), (.log, logHotKey), (.notes, notesHotKey), (.focusPanel, focusHotKey)]
+        [(.main, mainHotKey), (.shell, shellHotKey), (.log, logHotKey), (.notes, notesHotKey), (.focusPanel, focusHotKey), (.board, boardHotKey)]
     }
 
     /// 被其他应用占用而注册失败的动作，设置里据此逐条提示。
@@ -618,6 +623,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             menuItem("下个月", send(.shiftMonth(1))),
             .separator(),
             notesMenuItem,
+            menuItem("工作板（开 / 关）", { [weak self] in
+                guard let self else { return }
+                BoardWindowController.shared.toggle(store: self.store)
+            }),
             .separator(),
             menuItem("未完成事项…", send(.agenda(.unfinished))),
             menuItem("即将截止…", send(.agenda(.upcoming))),

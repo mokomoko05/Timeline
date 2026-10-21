@@ -405,6 +405,7 @@ struct NotesView: View {
             }
             Spacer()
             if let task = store.locate(topic.id), !store.isReadOnly {
+                BoardOpenButton(store: store, owner: .task(task.id))
                 // 和清单里的扇形菜单一致：完成、放弃、标签都能在笔记里直接做。
                 Button { store.toggleTodo(task.id, on: task.date) } label: {
                     Label(task.task.isDone ? "取消完成" : "完成", systemImage: task.task.isDone ? "arrow.uturn.backward.circle" : "checkmark.circle")
@@ -718,6 +719,7 @@ struct NotesView: View {
                     Text("按待办").tag(true)
                     Text("按日期").tag(false)
                 }.pickerStyle(.segmented).labelsHidden().frame(width: 140)
+                BoardOpenButton(store: store, owner: .tag(tag))
                 if chapterView {
                     Button { nav.showOutline.toggle() } label: { Image(systemName: "sidebar.right") }
                         .foregroundStyle(nav.showOutline ? Palette.accent : Palette.muted)

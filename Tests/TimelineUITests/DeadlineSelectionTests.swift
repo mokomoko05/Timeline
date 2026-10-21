@@ -66,8 +66,8 @@ final class DeadlineSelectionTests: XCTestCase {
             window.contentView = host
             window.setContentSize(host.fittingSize)
             host.layoutSubtreeIfNeeded()
-            XCTAssertEqual(host.fittingSize.width, timed ? 438 : 252, accuracy: 1)
-            XCTAssertLessThan(host.fittingSize.height, 330)
+            XCTAssertEqual(host.fittingSize.width, 308, accuracy: 1)
+            XCTAssertLessThan(host.fittingSize.height, 460)
             func pickers(_ view: NSView) -> [NSDatePicker] {
                 (view as? NSDatePicker).map { [$0] } ?? view.subviews.flatMap(pickers)
             }
@@ -83,6 +83,85 @@ final class DeadlineSelectionTests: XCTestCase {
             }
             window.contentView = nil
             window.close()
+        }
+    }
+
+    func testTwentyFourHourInputPreservesDayAndRejectsInvalidValues() {
+        var current = date(15, 37)
+        let binding = Binding(get: { current }, set: { current = $0 })
+        let hours = DeadlineTextInput(due: binding, component: .hour24)
+        hours.apply("00")
+        XCTAssertEqual(current, date(0, 37))
+        XCTAssertEqual(hours.display, "00")
+        hours.apply("23")
+        XCTAssertEqual(current, date(23, 37))
+        hours.apply("24")
+        hours.apply("-1")
+        hours.apply("invalid")
+        XCTAssertEqual(current, date(23, 37))
+        DeadlineTextInput(due: binding, component: .minute).apply("59")
+        XCTAssertEqual(current, date(23, 59))
+        DeadlineTextInput(due: binding, component: .day).apply("2026-10-31")
+        XCTAssertEqual(current, date(23, 59, day: 31))
+        XCTAssertEqual(DeadlineSelection.initialDate(date(0), hasTime: false), date(9))
+        XCTAssertEqual(DeadlineSelection.initialDate(date(0), hasTime: true), date(0))
+    }
+
+    func testDeadlineLabelsDistinguishAllDayUndatedAndMidnight() {
+        var task = Todo(title: "Task")
+        XCTAssertEqual(TaskDeadlineButton.label(for: task), AppLocalized("设置日期"))
+        task.dueDate = date(0)
+        XCTAssertEqual(TaskDeadlineButton.label(for: task, compact: true), AppLocalized("全天"))
+        task.dueHasTime = true
+        XCTAssertEqual(TaskDeadlineButton.label(for: task, compact: true), "00:00")
+        task.dueDate = date(23, 59)
+        XCTAssertEqual(TaskDeadlineButton.label(for: task, compact: true), "23:59")
+        XCTAssertTrue(TaskDeadlineButton.label(for: task).contains("23:59"))
+    }
+
+    func testTimeToggleKeepsPanelDimensionsStable() {
+        func size(timed: Bool) -> NSSize {
+            NSHostingView(rootView: DeadlineSelectionView(due: .constant(date(15, 37)), timed: .constant(timed))).fittingSize
+        }
+        XCTAssertEqual(size(timed: false).width, size(timed: true).width, accuracy: 1)
+        XCTAssertEqual(size(timed: false).height, size(timed: true).height, accuracy: 1)
+    }
+
+    func testFullTaskSettingsKeepDateAndTimeInputsInsideThePanel() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let task = try XCTUnwrap(store.addParsedTodo("Meeting", on: date(15, 37)))
+        store.updateTodo(task.id, scheduledDate: task.date, dueDate: date(15, 37), dueHasTime: true,
+                         reminderMinutes: nil, repeatRule: .none)
+        let current = try XCTUnwrap(store.locate(task.id))
+        let host = NSHostingView(rootView: LocalizedRoot {
+            TaskDetailsView(store: store, task: current.task, date: current.date)
+                .environmentObject(ReminderScheduler(store: store))
+        })
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 430, height: 740),
+                                 styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        window.setContentSize(host.fittingSize)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(host.fittingSize.width, 430, accuracy: 1)
+        XCTAssertLessThan(host.fittingSize.height, 740)
+        func fields(_ view: NSView) -> [NSTextField] {
+            (view as? NSTextField).map { $0.isEditable ? [$0] : [] } ?? view.subviews.flatMap(fields)
+        }
+        let timeFields = fields(host).filter { ["15", "37", "2026-10-19"].contains($0.stringValue) }
+        XCTAssertEqual(timeFields.count, 3)
+        for field in timeFields {
+            let frame = field.convert(field.bounds, to: host)
+            XCTAssertGreaterThanOrEqual(frame.minX, 0)
+            XCTAssertLessThanOrEqual(frame.maxX, host.bounds.width)
+        }
+        if let destination = ProcessInfo.processInfo.environment["TIMELINE_DEADLINE_SNAPSHOT"],
+           let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: destination + "-settings.png"))
         }
     }
 }

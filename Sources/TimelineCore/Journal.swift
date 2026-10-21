@@ -182,18 +182,19 @@ public struct ActionEvent: Equatable {
 }
 
 private struct JournalDocument: Codable {
-    /// 6：任务独立于日期，日期即截止日期（DDL），任务有永久编号。
-    var version = 6
+    var version = 7
     var days: [String: DayEntry] = [:]
     var nextTaskNumber: Int?
     /// 标签注册表：显式创建的标签（可以是还没有任何内容的空标签）。用过的标签不需要在这里。
     var tags: [String]?
     /// 固定关联的待办（不计时）：没有明确指定、也不在专注计时时，新日志记到它名下。
     var pinnedTask: UUID?
+    var boards: [Board]?
 }
 
 @MainActor
 public final class JournalStore: ObservableObject {
+    @Published public private(set) var boards: [Board] = []
     @Published public private(set) var days: [String: DayEntry] = [:]
     @Published public private(set) var errorMessage: String?
     @Published public private(set) var lastSaved: Date?
@@ -260,7 +261,7 @@ public final class JournalStore: ObservableObject {
         }
         let original = try Data(contentsOf: journal)
         let document = try JSONDecoder().decode(JournalDocument.self, from: original)
-        guard (1...6).contains(document.version) else { throw CocoaError(.fileReadUnknown) }
+        guard (1...7).contains(document.version) else { throw CocoaError(.fileReadUnknown) }
         let staging = applicationSupport.appendingPathComponent(".Timeline-migration-\(UUID().uuidString)", isDirectory: true)
         try manager.createDirectory(at: staging, withIntermediateDirectories: false)
         defer { try? manager.removeItem(at: staging) }
@@ -285,12 +286,13 @@ public final class JournalStore: ObservableObject {
             if FileManager.default.fileExists(atPath: fileURL.path) {
                 let data = try Data(contentsOf: fileURL)
                 let document = try JSONDecoder().decode(JournalDocument.self, from: data)
-                guard (1...6).contains(document.version) else {
+                guard (1...7).contains(document.version) else {
                     throw CocoaError(.fileReadUnknown)
                 }
                 days = document.days
                 tagRegistry = TagText.merge([], (document.tags ?? []).compactMap(TagText.normalize))
                 pinnedTaskID = document.pinnedTask
+                boards = document.boards ?? []
                 if !readOnlySnapshot { try data.write(to: backupURL, options: .atomic) }
                 nextTaskNumber = max(document.nextTaskNumber ?? 1, (days.values.flatMap(\.todos).compactMap(\.number).max() ?? 0) + 1)
                 if document.version < 6 {
@@ -420,7 +422,14 @@ public final class JournalStore: ObservableObject {
         guard !isReadOnly, let index = entry(for: date).todos.firstIndex(where: { $0.id == id }) else { return }
         deletedTodo = (entry(for: date).todos[index], date, index)
         canUndoDelete = true
+        var updatedBoards = boards
+        for boardIndex in updatedBoards.indices where updatedBoards[boardIndex].owner == .task(id) {
+            updatedBoards[boardIndex].title = String(TaskText.rendered(entry(for: date).todos[index].title).characters)
+        }
+        undoManager.beginUndoGrouping()
+        replaceBoards(updatedBoards, action: "删除任务")
         change(date, action: "删除任务") { $0.todos.remove(at: index) }
+        undoManager.endUndoGrouping()
     }
 
     public func renameCalendarName(_ id: UUID, name: String, on date: Date) {
@@ -1120,7 +1129,7 @@ public final class JournalStore: ObservableObject {
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(JournalDocument(days: days, nextTaskNumber: nextTaskNumber, tags: tagRegistry.isEmpty ? nil : tagRegistry, pinnedTask: pinnedTaskID))
+            let data = try encoder.encode(documentSnapshot)
             try makeDailyBackup(data)
             try data.write(to: fileURL, options: .atomic)
             lastSaved = Date()
@@ -1134,7 +1143,7 @@ public final class JournalStore: ObservableObject {
     public func export(to url: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(JournalDocument(days: days, nextTaskNumber: nextTaskNumber, tags: tagRegistry.isEmpty ? nil : tagRegistry, pinnedTask: pinnedTaskID)).write(to: url, options: .atomic)
+        try encoder.encode(documentSnapshot).write(to: url, options: .atomic)
     }
 
     public func tasks(matching query: String = "", filter: AgendaFilter = .all, now: Date = Date()) -> [ScheduledTask] {
@@ -1317,7 +1326,7 @@ public final class JournalStore: ObservableObject {
         let document = try readBackup(url)
         try FileManager.default.createDirectory(at: backupsDirectory, withIntermediateDirectories: true)
         let current = isReadOnly && FileManager.default.fileExists(atPath: fileURL.path)
-            ? try Data(contentsOf: fileURL) : try JSONEncoder().encode(JournalDocument(days: days, nextTaskNumber: nextTaskNumber, tags: tagRegistry.isEmpty ? nil : tagRegistry, pinnedTask: pinnedTaskID))
+            ? try Data(contentsOf: fileURL) : try JSONEncoder().encode(documentSnapshot)
         let recovery = backupsDirectory.appendingPathComponent("before-restore-\(JournalDates.key(Date()))-\(UUID().uuidString).json")
         try current.write(to: recovery, options: .atomic)
         isReadOnly = false
@@ -1327,17 +1336,23 @@ public final class JournalStore: ObservableObject {
         tagRegistry = TagText.merge(tagRegistry, (document.tags ?? []).compactMap(TagText.normalize))
         nextTaskNumber = max(nextTaskNumber, document.nextTaskNumber ?? 1, (restored.values.flatMap(\.todos).compactMap(\.number).max() ?? 0) + 1)
         assignMissingNumbers(in: &restored)
+        undoManager.beginUndoGrouping()
+        replaceBoards(document.boards ?? [], action: "恢复备份")
         replaceDays(restored, action: "恢复备份", force: true)
+        undoManager.endUndoGrouping()
         if let errorMessage { throw NSError(domain: "Timeline", code: 1, userInfo: [NSLocalizedDescriptionKey: errorMessage]) }
     }
 
     private func readBackup(_ url: URL) throws -> JournalDocument {
         let document = try JSONDecoder().decode(JournalDocument.self, from: Data(contentsOf: url))
-        guard (1...6).contains(document.version), document.days.keys.allSatisfy({ JournalDates.date(for: $0) != nil }) else { throw CocoaError(.fileReadCorruptFile) }
+        guard (1...7).contains(document.version), document.days.keys.allSatisfy({ JournalDates.date(for: $0) != nil }) else { throw CocoaError(.fileReadCorruptFile) }
         let ids = document.days.values.flatMap { $0.todos.map(\.id) }
         guard Set(ids).count == ids.count else { throw CocoaError(.fileReadCorruptFile) }
         let logIDs = document.days.values.flatMap { $0.logs.map(\.id) }
         guard Set(logIDs).count == logIDs.count else { throw CocoaError(.fileReadCorruptFile) }
+        let boards = document.boards ?? []
+        guard Set(boards.map(\.id)).count == boards.count,
+              boards.allSatisfy({ Set($0.items.map(\.id)).count == $0.items.count }) else { throw CocoaError(.fileReadCorruptFile) }
         return document
     }
 
@@ -1421,6 +1436,25 @@ public final class JournalStore: ObservableObject {
         save()
     }
 
+    private var documentSnapshot: JournalDocument {
+        JournalDocument(days: days, nextTaskNumber: nextTaskNumber, tags: tagRegistry.isEmpty ? nil : tagRegistry,
+                        pinnedTask: pinnedTaskID, boards: boards.isEmpty ? nil : boards)
+    }
+
+    func replaceBoards(_ updated: [Board], action: String, debounce: Bool = false) {
+        guard !isReadOnly, updated != boards else { return }
+        let previous = boards
+        let grouping = !undoManager.isUndoing && !undoManager.isRedoing
+        if grouping { undoManager.beginUndoGrouping() }
+        undoManager.registerUndo(withTarget: self) { store in store.replaceBoards(previous, action: action) }
+        undoManager.setActionName(action)
+        if grouping { undoManager.endUndoGrouping() }
+        boards = updated
+        cachedTagSummaries = nil
+        hasPendingSave = true
+        if debounce { scheduleSave() } else { save() }
+    }
+
     private func scheduleSave() {
         pendingSave?.cancel()
         pendingSave = Task { [weak self] in
@@ -1465,7 +1499,13 @@ extension JournalStore {
             day.logDraftTags = map(day.logDraftTags)
             updated[key] = day
         }
-        applyTagChange(days: updated, registry: map(tagRegistry), action: "重命名标签")
+        var updatedBoards = boards
+        for index in updatedBoards.indices {
+            if case .tag(let tag) = updatedBoards[index].owner, !updatedBoards[index].archived {
+                updatedBoards[index].owner = .tag(Self.renamedTag(tag, from: old, to: new))
+            }
+        }
+        applyTagChange(days: updated, registry: map(tagRegistry), boards: updatedBoards, action: "重命名标签")
         return new
     }
 
@@ -1491,13 +1531,20 @@ extension JournalStore {
             day.logDraftTags = strip(day.logDraftTags)
             updated[key] = day
         }
-        applyTagChange(days: updated, registry: strip(tagRegistry), action: "删除标签")
+        var updatedBoards = boards
+        for index in updatedBoards.indices {
+            if case .tag(let tag) = updatedBoards[index].owner, Self.isTag(tag, under: name) {
+                updatedBoards[index].archived = true
+            }
+        }
+        applyTagChange(days: updated, registry: strip(tagRegistry), boards: updatedBoards, action: "删除标签")
         return touched
     }
 
     /// 数据和注册表一起改，作为一次撤销。
-    private func applyTagChange(days updated: [String: DayEntry], registry: [String], action: String) {
+    private func applyTagChange(days updated: [String: DayEntry], registry: [String], boards updatedBoards: [Board], action: String) {
         undoManager.beginUndoGrouping()
+        replaceBoards(updatedBoards, action: action)
         replaceDays(updated, action: action)
         if registry != tagRegistry {
             registerRegistryUndo(tagRegistry, action: action)

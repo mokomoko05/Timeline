@@ -179,7 +179,7 @@ struct ContentView: View {
             guard let task = selectedTask else { return }
             tasksVisible = true
             scrollTarget = task.id
-            let kind: TaskPopoverRequest.Kind = { if case .tagsSelected = command { return .tags } else { return .details } }()
+            let kind: TaskPopoverRequest.Kind = { if case .tagsSelected = command { return .tags } else { return .deadline } }()
             // 等清单滚到这一行、行画出来之后再请它打开面板。
             DispatchQueue.main.async { interaction.taskPopover = TaskPopoverRequest(id: task.id, kind: kind) }
         case .pinSelected:

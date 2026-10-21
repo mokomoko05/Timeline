@@ -81,33 +81,34 @@ struct TaskDeadlineButton: View {
         return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
     }
 
+    static func label(for task: Todo, compact: Bool = false) -> String {
+        guard let due = task.dueDate else { return AppLocalized("设置日期") }
+        if compact { return task.dueHasTime ? time(due) : AppLocalized("全天") }
+        return task.dueHasTime ? due.relativeLabel + " " + time(due) : due.relativeLabel
+    }
+
     var body: some View {
         Button { showing = true } label: {
-            Text(task.dueDate.map(label) ?? AppLocalized("未设日期"))
+            HStack(spacing: 3) {
+                if !compact { Image(systemName: task.dueHasTime ? "clock" : "calendar") }
+                Text(Self.label(for: task, compact: compact))
+            }
                 .font(.system(size: compact ? 9 : 10, weight: .medium, design: .monospaced))
                 .lineLimit(1).fixedSize()
-                .foregroundStyle(!task.completed && task.effectiveDeadline.map({ $0 < Date() }) == true ? Palette.deadline : Palette.muted)
+                .foregroundStyle(!task.completed && task.effectiveDeadline.map({ $0 < Date() }) == true ? Palette.deadline : (task.dueHasTime ? Palette.accent : Palette.muted))
                 .padding(.horizontal, compact ? 2 : 4).padding(.vertical, 2)
         }
         .buttonStyle(.plain).raisedOnHover(radius: 4).disabled(store.isReadOnly)
-        .help("修改截止时间")
+        .help(task.dueDate.map { $0.formatted(date: .complete, time: task.dueHasTime ? .shortened : .omitted) } ?? AppLocalized("设置截止日期与时间"))
+        .accessibilityLabel(AppLocalized("截止日期与时间") + " " + Self.label(for: task))
         .accessibilityIdentifier("task-deadline-" + task.id.uuidString)
         .popover(isPresented: $showing, arrowEdge: .bottom) {
             TaskDeadlineEditor(store: store, task: task, close: { showing = false })
         }
     }
-
-    private func label(_ due: Date) -> String {
-        if compact { return Self.time(due) }
-        if task.dueHasTime {
-            return JournalDates.calendar.isDateInToday(due)
-                ? AppLocalizedFormat("%@ 前", Self.time(due)) : due.relativeLabel + " " + Self.time(due)
-        }
-        return due.relativeLabel
-    }
 }
 
-private struct TaskDeadlineEditor: View {
+struct TaskDeadlineEditor: View {
     @ObservedObject var store: JournalStore
     let task: Todo
     let close: () -> Void
@@ -115,16 +116,22 @@ private struct TaskDeadlineEditor: View {
     @State private var timed: Bool
     init(store: JournalStore, task: Todo, close: @escaping () -> Void) {
         self.store = store; self.task = task; self.close = close
-        _due = State(initialValue: task.dueDate ?? Date())
+        _due = State(initialValue: DeadlineSelection.initialDate(task.dueDate ?? Date(), hasTime: task.dueHasTime))
         _timed = State(initialValue: task.dueHasTime)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Text("截止日期与时间").font(.system(size: 14, weight: .semibold))
+            Text(String(TaskText.rendered(task.title).characters)).font(.system(size: 11)).foregroundStyle(Palette.muted).lineLimit(2)
             DeadlineSelectionView(due: $due, timed: $timed)
+            Divider()
             HStack {
                 Button("清除") { store.setDeadline(task.id, to: nil); close() }
+                    .disabled(task.dueDate == nil)
                 Spacer()
+                Button("取消", action: close).keyboardShortcut(.cancelAction)
                 Button("保存") {
+                    NSApp.keyWindow?.makeFirstResponder(nil)
                     if let current = store.locate(task.id) {
                         store.updateTodo(task.id, scheduledDate: current.date, dueDate: due, dueHasTime: timed,
                                          reminderMinutes: current.task.reminderMinutes, repeatRule: current.task.repeatRule)
@@ -132,7 +139,7 @@ private struct TaskDeadlineEditor: View {
                     close()
                 }.keyboardShortcut(.defaultAction)
             }
-        }.padding(14)
+        }.padding(16).foregroundStyle(Palette.ink).background(Palette.background)
     }
 }
 

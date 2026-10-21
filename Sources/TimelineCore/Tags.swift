@@ -138,6 +138,9 @@ extension JournalStore {
         }
 
         _ = levels(tagRegistry)
+        for board in boards where !board.archived {
+            if case .tag(let tag) = board.owner { _ = levels([tag]) }
+        }
         for item in tasks() {
             for key in levels(item.task.tags) {
                 let previous = taskCounts[key] ?? (0, 0)
@@ -226,6 +229,10 @@ extension JournalStore {
     public func removeEmptyTag(_ name: String) -> Bool {
         guard !isReadOnly, let summary = allTags().first(where: { $0.id == TagText.key(name) }),
               summary.taskCount == 0, summary.noteCount == 0 else { return false }
+        guard !boards.contains(where: { board in
+            guard !board.archived, case .tag(let tag) = board.owner else { return false }
+            return Self.isTag(tag, under: name)
+        }) else { return false }
         let key = TagText.key(name)
         // 空的上级标签（`论文`）可能只是被子标签带出来的：有子标签在用时不删。
         guard !allTags().contains(where: { $0.id != key && $0.id.hasPrefix(key + "/") && ($0.taskCount > 0 || $0.noteCount > 0) }) else { return false }

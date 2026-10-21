@@ -18,7 +18,7 @@ final class WorkspaceInteraction: ObservableObject {
 }
 
 struct TaskPopoverRequest: Equatable {
-    enum Kind { case details, tags }
+    enum Kind { case details, deadline, tags }
     let id: UUID
     let kind: Kind
 }

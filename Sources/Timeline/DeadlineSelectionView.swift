@@ -4,6 +4,10 @@ import TimelineCore
 
 /// 日期、钟表与文本输入共享同一份值，切换日期时保留已选时间。
 enum DeadlineSelection {
+    static func initialDate(_ date: Date, hasTime: Bool) -> Date {
+        hasTime ? date : (JournalDates.calendar.date(bySettingHour: 9, minute: 0, second: 0, of: date) ?? date)
+    }
+
     static func day(_ day: Date, keepingTime date: Date) -> Date {
         let time = JournalDates.calendar.dateComponents([.hour, .minute], from: date)
         return JournalDates.calendar.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: 0, of: day) ?? day
@@ -60,21 +64,54 @@ struct DeadlineSelectionView: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 10) {
-                calendar
-                HStack {
-                    Text("截止日期").font(.system(size: 12))
-                    DeadlineTextInput(due: $due, component: .day)
-                        .frame(width: 112, height: 24)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                ForEach([("今天", 0), ("明天", 1), ("下周一", -1)], id: \.0) { title, offset in
+                    Button(LocalizedStringKey(title)) {
+                        NSApp.keyWindow?.makeFirstResponder(nil)
+                        let today = JournalDates.calendar.startOfDay(for: Date())
+                        let weekday = (JournalDates.calendar.component(.weekday, from: today) + 5) % 7
+                        let day = JournalDates.calendar.date(byAdding: .day, value: offset < 0 ? 7 - weekday : offset, to: today) ?? today
+                        due = DeadlineSelection.day(day, keepingTime: due)
+                    }.buttonStyle(.bordered).controlSize(.small)
                 }
-                Toggle("指定时间", isOn: $timed).toggleStyle(.checkbox).font(.system(size: 12))
-            }.frame(width: 224)
-            if timed {
-                DeadlineClockPicker(due: $due)
-                    .frame(width: 170)
             }
+            calendar
+            HStack {
+                Text("截止日期").font(.system(size: 12))
+                Spacer()
+                DeadlineTextInput(due: $due, component: .day).frame(width: 118, height: 26)
+            }
+            Divider()
+            HStack {
+                Toggle("指定时间", isOn: $timed).toggleStyle(.checkbox).font(.system(size: 12))
+                Spacer()
+                Text(timed ? "24 小时制" : "全天").font(.system(size: 11)).foregroundStyle(Palette.muted)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                if timed {
+                    HStack(spacing: 7) {
+                        Image(systemName: "clock").foregroundStyle(Palette.accent)
+                        DeadlineTextInput(due: $due, component: .hour24).frame(width: 44, height: 28)
+                        Text(":").foregroundStyle(Palette.muted)
+                        DeadlineTextInput(due: $due, component: .minute).frame(width: 44, height: 28)
+                        Spacer()
+                        Text("HH:mm").font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
+                    }
+                    HStack(spacing: 6) {
+                        ForEach([9, 12, 18], id: \.self) { hour in
+                            Button(String(format: "%02d:00", hour)) {
+                                NSApp.keyWindow?.makeFirstResponder(nil)
+                                due = JournalDates.calendar.date(bySettingHour: hour, minute: 0, second: 0, of: due) ?? due
+                            }.buttonStyle(.bordered).controlSize(.mini)
+                        }
+                    }
+                } else {
+                    Text("全天任务，在当天结束时截止").font(.system(size: 11)).foregroundStyle(Palette.muted)
+                }
+            }.frame(height: 62, alignment: .top)
         }
+        .frame(width: 280)
         .onChange(of: due) { value in month = JournalDates.monthStart(value) }
         .foregroundStyle(Palette.ink).tint(Palette.accent)
     }
@@ -107,11 +144,14 @@ struct DeadlineSelectionView: View {
                 ForEach(JournalDates.monthGrid(month, weekStart: sundayFirst ? 1 : 2), id: \.self) { day in
                     let selected = JournalDates.calendar.isDate(day, inSameDayAs: due)
                     let inMonth = JournalDates.calendar.isDate(day, equalTo: month, toGranularity: .month)
-                    Button { due = DeadlineSelection.day(day, keepingTime: due) } label: {
+                    Button {
+                        NSApp.keyWindow?.makeFirstResponder(nil)
+                        due = DeadlineSelection.day(day, keepingTime: due)
+                    } label: {
                         Text("\(JournalDates.calendar.component(.day, from: day))")
                             .font(.system(size: 12, weight: selected ? .semibold : .regular)).monospacedDigit()
                             .foregroundStyle(selected ? Color.white : Palette.ink.opacity(inMonth ? 1 : 0.35))
-                            .frame(maxWidth: .infinity).frame(height: 26)
+                            .frame(maxWidth: .infinity).frame(height: 28)
                             .background(selected ? Palette.accent : .clear, in: RoundedRectangle(cornerRadius: 6))
                             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(JournalDates.calendar.isDateInToday(day) && !selected ? Palette.accent : .clear))
                     }
@@ -120,7 +160,7 @@ struct DeadlineSelectionView: View {
                     .accessibilityAddTraits(selected ? .isSelected : [])
                 }
             }
-            .frame(height: 166, alignment: .top)
+            .frame(height: 178, alignment: .top)
         }
         .buttonStyle(.plain)
     }
@@ -240,19 +280,20 @@ struct DeadlineClockPicker: View {
 
 /// 普通文本框不带系统日历弹窗。时、分分别输入，编辑回调始终保留当前 AM/PM。
 struct DeadlineTextInput: NSViewRepresentable {
-    enum Component { case day, hour, minute }
+    enum Component { case day, hour, hour24, minute }
     @Binding var due: Date
     let component: Component
 
     func makeNSView(context: Context) -> NSTextField {
         let field = NSTextField()
         field.delegate = context.coordinator
-        field.isBordered = true
+        field.isBordered = false
+        field.isBezeled = true
         field.bezelStyle = .roundedBezel
-        field.focusRingType = .none
+        field.focusRingType = .default
         field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         field.alignment = component == .day ? .left : .center
-        field.setAccessibilityLabel(AppLocalized(component == .day ? "截止日期" : (component == .hour ? "时针" : "分针")))
+        field.setAccessibilityLabel(AppLocalized(component == .day ? "截止日期" : (component == .minute ? "分钟" : "小时")))
         return field
     }
 
@@ -268,6 +309,7 @@ struct DeadlineTextInput: NSViewRepresentable {
         case .hour:
             let hour = calendar.component(.hour, from: due) % 12
             return String(format: "%02d", hour == 0 ? 12 : hour)
+        case .hour24: return String(format: "%02d", calendar.component(.hour, from: due))
         case .minute: return String(format: "%02d", calendar.component(.minute, from: due))
         }
     }
@@ -278,6 +320,11 @@ struct DeadlineTextInput: NSViewRepresentable {
             if let day = JournalDates.date(for: text) { due = DeadlineSelection.day(day, keepingTime: due) }
         case .hour:
             if let hour = Int(text), (1...12).contains(hour) { due = DeadlineSelection.time(due, hour: hour) }
+        case .hour24:
+            if let hour = Int(text), (0...23).contains(hour),
+               let updated = JournalDates.calendar.date(bySettingHour: hour, minute: JournalDates.calendar.component(.minute, from: due), second: 0, of: due) {
+                due = updated
+            }
         case .minute:
             if let minute = Int(text), (0...59).contains(minute) { due = DeadlineSelection.time(due, minute: minute) }
         }

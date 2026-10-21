@@ -24,7 +24,7 @@ struct TaskDetailsView: View {
         self.task = task
         self.home = date
         _hasDue = State(initialValue: task.dueDate != nil)
-        _due = State(initialValue: task.dueDate ?? JournalDates.calendar.startOfDay(for: Date()))
+        _due = State(initialValue: DeadlineSelection.initialDate(task.dueDate ?? Date(), hasTime: task.dueHasTime))
         _timed = State(initialValue: task.dueHasTime)
         _reminder = State(initialValue: task.reminderMinutes ?? -1)
         _recurrence = State(initialValue: task.repeatRule)
@@ -32,64 +32,56 @@ struct TaskDetailsView: View {
         _priority = State(initialValue: task.priority)
     }
 
-    /// offset = -1 表示下周一。
-    private static func quickDate(_ offset: Int) -> Date {
-        let calendar = JournalDates.calendar
-        let today = calendar.startOfDay(for: Date())
-        if offset >= 0 { return calendar.date(byAdding: .day, value: offset, to: today)! }
-        let weekday = (calendar.component(.weekday, from: today) + 5) % 7
-        return calendar.date(byAdding: .day, value: 7 - weekday, to: today)!
-    }
-
-    /// 换日期时保留已设置的时分。
-    private func setDay(_ day: Date) {
-        let calendar = JournalDates.calendar
-        if timed {
-            let time = calendar.dateComponents([.hour, .minute], from: due)
-            due = calendar.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: 0, of: day) ?? day
-        } else {
-            due = day
-        }
-        hasDue = true
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(String(TaskText.rendered(task.title).characters)).font(.headline).lineLimit(3)
-            HStack(spacing: 6) {
-                Text("截止日期").font(.caption).foregroundStyle(.secondary)
-                ForEach([("今天", 0), ("明天", 1), ("下周一", -1)], id: \.0) { label, offset in
-                    Button(label) { setDay(Self.quickDate(offset)) }.buttonStyle(.bordered).controlSize(.small)
-                }
-                Button("清除") { hasDue = false }.buttonStyle(.bordered).controlSize(.small).disabled(!hasDue)
-            }
-            Form {
-                Picker("优先级", selection: $priority) {
-                    ForEach(TaskPriority.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
-                }.pickerStyle(.segmented)
-                TextField("月历短名称", text: $calendarName, prompt: Text("留空使用原标题"))
-                Toggle("设置截止日期（DDL）", isOn: $hasDue)
-                if hasDue {
-                    DeadlineSelectionView(due: $due, timed: $timed)
-                    Picker("提醒", selection: $reminder) {
-                        Text("不提醒").tag(-1)
-                        Text(timed ? "截止时" : "当天 09:00").tag(0)
-                        Text("提前 15 分钟").tag(15)
-                        Text("提前 30 分钟").tag(30)
-                        Text("提前 1 小时").tag(60)
-                        Text("提前 1 天").tag(1440)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        Text("优先级")
+                        Spacer()
+                        Picker("优先级", selection: $priority) {
+                            ForEach(TaskPriority.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
+                        }.pickerStyle(.menu).labelsHidden().frame(width: 190)
                     }
+                    HStack {
+                        Text("月历短名称")
+                        TextField("", text: $calendarName, prompt: Text("留空使用原标题")).textFieldStyle(.roundedBorder)
+                    }
+                    Divider()
+                    Toggle("设置截止日期（DDL）", isOn: $hasDue)
+                    if hasDue {
+                        DeadlineSelectionView(due: $due, timed: $timed).frame(maxWidth: .infinity)
+                        HStack {
+                            Text("提醒")
+                            Spacer()
+                            Picker("提醒", selection: $reminder) {
+                                Text("不提醒").tag(-1)
+                                Text(timed ? "截止时" : "当天 09:00").tag(0)
+                                Text("提前 15 分钟").tag(15)
+                                Text("提前 30 分钟").tag(30)
+                                Text("提前 1 小时").tag(60)
+                                Text("提前 1 天").tag(1440)
+                            }.pickerStyle(.menu).labelsHidden().frame(width: 190)
+                        }
+                    }
+                    HStack {
+                        Text("重复")
+                        Spacer()
+                        Picker("重复", selection: $recurrence) {
+                            ForEach(RepeatRule.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
+                        }.pickerStyle(.menu).labelsHidden().frame(width: 190)
+                    }
+                    if recurrence != .none { Text("完成后生成下一次").font(.caption).foregroundStyle(Palette.muted) }
                 }
-                Picker("重复", selection: $recurrence) {
-                    ForEach(RepeatRule.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
-                }
-                if recurrence != .none { Text("完成后生成下一次").font(.caption).foregroundStyle(.secondary) }
-            }.disabled(store.isReadOnly)
+                .font(.system(size: 12)).padding(.trailing, 6).disabled(store.isReadOnly)
+            }.frame(height: hasDue ? 540 : 150)
             if !reminders.status.isEmpty { Text(reminders.status).font(.caption).foregroundStyle(.orange) }
             HStack {
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存") {
+                    NSApp.keyWindow?.makeFirstResponder(nil)
                     saving = true
                     Task { @MainActor in
                         if hasDue && reminder >= 0 { _ = await reminders.requestPermission() }
@@ -104,7 +96,7 @@ struct TaskDetailsView: View {
                 .disabled(saving || store.isReadOnly)
             }
         }
-        .padding(20).frame(width: hasDue && timed ? 490 : 430)
+        .padding(20).frame(width: 430).foregroundStyle(Palette.ink).background(Palette.background)
     }
 }
 

@@ -212,7 +212,7 @@ final class JournalTests: XCTestCase {
         XCTAssertEqual(restored.entry(for: today), store.entry(for: today))
         XCTAssertEqual(restored.entry(for: today).todos.count, 2)
         let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as? [String: Any])
-        XCTAssertEqual(raw["version"] as? Int, 6)
+        XCTAssertEqual(raw["version"] as? Int, 7)
     }
 
     @MainActor
@@ -310,7 +310,7 @@ final class JournalTests: XCTestCase {
     @MainActor
     func testFutureSchemaIsProtected() async throws {
         let directory = try temporaryDirectory()
-        try Data("{\"version\":7,\"days\":{}}".utf8).write(to: directory.appendingPathComponent("journal.json"))
+        try Data("{\"version\":8,\"days\":{}}".utf8).write(to: directory.appendingPathComponent("journal.json"))
         let store = JournalStore(directory: directory)
         XCTAssertTrue(store.isReadOnly)
     }

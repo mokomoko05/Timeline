@@ -19,6 +19,7 @@ struct ManagedTaskRow: View {
     var next: () -> Void = {}
     var select: () -> Void = {}
     @State private var showingDetails = false
+    @State private var showingDeadline = false
     @State private var showingTags = false
     @State private var hovered = false
 
@@ -27,10 +28,7 @@ struct ManagedTaskRow: View {
     var body: some View {
         HStack(spacing: 6) {
             if timeline {
-                Group {
-                    if task.dueHasTime { TaskDeadlineButton(store: store, task: task, compact: true) }
-                    else { Color.clear }
-                }
+                TaskDeadlineButton(store: store, task: task, compact: true)
                 .frame(width: TaskTimelineLayout.timeWidth(typography), alignment: .trailing)
                 priorityControl
                     .frame(width: 22).frame(maxHeight: .infinity)
@@ -127,6 +125,9 @@ struct ManagedTaskRow: View {
                 // 日期与计时覆盖整块正文的高度，不再挤在标题行中。
                 VStack(alignment: .trailing, spacing: 2) {
                     if !timeline { TaskDeadlineButton(store: store, task: task) }
+                    if store.board(for: .task(task.id)) != nil {
+                        BoardOpenButton(store: store, owner: .task(task.id)).font(.system(size: 10)).buttonStyle(.plain)
+                    }
                     if let focus {
                         TaskFocusButton(session: focus, task: ScheduledTask(date: date, task: task))
                     }
@@ -196,6 +197,9 @@ struct ManagedTaskRow: View {
             }
         }
         .popover(isPresented: $showingDetails, arrowEdge: .leading) { TaskDetailsView(store: store, task: task, date: date) }
+        .popover(isPresented: $showingDeadline, arrowEdge: .leading) {
+            TaskDeadlineEditor(store: store, task: task, close: { showingDeadline = false })
+        }
         // 键盘（D / T）或菜单请这一行打开面板。
         .onChange(of: interaction.taskPopover) { request in
             guard let request, request.id == task.id else { return }
@@ -203,6 +207,7 @@ struct ManagedTaskRow: View {
             NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
             switch request.kind {
             case .details: showingDetails = true
+            case .deadline: showingDeadline = true
             case .tags: showingTags = true
             }
         }
@@ -213,6 +218,10 @@ struct ManagedTaskRow: View {
     private var radialItems: [RadialItem] {
         let noteCount = store.notes(for: task.id).count
         var items: [RadialItem] = [
+            RadialItem(id: "board", symbol: "list.bullet.rectangle", title: "打开工作板", action: {
+                selectTask()
+                BoardWindowController.shared.show(store: store, owner: .task(task.id))
+            }),
             RadialItem(id: "notes", symbol: noteCount > 0 ? "note.text" : "square.and.pencil",
                        title: noteCount > 0 ? "打开笔记（\(noteCount) 条）" : "写笔记", active: noteCount > 0, action: {
                 selectTask()
@@ -254,11 +263,15 @@ struct ManagedTaskRow: View {
                 withAnimation(Motion.quick) { store.toggleTodo(task.id, on: date) }
             }), at: 0)
         }
-        // 环形菜单不再重复日期入口；完整设置仍可从右键或 D 打开。
-        list.insert(TextMenuItem(title: "截止日期与月历短标题", symbol: "calendar.badge.clock", action: {
+        list.insert(TextMenuItem(title: "任务设置…", symbol: "slider.horizontal.3", action: {
             selectTask()
             NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
             showingDetails = true
+        }), at: 1)
+        list.insert(TextMenuItem(title: "截止日期与时间…（D）", symbol: "calendar.badge.clock", action: {
+            selectTask()
+            NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
+            showingDeadline = true
         }), at: 1)
         list.insert(contentsOf: TaskPriority.allCases.map { priority in
             TextMenuItem(title: priority.title, symbol: task.priority == priority ? "checkmark" : nil,
