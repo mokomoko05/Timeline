@@ -360,18 +360,21 @@ struct BoardContentView: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             Divider()
-            HStack {
+            VStack(alignment: .leading, spacing: 10) {
                 if !store.isReadOnly {
-                    Menu("插入模板") {
-                        Button("折叠内容（details）") { insertTemplate(.disclosure) }
-                        Divider()
+                    HStack(spacing: 8) {
+                        Button("折叠内容") { insertTemplate(.disclosure) }
                         Button("论文阅读") { insertTemplate(.paper) }
                         Button("会议议程") { insertTemplate(.meeting) }
-                    }.menuStyle(.borderlessButton).fixedSize()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
-                Spacer()
-                Text(editing ? "⌘↩ 预览" : "⌘↩ 编辑")
-                Text(store.isReadOnly ? "只读" : "自动保存")
+                HStack {
+                    Text(editing ? "⌘↩ 预览" : "⌘↩ 编辑")
+                    Spacer()
+                    Text(store.isReadOnly ? "只读" : "自动保存")
+                }
             }.font(.system(size: 10)).foregroundStyle(Palette.muted).padding(12)
         }
         .onDisappear { store.save() }
