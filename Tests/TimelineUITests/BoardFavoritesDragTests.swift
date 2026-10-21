@@ -165,6 +165,7 @@ final class BoardFavoritesDragTests: XCTestCase {
         let first = try XCTUnwrap(store.ensureBoard(for: .tag("Draft")))
         let second = try XCTUnwrap(store.ensureBoard(for: .tag("Reading")))
         store.setBoardMarkdown("# Reading", for: second.id)
+        store.save()
         let controller = BoardWindowController(defaults: defaults)
         controller.navigation.toggleFavorite(first.id)
         controller.navigation.toggleFavorite(second.id)
@@ -181,11 +182,12 @@ final class BoardFavoritesDragTests: XCTestCase {
             (view as? BoardFavoritesScrollView).map { [$0] } ?? view.subviews.flatMap(bars)
         }
         let editor = try XCTUnwrap(editors(content).first)
-        editor.string = "Unsaved meeting notes"
-        editor.didChangeText()
+        try await Task.sleep(for: .milliseconds(60))
+        panel.makeFirstResponder(editor)
+        editor.insertText("Unsaved meeting notes", replacementRange: NSRange(location: 0, length: 0))
         try await Task.sleep(for: .milliseconds(30))
-        XCTAssertEqual(store.board(for: first.owner)?.markdown, "Unsaved meeting notes")
-        XCTAssertTrue(store.hasPendingSave)
+        XCTAssertEqual(store.board(for: first.owner)?.markdown, "")
+        XCTAssertFalse(store.hasPendingSave)
         let saved = store.lastSaved
         let bar = try XCTUnwrap(bars(content).first)
         let button = try XCTUnwrap(bar.buttons[second.id])
@@ -196,6 +198,7 @@ final class BoardFavoritesDragTests: XCTestCase {
         XCTAssertEqual(controller.navigation.selection, second.id)
         try await Task.sleep(for: .milliseconds(30))
         content.layoutSubtreeIfNeeded()
+        XCTAssertEqual(store.board(for: first.owner)?.markdown, "Unsaved meeting notes")
         XCTAssertEqual(store.lastSaved, saved)
         XCTAssertTrue(store.hasPendingSave)
         XCTAssertEqual(button.frame, frame)

@@ -80,7 +80,7 @@ struct LogTextEditor: NSViewRepresentable {
 /// ⌘Enter 保存：在 `keyDown` 里直接拦截，不走 `doCommandBy`（`insertNewline` 这个 selector 在输入法组词、
 /// 候选框等场景下的派发时机不可靠，`NSApp.currentEvent` 和「记录上一次 keyDown 再在 doCommandBy 里读」
 /// 都验证过不准）。`keyDown` 拿到的 `event` 就是这次按键本身，修饰键判断不会错。
-final class KeyTrackingTextView: NSTextView {
+class KeyTrackingTextView: NSTextView {
     var onSubmitShortcut: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {

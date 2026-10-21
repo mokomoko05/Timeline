@@ -271,7 +271,6 @@ struct BoardContentView: View {
     @ObservedObject var navigation: BoardNavigation
     let board: Board
     @State private var editing: Bool
-    @FocusState private var editorFocused: Bool
 
     init(store: JournalStore, navigation: BoardNavigation, board: Board) {
         self.store = store
@@ -289,13 +288,14 @@ struct BoardContentView: View {
         NSApp.keyWindow?.makeFirstResponder(nil)
         store.save()
         editing = value
-        editorFocused = value
     }
 
     private func insertTemplate(_ template: BoardMarkdownTemplate) {
         if editing, let editor = NSApp.keyWindow?.firstResponder as? NSTextView,
-           editor.isEditable, editor.string == markdown.wrappedValue, template.insert(into: editor) {
-            store.save()
+           editor.isEditable {
+            if editor.hasMarkedText() { editor.unmarkText() }
+            guard template.insert(into: editor) else { return }
+            (editor as? BoardMarkdownTextView)?.onFlush?()
             return
         }
         let insertion = template.insertion(into: markdown.wrappedValue)
@@ -346,12 +346,8 @@ struct BoardContentView: View {
             }.padding(.horizontal, 12).padding(.vertical, 8)
             Divider()
             if editing {
-                TextEditor(text: markdown)
-                    .font(.system(size: 13, design: .monospaced))
-                    .scrollContentBackground(.hidden)
-                    .focused($editorFocused)
+                BoardMarkdownEditor(text: markdown, preview: { setEditing(false) })
                     .padding(10)
-                    .accessibilityLabel("工作板 Markdown 内容")
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
