@@ -106,9 +106,19 @@ final class BoardFavoritesDragTests: XCTestCase {
         XCTAssertTrue(moves.isEmpty)
         XCTAssertTrue(selections.isEmpty)
         let point = center(first)
+        XCTAssertEqual(first.focusRingType, .none)
+        XCTAssertEqual(bar.focusRingType, .none)
         first.mouseDown(with: try event(.leftMouseDown, at: point, window: window))
+        XCTAssertTrue(first.pressing)
+        XCTAssertTrue(selections.isEmpty)
         first.mouseDragged(with: try event(.leftMouseDragged, at: NSPoint(x: point.x + 2, y: point.y), window: window))
         first.mouseUp(with: try event(.leftMouseUp, at: point, window: window))
+        XCTAssertFalse(first.pressing)
+        XCTAssertEqual(selections, [boards[0].id])
+        first.mouseDown(with: try event(.leftMouseDown, at: point, window: window))
+        first.cancelOperation(nil)
+        first.mouseUp(with: try event(.leftMouseUp, at: point, window: window))
+        XCTAssertFalse(first.pressing)
         XCTAssertEqual(selections, [boards[0].id])
         last.mouseDown(with: try event(.leftMouseDown, at: start, window: window))
         last.mouseDragged(with: try event(.leftMouseDragged, at: destination, window: window))
@@ -141,6 +151,57 @@ final class BoardFavoritesDragTests: XCTestCase {
         XCTAssertNil(bar.draggedID)
         XCTAssertFalse(moved)
         XCTAssertNil(bar.buttons[boards[3].id])
+    }
+
+    func testSwitchingFavoritesKeepsDraftsAndDoesNotFlushTheJournal() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "board-switch-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let store = JournalStore(directory: directory)
+        let first = try XCTUnwrap(store.ensureBoard(for: .tag("Draft")))
+        let second = try XCTUnwrap(store.ensureBoard(for: .tag("Reading")))
+        store.setBoardMarkdown("# Reading", for: second.id)
+        let controller = BoardWindowController(defaults: defaults)
+        controller.navigation.toggleFavorite(first.id)
+        controller.navigation.toggleFavorite(second.id)
+        controller.show(store: store, owner: first.owner)
+        defer { controller.hide() }
+        let panel = try XCTUnwrap(controller.panel)
+        let content = try XCTUnwrap(panel.contentView)
+        content.layoutSubtreeIfNeeded()
+        func editors(_ view: NSView) -> [NSTextView] {
+            if let text = view as? NSTextView, text.isEditable { return [text] }
+            return view.subviews.flatMap(editors)
+        }
+        func bars(_ view: NSView) -> [BoardFavoritesScrollView] {
+            (view as? BoardFavoritesScrollView).map { [$0] } ?? view.subviews.flatMap(bars)
+        }
+        let editor = try XCTUnwrap(editors(content).first)
+        editor.string = "Unsaved meeting notes"
+        editor.didChangeText()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(store.board(for: first.owner)?.markdown, "Unsaved meeting notes")
+        XCTAssertTrue(store.hasPendingSave)
+        let saved = store.lastSaved
+        let bar = try XCTUnwrap(bars(content).first)
+        let button = try XCTUnwrap(bar.buttons[second.id])
+        let frame = button.frame
+        let point = center(button)
+        button.mouseDown(with: try event(.leftMouseDown, at: point, window: panel))
+        button.mouseUp(with: try event(.leftMouseUp, at: point, window: panel))
+        XCTAssertEqual(controller.navigation.selection, second.id)
+        try await Task.sleep(for: .milliseconds(30))
+        content.layoutSubtreeIfNeeded()
+        XCTAssertEqual(store.lastSaved, saved)
+        XCTAssertTrue(store.hasPendingSave)
+        XCTAssertEqual(button.frame, frame)
+        XCTAssertTrue(button.selected)
+        controller.hide()
+        XCTAssertEqual(JournalStore(directory: directory).board(for: first.owner)?.markdown, "Unsaved meeting notes")
     }
 
     func testFloatingBoardPanelRoutesMouseEventsAndKeepsTheNewOrderAfterReopening() async throws {

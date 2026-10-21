@@ -48,6 +48,7 @@ final class BoardFavoritesScrollView: NSScrollView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         drawsBackground = false
+        focusRingType = .none
         borderType = .noBorder
         hasHorizontalScroller = true
         hasVerticalScroller = false
@@ -75,7 +76,7 @@ final class BoardFavoritesScrollView: NSScrollView {
             }
             button.bar = self
             button.title = board.title
-            button.font = .systemFont(ofSize: fontSize, weight: selection == board.id ? .semibold : .regular)
+            button.font = .systemFont(ofSize: fontSize, weight: .medium)
             button.selected = selection == board.id
             button.toolTip = board.title + " · " + AppLocalized("拖动调整顺序")
             button.setAccessibilityLabel(board.title)
@@ -99,8 +100,8 @@ final class BoardFavoritesScrollView: NSScrollView {
     }
 
     private func layoutButtons(animated: Bool) {
-        var origin: CGFloat = 14
-        let height: CGFloat = 30
+        var origin: CGFloat = 12
+        let height: CGFloat = 28
         let top = max(0, (contentSize.height - height) / 2)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = animated ? 0.16 : 0
@@ -226,11 +227,15 @@ final class BoardFavoriteButton: NSButton {
     }
     private var initialPoint: NSPoint?
     private var moved = false
+    private(set) var pressing = false { didSet { needsDisplay = true } }
+    private var hovered = false { didSet { needsDisplay = true } }
+    private var hoverTracking: NSTrackingArea?
 
     init(id: UUID) {
         boardID = id
         super.init(frame: .zero)
         isBordered = false
+        focusRingType = .none
         wantsLayer = true
         layer?.shadowRadius = 4
         layer?.shadowOffset = NSSize(width: 0, height: -1)
@@ -244,9 +249,18 @@ final class BoardFavoriteButton: NSButton {
     override var acceptsFirstResponder: Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
-        let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 7, yRadius: 7)
-        NSColor(selected || dragging ? Palette.soft : Palette.card).setFill()
+        let inset: CGFloat = pressing ? 2 : 1
+        let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: inset, dy: inset), xRadius: 6, yRadius: 6)
+        NSColor(selected || dragging || hovered || pressing ? Palette.soft : Palette.card).setFill()
         shape.fill()
+        if hovered && !pressing {
+            let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            NSGradient(starting: NSColor.white.withAlphaComponent(dark ? 0.08 : 0.18),
+                       ending: .clear)?.draw(in: shape, angle: -90)
+        }
+        NSColor(Palette.line).withAlphaComponent(hovered ? 1 : 0.5).setStroke()
+        shape.lineWidth = 0.5
+        shape.stroke()
         if dragging {
             NSColor(Palette.accent).setStroke()
             shape.lineWidth = 1.5
@@ -259,16 +273,29 @@ final class BoardFavoriteButton: NSButton {
         let textHeight = labelFont.ascender - labelFont.descender
         (title as NSString).draw(in: NSRect(x: 10, y: (bounds.height - textHeight) / 2 - 1,
                                           width: max(0, bounds.width - 20), height: textHeight + 2),
-                                withAttributes: [.font: labelFont, .foregroundColor: NSColor(selected || dragging ? Palette.accent : Palette.muted),
+                                withAttributes: [.font: labelFont, .foregroundColor: NSColor(selected || dragging ? Palette.accent : (hovered ? Palette.ink : Palette.muted)),
                                                  .paragraphStyle: paragraph])
     }
 
-    override func resetCursorRects() { addCursorRect(bounds, cursor: dragging ? .closedHand : .openHand) }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                      owner: self, userInfo: nil)
+        addTrackingArea(tracking)
+        hoverTracking = tracking
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+
+    override func resetCursorRects() { addCursorRect(bounds, cursor: dragging ? .closedHand : .pointingHand) }
 
     override func mouseDown(with event: NSEvent) {
         guard !event.modifierFlags.contains(.control) else { super.mouseDown(with: event); return }
         initialPoint = event.locationInWindow
         moved = false
+        pressing = true
         window?.makeFirstResponder(self)
     }
 
@@ -277,6 +304,7 @@ final class BoardFavoriteButton: NSButton {
         if !moved {
             guard hypot(event.locationInWindow.x - initialPoint.x, event.locationInWindow.y - initialPoint.y) > 4 else { return }
             moved = true
+            pressing = false
             bar?.beginDrag(boardID, at: initialPoint)
         }
         bar?.updateDrag(at: event.locationInWindow)
@@ -284,6 +312,7 @@ final class BoardFavoriteButton: NSButton {
 
     override func mouseUp(with event: NSEvent) {
         guard initialPoint != nil else { return }
+        pressing = false
         if moved { bar?.endDrag() }
         else if bounds.contains(convert(event.locationInWindow, from: nil)) { bar?.onSelect(boardID) }
         initialPoint = nil
@@ -294,6 +323,7 @@ final class BoardFavoriteButton: NSButton {
         bar?.cancelDrag()
         initialPoint = nil
         moved = false
+        pressing = false
     }
 
     override func keyDown(with event: NSEvent) {

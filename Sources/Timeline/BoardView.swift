@@ -68,6 +68,7 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
             panel.title = AppLocalized("工作板")
             panel.titleVisibility = .hidden
             panel.titlebarAppearsTransparent = true
+            panel.isMovableByWindowBackground = true
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
             panel.isFloatingPanel = true
@@ -139,7 +140,9 @@ struct BoardWorkspaceView: View {
                     }
                 Button(action: close) { Image(systemName: "xmark") }.accessibilityLabel("关闭工作板")
             }
-            .buttonStyle(.plain).foregroundStyle(Palette.muted).padding(14)
+            .buttonStyle(HitAreaButtonStyle(compact: true))
+            .font(.system(size: 12)).foregroundStyle(Palette.muted)
+            .padding(.horizontal, 12).padding(.vertical, 6)
             Divider()
             if !navigation.favoriteBoards(in: store).isEmpty {
                 favoritesBar
@@ -164,14 +167,15 @@ struct BoardWorkspaceView: View {
             }
         }
         .background(Palette.background).foregroundStyle(Palette.ink).tint(Palette.accent)
+        .ignoresSafeArea(.container, edges: .top)
     }
 
     private var favoritesBar: some View {
         BoardFavoritesBar(boards: navigation.favoriteBoards(in: store).map {
             BoardFavorite(id: $0.id, title: store.boardTitle($0))
         }, selection: navigation.selection, select: { id in
+            guard navigation.selection != id else { return }
             NSApp.keyWindow?.makeFirstResponder(nil)
-            store.save()
             navigation.selection = id
         }, move: { id, destination in
             let visible = navigation.favoriteBoards(in: store)
@@ -179,7 +183,7 @@ struct BoardWorkspaceView: View {
                   let index = navigation.favoriteBoardIDs.firstIndex(of: visible[destination].id) else { return }
             navigation.moveFavorite(id, to: index)
         }, remove: { navigation.toggleFavorite($0) })
-        .frame(height: 46)
+        .frame(height: 38)
         .accessibilityLabel("常用工作板")
     }
 }
@@ -307,36 +311,39 @@ struct BoardContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top, spacing: 10) {
-                    Text(store.boardTitle(board)).font(.system(size: 18, weight: .semibold))
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(store.boardTitle(board)).font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(2)
                         .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                    Button { navigation.toggleFavorite(board.id) } label: {
-                        Image(systemName: navigation.isFavorite(board.id) ? "star.fill" : "star")
-                            .foregroundStyle(navigation.isFavorite(board.id) ? Palette.accent : Palette.muted)
-                            .frame(width: 26, height: 26)
-                    }
-                    .buttonStyle(.plain)
-                    .help(navigation.isFavorite(board.id) ? "取消常用固定" : "固定到常用")
-                    .accessibilityLabel(navigation.isFavorite(board.id) ? "取消常用固定" : "固定到常用")
-                }
-                HStack {
-                    if store.isBoardArchived(board) { Label("已归档 · 内容保留", systemImage: "archivebox") }
-                    else if case .task(let id) = board.owner, store.locate(id)?.task.completed == true {
-                        Label("任务已结束", systemImage: "checkmark.circle")
-                    }
-                    Text("Markdown").foregroundStyle(Palette.muted)
-                    Spacer()
                     if case .task(let id) = board.owner, store.locate(id) != nil {
-                        Button { AppRouter.openNotes(id) } label: { Label("笔记", systemImage: "note.text") }
+                        Button { AppRouter.openNotes(id) } label: { Image(systemName: "note.text") }
+                            .help("笔记").accessibilityLabel("笔记")
                     }
                     Button { setEditing(!editing) } label: {
                         Label(editing ? "预览" : "编辑", systemImage: editing ? "eye" : "pencil")
+                            .fixedSize()
                     }
                     .keyboardShortcut(.return, modifiers: .command)
+                    .help(editing ? "⌘↩ 预览" : "⌘↩ 编辑")
                     .disabled(store.isReadOnly)
-                }.font(.system(size: 11)).foregroundStyle(Palette.muted).buttonStyle(.plain)
-            }.padding(16)
+                    Button { navigation.toggleFavorite(board.id) } label: {
+                        Image(systemName: navigation.isFavorite(board.id) ? "star.fill" : "star")
+                            .foregroundStyle(navigation.isFavorite(board.id) ? Palette.accent : Palette.muted)
+                    }
+                    .help(navigation.isFavorite(board.id) ? "取消常用固定" : "固定到常用")
+                    .accessibilityLabel(navigation.isFavorite(board.id) ? "取消常用固定" : "固定到常用")
+                }.font(.system(size: 11)).foregroundStyle(Palette.muted)
+                    .buttonStyle(HitAreaButtonStyle(compact: true))
+                if store.isBoardArchived(board) {
+                    Label("已归档 · 内容保留", systemImage: "archivebox")
+                        .font(.system(size: 10)).foregroundStyle(Palette.muted)
+                } else if case .task(let id) = board.owner, store.locate(id)?.task.completed == true {
+                    Label("任务已结束", systemImage: "checkmark.circle")
+                        .font(.system(size: 10)).foregroundStyle(Palette.muted)
+                }
+            }.padding(.horizontal, 12).padding(.vertical, 8)
             Divider()
             if editing {
                 TextEditor(text: markdown)
@@ -356,28 +363,40 @@ struct BoardContentView: View {
                                                  edit: { if !store.isReadOnly { setEditing(true) } })
                         }
                         relatedBoards
-                    }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                    }.padding(.horizontal, 14).padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             Divider()
-            VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
                 if !store.isReadOnly {
-                    HStack(spacing: 8) {
-                        Button("折叠内容") { insertTemplate(.disclosure) }
-                        Button("论文阅读") { insertTemplate(.paper) }
-                        Button("会议议程") { insertTemplate(.meeting) }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-                HStack {
-                    Text(editing ? "⌘↩ 预览" : "⌘↩ 编辑")
+                    templateButton("折叠内容", systemImage: "chevron.down.square", template: .disclosure)
+                    templateButton("论文阅读", systemImage: "book.closed", template: .paper)
+                    templateButton("会议议程", systemImage: "list.bullet", template: .meeting)
+                } else {
                     Spacer()
-                    Text(store.isReadOnly ? "只读" : "自动保存")
+                    Text("只读").font(.system(size: 10)).foregroundStyle(Palette.muted)
                 }
-            }.font(.system(size: 10)).foregroundStyle(Palette.muted).padding(12)
+            }.padding(.horizontal, 12).padding(.vertical, 8).background(Palette.card)
         }
-        .onDisappear { store.save() }
+    }
+
+    private func templateButton(_ title: LocalizedStringKey, systemImage: String,
+                                template: BoardMarkdownTemplate) -> some View {
+        Button { insertTemplate(template) } label: {
+            ViewThatFits(in: .horizontal) {
+                Label(title, systemImage: systemImage).fixedSize()
+                Text(title).fixedSize()
+            }
+            .font(.system(size: 11, weight: .medium))
+            .frame(maxWidth: .infinity, minHeight: 24)
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(HitAreaButtonStyle(compact: true, pressedScale: 0.98))
+        .foregroundStyle(Palette.muted)
+        .background(Palette.background, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Palette.line.opacity(0.7), lineWidth: 0.5))
+        .accessibilityLabel(title)
     }
 
     @ViewBuilder private var relatedBoards: some View {
@@ -393,7 +412,6 @@ struct BoardContentView: View {
                 ForEach(related) { candidate in
                     Button {
                         NSApp.keyWindow?.makeFirstResponder(nil)
-                        store.save()
                         navigation.selection = candidate.id
                     } label: {
                         Label(store.boardTitle(candidate), systemImage: "list.bullet.rectangle")
