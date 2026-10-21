@@ -5,6 +5,33 @@ import TimelineCore
 @MainActor
 final class BoardNavigation: ObservableObject {
     private let defaults: UserDefaults
+    private var editorSessions: [UUID: BoardLiveEditorSession] = [:]
+    private var editorOrder: [UUID] = []
+    private var selectionRequest: UUID?
+
+    func editorSession(for board: Board, store: JournalStore) -> BoardLiveEditorSession {
+        if editorSessions[board.id] == nil { editorSessions[board.id] = BoardLiveEditorSession(store: store, board: board) }
+        editorOrder.removeAll { $0 == board.id }
+        editorOrder.append(board.id)
+        while editorOrder.count > 6 {
+            let oldest = editorOrder.removeFirst()
+            editorSessions.removeValue(forKey: oldest)?.flush()
+        }
+        return editorSessions[board.id]!
+    }
+
+    func select(_ id: UUID) {
+        guard selection != id else { return }
+        selectionRequest = id
+        guard let selection, let editor = editorSessions[selection], editor.webView != nil else {
+            self.selection = id
+            return
+        }
+        editor.commit { [weak self] in
+            guard let self, self.selectionRequest == id else { return }
+            self.selection = id
+        }
+    }
     @Published var selection: UUID? {
         didSet { defaults.set(selection?.uuidString, forKey: "board.selection") }
     }
@@ -101,7 +128,9 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
 
     func hide() {
         panel?.makeFirstResponder(nil)
-        store?.save()
+        if let editor = BoardLiveEditorSession.active, editor.webView?.window === panel {
+            editor.commit { [weak self] in self?.store?.save() }
+        } else { store?.save() }
         panel?.orderOut(nil)
     }
 
@@ -176,7 +205,7 @@ struct BoardWorkspaceView: View {
         }, selection: navigation.selection, select: { id in
             guard navigation.selection != id else { return }
             NSApp.keyWindow?.makeFirstResponder(nil)
-            navigation.selection = id
+            navigation.select(id)
         }, move: { id, destination in
             let visible = navigation.favoriteBoards(in: store)
             guard visible.indices.contains(destination),
@@ -199,7 +228,7 @@ private struct BoardChooser: View {
         NSApp.keyWindow?.makeFirstResponder(nil)
         store.save()
         guard let board = store.ensureBoard(for: owner) else { return }
-        navigation.selection = board.id
+        navigation.select(board.id)
         close()
     }
 
@@ -245,7 +274,7 @@ private struct BoardChooser: View {
             Button {
                 NSApp.keyWindow?.makeFirstResponder(nil)
                 store.save()
-                navigation.selection = board.id
+                navigation.select(board.id)
                 close()
             } label: {
                 HStack {
@@ -271,12 +300,15 @@ struct BoardContentView: View {
     @ObservedObject var navigation: BoardNavigation
     let board: Board
     @State private var editing: Bool
+    @StateObject private var liveEditor: BoardLiveEditorSession
+    @AppStorage("board.vim") private var vim = false
 
     init(store: JournalStore, navigation: BoardNavigation, board: Board) {
         self.store = store
         self.navigation = navigation
         self.board = board
-        _editing = State(initialValue: board.markdown.isEmpty && !store.isReadOnly)
+        _editing = State(initialValue: false)
+        _liveEditor = StateObject(wrappedValue: navigation.editorSession(for: board, store: store))
     }
 
     private var markdown: Binding<String> {
@@ -285,13 +317,12 @@ struct BoardContentView: View {
     }
 
     private func setEditing(_ value: Bool) {
-        NSApp.keyWindow?.makeFirstResponder(nil)
-        store.save()
         editing = value
     }
 
     private func insertTemplate(_ template: BoardMarkdownTemplate) {
-        if editing, let editor = NSApp.keyWindow?.firstResponder as? NSTextView,
+        if liveEditor.error == nil { liveEditor.insertTemplate(template); return }
+        if let editor = NSApp.keyWindow?.firstResponder as? NSTextView,
            editor.isEditable {
             if editor.hasMarkedText() { editor.unmarkText() }
             guard template.insert(into: editor) else { return }
@@ -321,12 +352,17 @@ struct BoardContentView: View {
                         Button { AppRouter.openNotes(id) } label: { Image(systemName: "note.text") }
                             .help("笔记").accessibilityLabel("笔记")
                     }
-                    Button { setEditing(!editing) } label: {
-                        Label(editing ? "预览" : "编辑", systemImage: editing ? "eye" : "pencil")
-                            .fixedSize()
+                    Button { vim.toggle() } label: {
+                        Text("Vim").font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(vim ? Palette.accent : Palette.muted)
                     }
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .help(editing ? "⌘↩ 预览" : "⌘↩ 编辑")
+                    .help("Vim：Esc 普通模式，i 插入，v 可视，支持移动、删除、撤销和搜索")
+                    .accessibilityLabel("Vim 模式").accessibilityValue(vim ? "开启" : "关闭")
+                    Button { setEditing(!editing) } label: {
+                        Image(systemName: editing ? "eye" : "chevron.left.forwardslash.chevron.right")
+                    }
+                    .help(editing ? "实时预览" : "源码")
+                    .accessibilityLabel(editing ? "实时预览" : "源码")
                     .disabled(store.isReadOnly)
                     Button { navigation.toggleFavorite(board.id) } label: {
                         Image(systemName: navigation.isFavorite(board.id) ? "star.fill" : "star")
@@ -345,23 +381,16 @@ struct BoardContentView: View {
                 }
             }.padding(.horizontal, 12).padding(.vertical, 8)
             Divider()
-            if editing {
+            if liveEditor.error != nil {
                 BoardMarkdownEditor(text: markdown, preview: { setEditing(false) })
                     .padding(10)
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if markdown.wrappedValue.isEmpty {
-                            Text("暂无内容，点击编辑开始书写。")
-                                .font(.system(size: 12)).foregroundStyle(Palette.muted)
-                        } else {
-                            BoardMarkdownPreview(store: store, board: board,
-                                                 edit: { if !store.isReadOnly { setEditing(true) } })
-                        }
-                        relatedBoards
-                    }.padding(.horizontal, 14).padding(.vertical, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                BoardLiveEditor(session: liveEditor, vim: vim, sourceMode: editing)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                relatedBoards.padding(.horizontal, 14)
+                if let error = liveEditor.error {
+                    Text(error).font(.caption).foregroundStyle(Palette.deadline).padding(8)
+                }
             }
             Divider()
             HStack(spacing: 6) {
@@ -375,6 +404,7 @@ struct BoardContentView: View {
                 }
             }.padding(.horizontal, 12).padding(.vertical, 8).background(Palette.card)
         }
+        .onDisappear { liveEditor.flush() }
     }
 
     private func templateButton(_ title: LocalizedStringKey, systemImage: String,
@@ -408,7 +438,7 @@ struct BoardContentView: View {
                 ForEach(related) { candidate in
                     Button {
                         NSApp.keyWindow?.makeFirstResponder(nil)
-                        navigation.selection = candidate.id
+                        navigation.select(candidate.id)
                     } label: {
                         Label(store.boardTitle(candidate), systemImage: "list.bullet.rectangle")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -455,12 +485,14 @@ private struct BoardMarkdownBlocks: View {
                                  maxLines: 0, markdown: true,
                                  toggleMarkdownTask: store.isReadOnly ? nil : { line in
                                      store.toggleBoardMarkdownTask(atLine: line + fragment.lineOffset, in: boardID)
-                                 })
+                                 }, compactLines: true)
                 case .disclosure(let disclosure):
                     let open = cache.isExpanded(disclosure)
                     VStack(alignment: .leading, spacing: 4) {
                         Button {
-                            withAnimation(Motion.quick) { cache.toggle(disclosure) }
+                            var transaction = Transaction()
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) { cache.toggle(disclosure) }
                         } label: {
                             HStack(spacing: 7) {
                                 Image(systemName: "chevron.right")
@@ -470,18 +502,19 @@ private struct BoardMarkdownBlocks: View {
                                     .lineLimit(1).truncationMode(.tail)
                                 Spacer(minLength: 0)
                             }
-                            .padding(.horizontal, 8).frame(height: 30)
+                            .padding(.horizontal, 2).frame(height: 24)
                             .contentShape(Rectangle())
-                            .background(Palette.soft.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
                         }
                         .buttonStyle(.plain).foregroundStyle(Palette.ink).help(disclosure.title)
                         .accessibilityLabel(disclosure.title)
                         .accessibilityValue(open ? AppLocalized("已展开") : AppLocalized("已收起"))
-                        if open {
+                        if cache.hasRendered(disclosure) {
                             BoardMarkdownBlocks(store: store, boardID: boardID, nodes: disclosure.children,
                                                 cache: cache, edit: edit)
                                 .padding(.leading, 16)
                                 .overlay(alignment: .leading) { Rectangle().fill(Palette.line).frame(width: 1) }
+                                .frame(height: open ? nil : 0, alignment: .top)
+                                .clipped().opacity(open ? 1 : 0).allowsHitTesting(open).accessibilityHidden(!open)
                         }
                     }
                 }

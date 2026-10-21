@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WebKit
 import XCTest
 import TimelineCore
 @testable import Timeline
@@ -40,7 +41,7 @@ final class BoardWindowTests: XCTestCase {
         XCTAssertTrue(BoardNavigation(defaults: defaults).isFavorite(board.id))
     }
 
-    func testBoardContentFitsCompactPanelAndRendersMarkdownLinks() throws {
+    func testBoardContentFitsCompactPanelAndRendersMarkdownLinks() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let suite = "timeline-board-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -61,37 +62,30 @@ final class BoardWindowTests: XCTestCase {
         panel.contentView?.layoutSubtreeIfNeeded()
         XCTAssertGreaterThan(panel.frame.width, 340)
         XCTAssertLessThan(panel.frame.width, 600)
-        func texts(_ view: NSView) -> [InteractiveTaskText] {
-            (view as? InteractiveTaskText).map { [$0] } ?? view.subviews.flatMap(texts)
-        }
-        let link = try XCTUnwrap(texts(try XCTUnwrap(panel.contentView)).first)
-        let storage = try XCTUnwrap(link.textStorage)
-        var links: [URL] = []
-        storage.enumerateAttribute(.link, in: NSRange(location: 0, length: storage.length)) { value, _, _ in
-            if let url = value as? URL { links.append(url) }
-        }
-        XCTAssertEqual(links, [URL(string: "https://example.com")!])
-        XCTAssertFalse(storage.string.contains("# Background"))
-        XCTAssertTrue(storage.string.contains("Background"))
+        let editor = try boardWebView(in: XCTUnwrap(panel.contentView))
+        try await waitForBoardEditor(editor)
+        let links = try await editor.evaluateJavaScript("[...document.querySelectorAll('[data-url]')].map(e=>e.dataset.url)") as? [String]
+        XCTAssertEqual(links, ["https://example.com"])
+        let rendered = try await editor.evaluateJavaScript("document.querySelector('.cm-content').textContent") as? String ?? ""
+        XCTAssertFalse(rendered.contains("# Background"))
+        XCTAssertTrue(rendered.contains("Background"))
         if let destination = ProcessInfo.processInfo.environment["TIMELINE_BOARD_SNAPSHOT"],
            let view = panel.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
             view.cacheDisplay(in: view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: destination))
         }
-        let circles = link.taskRegions()
-        XCTAssertEqual(circles.map(\.line), [5, 6])
-        let pending = try XCTUnwrap(circles.last)
-        link.activate(at: NSPoint(x: pending.rect.midX, y: pending.rect.midY))
+        _ = try await editor.evaluateJavaScript("document.querySelectorAll('.board-check')[1].click()")
+        try await Task.sleep(for: .milliseconds(220))
         XCTAssertTrue(store.boards.first { $0.id == board.id }?.markdown.contains("- [x] Design") == true)
-        let completed = try XCTUnwrap(circles.first)
-        link.activate(at: NSPoint(x: completed.rect.midX, y: completed.rect.midY))
+        _ = try await editor.evaluateJavaScript("document.querySelectorAll('.board-check')[0].click()")
+        try await Task.sleep(for: .milliseconds(220))
         XCTAssertTrue(store.boards.first { $0.id == board.id }?.markdown.contains("- [ ] Intro & Abstract") == true)
         store.save()
         XCTAssertEqual(JournalStore(directory: directory).boards.first { $0.id == board.id }?.markdown,
                        store.boards.first { $0.id == board.id }?.markdown)
     }
 
-    func testNativeEditorSavesTextDeletionAndPersistsOnHide() async throws {
+    func testLiveEditorSavesTextDeletionAndPersistsOnHide() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let suite = "timeline-board-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -105,21 +99,16 @@ final class BoardWindowTests: XCTestCase {
         defer { controller.hide() }
         let panel = try XCTUnwrap(controller.panel)
         panel.contentView?.layoutSubtreeIfNeeded()
-        func editors(_ view: NSView) -> [NSTextView] {
-            if let text = view as? NSTextView, text.isEditable { return [text] }
-            return view.subviews.flatMap(editors)
-        }
-        let editor = try XCTUnwrap(editors(try XCTUnwrap(panel.contentView)).first)
-        XCTAssertTrue(editor.allowsUndo)
+        let editor = try boardWebView(in: XCTUnwrap(panel.contentView))
+        try await waitForBoardEditor(editor)
         let source = "# Meeting\n\nTalking points\n\n[Reference](https://example.com)"
-        editor.string = source
-        editor.didChangeText()
+        let encoded = String(decoding: try JSONEncoder().encode(source), as: UTF8.self)
+        _ = try await editor.evaluateJavaScript("window.boardEditor.replaceSelection(\(encoded))")
         try await Task.sleep(for: .milliseconds(350))
         XCTAssertEqual(store.boards.first?.markdown, source)
-        editor.string = ""
-        editor.didChangeText()
-        try await Task.sleep(for: .milliseconds(350))
+        _ = try await editor.evaluateJavaScript("window.boardEditor.select(0,window.boardEditor.snapshot().source.length);window.boardEditor.replaceSelection('')")
         controller.hide()
+        try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(JournalStore(directory: directory).boards.first?.markdown, "")
     }
 
@@ -173,21 +162,22 @@ final class BoardWindowTests: XCTestCase {
         defer { controller.hide() }
         let panel = try XCTUnwrap(controller.panel)
         panel.contentView?.layoutSubtreeIfNeeded()
-        func textViews(_ view: NSView) -> [NSTextView] {
-            (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(textViews)
-        }
-        let preview = try XCTUnwrap(textViews(try XCTUnwrap(panel.contentView)).compactMap { $0 as? InteractiveTaskText }.first)
-        preview.onEdit?()
+        let editor = try boardWebView(in: XCTUnwrap(panel.contentView))
+        try await waitForBoardEditor(editor)
+        _ = try await editor.evaluateJavaScript("window.boardEditor.select(12)")
+        XCTAssertEqual(store.boards.first { $0.id == board.id }?.markdown, source)
+        controller.navigation.select(other.id)
+        try await Task.sleep(for: .milliseconds(100))
+        controller.navigation.select(board.id)
         try await Task.sleep(for: .milliseconds(100))
         panel.contentView?.layoutSubtreeIfNeeded()
-        let editor = try XCTUnwrap(textViews(try XCTUnwrap(panel.contentView)).first { $0.isEditable })
-        XCTAssertEqual(editor.string, source)
-        XCTAssertEqual(store.boards.first { $0.id == board.id }?.markdown, source)
-        controller.navigation.selection = other.id
-        try await Task.sleep(for: .milliseconds(100))
-        controller.navigation.selection = board.id
-        try await Task.sleep(for: .milliseconds(100))
+        let reopened = try boardWebView(in: XCTUnwrap(panel.contentView))
+        XCTAssertTrue(reopened === editor)
+        let snapshot = try await reopened.evaluateJavaScript("window.boardEditor.snapshot()") as? [String: Any]
+        XCTAssertEqual(snapshot?["source"] as? String, source)
+        XCTAssertEqual(snapshot?["head"] as? Int, 12)
         controller.hide()
+        try await Task.sleep(for: .milliseconds(50))
         XCTAssertEqual(JournalStore(directory: directory).boards.first { $0.id == board.id }?.markdown, source)
     }
 

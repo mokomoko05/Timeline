@@ -30,6 +30,7 @@ final class MarkdownDisclosureCache: ObservableObject {
     @Published private(set) var expanded: [Int: Bool] = [:]
     private var source: String?
     private var nodes: [MarkdownDisclosureNode] = []
+    private var rendered: Set<Int> = []
 
     func parse(_ source: String) -> [MarkdownDisclosureNode] {
         if self.source != source {
@@ -44,8 +45,11 @@ final class MarkdownDisclosureCache: ObservableObject {
     }
 
     func toggle(_ disclosure: MarkdownDisclosure) {
+        rendered.insert(disclosure.id)
         expanded[disclosure.id] = !isExpanded(disclosure)
     }
+
+    func hasRendered(_ disclosure: MarkdownDisclosure) -> Bool { isExpanded(disclosure) || rendered.contains(disclosure.id) }
 }
 
 enum MarkdownDisclosures {

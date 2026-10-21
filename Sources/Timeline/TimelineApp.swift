@@ -59,6 +59,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var settings: SettingsWindowController!
     private var undoItem: NSMenuItem?
     private var keyMonitor: Any?
+    private var boardTerminationPrepared = false
+    private var boardTerminationPending = false
     /// 用全局快捷键打开 Timeline 之前的前台应用，隐藏 Timeline 时把焦点还给它。
     private var hotKeysRegistered = false
     private var hotKeysAttempted = false
@@ -338,6 +340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private var isEditingText: Bool {
         (NSApp.keyWindow?.firstResponder as? NSText)?.isEditable == true
+            || BoardLiveEditorSession.active?.handlesTextCommands == true
     }
 
     /// 没有文本框占用键盘时：方向键选择事项或切换日期，空格完成，回车编辑，Delete 删除。
@@ -377,12 +380,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// ⌘Z：输入框里有能撤销的打字就撤销打字；没有（比如刚在日志窗口里删了日志，光标还在输入框里）就撤销上一步操作。
     @objc private func undoAction(_ sender: Any?) {
+        if let editor = BoardLiveEditorSession.active, editor.handlesTextCommands { editor.undo(); return }
         if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isEditable, editor.undoManager?.canUndo == true {
             editor.undoManager?.undo()
         } else { store.undo() }
     }
 
     @objc private func redoAction(_ sender: Any?) {
+        if let editor = BoardLiveEditorSession.active, editor.handlesTextCommands { editor.redo(); return }
         if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isEditable, editor.undoManager?.canRedo == true {
             editor.undoManager?.redo()
         } else { store.redo() }
@@ -393,6 +398,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if boardTerminationPending { return .terminateLater }
+        if !boardTerminationPrepared, let editor = BoardLiveEditorSession.active, editor.ready {
+            boardTerminationPending = true
+            editor.commit { [weak self] in
+                guard let self else { sender.reply(toApplicationShouldTerminate: false); return }
+                self.boardTerminationPending = false
+                self.boardTerminationPrepared = true
+                let reply = self.applicationShouldTerminate(sender)
+                self.boardTerminationPrepared = false
+                sender.reply(toApplicationShouldTerminate: reply == .terminateNow)
+            }
+            return .terminateLater
+        }
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
         window.makeFirstResponder(nil)
         if shell.busyCount > 0 {

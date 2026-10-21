@@ -797,3 +797,9 @@
 "⌘↩ 编辑" = "⌘↩ Edit";
 "直接编辑 Markdown，⌘↩ 预览" = "Edit Markdown · ⌘↩ to preview";
 "⌘↩ 编辑 · 点击链接打开网页" = "⌘↩ to edit · Click links to open webpages";
+"实时预览" = "Live preview";
+"源码" = "Markdown source";
+"Vim 模式" = "Vim mode";
+"开启" = "On";
+"Vim：Esc 普通模式，i 插入，v 可视，支持移动、删除、撤销和搜索" = "Vim: Esc for normal mode, i to insert, v for visual mode; movement, deletion, undo and search supported";
+"编辑器加载失败，请重新打开工作板。" = "The editor could not load. Reopen the board to retry.";

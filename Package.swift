@@ -14,7 +14,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "TimelineCore"),
-        .executableTarget(name: "Timeline", dependencies: ["TimelineCore", .product(name: "SwiftTerm", package: "SwiftTerm"), .product(name: "Markdown", package: "swift-markdown")]),
+        .executableTarget(name: "Timeline", dependencies: ["TimelineCore", .product(name: "SwiftTerm", package: "SwiftTerm"), .product(name: "Markdown", package: "swift-markdown")], resources: [.copy("EditorAssets")]),
         .testTarget(name: "TimelineCoreTests", dependencies: ["TimelineCore"]),
         .testTarget(name: "TimelineUITests", dependencies: ["Timeline", .product(name: "SwiftTerm", package: "SwiftTerm")])
     ]

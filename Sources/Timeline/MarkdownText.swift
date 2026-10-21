@@ -9,6 +9,7 @@ enum MarkdownText {
 
     static func render(_ source: String, color: NSColor, fontSize: CGFloat, monospaced: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing, scale: CGFloat = UIScale.factor, document: Document? = nil, interactiveTasks: Bool = false) -> NSAttributedString {
         let renderer = Renderer(color: color, size: fontSize * scale, monospaced: monospaced, lineSpacing: lineSpacing, interactiveTasks: interactiveTasks)
+        renderer.sourceLines = source.components(separatedBy: "\n")
         renderer.blocks(document ?? Document(parsing: source))
         return renderer.output
     }
@@ -21,6 +22,7 @@ enum MarkdownText {
         let font: NSFont
         let lineSpacing: CGFloat
         let interactiveTasks: Bool
+        var sourceLines: [String] = []
         init(color: NSColor, size: CGFloat, monospaced: Bool, lineSpacing: CGFloat, interactiveTasks: Bool) {
             self.color = color
             self.size = size
@@ -81,7 +83,16 @@ enum MarkdownText {
         }
 
         func blocks(_ node: Markup, indent: CGFloat = 0) {
-            for child in node.children { block(child, indent: indent) }
+            var previousEnd: Int?
+            for child in node.children {
+                if let end = previousEnd, let start = child.range?.lowerBound.line, start > end + 1 {
+                    let blankCount = sourceLines.dropFirst(end).prefix(start - end - 1)
+                        .filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
+                    for _ in 0..<blankCount { paragraph(text(""), style: style(indent: indent)) }
+                }
+                block(child, indent: indent)
+                previousEnd = child.range?.upperBound.line
+            }
         }
 
         func block(_ node: Markup, indent: CGFloat) {
@@ -90,7 +101,9 @@ enum MarkdownText {
                 let headingFont = NSFont.systemFont(ofSize: size + CGFloat(max(1, 7 - heading.level)) * 1.5, weight: .bold)
                 let paragraphStyle = style(indent: indent)
                 paragraphStyle.paragraphSpacingBefore = 5
-                paragraph(inline(heading, font: headingFont), style: paragraphStyle)
+                let content = inline(heading, font: headingFont)
+                content.addAttribute(.foregroundColor, value: MarkdownText.headingColor(heading.level), range: content.fullRange)
+                paragraph(content, style: paragraphStyle)
             case let node as Paragraph:
                 paragraph(inline(node), style: style(indent: indent))
             case let code as CodeBlock:
@@ -132,7 +145,12 @@ enum MarkdownText {
                         } else {
                             content = text(marker + "\t")
                         }
-                        content.append(inline(child))
+                        let body = inline(child)
+                        if item.checkbox == .checked {
+                            body.addAttributes([.strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                                                .foregroundColor: NSColor(Palette.muted)], range: body.fullRange)
+                        }
+                        content.append(body)
                         let paragraphStyle = style(indent: indent + 22)
                         paragraphStyle.firstLineHeadIndent = indent
                         paragraphStyle.tabStops = [NSTextTab(textAlignment: .left, location: indent + 22)]
@@ -152,7 +170,7 @@ enum MarkdownText {
                 let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1))
                 circle.lineWidth = 1.3
                 if checked {
-                    NSColor.controlAccentColor.setFill()
+                    NSColor(Palette.success).setFill()
                     circle.fill()
                     NSColor.white.setStroke()
                     let check = NSBezierPath()
@@ -203,6 +221,17 @@ enum MarkdownText {
                 }
             }
             paragraph(text(""), style: style(indent: indent))
+        }
+    }
+
+    static func headingColor(_ level: Int) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let colors: [UInt32] = dark ? [0xdd9179, 0xd4ae62, 0x79b898, 0x73afcf, 0xa596d1, 0xc68fae]
+                : [0xa84d33, 0x846000, 0x327455, 0x296d91, 0x7658a4, 0x984d77]
+            let value = colors[max(0, min(level - 1, colors.count - 1))]
+            return NSColor(srgbRed: CGFloat((value >> 16) & 255) / 255,
+                           green: CGFloat((value >> 8) & 255) / 255, blue: CGFloat(value & 255) / 255, alpha: 1)
         }
     }
 }

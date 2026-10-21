@@ -49,6 +49,17 @@ final class MarkdownTextTests: XCTestCase {
         XCTAssertNil(attributes("https://example.org", in: text)[.link])
     }
 
+    func testHeadingLevelsHaveDistinctColorsAndBlankLinesArePreserved() {
+        let source = (1...6).map { String(repeating: "#", count: $0) + " Heading\($0)" }.joined(separator: "\n\n")
+        let rendered = render(source)
+        let colors = (1...6).compactMap { attributes("Heading\($0)", in: rendered)[.foregroundColor] as? NSColor }
+        XCTAssertEqual(Set(colors).count, 6)
+        XCTAssertTrue(render("First\n\n\n\nSecond").string.contains("First\n\n\n\nSecond"))
+        let tasks = MarkdownText.render("- [x] Done\n- [ ] Pending", color: .labelColor, fontSize: 13, interactiveTasks: true)
+        XCTAssertEqual(attributes("Done", in: tasks)[.strikethroughStyle] as? Int, NSUnderlineStyle.single.rawValue)
+        XCTAssertNil(attributes("Pending", in: tasks)[.strikethroughStyle])
+    }
+
     func testInteractiveTaskCirclesKeepSourceLinesAndIgnoreCode() {
         let source = "# 中文标题\n\n- [ ] 同名\n  - [X] 嵌套\n\n- [ ] 第二项\n\n~~~\n- [ ] code\n~~~"
         let text = MarkdownText.render(source, color: .labelColor, fontSize: 13, interactiveTasks: true)

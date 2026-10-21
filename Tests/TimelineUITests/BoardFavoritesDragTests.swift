@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WebKit
 import XCTest
 import TimelineCore
 @testable import Timeline
@@ -174,17 +175,12 @@ final class BoardFavoritesDragTests: XCTestCase {
         let panel = try XCTUnwrap(controller.panel)
         let content = try XCTUnwrap(panel.contentView)
         content.layoutSubtreeIfNeeded()
-        func editors(_ view: NSView) -> [NSTextView] {
-            if let text = view as? NSTextView, text.isEditable { return [text] }
-            return view.subviews.flatMap(editors)
-        }
         func bars(_ view: NSView) -> [BoardFavoritesScrollView] {
             (view as? BoardFavoritesScrollView).map { [$0] } ?? view.subviews.flatMap(bars)
         }
-        let editor = try XCTUnwrap(editors(content).first)
-        try await Task.sleep(for: .milliseconds(60))
-        panel.makeFirstResponder(editor)
-        editor.insertText("Unsaved meeting notes", replacementRange: NSRange(location: 0, length: 0))
+        let editor = try boardWebView(in: content)
+        try await waitForBoardEditor(editor)
+        _ = try await editor.evaluateJavaScript("window.boardEditor.focus();window.boardEditor.replaceSelection('Unsaved meeting notes')")
         try await Task.sleep(for: .milliseconds(30))
         XCTAssertEqual(store.board(for: first.owner)?.markdown, "")
         XCTAssertFalse(store.hasPendingSave)
@@ -195,8 +191,8 @@ final class BoardFavoritesDragTests: XCTestCase {
         let point = center(button)
         button.mouseDown(with: try event(.leftMouseDown, at: point, window: panel))
         button.mouseUp(with: try event(.leftMouseUp, at: point, window: panel))
-        XCTAssertEqual(controller.navigation.selection, second.id)
         try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(controller.navigation.selection, second.id)
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(store.board(for: first.owner)?.markdown, "Unsaved meeting notes")
         XCTAssertEqual(store.lastSaved, saved)
@@ -204,6 +200,7 @@ final class BoardFavoritesDragTests: XCTestCase {
         XCTAssertEqual(button.frame, frame)
         XCTAssertTrue(button.selected)
         controller.hide()
+        try await Task.sleep(for: .milliseconds(50))
         XCTAssertEqual(JournalStore(directory: directory).board(for: first.owner)?.markdown, "Unsaved meeting notes")
     }
 
