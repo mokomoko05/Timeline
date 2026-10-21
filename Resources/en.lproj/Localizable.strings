@@ -786,5 +786,14 @@
 "工作板 Markdown 内容" = "Board Markdown content";
 "暂无内容，点击编辑开始书写。" = "No content yet. Click Edit to start writing.";
 "插入模板" = "Insert template";
+"折叠内容" = "Collapsible content";
+"折叠标题" = "Disclosure title";
+"折叠内容（details）" = "Collapsible content (details)";
+"在这里填写内容，支持 Markdown、链接和待办。" = "Write here. Markdown, links and tasks are supported.";
+"阅读笔记" = "Reading notes";
+"已展开" = "Expanded";
+"已收起" = "Collapsed";
+"⌘↩ 预览" = "⌘↩ Preview";
+"⌘↩ 编辑" = "⌘↩ Edit";
 "直接编辑 Markdown，⌘↩ 预览" = "Edit Markdown · ⌘↩ to preview";
 "⌘↩ 编辑 · 点击链接打开网页" = "⌘↩ to edit · Click links to open webpages";

@@ -288,6 +288,23 @@ struct BoardContentView: View {
         editorFocused = value
     }
 
+    private func insertTemplate(_ template: BoardMarkdownTemplate) {
+        if editing, let editor = NSApp.keyWindow?.firstResponder as? NSTextView,
+           editor.isEditable, editor.string == markdown.wrappedValue, template.insert(into: editor) {
+            store.save()
+            return
+        }
+        let insertion = template.insertion(into: markdown.wrappedValue)
+        markdown.wrappedValue = insertion.source
+        setEditing(true)
+        DispatchQueue.main.async {
+            guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView,
+                  editor.isEditable, editor.string == insertion.source else { return }
+            editor.setSelectedRange(insertion.selectedRange)
+            editor.scrollRangeToVisible(insertion.selectedRange)
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
@@ -344,20 +361,16 @@ struct BoardContentView: View {
             }
             Divider()
             HStack {
-                if editing && markdown.wrappedValue.isEmpty {
+                if !store.isReadOnly {
                     Menu("插入模板") {
-                        Button("论文阅读") {
-                            markdown.wrappedValue = "# 论文阅读\n\n- [ ] Intro & Abstract\n- [ ] Background\n- [ ] Design\n- [ ] Experiment\n\n## 阅读笔记\n\n"
-                        }
-                        Button("会议议程") {
-                            markdown.wrappedValue = "# " + AppLocalized("会议议程") + "\n\n## " + AppLocalized("进展同步")
-                                + "\n\n## " + AppLocalized("讨论事项") + "\n\n## " + AppLocalized("结论与后续行动") + "\n\n"
-                        }
+                        Button("折叠内容（details）") { insertTemplate(.disclosure) }
+                        Divider()
+                        Button("论文阅读") { insertTemplate(.paper) }
+                        Button("会议议程") { insertTemplate(.meeting) }
                     }.menuStyle(.borderlessButton).fixedSize()
-                } else {
-                    Text(editing ? "直接编辑 Markdown，⌘↩ 预览" : "⌘↩ 编辑 · 点击链接打开网页")
                 }
                 Spacer()
+                Text(editing ? "⌘↩ 预览" : "⌘↩ 编辑")
                 Text(store.isReadOnly ? "只读" : "自动保存")
             }.font(.system(size: 10)).foregroundStyle(Palette.muted).padding(12)
         }
@@ -393,14 +406,70 @@ struct BoardMarkdownPreview: View {
     @ObservedObject var store: JournalStore
     let board: Board
     var edit: () -> Void = {}
+    @StateObject private var cache = MarkdownDisclosureCache()
+
+    init(store: JournalStore, board: Board, edit: @escaping () -> Void = {}, cache: MarkdownDisclosureCache? = nil) {
+        self.store = store
+        self.board = board
+        self.edit = edit
+        _cache = StateObject(wrappedValue: cache ?? MarkdownDisclosureCache())
+    }
 
     var body: some View {
-        TaskLinkText(source: board.markdown, completed: false, color: Palette.ink,
-                     fontSize: 13, edit: edit, open: { NSWorkspace.shared.open($0) },
-                     maxLines: 0, markdown: true,
-                     toggleMarkdownTask: store.isReadOnly ? nil : { line in
-                         store.toggleBoardMarkdownTask(atLine: line, in: board.id)
-                     })
+        BoardMarkdownBlocks(store: store, boardID: board.id, nodes: cache.parse(board.markdown),
+                            cache: cache, edit: edit)
+    }
+}
+
+private struct BoardMarkdownBlocks: View {
+    @ObservedObject var store: JournalStore
+    let boardID: UUID
+    let nodes: [MarkdownDisclosureNode]
+    @ObservedObject var cache: MarkdownDisclosureCache
+    let edit: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(nodes) { node in
+                switch node {
+                case .markdown(let fragment):
+                    TaskLinkText(source: fragment.source, completed: false, color: Palette.ink,
+                                 fontSize: 13, edit: edit, open: { NSWorkspace.shared.open($0) },
+                                 maxLines: 0, markdown: true,
+                                 toggleMarkdownTask: store.isReadOnly ? nil : { line in
+                                     store.toggleBoardMarkdownTask(atLine: line + fragment.lineOffset, in: boardID)
+                                 })
+                case .disclosure(let disclosure):
+                    let open = cache.isExpanded(disclosure)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Button {
+                            withAnimation(Motion.quick) { cache.toggle(disclosure) }
+                        } label: {
+                            HStack(spacing: 7) {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .rotationEffect(.degrees(open ? 90 : 0)).frame(width: 12)
+                                Text(disclosure.title).font(.system(size: 13, weight: .medium))
+                                    .lineLimit(1).truncationMode(.tail)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 8).frame(height: 30)
+                            .contentShape(Rectangle())
+                            .background(Palette.soft.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain).foregroundStyle(Palette.ink).help(disclosure.title)
+                        .accessibilityLabel(disclosure.title)
+                        .accessibilityValue(open ? AppLocalized("已展开") : AppLocalized("已收起"))
+                        if open {
+                            BoardMarkdownBlocks(store: store, boardID: boardID, nodes: disclosure.children,
+                                                cache: cache, edit: edit)
+                                .padding(.leading, 16)
+                                .overlay(alignment: .leading) { Rectangle().fill(Palette.line).frame(width: 1) }
+                        }
+                    }
+                }
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -421,7 +490,7 @@ struct BoardNotesSection: View {
                     } label: { Label("打开工作板", systemImage: "arrow.up.forward.square") }
                         .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Palette.accent)
                 }
-                BoardMarkdownPreview(store: store, board: board)
+                BoardMarkdownPreview(store: store, board: board).id(board.id)
             }
             .padding(12).frame(maxWidth: .infinity, alignment: .leading)
             .background {
