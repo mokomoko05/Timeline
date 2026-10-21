@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 import TimelineCore
-import UniformTypeIdentifiers
 
 @MainActor
 final class BoardNavigation: ObservableObject {
@@ -125,7 +124,6 @@ struct BoardWorkspaceView: View {
     @ObservedObject var navigation: BoardNavigation
     var close: () -> Void = {}
     @State private var choosing = false
-    @State private var draggedFavorite: UUID?
 
     private var board: Board? { store.boards.first { $0.id == navigation.selection } }
 
@@ -169,48 +167,18 @@ struct BoardWorkspaceView: View {
     }
 
     private var favoritesBar: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 6) {
-                ForEach(navigation.favoriteBoards(in: store)) { favorite in
-                    Button {
-                        NSApp.keyWindow?.makeFirstResponder(nil)
-                        store.save()
-                        navigation.selection = favorite.id
-                    } label: {
-                        Text(store.boardTitle(favorite))
-                            .font(.system(size: 11, weight: navigation.selection == favorite.id ? .semibold : .regular))
-                            .lineLimit(1).truncationMode(.tail).frame(maxWidth: 140)
-                            .padding(.horizontal, 10).padding(.vertical, 7)
-                            .foregroundStyle(navigation.selection == favorite.id ? Palette.accent : Palette.muted)
-                            .background(navigation.selection == favorite.id ? Palette.soft : Palette.card, in: RoundedRectangle(cornerRadius: 7))
-                    }
-                    .buttonStyle(.plain)
-                    .help(store.boardTitle(favorite) + " · " + AppLocalized("拖动调整顺序"))
-                    .accessibilityAddTraits(navigation.selection == favorite.id ? .isSelected : [])
-                    .onDrag {
-                        draggedFavorite = favorite.id
-                        return NSItemProvider(item: favorite.id.uuidString as NSString,
-                                              typeIdentifier: "local.timeline.board-favorite")
-                    }
-                    .onDrop(of: [UTType(exportedAs: "local.timeline.board-favorite")], isTargeted: nil) { providers in
-                        guard !providers.isEmpty, let draggedFavorite, draggedFavorite != favorite.id,
-                              let destination = navigation.favoriteBoardIDs.firstIndex(of: favorite.id) else { return false }
-                        navigation.moveFavorite(draggedFavorite, to: destination)
-                        self.draggedFavorite = nil
-                        return true
-                    }
-                    .contextMenu {
-                        let index = navigation.favoriteBoardIDs.firstIndex(of: favorite.id) ?? 0
-                        Button("向左移") { navigation.moveFavorite(favorite.id, to: index - 1) }
-                            .disabled(index == 0)
-                        Button("向右移") { navigation.moveFavorite(favorite.id, to: index + 1) }
-                            .disabled(index == navigation.favoriteBoardIDs.count - 1)
-                        Divider()
-                        Button("取消常用固定") { navigation.toggleFavorite(favorite.id) }
-                    }
-                }
-            }.padding(.horizontal, 14).padding(.vertical, 8)
-        }
+        BoardFavoritesBar(boards: navigation.favoriteBoards(in: store).map {
+            BoardFavorite(id: $0.id, title: store.boardTitle($0))
+        }, selection: navigation.selection, select: { id in
+            NSApp.keyWindow?.makeFirstResponder(nil)
+            store.save()
+            navigation.selection = id
+        }, move: { id, destination in
+            let visible = navigation.favoriteBoards(in: store)
+            guard visible.indices.contains(destination),
+                  let index = navigation.favoriteBoardIDs.firstIndex(of: visible[destination].id) else { return }
+            navigation.moveFavorite(id, to: index)
+        }, remove: { navigation.toggleFavorite($0) })
         .frame(height: 46)
         .accessibilityLabel("常用工作板")
     }
