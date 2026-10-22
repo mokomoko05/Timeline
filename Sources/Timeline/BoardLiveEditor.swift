@@ -28,6 +28,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     private(set) var webView: WKWebView?
     private let store: JournalStore
     private let boardID: UUID
+    private let pasteboard: NSPasteboard
     private var storedSource: String
     private(set) var source: String
     private var composing = false
@@ -60,8 +61,9 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         return true
     }
 
-    init(store: JournalStore, board: Board) {
+    init(store: JournalStore, board: Board, pasteboard: NSPasteboard = .general) {
         self.store = store
+        self.pasteboard = pasteboard
         boardID = board.id
         storedSource = board.markdown
         source = board.markdown
@@ -112,6 +114,8 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
                       "soft": css(Palette.soft), "line": css(Palette.line), "success": css(Palette.success)]
         for level in 1...6 { colors["heading-\(level)"] = css(Color(nsColor: MarkdownText.headingColor(level))) }
         settings = ["vim": vim, "fontSize": fontSize, "readOnly": store.isReadOnly, "colors": colors, "sourceMode": sourceMode]
+        settings["labels"] = ["openLink": AppLocalized("在 Safari 中打开"), "copyCode": AppLocalized("复制代码"),
+                              "copied": AppLocalized("已复制"), "copyFailed": AppLocalized("复制失败，请重试")]
         let current = store.boards.first { $0.id == boardID }?.markdown ?? storedSource
         if current != storedSource {
             pending?.cancel()
@@ -153,7 +157,11 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
                 }
             }
         } else if kind == "open", let value = body["url"] as? String, let url = TaskText.linkURL(value) {
-            NSWorkspace.shared.open(url)
+            SafariLinks.open(url)
+        } else if kind == "copy", let value = body["text"] as? String, let request = body["request"] as? Int {
+            pasteboard.clearContents()
+            let success = pasteboard.setString(value, forType: .string)
+            webView?.evaluateJavaScript("window.boardEditor.copyResult(\(request), \(success))")
         }
     }
 
@@ -200,7 +208,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.navigationType == .linkActivated {
-            if let url = navigationAction.request.url.flatMap({ TaskText.linkURL($0.absoluteString) }) { NSWorkspace.shared.open(url) }
+            if let url = navigationAction.request.url.flatMap({ TaskText.linkURL($0.absoluteString) }) { SafariLinks.open(url) }
             decisionHandler(.cancel)
         } else { decisionHandler(navigationAction.request.url?.isFileURL == true ? .allow : .cancel) }
     }

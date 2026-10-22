@@ -26,6 +26,73 @@ func waitForBoardEditor(_ view: WKWebView) async throws {
 
 @MainActor
 final class BoardLiveEditorTests: XCTestCase {
+    func testLinkButtonsUseTaskSafariRoutingWithoutMovingCaretOrChangingMarkdown() async throws {
+        let source = "[Paper](https://example.com/paper)\n\n[**Design**](<https://example.com/a_(b)?a=1&amp;b=2> \"Title\")\n\nEnd"
+        let fixture = try LiveFixture(source: source)
+        defer { fixture.close() }
+        let (activate, launch) = (SafariLinks.activateExistingTab, SafariLinks.launch)
+        defer { SafariLinks.activateExistingTab = activate; SafariLinks.launch = launch }
+        var activated: [URL] = [], launched: [URL] = []
+        SafariLinks.activateExistingTab = { activated.append($0); return activated.count == 1 }
+        SafariLinks.launch = { launched.append($0) }
+        try await waitForBoardEditor(fixture.webView)
+        let urls = try await fixture.webView.evaluateJavaScript("[...document.querySelectorAll('.board-open-link')].map(e=>e.dataset.openUrl)") as? [String]
+        XCTAssertEqual(urls, ["https://example.com/paper", "https://example.com/a_(b)?a=1&b=2"])
+        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.select(3);document.querySelector('.board-open-link').click()")
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(activated.map(\.absoluteString), ["https://example.com/paper"])
+        XCTAssertTrue(launched.isEmpty)
+        let snapshot = try await fixture.snapshot()
+        XCTAssertEqual(snapshot["head"] as? Int, 3)
+        XCTAssertEqual(snapshot["source"] as? String, source)
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.board-open-link')[1].click()")
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(launched.map(\.absoluteString), ["https://example.com/a_(b)?a=1&b=2"])
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('[data-url]').dispatchEvent(new MouseEvent('click',{bubbles:true,metaKey:true}))")
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(activated.count, 3)
+    }
+
+    func testCodeCopyButtonsCopyOnlyCurrentBodyAndKeepSelectionAndUndo() async throws {
+        let source = "```swift\n  let value = 1\n\n  print(value)\n```\n\n~~~\n~~~\n\n```text\nunclosed\n"
+        let fixture = try LiveFixture(source: source)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        let buttons = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.board-copy-code').length") as? Int
+        XCTAssertEqual(buttons, 3)
+        let rightAligned = try await fixture.webView.evaluateJavaScript("getComputedStyle(document.querySelector('.board-copy-code')).float === 'right'") as? Bool
+        XCTAssertEqual(rightAligned, true)
+        _ = try await fixture.webView.evaluateJavaScript("(()=>{const editor=window.boardEditor;const start=editor.snapshot().source.indexOf('1');editor.select(start,start+1);editor.replaceSelection('42')})()")
+        let before = try await fixture.snapshot()
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-copy-code').click()")
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(fixture.pasteboard.string(forType: .string), "  let value = 42\n\n  print(value)\n")
+        let feedback = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-copy-code').dataset.copied") as? String
+        XCTAssertEqual(feedback, "true")
+        if let path = ProcessInfo.processInfo.environment["TIMELINE_CODE_SNAPSHOT"] {
+            let image = try await fixture.webView.takeSnapshot(configuration: nil)
+            let bitmap = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        }
+        let after = try await fixture.snapshot()
+        XCTAssertEqual(after["source"] as? String, before["source"] as? String)
+        XCTAssertEqual(after["head"] as? Int, before["head"] as? Int)
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.board-copy-code')[1].click()")
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(fixture.pasteboard.string(forType: .string), "")
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.board-copy-code')[2].click()")
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(fixture.pasteboard.string(forType: .string), "unclosed\n")
+        fixture.session.undo()
+        try await Task.sleep(for: .milliseconds(60))
+        let undone = try await fixture.snapshot()
+        XCTAssertEqual(undone["source"] as? String, source)
+        fixture.session.configure(vim: false, fontSize: 13, dark: false, sourceMode: true)
+        try await Task.sleep(for: .milliseconds(30))
+        let rawButtons = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.board-copy-code').length") as? Int
+        XCTAssertEqual(rawButtons, 0)
+    }
+
     func testLivePreviewHeadingsBlankLinesTaskCompletionAndNativePersistence() async throws {
         let fixture = try LiveFixture(source: "# First\n\n## Second\n\n\n\nThird\n\n- [ ] Task\n\nEnd")
         defer { fixture.close() }
@@ -249,13 +316,14 @@ private final class LiveFixture {
     let session: BoardLiveEditorSession
     let webView: WKWebView
     let window: NSWindow
+    let pasteboard = NSPasteboard(name: .init("board-editor-\(UUID().uuidString)"))
 
     init(source: String, vim: Bool = false) throws {
         store = JournalStore(directory: directory)
         let board = try XCTUnwrap(store.ensureBoard(for: .tag("Editor")))
         store.setBoardMarkdown(source, for: board.id)
         store.save()
-        session = BoardLiveEditorSession(store: store, board: try XCTUnwrap(store.board(for: board.owner)))
+        session = BoardLiveEditorSession(store: store, board: try XCTUnwrap(store.board(for: board.owner)), pasteboard: pasteboard)
         webView = session.makeWebView()
         session.configure(vim: vim, fontSize: 13, dark: true)
         window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 410, height: 480),
@@ -282,6 +350,7 @@ private final class LiveFixture {
 
     func close() {
         session.flush()
+        pasteboard.releaseGlobally()
         window.contentView = nil
         window.close()
         try? FileManager.default.removeItem(at: directory)

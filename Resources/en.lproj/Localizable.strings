@@ -798,6 +798,10 @@
 "直接编辑 Markdown，⌘↩ 预览" = "Edit Markdown · ⌘↩ to preview";
 "⌘↩ 编辑 · 点击链接打开网页" = "⌘↩ to edit · Click links to open webpages";
 "实时预览" = "Live preview";
+"在 Safari 中打开" = "Open in Safari";
+"复制代码" = "Copy code";
+"已复制" = "Copied";
+"复制失败，请重试" = "Copy failed; try again";
 "源码" = "Markdown source";
 "Vim 模式" = "Vim mode";
 "开启" = "On";

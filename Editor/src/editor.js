@@ -17,6 +17,51 @@ const livePreview = new Compartment();
 let view;
 let composing = false;
 let currentVim, currentReadOnly, currentSourceMode;
+let labels = {};
+let copyRequest = 0;
+const pendingCopies = new Map();
+
+function actionButton(className, label, path) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${path}</svg>`;
+  button.addEventListener("mousedown", event => event.preventDefault());
+  return button;
+}
+
+class OpenLinkWidget extends WidgetType {
+  constructor(url) { super(); this.url = url; }
+  eq(other) { return this.url === other.url; }
+  toDOM() {
+    const button = actionButton("board-open-link", labels.openLink || "在 Safari 中打开", '<path d="M9 2h5v5M14 2L7 9M6 3H3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3"/>');
+    button.dataset.openUrl = this.url;
+    button.title += " · " + this.url;
+    button.addEventListener("click", () => post({kind: "open", url: this.url}));
+    return button;
+  }
+  ignoreEvent() { return true; }
+}
+
+class CopyCodeWidget extends WidgetType {
+  constructor(from, to) { super(); this.from = from; this.to = to; }
+  eq(other) { return this.from === other.from && this.to === other.to; }
+  toDOM() {
+    const button = actionButton("board-copy-code", labels.copyCode || "复制代码", '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2A1.5 1.5 0 0 0 9 2H3.5A1.5 1.5 0 0 0 2 3.5V9A1.5 1.5 0 0 0 3.5 10.5h2"/>');
+    button.addEventListener("click", () => {
+      const request = ++copyRequest;
+      pendingCopies.set(request, button);
+      post({kind: "copy", request, text: view.state.doc.sliceString(this.from, this.to)});
+    });
+    return button;
+  }
+  ignoreEvent() { return true; }
+  destroy(button) {
+    for (const [request, pending] of pendingCopies) if (pending === button) pendingCopies.delete(request);
+  }
+}
 
 function parseDetails(doc, tree) {
   const excluded = [];
@@ -157,6 +202,13 @@ function decorations(state, details, expanded) {
       for (let number = line.number; number <= state.doc.lineAt(node.to).number; number++) {
         ranges.push(Decoration.line({class: "cm-code"}).range(state.doc.line(number).from));
       }
+      if (name === "FencedCode") {
+        const firstBody = line.number < state.doc.lines ? state.doc.line(line.number + 1).from : node.to;
+        const lastChild = node.node.lastChild;
+        const end = lastChild?.name === "CodeMark" ? state.doc.lineAt(lastChild.from).from : node.to;
+        ranges.push(Decoration.line({class: "cm-code-header"}).range(line.from));
+        ranges.push(Decoration.widget({widget: new CopyCodeWidget(firstBody, Math.max(firstBody, end)), side: -1}).range(line.from));
+      }
       return false;
     }
     if (name === "Blockquote") ranges.push(Decoration.line({class: "cm-quote"}).range(line.from));
@@ -176,14 +228,18 @@ function decorations(state, details, expanded) {
     }
     if (name === "ListMark" && /^\s*[-+*]\s+\[[ xX]\]/.test(line.text)) replace(node.from, node.to + 1, undefined);
     if (name === "Link") {
-      const source = state.doc.sliceString(node.from, node.to);
-      const match = source.match(/^\[([^\]]+)\]\(([^\s)]+)\)$/);
-      if (match) {
-        add(node.from + 1, node.from + 1 + match[1].length,
-            Decoration.mark({class: "cm-link", attributes: {"data-url": match[2]}}));
+      const destination = node.node.getChild("URL");
+      const closing = node.node.getChildren("LinkMark").find(mark => state.doc.sliceString(mark.from, mark.to) === "]");
+      if (destination && closing) {
+        const decoded = document.createElement("textarea");
+        decoded.innerHTML = state.doc.sliceString(destination.from, destination.to).replace(/^<|>$/g, "").replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, "$1");
+        const url = decoded.value;
+        add(node.from + 1, closing.from,
+            Decoration.mark({class: "cm-link", attributes: {"data-url": url}}));
+        ranges.push(Decoration.widget({widget: new OpenLinkWidget(url), side: 1}).range(node.to));
         if (!editing) {
           replace(node.from, node.from + 1, undefined);
-          replace(node.from + 1 + match[1].length, node.to, undefined);
+          replace(closing.from, node.to, undefined);
         }
       }
     }
@@ -242,6 +298,7 @@ function snapshot() {
 
 window.boardEditor = {
   configure(config) {
+    if (config.labels) labels = config.labels;
     if (!view) {
       view = new EditorView({parent: document.getElementById("editor"), state: EditorState.create({
         doc: config.source,
@@ -296,6 +353,28 @@ window.boardEditor = {
     return snapshot();
   },
   snapshot,
+  copyResult(request, success) {
+    const button = pendingCopies.get(request);
+    pendingCopies.delete(request);
+    if (!button?.isConnected) return;
+    const original = button.dataset.copyIcon || button.innerHTML;
+    button.dataset.copyIcon = original;
+    const label = labels.copyCode || "复制代码";
+    const result = success ? (labels.copied || "已复制") : (labels.copyFailed || "复制失败，请重试");
+    button.title = result;
+    button.setAttribute("aria-label", result);
+    if (success) {
+      button.dataset.copied = "true";
+      button.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8l3 3 7-7"/></svg>';
+    }
+    setTimeout(() => {
+      if (!button.isConnected) return;
+      button.innerHTML = original;
+      delete button.dataset.copied;
+      button.title = label;
+      button.setAttribute("aria-label", label);
+    }, 1600);
+  },
   focus() { view.focus(); },
   escape() {
     const target = view.dom.contains(document.activeElement) ? document.activeElement : view.contentDOM;

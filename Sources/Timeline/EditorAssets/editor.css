@@ -25,6 +25,14 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 .cm-code { font-family: ui-monospace, SFMono-Regular, monospace; background: var(--soft); border-radius: 3px; }
 .cm-quote { border-left: 2px solid var(--line); color: var(--muted); }
 .cm-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.board-open-link, .board-copy-code { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 4px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); vertical-align: middle; cursor: pointer; }
+.board-open-link { margin-left: 3px; }
+.board-copy-code { float: right; margin-left: 8px; background: var(--background); border-color: var(--line); }
+.board-open-link svg, .board-copy-code svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.board-open-link:hover, .board-copy-code:hover { color: var(--accent); background: var(--soft); border-color: var(--line); }
+.board-open-link:focus-visible, .board-copy-code:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.board-copy-code[data-copied="true"] { color: var(--success); }
+#editor .cm-code-header { min-height: 24px; }
 .board-check { display: inline-flex; vertical-align: -.16em; align-items: center; justify-content: center; width: 1.1em; height: 1.1em; margin-right: .45em; padding: 0; border: 1.4px solid var(--muted); border-radius: 50%; background: transparent; cursor: pointer; }
 .board-check[aria-checked="true"] { border-color: var(--success); background: var(--success); }
 .board-check svg { width: 80%; height: 80%; stroke: white; stroke-width: 2; fill: none; }
