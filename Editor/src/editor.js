@@ -32,23 +32,26 @@ const pendingCopies = new Map();
 
 function isBrowsing(state = view.state) { return state.field(browsingState); }
 
+function editability(readOnly) {
+  return [EditorState.readOnly.compute([browsingState], state => readOnly || isBrowsing(state)),
+          EditorView.editable.compute([browsingState], state => !readOnly && !isBrowsing(state))];
+}
+
 function setBrowsing(value) {
   value = Boolean(value && currentVim);
   if (value === isBrowsing()) return;
   const scrollTop = view.scrollDOM.scrollTop;
-  view.dispatch({effects: [changeBrowsing.of(value),
-    editable.reconfigure([EditorState.readOnly.of(currentReadOnly || value), EditorView.editable.of(!currentReadOnly && !value)]),
-    livePreview.reconfigure(currentSourceMode && !value ? [] : live)]});
-  view.dom.classList.toggle("board-browsing", value);
-  view.contentDOM.setAttribute("aria-label", value ? (labels.browse || "浏览 · 按 i 编辑") : "工作板 Markdown 内容");
+  const effects = [changeBrowsing.of(value)];
+  if (currentSourceMode) effects.push(livePreview.reconfigure(value ? live : []));
+  view.dispatch({effects});
   view.scrollDOM.scrollTop = scrollTop;
   post({kind: "mode", browsing: value});
 }
 
 function saveAndBrowse() {
   queueMicrotask(() => {
-    post({kind: "write", ...snapshot()});
     setBrowsing(true);
+    post({kind: "write", ...snapshot()});
   });
 }
 
@@ -361,14 +364,18 @@ window.boardEditor = {
           livePreview.of(config.sourceMode ? [] : live),
           EditorView.atomicRanges.of(view => view.state.field(live, false)?.decorations.update({filter: (_from, _to, decoration) => decoration.spec.atomic === true}) ?? Decoration.none),
           vimMode.of(config.vim ? Prec.highest(vim({status: true})) : []),
-          editable.of([EditorState.readOnly.of(config.readOnly), EditorView.editable.of(!config.readOnly)]),
+          editable.of(editability(config.readOnly)),
           keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
           Prec.lowest(EditorView.domEventHandlers({keydown(event) {
             if (event.key !== "Escape" || event.isComposing || composing || view.composing) return false;
             event.stopPropagation();
             return true;
           }})),
-          EditorView.contentAttributes.of({"aria-label": "工作板 Markdown 内容", spellcheck: "false", tabindex: "0"}),
+          EditorView.editorAttributes.of(view => ({class: isBrowsing(view.state) ? "board-browsing" : ""})),
+          EditorView.contentAttributes.of(view => ({
+            "aria-label": isBrowsing(view.state) ? (labels.browse || "浏览 · 按 i 编辑") : "工作板 Markdown 内容",
+            spellcheck: "false", tabindex: "0"
+          })),
           EditorView.updateListener.of(update => {
             if (update.docChanged && !update.transactions.some(transaction => transaction.annotation(external))) {
               post({kind: "change", ...snapshot()});
@@ -394,7 +401,7 @@ window.boardEditor = {
       }
       const effects = [];
       if (currentVim !== config.vim) effects.push(vimMode.reconfigure(config.vim ? Prec.highest(vim({status: true})) : []));
-      if (currentReadOnly !== config.readOnly) effects.push(editable.reconfigure([EditorState.readOnly.of(config.readOnly || isBrowsing()), EditorView.editable.of(!config.readOnly && !isBrowsing())]));
+      if (currentReadOnly !== config.readOnly) effects.push(editable.reconfigure(editability(config.readOnly)));
       if (currentSourceMode !== config.sourceMode) effects.push(livePreview.reconfigure(config.sourceMode && !isBrowsing() ? [] : live));
       if (effects.length) view.dispatch({effects});
     }

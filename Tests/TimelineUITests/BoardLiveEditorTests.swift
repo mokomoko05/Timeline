@@ -26,6 +26,49 @@ func waitForBoardEditor(_ view: WKWebView) async throws {
 
 @MainActor
 final class BoardLiveEditorTests: XCTestCase {
+    func testBrowsingHidesCursorBeforeSavingAndKeepsItHiddenWhenFocusReturns() async throws {
+        let fixture = try LiveFixture(source: "# Title\n\n- [ ] Task\n\nEnd", vim: true)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        _ = try await fixture.webView.evaluateJavaScript("""
+        document.hasFocus=()=>true;
+        window.writeStates=[];
+        const handler=window.webkit.messageHandlers.boardEditor;
+        const original=handler.postMessage.bind(handler);
+        handler.postMessage=message=>{
+          if(message.kind==='mode'||message.kind==='write') window.writeStates.push({
+            kind:message.kind,browsing:window.boardEditor.snapshot().browsing,
+            hidden:[...document.querySelectorAll('.cm-cursorLayer')].every(e=>getComputedStyle(e).display==='none')
+          });
+          original(message);
+        };
+        window.boardEditor.focus();
+        """)
+        try await fixture.writeCommand()
+        let states = try await fixture.webView.evaluateJavaScript("window.writeStates") as? [[String: Any]] ?? []
+        XCTAssertEqual(states.compactMap { $0["kind"] as? String }, ["mode", "write"])
+        XCTAssertTrue(states.allSatisfy { $0["browsing"] as? Bool == true && $0["hidden"] as? Bool == true })
+        for _ in 0..<3 {
+            fixture.window.resignKey()
+            _ = try await fixture.webView.evaluateJavaScript("document.activeElement?.blur();window.boardEditor.view().dispatch({})")
+            try await Task.sleep(for: .milliseconds(30))
+            fixture.window.makeKey()
+            _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.focus();window.boardEditor.select(0);window.boardEditor.view().measure()")
+            try await Task.sleep(for: .milliseconds(30))
+            let state = try await fixture.webView.evaluateJavaScript("""
+            ({browsing:window.boardEditor.snapshot().browsing,
+              hidden:[...document.querySelectorAll('.cm-cursorLayer')].every(e=>getComputedStyle(e).display==='none'),
+              caret:getComputedStyle(document.querySelector('.cm-content')).caretColor==='rgba(0, 0, 0, 0)',
+              readonly:window.boardEditor.view().state.readOnly,
+              labelled:document.querySelector('.cm-content').getAttribute('aria-label').includes('i')})
+            """) as? [String: Bool]
+            XCTAssertEqual(state, ["browsing": true, "hidden": true, "caret": true, "readonly": true, "labelled": true])
+        }
+        _ = try await fixture.pressKey("i")
+        let editing = try await fixture.webView.evaluateJavaScript("!window.boardEditor.snapshot().browsing&&document.querySelector('.cm-content').isContentEditable&&[...document.querySelectorAll('.cm-cursorLayer')].some(e=>getComputedStyle(e).display!=='none')") as? Bool
+        XCTAssertEqual(editing, true)
+    }
+
     func testVimWriteSavesToDiskAndBrowsesUntilExplicitInsert() async throws {
         let source = "# Title\n\n**Body** [Paper](https://example.com)\n\n<details>\n<summary>Agenda</summary>\n\nDiscussion\n\n</details>\n\n- [ ] Task\n\n```\ncode\n```\n\nEnd"
         let fixture = try LiveFixture(source: source, vim: true)
