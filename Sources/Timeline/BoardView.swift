@@ -364,8 +364,19 @@ struct BoardContentView: View {
                         Text("Vim").font(.system(size: 10, weight: .medium, design: .monospaced))
                             .foregroundStyle(vim ? Palette.accent : Palette.muted)
                     }
-                    .help("Vim：Esc 或 Ctrl+[ 普通模式，i 插入，v 可视，支持移动、删除、撤销和搜索")
+                    .help("Vim：:w 保存并浏览，i 编辑，Esc 或 Ctrl+[ 普通模式")
                     .accessibilityLabel("Vim 模式").accessibilityValue(vim ? "开启" : "关闭")
+                    if vim {
+                        Button {
+                            if liveEditor.browsing { liveEditor.beginEditing() }
+                            else { liveEditor.saveAndBrowse() }
+                        } label: {
+                            Image(systemName: liveEditor.browsing ? "pencil" : "eye")
+                        }
+                        .help(liveEditor.browsing ? "浏览 · 按 i 编辑" : ":w 保存并浏览")
+                        .accessibilityLabel(liveEditor.browsing ? "浏览 · 按 i 编辑" : ":w 保存并浏览")
+                        .disabled(store.isReadOnly)
+                    }
                     Button { setEditing(!editing) } label: {
                         Image(systemName: editing ? "eye" : "chevron.left.forwardslash.chevron.right")
                     }

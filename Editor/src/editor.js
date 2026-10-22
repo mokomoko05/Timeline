@@ -4,11 +4,20 @@ import {defaultKeymap, history, historyKeymap, indentWithTab} from "@codemirror/
 import {markdown, markdownLanguage, markdownKeymap} from "@codemirror/lang-markdown";
 import {syntaxTree, syntaxHighlighting, HighlightStyle, indentOnInput, bracketMatching} from "@codemirror/language";
 import {tags} from "@lezer/highlight";
-import {vim} from "@replit/codemirror-vim";
+import {vim, Vim} from "@replit/codemirror-vim";
 
 const post = payload => window.webkit?.messageHandlers.boardEditor.postMessage(payload);
 const toggleDetails = StateEffect.define();
 const resetDetails = StateEffect.define();
+const changeBrowsing = StateEffect.define();
+const browsingState = StateField.define({
+  create: () => false,
+  update(value, transaction) {
+    for (const effect of transaction.effects) if (effect.is(changeBrowsing)) value = effect.value;
+    return value;
+  }
+});
+const taskInteraction = Annotation.define();
 const external = Annotation.define();
 const externalChange = external.of(true);
 const vimMode = new Compartment();
@@ -20,6 +29,30 @@ let currentVim, currentReadOnly, currentSourceMode;
 let labels = {};
 let copyRequest = 0;
 const pendingCopies = new Map();
+
+function isBrowsing(state = view.state) { return state.field(browsingState); }
+
+function setBrowsing(value) {
+  value = Boolean(value && currentVim);
+  if (value === isBrowsing()) return;
+  const scrollTop = view.scrollDOM.scrollTop;
+  view.dispatch({effects: [changeBrowsing.of(value),
+    editable.reconfigure([EditorState.readOnly.of(currentReadOnly || value), EditorView.editable.of(!currentReadOnly && !value)]),
+    livePreview.reconfigure(currentSourceMode && !value ? [] : live)]});
+  view.dom.classList.toggle("board-browsing", value);
+  view.contentDOM.setAttribute("aria-label", value ? (labels.browse || "浏览 · 按 i 编辑") : "工作板 Markdown 内容");
+  view.scrollDOM.scrollTop = scrollTop;
+  post({kind: "mode", browsing: value});
+}
+
+function saveAndBrowse() {
+  queueMicrotask(() => {
+    post({kind: "write", ...snapshot()});
+    setBrowsing(true);
+  });
+}
+
+Vim.defineEx("write", "w", saveAndBrowse);
 
 function actionButton(className, label, path) {
   const button = document.createElement("button");
@@ -112,10 +145,10 @@ class CheckWidget extends WidgetType {
     if (this.checked) button.innerHTML = '<svg viewBox="0 0 16 16"><path d="M3 8l3 3 7-7"/></svg>';
     button.addEventListener("mousedown", event => event.preventDefault());
     button.addEventListener("click", () => {
-      if (view.state.readOnly) return;
+      if (currentReadOnly) return;
       const marker = view.state.doc.sliceString(this.position, this.position + 1);
       view.dispatch({changes: {from: this.position, to: this.position + 1, insert: marker === " " ? "x" : " "},
-                     annotations: Transaction.userEvent.of("input.task")});
+                     annotations: [Transaction.userEvent.of("input.task"), taskInteraction.of(true)]});
     });
     return button;
   }
@@ -146,7 +179,7 @@ class DetailsWidget extends WidgetType {
       view.dispatch(transaction);
     });
     button.addEventListener("dblclick", () => {
-      if (view.state.readOnly) return;
+      if (view.state.readOnly || isBrowsing()) return;
       const line = view.state.doc.lineAt(this.item.headerTo);
       const offset = line.text.indexOf("<summary>") + "<summary>".length;
       view.dispatch({selection: {anchor: line.from + offset}, effects: toggleDetails.of({from: this.item.from, open: true}), scrollIntoView: true});
@@ -160,7 +193,8 @@ class DetailsWidget extends WidgetType {
 function decorations(state, details, expanded) {
   const ranges = [], hidden = [];
   const selection = state.selection.main;
-  const active = state.readOnly ? null : state.doc.lineAt(selection.head).number;
+  const browsing = isBrowsing(state);
+  const active = state.readOnly || browsing ? null : state.doc.lineAt(selection.head).number;
   const overlapsSelection = (from, to) => selection.from <= to && selection.to >= from;
   const add = (from, to, decoration) => { if (from < to) ranges.push(decoration.range(from, to)); };
   const replace = (from, to, widget, block = false) => add(from, to, Decoration.replace({widget, block, atomic: true}));
@@ -178,7 +212,7 @@ function decorations(state, details, expanded) {
       const closingLine = state.doc.lineAt(item.closingFrom).number;
       const previous = closingLine > 1 ? state.doc.line(closingLine - 1) : null;
       const closingFrom = previous && !previous.text.trim() ? previous.from - 1 : item.closingFrom;
-      if (!overlapsSelection(closingFrom, item.to) || state.readOnly) replace(closingFrom, item.to, undefined);
+      if (!overlapsSelection(closingFrom, item.to) || state.readOnly || browsing) replace(closingFrom, item.to, undefined);
       const first = state.doc.lineAt(item.headerTo).number + 1;
       const last = state.doc.lineAt(item.closingFrom).number;
       for (let number = first; number < last; number++) {
@@ -266,12 +300,13 @@ const live = StateField.define({
         if (item) expanded.set(item.from, effect.value.open);
         effectsChanged = true;
       } else if (effect.is(resetDetails)) { expanded = new Map(); effectsChanged = true; }
+      else if (effect.is(changeBrowsing)) effectsChanged = true;
     }
     const tree = syntaxTree(transaction.state);
     const parsed = tree !== value.tree;
     if (!changed && !transaction.selection && !effectsChanged && !parsed) return value;
     const details = changed || parsed ? parseDetails(transaction.state.doc, tree) : value.details;
-    if (transaction.selection && !effectsChanged) {
+    if (transaction.selection && !effectsChanged && !isBrowsing(transaction.state)) {
       const head = transaction.state.selection.main.head;
       for (const item of details) {
         if (head >= item.from && head < item.to && expanded.get(item.from) === false) {
@@ -293,17 +328,35 @@ const highlighting = HighlightStyle.define([
 
 function snapshot() {
   return {source: view.state.doc.toString(), anchor: view.state.selection.main.anchor,
-          head: view.state.selection.main.head, composing: composing || view.composing};
+          head: view.state.selection.main.head, composing: composing || view.composing, browsing: isBrowsing()};
 }
 
 window.boardEditor = {
   configure(config) {
     if (config.labels) labels = config.labels;
+    const initial = !view;
     if (!view) {
       view = new EditorView({parent: document.getElementById("editor"), state: EditorState.create({
         doc: config.source,
         selection: {anchor: config.readOnly ? 0 : config.source.length},
-        extensions: [history(), drawSelection({cursorBlinkRate: 0}), rectangularSelection(), EditorView.lineWrapping,
+        extensions: [browsingState, history(), drawSelection({cursorBlinkRate: 0}), rectangularSelection(), EditorView.lineWrapping,
+          EditorState.transactionFilter.of(transaction => {
+            if (transaction.docChanged && isBrowsing(transaction.startState)
+                && !transaction.annotation(external) && !transaction.annotation(taskInteraction)) return [];
+            return transaction;
+          }),
+          Prec.highest(EditorView.domEventHandlers({keydown(event) {
+            if (!isBrowsing() || event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return false;
+            if (event.key === "i" && !currentReadOnly) {
+              Vim.handleKey(view.cm, "<Esc>", "user");
+              setBrowsing(false);
+              Vim.handleKey(view.cm, "i", "user");
+              view.focus();
+              event.stopPropagation();
+              return true;
+            }
+            return false;
+          }})),
           indentOnInput(), bracketMatching(), markdown({base: markdownLanguage}), syntaxHighlighting(highlighting),
           livePreview.of(config.sourceMode ? [] : live),
           EditorView.atomicRanges.of(view => view.state.field(live, false)?.decorations.update({filter: (_from, _to, decoration) => decoration.spec.atomic === true}) ?? Decoration.none),
@@ -315,7 +368,7 @@ window.boardEditor = {
             event.stopPropagation();
             return true;
           }})),
-          EditorView.contentAttributes.of({"aria-label": "工作板 Markdown 内容", spellcheck: "false"}),
+          EditorView.contentAttributes.of({"aria-label": "工作板 Markdown 内容", spellcheck: "false", tabindex: "0"}),
           EditorView.updateListener.of(update => {
             if (update.docChanged && !update.transactions.some(transaction => transaction.annotation(external))) {
               post({kind: "change", ...snapshot()});
@@ -327,7 +380,7 @@ window.boardEditor = {
             blur() { post({kind: "commit", ...snapshot()}); },
             click(event) {
               const link = event.target.closest("[data-url]");
-              if (link && (event.metaKey || view.state.readOnly)) { post({kind: "open", url: link.dataset.url}); return true; }
+              if (link && (event.metaKey || view.state.readOnly || isBrowsing())) { post({kind: "open", url: link.dataset.url}); return true; }
               return false;
             }
           })]
@@ -341,18 +394,28 @@ window.boardEditor = {
       }
       const effects = [];
       if (currentVim !== config.vim) effects.push(vimMode.reconfigure(config.vim ? Prec.highest(vim({status: true})) : []));
-      if (currentReadOnly !== config.readOnly) effects.push(editable.reconfigure([EditorState.readOnly.of(config.readOnly), EditorView.editable.of(!config.readOnly)]));
-      if (currentSourceMode !== config.sourceMode) effects.push(livePreview.reconfigure(config.sourceMode ? [] : live));
+      if (currentReadOnly !== config.readOnly) effects.push(editable.reconfigure([EditorState.readOnly.of(config.readOnly || isBrowsing()), EditorView.editable.of(!config.readOnly && !isBrowsing())]));
+      if (currentSourceMode !== config.sourceMode) effects.push(livePreview.reconfigure(config.sourceMode && !isBrowsing() ? [] : live));
       if (effects.length) view.dispatch({effects});
     }
     currentVim = config.vim;
     currentReadOnly = config.readOnly;
     currentSourceMode = config.sourceMode;
+    if (!currentVim && isBrowsing()) setBrowsing(false);
+    if (initial && config.browsing) setBrowsing(true);
     if (config.colors) for (const [key, value] of Object.entries(config.colors)) document.documentElement.style.setProperty("--" + key, value);
     if (config.fontSize) document.documentElement.style.setProperty("--font-size", config.fontSize + "px");
     return snapshot();
   },
   snapshot,
+  browse: saveAndBrowse,
+  edit() {
+    if (currentReadOnly) return;
+    if (isBrowsing() && view.cm) Vim.handleKey(view.cm, "<Esc>", "user");
+    setBrowsing(false);
+    if (view.cm && !view.cm.state.vim.insertMode) Vim.handleKey(view.cm, "i", "user");
+    view.focus();
+  },
   copyResult(request, success) {
     const button = pendingCopies.get(request);
     pendingCopies.delete(request);
@@ -381,6 +444,8 @@ window.boardEditor = {
     target.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", code: "Escape", bubbles: true, cancelable: true}));
   },
   insertTemplate(kind, labels) {
+    if (currentReadOnly) return snapshot();
+    if (isBrowsing()) window.boardEditor.edit();
     const selection = view.state.selection.main;
     const selected = view.state.doc.sliceString(selection.from, selection.to);
     let content, title;
@@ -411,8 +476,8 @@ window.boardEditor = {
     return snapshot();
   },
   select(anchor, head = anchor) { view.dispatch({selection: {anchor, head}}); return snapshot(); },
-  undo() { const command = historyKeymap.find(item => item.key === "Mod-z"); command?.run(view); return snapshot(); },
-  redo() { const command = historyKeymap.find(item => item.key === "Mod-Shift-z"); command?.run(view); return snapshot(); },
+  undo() { if (!isBrowsing()) { const command = historyKeymap.find(item => item.key === "Mod-z"); command?.run(view); } return snapshot(); },
+  redo() { if (!isBrowsing()) { const command = historyKeymap.find(item => item.key === "Mod-Shift-z"); command?.run(view); } return snapshot(); },
   view() { return view; }
 };
 post({kind: "ready"});

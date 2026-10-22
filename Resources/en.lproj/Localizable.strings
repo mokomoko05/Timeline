@@ -805,5 +805,7 @@
 "源码" = "Markdown source";
 "Vim 模式" = "Vim mode";
 "开启" = "On";
-"Vim：Esc 或 Ctrl+[ 普通模式，i 插入，v 可视，支持移动、删除、撤销和搜索" = "Vim: Esc or Ctrl+[ for normal mode, i to insert, v for visual mode; movement, deletion, undo and search supported";
+"Vim：:w 保存并浏览，i 编辑，Esc 或 Ctrl+[ 普通模式" = "Vim: :w saves and browses, i edits, Esc or Ctrl+[ returns to normal mode";
+"浏览 · 按 i 编辑" = "Browse · Press i to edit";
+":w 保存并浏览" = ":w Save and browse";
 "编辑器加载失败，请重新打开工作板。" = "The editor could not load. Reopen the board to retry.";

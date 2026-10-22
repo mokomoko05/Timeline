@@ -25,6 +25,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     static weak var active: BoardLiveEditorSession?
     @Published private(set) var ready = false
     @Published private(set) var error: String?
+    @Published private(set) var browsing = false
     private(set) var webView: WKWebView?
     private let store: JournalStore
     private let boardID: UUID
@@ -48,6 +49,8 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
 
     func undo() { webView?.evaluateJavaScript("window.boardEditor.undo()") }
     func redo() { webView?.evaluateJavaScript("window.boardEditor.redo()") }
+    func beginEditing() { webView?.evaluateJavaScript("window.boardEditor.edit()") }
+    func saveAndBrowse() { webView?.evaluateJavaScript("window.boardEditor.escape(); window.boardEditor.browse()") }
 
     func handleModeKey(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown, ready, settings["vim"] as? Bool == true,
@@ -115,7 +118,8 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         for level in 1...6 { colors["heading-\(level)"] = css(Color(nsColor: MarkdownText.headingColor(level))) }
         settings = ["vim": vim, "fontSize": fontSize, "readOnly": store.isReadOnly, "colors": colors, "sourceMode": sourceMode]
         settings["labels"] = ["openLink": AppLocalized("在 Safari 中打开"), "copyCode": AppLocalized("复制代码"),
-                              "copied": AppLocalized("已复制"), "copyFailed": AppLocalized("复制失败，请重试")]
+                              "copied": AppLocalized("已复制"), "copyFailed": AppLocalized("复制失败，请重试"),
+                              "browse": AppLocalized("浏览 · 按 i 编辑")]
         let current = store.boards.first { $0.id == boardID }?.markdown ?? storedSource
         if current != storedSource {
             pending?.cancel()
@@ -129,7 +133,10 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     private func applyConfiguration() {
         guard ready, !settings.isEmpty else { return }
         var configuration = settings
-        if sourceNeedsSynchronization { configuration["source"] = source }
+        if sourceNeedsSynchronization {
+            configuration["source"] = source
+            configuration["browsing"] = browsing
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: configuration, options: [.sortedKeys]),
               data != lastConfiguration else { return }
         lastConfiguration = data
@@ -145,6 +152,12 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         if kind == "ready" {
             ready = true
             applyConfiguration()
+        } else if kind == "mode", let value = body["browsing"] as? Bool {
+            if browsing != value { browsing = value }
+        } else if kind == "write" {
+            accept(body)
+            flush()
+            store.save()
         } else if kind == "change" || kind == "commit" {
             accept(body)
             if kind == "commit" { flush() }

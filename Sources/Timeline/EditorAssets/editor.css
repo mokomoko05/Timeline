@@ -11,6 +11,10 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 #editor .cm-cursorLayer { animation: none !important; }
 #editor .cm-fat-cursor { background: var(--ink); color: var(--background) !important; outline: 1px solid var(--ink); min-width: .55em; }
 #editor .cm-editor:not(.cm-focused) .cm-fat-cursor { background: transparent; color: transparent !important; }
+#editor .board-browsing .cm-cursorLayer { display: none !important; }
+#editor .board-browsing .cm-content, #editor .board-browsing .cm-line { caret-color: transparent !important; cursor: default; }
+#editor .board-browsing .cm-content:focus { outline: none; }
+#editor .board-browsing .cm-link { cursor: pointer; }
 .cm-selectionBackground, .cm-focused .cm-selectionBackground, ::selection { background: var(--soft) !important; }
 .cm-heading-1 { color: var(--heading-1, #dd9179); font-size: 1.6em; font-weight: 700; }
 .cm-heading-2 { color: var(--heading-2, #d4ae62); font-size: 1.4em; font-weight: 650; }
