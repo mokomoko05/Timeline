@@ -191,7 +191,24 @@ final class InteractiveTaskText: NSTextView {
     // NSTextView 的继承初始化入口可能重入 Swift 的存储属性初始化，
     // 重复分配并遗失 measurer；直接实现指定初始化方法，保证只分配一次。
     override init(frame frameRect: NSRect = .zero, textContainer container: NSTextContainer? = nil) {
-        super.init(frame: frameRect, textContainer: container)
+        // 指定初始化方法收到 nil 时不会像便捷初始化方法一样创建排版栈。
+        // 必须提供完整的 TextKit 栈，否则 textStorage 为 nil，正文无法写入或绘制。
+        let textContainer: NSTextContainer
+        let ownedStorage: NSTextStorage?
+        if let container {
+            textContainer = container
+            ownedStorage = nil
+        } else {
+            let storage = NSTextStorage()
+            ownedStorage = storage
+            let manager = NSLayoutManager()
+            textContainer = NSTextContainer(containerSize: NSSize(width: max(1, frameRect.width), height: .greatestFiniteMagnitude))
+            storage.addLayoutManager(manager)
+            manager.addTextContainer(textContainer)
+        }
+        super.init(frame: frameRect, textContainer: textContainer)
+        // NSLayoutManager 不持有 storage；交给 NSTextView 接管前不能提前释放。
+        withExtendedLifetime(ownedStorage) {}
     }
 
     required init?(coder: NSCoder) { super.init(coder: coder) }
