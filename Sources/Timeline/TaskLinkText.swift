@@ -188,6 +188,14 @@ extension NSMenu {
 }
 
 final class InteractiveTaskText: NSTextView {
+    // NSTextView 的继承初始化入口可能重入 Swift 的存储属性初始化，
+    // 重复分配并遗失 measurer；直接实现指定初始化方法，保证只分配一次。
+    override init(frame frameRect: NSRect = .zero, textContainer container: NSTextContainer? = nil) {
+        super.init(frame: frameRect, textContainer: container)
+    }
+
+    required init?(coder: NSCoder) { super.init(coder: coder) }
+
     var markdownDocument: Document?
     var inlineText: NSAttributedString?
     var markdown = false

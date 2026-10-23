@@ -1,4 +1,4 @@
-:root { color-scheme: light dark; --background: #10151d; --ink: #e1e6ef; --muted: #929aa6; --accent: #70a9f7; --soft: #19283c; --line: #323942; --success: #58b98a; --font-size: 13px; }
+:root { color-scheme: light dark; --background: #10151d; --ink: #e1e6ef; --muted: #929aa6; --accent: #70a9f7; --soft: #19283c; --selection: #365e8d; --selection-ink: #ffffff; --line: #323942; --success: #58b98a; --font-size: 13px; }
 * { box-sizing: border-box; }
 html, body, #editor { height: 100%; margin: 0; background: var(--background); color: var(--ink); }
 body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif; }
@@ -15,7 +15,15 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 #editor .board-browsing .cm-content, #editor .board-browsing .cm-line { caret-color: transparent !important; cursor: default; }
 #editor .board-browsing .cm-content:focus { outline: none; }
 #editor .board-browsing .cm-link { cursor: pointer; }
-.cm-selectionBackground, .cm-focused .cm-selectionBackground, ::selection { background: var(--soft) !important; }
+#editor .cm-selectionBackground { background: var(--selection) !important; }
+/* Browsing uses the native DOM selection, including text over opaque code backgrounds.
+   Override drawSelection's transparent native highlight, and avoid drawing it twice. */
+#editor .board-browsing .cm-selectionLayer { display: none; }
+#editor .board-browsing .cm-content::selection,
+#editor .board-browsing .cm-content ::selection {
+  background: var(--selection) !important;
+  color: var(--selection-ink) !important;
+}
 .cm-heading-1 { color: var(--heading-1, #dd9179); font-size: 1.6em; font-weight: 700; }
 .cm-heading-2 { color: var(--heading-2, #d4ae62); font-size: 1.4em; font-weight: 650; }
 .cm-heading-3 { color: var(--heading-3, #79b898); font-size: 1.22em; font-weight: 650; }

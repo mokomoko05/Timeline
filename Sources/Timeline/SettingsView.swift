@@ -51,6 +51,7 @@ struct SettingsView: View {
                     }
                 }
                 Toggle("登录时自动启动", isOn: Binding(get: { loginItem.enabled }, set: loginItem.setEnabled))
+                    .disabled(loginItem.isUpdating)
                 Toggle("切到别的应用时自动收起窗口", isOn: $autoHideOnResign)
                 Text("快速记录与专注面板保持显示。")
                     .font(.caption).foregroundStyle(.secondary)
@@ -200,8 +201,9 @@ final class SettingsWindowController {
                                   styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = AppLocalized("设置")
             window.isReleasedWhenClosed = false
+            let loginItem = loginItem, failedHotKeys = failedHotKeys
             window.contentView = NSHostingView(rootView: LocalizedRoot {
-                SettingsView(loginItem: self.loginItem, failedHotKeys: self.failedHotKeys)
+                SettingsView(loginItem: loginItem, failedHotKeys: failedHotKeys)
             })
             window.center()
             self.window = window

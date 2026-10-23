@@ -139,7 +139,7 @@ public struct ReminderPlan: Identifiable, Equatable {
                 guard fire > now else { return nil }
                 return ReminderPlan(id: "timeline.\(task.id.uuidString)", title: String(TaskText.rendered(task.title).characters), fireDate: fire, dayKey: JournalDates.key(due), taskID: task.id)
             }
-        }.sorted { $0.fireDate < $1.fireDate }
+        }.sorted { $0.fireDate == $1.fireDate ? $0.id < $1.id : $0.fireDate < $1.fireDate }
     }
 }
 

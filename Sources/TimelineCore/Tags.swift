@@ -456,14 +456,18 @@ extension JournalStore {
     /// 把一个标签（笔记本）的内容按待办（章节）分组：先是「直接记录」，然后是带这个标签的待办（即使还没有笔记），
     /// 最后是日志自己带这个标签、但关联的待办没有这个标签的那些待办。章节里的笔记按时间从早到晚。
     public func chapters(forTag tag: String) -> [NotebookChapter] {
-        let notes = notes(forTag: tag)
+        chapters(notes: notes(forTag: tag), tasks: tasks(taggedWith: tag))
+    }
+
+    /// 页面已经取得标签笔记和待办时，直接复用，避免再次扫描、排序全部日志。
+    public func chapters(notes: [LoggedLog], tasks: [ScheduledTask]) -> [NotebookChapter] {
         let grouped = Dictionary(grouping: notes) { $0.log.taskID }
         var result: [NotebookChapter] = []
         if let direct = grouped[nil], !direct.isEmpty {
             result.append(NotebookChapter(taskID: nil, number: nil, title: "直接记录", completed: false, notes: direct))
         }
         var used = Set<UUID>()
-        for item in tasks(taggedWith: tag) {
+        for item in tasks {
             used.insert(item.id)
             result.append(NotebookChapter(taskID: item.id, number: item.task.number,
                                           title: String(TaskText.rendered(item.task.title).characters),

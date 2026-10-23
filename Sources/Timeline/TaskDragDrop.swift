@@ -175,6 +175,8 @@ final class TaskHandleView: NSView, NSDraggingSource {
     private var startScroll: CGFloat = 0
     private var autoscroll: Timer?
 
+    deinit { autoscroll?.invalidate() }
+
     private var scrollView: NSScrollView? { enclosingScrollView }
 
     private func scrollOffset() -> CGFloat {

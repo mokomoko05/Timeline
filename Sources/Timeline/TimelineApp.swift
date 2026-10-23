@@ -23,7 +23,7 @@ enum TimelineApp {
         if CommandLine.arguments.contains("--migrate-legacy") { return }
         if CommandLine.arguments.contains("--configure-login") {
             let loginItem = LoginItem()
-            loginItem.setEnabled(true)
+            loginItem.configureForInstallation()
             if let error = loginItem.errorMessage {
                 print(error)
             } else {
@@ -143,7 +143,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if !snapshotRun {
             ImageIndexer.run(store: store)
             // 启动稍后清理不再被任何数据或备份引用的图片，不拖慢启动。
-            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [store] in store?.removeUnusedImages() }
+            Task { @MainActor [weak store] in
+                try? await Task.sleep(for: .seconds(8))
+                guard !Task.isCancelled else { return }
+                await store?.removeUnusedImagesInBackground()
+            }
             quickCapture.installStatusItem()
             logHotKey.onPress = { [weak self] in self?.quickCapture.toggle(.log) }
             notesHotKey.onPress = { [weak self] in self?.toggleNotesGlobally() }

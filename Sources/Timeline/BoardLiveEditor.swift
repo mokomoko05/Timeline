@@ -114,7 +114,9 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         }
         var colors = ["background": css(Palette.background), "ink": css(Palette.ink),
                       "muted": css(Palette.muted), "accent": css(Palette.accent),
-                      "soft": css(Palette.soft), "line": css(Palette.line), "success": css(Palette.success)]
+                      "soft": css(Palette.soft), "line": css(Palette.line), "success": css(Palette.success),
+                      "selection": css(Color(nsColor: .selectedTextBackgroundColor)),
+                      "selection-ink": css(Color(nsColor: .selectedTextColor))]
         for level in 1...6 { colors["heading-\(level)"] = css(Color(nsColor: MarkdownText.headingColor(level))) }
         settings = ["vim": vim, "fontSize": fontSize, "readOnly": store.isReadOnly, "colors": colors, "sourceMode": sourceMode]
         settings["labels"] = ["openLink": AppLocalized("在 Safari 中打开"), "copyCode": AppLocalized("复制代码"),

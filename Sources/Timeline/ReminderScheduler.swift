@@ -26,9 +26,18 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
                 UNNotificationAction(identifier: Self.snooze60Action, title: "推迟 1 小时", options: []),
             ], intentIdentifiers: [], options: [])
         ])
-        changes = store.$days.debounce(for: .milliseconds(350), scheduler: RunLoop.main).sink { [weak self] _ in
+        changes = Self.planChanges(in: store).sink { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+    }
+
+    /// 日志、草稿和 OCR 不改变提醒。先合并输入，再比较计划，避免每次打字访问系统通知服务。
+    static func planChanges(in store: JournalStore) -> AnyPublisher<[ReminderPlan], Never> {
+        store.$days
+            .debounce(for: .milliseconds(350), scheduler: RunLoop.main)
+            .map { ReminderPlan.pending(days: $0) }
+            .removeDuplicates()
+            .eraseToAnyPublisher()
     }
 
     func requestPermission() async -> Bool {
@@ -68,6 +77,8 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
             do {
                 for plan in plans {
                     guard !Task.isCancelled else { return }
+                    if let request = existing.first(where: { $0.identifier == plan.id }),
+                       Self.matches(request, plan: plan) { continue }
                     let content = UNMutableNotificationContent()
                     content.title = "事项提醒"
                     content.body = plan.title
@@ -82,6 +93,15 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
                 status = ""
             } catch { status = "提醒未能保存：\(error.localizedDescription)" }
         }
+    }
+
+    static func matches(_ request: UNNotificationRequest, plan: ReminderPlan) -> Bool {
+        guard let trigger = request.trigger as? UNCalendarNotificationTrigger, !trigger.repeats else { return false }
+        let components = JournalDates.calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: plan.fireDate)
+        return trigger.dateComponents == components && request.content.body == plan.title
+            && request.content.categoryIdentifier == category
+            && request.content.userInfo["day"] as? String == plan.dayKey
+            && request.content.userInfo["task"] as? String == plan.taskID.uuidString
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,

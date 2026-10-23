@@ -1054,7 +1054,10 @@ public final class JournalStore: ObservableObject {
 
     /// 尚未做文字识别的图片文件名。
     public func imagesMissingText() -> [String] {
-        days.values.flatMap { $0.logs }.flatMap { log in log.images.filter { log.imageText[$0] == nil } }
+        var seen = Set<String>()
+        return days.values.flatMap { $0.logs }.flatMap { log in
+            log.images.filter { log.imageText[$0] == nil && seen.insert($0).inserted }
+        }
     }
 
     /// 写入识别结果；不进入撤销栈，也不改变其他内容。
@@ -1063,9 +1066,10 @@ public final class JournalStore: ObservableObject {
         var updated = days
         var changed = false
         for (key, entry) in days {
-            guard let index = entry.logs.firstIndex(where: { $0.images.contains(name) }) else { continue }
-            updated[key]!.logs[index].imageText[name] = text
-            changed = true
+            for index in entry.logs.indices where entry.logs[index].images.contains(name) && entry.logs[index].imageText[name] != text {
+                updated[key]!.logs[index].imageText[name] = text
+                changed = true
+            }
         }
         guard changed else { return }
         invalidateNotebookIndex(logsChanged: true, tasksChanged: false)
@@ -1109,8 +1113,14 @@ public final class JournalStore: ObservableObject {
 
     /// 删除不再被当前数据、每日快照和上次启动备份引用的图片，之后撤销或恢复备份仍然安全。
     public func unusedImageNames() -> [String] {
+        Self.unusedImageNames(imagesDirectory: imagesDirectory, backupURL: backupURL,
+                              backupsDirectory: backupsDirectory, keeping: referencedImageNames(in: days))
+    }
+
+    nonisolated private static func unusedImageNames(imagesDirectory: URL, backupURL: URL,
+                                                     backupsDirectory: URL, keeping: Set<String>) -> [String] {
         guard let files = try? FileManager.default.contentsOfDirectory(atPath: imagesDirectory.path), !files.isEmpty else { return [] }
-        var keep = referencedImageNames(in: days)
+        var keep = keeping
         var documents = [backupURL]
         documents += (try? FileManager.default.contentsOfDirectory(at: backupsDirectory, includingPropertiesForKeys: nil)) ?? []
         for url in documents where url.pathExtension == "json" {
@@ -1120,10 +1130,31 @@ public final class JournalStore: ObservableObject {
         return files.filter { !keep.contains($0) }
     }
 
+    /// 启动维护只在后台读取、扫描备份；回到主线程后重新检查引用。
+    /// 扫描期间有保存就跳过本次清理，避免用过期的备份快照删除图片。
+    @discardableResult
+    public func removeUnusedImagesInBackground(olderThan age: TimeInterval = 3600, now: Date = Date()) async -> Int {
+        guard !isReadOnly else { return 0 }
+        let savedAt = lastSaved
+        let images = imagesDirectory, backup = backupURL, backups = backupsDirectory
+        let keep = referencedImageNames(in: days)
+        let unused = await Task.detached(priority: .utility) {
+            Self.unusedImageNames(imagesDirectory: images, backupURL: backup, backupsDirectory: backups, keeping: keep)
+        }.value
+        guard !Task.isCancelled, lastSaved == savedAt, !isReadOnly else { return 0 }
+        let current = referencedImageNames(in: days)
+        return removeImageFiles(unused.filter { !current.contains($0) }, olderThan: age, now: now)
+    }
+
     @discardableResult
     public func removeUnusedImages(olderThan age: TimeInterval = 3600, now: Date = Date()) -> Int {
+        guard !isReadOnly else { return 0 }
+        return removeImageFiles(unusedImageNames(), olderThan: age, now: now)
+    }
+
+    private func removeImageFiles(_ names: [String], olderThan age: TimeInterval, now: Date) -> Int {
         var removed = 0
-        for name in unusedImageNames() {
+        for name in names {
             let url = imageURL(name)
             let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             guard now.timeIntervalSince(modified) >= age else { continue }

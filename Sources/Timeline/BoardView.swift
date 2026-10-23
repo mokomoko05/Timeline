@@ -119,10 +119,9 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
             self.panel = panel
         }
         guard let panel else { return }
-        panel.contentView = NSHostingView(rootView: LocalizedRoot {
-            BoardWorkspaceView(store: store, navigation: self.navigation,
-                               close: { [weak self] in self?.hide() })
-        })
+        let content = BoardWorkspaceView(store: store, navigation: navigation,
+                                         close: { [weak self] in self?.hide() })
+        panel.contentView = NSHostingView(rootView: LocalizedRoot { content })
         panel.level = .floating
         if Headless.active { panel.alphaValue = 0; panel.ignoresMouseEvents = true }
         if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(panel.frame) }) { panel.center() }

@@ -26,6 +26,66 @@ func waitForBoardEditor(_ view: WKWebView) async throws {
 
 @MainActor
 final class BoardLiveEditorTests: XCTestCase {
+    func testBrowsingSelectionIsVisibleAcrossRenderedTextAndCodeAndSurvivesCopy() async throws {
+        let source = "## Title\n\n**Selected** [paper](https://example.com) text\n\n```\ncode to copy\n```\n\nEnd"
+        let fixture = try LiveFixture(source: source, vim: true)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        _ = try await fixture.webView.evaluateJavaScript("document.hasFocus=()=>true;window.boardEditor.focus()")
+        try await fixture.writeCommand()
+        for dark in [true, false] {
+            fixture.session.configure(vim: true, fontSize: 13, dark: dark)
+            try await Task.sleep(for: .milliseconds(30))
+            _ = try await fixture.webView.evaluateJavaScript("""
+            (()=>{
+              const content=document.querySelector('.cm-content');
+              const first=document.querySelector('.cm-strong').firstChild;
+              const code=[...document.querySelectorAll('.cm-code')].find(e=>e.textContent==='code to copy').firstChild;
+              content.focus();
+              const range=document.createRange();
+              range.setStart(first,0);range.setEnd(code,code.textContent.length);
+              const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
+            })()
+            """)
+            try await Task.sleep(for: .milliseconds(50))
+            let selection = try await fixture.webView.evaluateJavaScript("""
+            (()=>{
+              const content=document.querySelector('.cm-content'), code=[...document.querySelectorAll('.cm-code')].find(e=>e.textContent==='code to copy');
+              const style=getComputedStyle(document.querySelector('.cm-strong'),'::selection');
+              return {text:window.getSelection().toString(),background:style.backgroundColor,
+                codeBackground:getComputedStyle(code,'::selection').backgroundColor,
+                foreground:style.color,bodyBackground:getComputedStyle(content).backgroundColor,
+                hidden:[...document.querySelectorAll('.cm-cursorLayer')].every(e=>getComputedStyle(e).display==='none'),
+                browsing:window.boardEditor.snapshot().browsing};
+            })()
+            """) as? [String: Any] ?? [:]
+            let text = try XCTUnwrap(selection["text"] as? String)
+            XCTAssertTrue(text.contains("Selected"))
+            XCTAssertTrue(text.contains("code to copy"))
+            XCTAssertNotEqual(selection["background"] as? String, "rgba(0, 0, 0, 0)")
+            XCTAssertNotEqual(selection["background"] as? String, selection["foreground"] as? String)
+            XCTAssertEqual(selection["background"] as? String, selection["codeBackground"] as? String)
+            XCTAssertEqual(selection["hidden"] as? Bool, true)
+            XCTAssertEqual(selection["browsing"] as? Bool, true)
+            // Exercise WebKit's native copy command while observing its pasteboard payload.
+            let copied = try await fixture.webView.evaluateJavaScript("""
+            (()=>{
+              let copied;
+              document.addEventListener('copy',event=>{
+                copied=window.getSelection().toString();event.preventDefault();
+              },{once:true});
+              document.execCommand('copy');
+              return {copied,after:window.getSelection().toString()};
+            })()
+            """) as? [String: String]
+            XCTAssertEqual(copied?["copied"], text)
+            XCTAssertEqual(copied?["after"], text)
+            let snapshot = try await fixture.snapshot()
+            XCTAssertEqual(snapshot["source"] as? String, source)
+            XCTAssertEqual(snapshot["browsing"] as? Bool, true)
+        }
+    }
+
     func testBrowsingHidesCursorBeforeSavingAndKeepsItHiddenWhenFocusReturns() async throws {
         let fixture = try LiveFixture(source: "# Title\n\n- [ ] Task\n\nEnd", vim: true)
         defer { fixture.close() }

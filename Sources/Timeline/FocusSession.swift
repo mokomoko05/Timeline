@@ -65,6 +65,8 @@ final class FocusSession: ObservableObject {
     private var pausedAt: Date?
     private var pausedSeconds: TimeInterval = 0
 
+    deinit { timer?.invalidate() }
+
     /// 刚打开页面时留出加载和重定向的时间，期间不判定离开。
     static let grace: TimeInterval = 6
     /// 连续几次（每次 1 秒）不在目标页面才算离开，避免通知、Spotlight 一闪而过造成误判。
@@ -481,10 +483,12 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
     private let defaults: UserDefaults
     private var workspaceShown = false
     private var refreshing = false
+    private var panelHidden: Bool
 
     init(session: FocusSession, defaults: UserDefaults = .standard) {
         self.session = session
         self.defaults = defaults
+        panelHidden = defaults.bool(forKey: Prefs.focusPanelHidden)
         super.init()
         session.onActiveChange = { [weak self] active in
             if active { self?.workspaceShown = true }
@@ -497,7 +501,14 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         }
         // 设置里改了隐藏偏好，立刻生效。
         observers.append(NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh() }
+            // 笔记导航、窗口位置等也会发偏好通知，不能在它们的布局过程中重排窗口。
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let hidden = self.defaults.bool(forKey: Prefs.focusPanelHidden)
+                guard hidden != self.panelHidden else { return }
+                self.panelHidden = hidden
+                Task { @MainActor [weak self] in self?.refresh() }
+            }
         })
         observers.append(NotificationCenter.default.addObserver(forName: .appLanguageDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -521,6 +532,7 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         refreshing = true
         defer { refreshing = false }
         let hidden = defaults.bool(forKey: Prefs.focusPanelHidden)
+        panelHidden = hidden
         if workspaceShown && !hidden {
             showPanel(size: panel?.frame.size ?? Self.workspaceSize)
         } else {
@@ -548,12 +560,11 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
     private func showPanel(size: NSSize) {
         let created = panel == nil
         if panel == nil {
-            let host = NSHostingView(rootView: LocalizedRoot {
-                FocusPanelView(session: self.session, close: { [weak self] in
+            let content = FocusPanelView(session: session, close: { [weak self] in
                     self?.workspaceShown = false
                     self?.refresh()
                 }, resize: { [weak self] height in self?.resize(height: height) })
-            })
+            let host = NSHostingView(rootView: LocalizedRoot { content })
             host.setFrameSize(size)
             // 不激活的浮动窗口：点它不会抢走前台，否则会被判定为离开目标页面。
             let panel = FocusPanel(contentRect: NSRect(origin: .zero, size: size),
@@ -578,9 +589,10 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         } else {
             topLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
         }
-        panel.setFrame(NSRect(x: topLeft.x, y: topLeft.y - size.height, width: size.width, height: size.height), display: true)
+        let frame = NSRect(x: topLeft.x, y: topLeft.y - size.height, width: size.width, height: size.height)
+        if panel.frame != frame { panel.setFrame(frame, display: true) }
         if Headless.active { panel.alphaValue = 0; panel.ignoresMouseEvents = true }
-        panel.orderFrontRegardless()
+        if !panel.isVisible { panel.orderFrontRegardless() }
     }
 
     private func defaultTopLeft(for size: NSSize) -> NSPoint {
@@ -606,7 +618,10 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
 
     func windowDidMove(_ notification: Notification) {
         guard let frame = panel?.frame, panel?.isVisible == true else { return }
-        defaults.set(NSStringFromPoint(NSPoint(x: frame.minX, y: frame.maxY)), forKey: Prefs.focusPanelTopLeft)
+        let position = NSStringFromPoint(NSPoint(x: frame.minX, y: frame.maxY))
+        if defaults.string(forKey: Prefs.focusPanelTopLeft) != position {
+            defaults.set(position, forKey: Prefs.focusPanelTopLeft)
+        }
     }
 
     // MARK: 菜单栏

@@ -7,7 +7,12 @@ import TimelineCore
 /// 日志图片的处理：从剪贴板或文件取图、缩放压缩、缩略图缓存、本地文字识别。
 enum ImageTools {
     static let maxPixel = 2048
-    private static let thumbnails = NSCache<NSString, NSImage>()
+    private static let thumbnails: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 128
+        cache.totalCostLimit = 64 * 1024 * 1024
+        return cache
+    }()
 
     /// 把任意图片数据缩放到长边不超过 `maxPixel`，并编码成 PNG（小图）或 JPEG。
     static func process(_ data: Data) -> (data: Data, fileExtension: String)? {
@@ -83,7 +88,7 @@ enum ImageTools {
         ]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         let result = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
-        thumbnails.setObject(result, forKey: key)
+        thumbnails.setObject(result, forKey: key, cost: image.bytesPerRow * image.height)
         return result
     }
 
@@ -114,7 +119,7 @@ enum ImageIndexer {
         Task.detached(priority: .utility) {
             for (name, url) in urls {
                 let exists = FileManager.default.fileExists(atPath: url.path)
-                let text = exists ? ImageTools.recognizeText(at: url) : ""
+                let text = exists ? autoreleasepool { ImageTools.recognizeText(at: url) } : ""
                 await MainActor.run { store.setImageText(text, image: name) }
             }
             await MainActor.run { running = false }

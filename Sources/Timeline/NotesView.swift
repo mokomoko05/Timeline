@@ -16,8 +16,6 @@ struct NotesView: View {
     @ObservedObject var nav: NotesNavigation
     @ObservedObject private var themes = ThemeStore.shared
     @State private var creatingTag = false
-    @State private var newTagName = ""
-    @State private var newTagMessage: String?
     @State private var tagFocused = false
     @State private var editingNoteID: UUID?
     @State private var editingNoteDate: Date?
@@ -60,10 +58,14 @@ struct NotesView: View {
         self.close = close
         self.reveal = reveal
         self.openDay = openDay
-        let nav = nav ?? NotesNavigation()
-        self.nav = nav
-        if let initialTag { nav.open(tag: initialTag) } else if let initialSelection { nav.open(task: initialSelection) }
-        else if nav.selection == nil, nav.tagSelection == nil { nav.validate(in: store) }
+        let navigation = nav ?? NotesNavigation()
+        self.nav = navigation
+        // 共享导航已经被父视图观察：在 View.init 中发布会重新构造父视图，
+        // 空笔记本尤其容易出现 nil → nil 的反复刷新。只初始化自己新建的状态。
+        if nav == nil {
+            if let initialTag { navigation.open(tag: initialTag) }
+            else if let initialSelection { navigation.open(task: initialSelection) }
+        }
     }
 
     /// 搜索词去掉开头的 `#`；以 `#` 开头（且不是 `#3` 这样的编号）表示只找标签。
@@ -116,6 +118,8 @@ struct NotesView: View {
             Text("只去掉这个标签（连同子标签），待办和笔记本身都保留。可以 ⌘Z 撤销。")
         }
         .onAppear {
+            if let initialTag { nav.open(tag: initialTag) }
+            else if let initialSelection { nav.open(task: initialSelection) }
             nav.validate(in: store)
             configureMention()
         }
@@ -187,6 +191,13 @@ struct NotesView: View {
             }
         }
         .padding(16)
+        // 弹窗挂在稳定的侧栏上，创建 / 筛选标签时不会替换其 LazyVStack 锚点。
+        .popover(isPresented: $creatingTag, arrowEdge: .trailing) {
+            CreateNotebookTagView(store: store, cancel: { creatingTag = false }, created: { name in
+                creatingTag = false
+                select(tag: name)
+            })
+        }
     }
 
     private func sectionTitle(_ text: String) -> some View {
@@ -199,37 +210,13 @@ struct NotesView: View {
         HStack(spacing: 4) {
             sectionTitle("标签（笔记本）")
             Spacer(minLength: 0)
-            Button { newTagName = ""; newTagMessage = nil; creatingTag = true } label: {
+            Button { creatingTag = true } label: {
                 Image(systemName: "plus").font(.system(size: 11, weight: .semibold)).frame(width: 24, height: 22).contentShape(Rectangle())
             }
             .buttonStyle(.plain).foregroundStyle(Palette.accent).padding(.top, 6)
             .help("新建标签").accessibilityLabel("新建标签")
             .disabled(store.isReadOnly)
-            .popover(isPresented: $creatingTag, arrowEdge: .trailing) { newTagPopover }
         }
-    }
-
-    private var newTagPopover: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("新建标签").font(.headline)
-            TextField("标签名称", text: $newTagName).textFieldStyle(.roundedBorder).onSubmit(createTag)
-            if let newTagMessage { Text(LocalizedStringKey(newTagMessage)).font(.caption).foregroundStyle(.orange) }
-            Text("用 / 分层").font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Spacer()
-                Button("取消") { creatingTag = false }.keyboardShortcut(.cancelAction)
-                Button("创建") { createTag() }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
-            }
-        }.padding(16).frame(width: 300)
-    }
-
-    private func createTag() {
-        guard let name = store.createTag(newTagName) else {
-            newTagMessage = "标签不能为空、含空格，或是纯数字（#3 表示任务编号）"
-            return
-        }
-        creatingTag = false
-        select(tag: name)
     }
 
     private func select(task id: UUID) {
@@ -572,7 +559,7 @@ struct NotesView: View {
     private func tagDetail(_ tag: String) -> some View {
         let tasks = store.tasks(taggedWith: tag)
         let notes = store.notes(forTag: tag)
-        let chapters = chapterView ? store.chapters(forTag: tag) : []
+        let chapters = chapterView ? store.chapters(notes: notes, tasks: tasks) : []
         let hasBoardContent = store.board(for: .tag(tag))?.hasContent == true
             || tasks.contains { store.board(for: .task($0.id))?.hasContent == true }
         return VStack(spacing: 0) {
@@ -889,5 +876,44 @@ struct NotesView: View {
             lines.append("")
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+/// 创建流程与侧栏列表分开，提交时列表刷新不会销毁正在处理回车的输入框。
+struct CreateNotebookTagView: View {
+    @ObservedObject var store: JournalStore
+    let cancel: () -> Void
+    let created: (String) -> Void
+    @State private var name = ""
+    @State private var message: String?
+    @State private var submitting = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("新建标签").font(.headline)
+            TextField("标签名称", text: $name).textFieldStyle(.roundedBorder).onSubmit(submit)
+            if let message { Text(LocalizedStringKey(message)).font(.caption).foregroundStyle(.orange) }
+            Text("用 / 分层").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("取消", action: cancel).keyboardShortcut(.cancelAction)
+                Button("创建", action: submit).keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+                    .disabled(submitting || store.isReadOnly)
+            }
+        }.padding(16).frame(width: 300)
+    }
+
+    private func submit() {
+        guard !submitting, !store.isReadOnly else { return }
+        guard let normalized = TagText.normalize(name) else {
+            message = "标签不能为空、含空格，或是纯数字（#3 表示任务编号）"
+            return
+        }
+        submitting = true
+        // 离开 NSTextField 的回车事件 / SwiftUI 按钮事务后再更新列表、保存并关闭弹窗。
+        DispatchQueue.main.async {
+            guard let tag = store.createTag(normalized) else { submitting = false; return }
+            created(tag)
+        }
     }
 }

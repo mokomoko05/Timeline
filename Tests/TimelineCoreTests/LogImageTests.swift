@@ -80,6 +80,35 @@ final class LogImageTests: XCTestCase {
         XCTAssertEqual(try fresh.inspectBackup(folder.appendingPathComponent("journal.json")).logCount, 1)
     }
 
+    func testSharedImageIsRecognizedOnceAndUpdatesEveryLog() throws {
+        let (store, _) = makeStore()
+        let name = try store.storeImage(Data([1]), fileExtension: "png")
+        _ = try store.quickLog("第一次引用", images: [name], on: day)
+        _ = try store.quickLog("再次引用", images: [name], on: day)
+        XCTAssertEqual(store.imagesMissingText(), [name])
+        store.setImageText("识别结果", image: name)
+        XCTAssertTrue(store.imagesMissingText().isEmpty)
+        XCTAssertTrue(store.entry(for: day).logs.allSatisfy { $0.imageText[name] == "识别结果" })
+    }
+
+    func testBackgroundCleanupPreservesCurrentAndBackupReferences() async throws {
+        let (store, _) = makeStore()
+        let kept = try store.storeImage(Data([1]), fileExtension: "png")
+        let backedUp = try store.storeImage(Data([2]), fileExtension: "png")
+        let orphan = try store.storeImage(Data([3]), fileExtension: "png")
+        store.addDraftImage(kept, on: day)
+        store.save()
+        try FileManager.default.createDirectory(at: store.backupsDirectory, withIntermediateDirectories: true)
+        try Data("{\"images\":[\"\(backedUp)\"]}".utf8).write(to: store.backupsDirectory.appendingPathComponent("backup.json"))
+        let recent = await store.removeUnusedImagesInBackground()
+        XCTAssertEqual(recent, 0)
+        let removed = await store.removeUnusedImagesInBackground(olderThan: 0, now: Date().addingTimeInterval(1))
+        XCTAssertEqual(removed, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.imageURL(kept).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.imageURL(backedUp).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.imageURL(orphan).path))
+    }
+
     func testCleanupKeepsReferencedAndBackedUpImagesAndHonoursGracePeriod() throws {
         let (store, _) = makeStore()
         let kept = try store.storeImage(Data([1]), fileExtension: "png")

@@ -21,12 +21,12 @@ final class NotesNavigation: ObservableObject {
     private let defaults: UserDefaults?
     private let prefix: String
 
-    @Published var selection: UUID? { didSet { save() } }
-    @Published var tagSelection: String? { didSet { save() } }
-    @Published var query: String { didSet { save() } }
-    @Published var chapterView: Bool { didSet { save() } }
+    @Published var selection: UUID? { didSet { if selection != oldValue { defaults?.set(selection?.uuidString, forKey: prefix + ".task") } } }
+    @Published var tagSelection: String? { didSet { if tagSelection != oldValue { defaults?.set(tagSelection, forKey: prefix + ".tag") } } }
+    @Published var query: String { didSet { if query != oldValue { defaults?.set(query, forKey: prefix + ".query") } } }
+    @Published var chapterView: Bool { didSet { if chapterView != oldValue { defaults?.set(chapterView, forKey: prefix + ".chapters") } } }
     /// 标签页右侧的目录（章节列表）显示与否。
-    @Published var showOutline: Bool { didSet { save() } }
+    @Published var showOutline: Bool { didSet { if showOutline != oldValue { defaults?.set(showOutline, forKey: prefix + ".outline") } } }
     /// 折叠起来的章节（只在应用运行期间保留）：`标签|章节` 的键。
     @Published var collapsed: Set<String> = []
     /// 每个任务、每个标签各有一份没发送的草稿（只在应用运行期间保留）：切到别处、关掉窗口、去别的应用复制东西，回来都还在。
@@ -65,23 +65,20 @@ final class NotesNavigation: ObservableObject {
         showOutline = defaults?.object(forKey: prefix + ".outline") as? Bool ?? true
     }
 
-    private func save() {
-        guard let defaults else { return }
-        defaults.set(selection?.uuidString, forKey: prefix + ".task")
-        defaults.set(tagSelection, forKey: prefix + ".tag")
-        defaults.set(query, forKey: prefix + ".query")
-        defaults.set(chapterView, forKey: prefix + ".chapters")
-        defaults.set(showOutline, forKey: prefix + ".outline")
+    func open(task id: UUID) {
+        if tagSelection != nil { tagSelection = nil }
+        if selection != id { selection = id }
     }
-
-    func open(task id: UUID) { tagSelection = nil; selection = id }
-    func open(tag: String) { selection = nil; tagSelection = tag }
+    func open(tag: String) {
+        if selection != nil { selection = nil }
+        if tagSelection != tag { tagSelection = tag }
+    }
 
     /// 上次停留的任务被删除、或标签不存在了，就退回到最近有笔记的任务；停留的位置还有效就原样保留。
     func validate(in store: JournalStore) {
         if let tag = tagSelection, !store.allTags().contains(where: { $0.id == TagText.key(tag) }) { tagSelection = nil }
         // 选中的任务还在（哪怕还没有笔记）就保留，否则退回最近有笔记的任务。
         if let id = selection, store.noteTopic(for: id) == nil { selection = nil }
-        if selection == nil, tagSelection == nil { selection = store.noteTopics().first?.id }
+        if selection == nil, tagSelection == nil, let first = store.noteTopics().first?.id { selection = first }
     }
 }

@@ -387,7 +387,12 @@ window.boardEditor = {
             blur() { post({kind: "commit", ...snapshot()}); },
             click(event) {
               const link = event.target.closest("[data-url]");
-              if (link && (event.metaKey || view.state.readOnly || isBrowsing())) { post({kind: "open", url: link.dataset.url}); return true; }
+              if (link && (event.metaKey || view.state.readOnly || isBrowsing())) {
+                // Dragging across a link selects text for copying rather than opening Safari.
+                if (!view.state.selection.main.empty || window.getSelection()?.isCollapsed === false) return false;
+                post({kind: "open", url: link.dataset.url});
+                return true;
+              }
               return false;
             }
           })]

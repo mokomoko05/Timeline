@@ -77,7 +77,8 @@ final class ImageViewerController: NSObject, NSWindowDelegate {
     func close() { window?.close() }
 
     private func makeWindow(store: JournalStore) -> NSWindow {
-        let host = NSHostingController(rootView: LocalizedRoot { ImageViewerView(store: store, model: self.model, close: { [weak self] in self?.close() }) })
+        let content = ImageViewerView(store: store, model: model, close: { [weak self] in self?.close() })
+        let host = NSHostingController(rootView: LocalizedRoot { content })
         let window = ImageViewerWindow(contentViewController: host)
         window.title = "图片"
         window.styleMask = [.titled, .closable, .resizable, .fullSizeContentView]
