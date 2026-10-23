@@ -425,7 +425,7 @@ struct UnifiedJournalView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             ForEach(Array(log.images.enumerated()), id: \.element) { index, name in
-                                Button { ImageViewerController.shared.show(store: store, around: log, index: index) } label: {
+                                Button { ImageViewerController.shared.openPreview(store: store, around: log, index: index) } label: {
                                     ImageFit(url: store.imageURL(name), maxWidth: 360, maxHeight: 190)
                                 }.buttonStyle(.plain)
                             }

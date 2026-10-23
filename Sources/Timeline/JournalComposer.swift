@@ -79,7 +79,7 @@ struct JournalComposer: View {
             if !entry.logDraftImages.isEmpty {
                 PendingImagesStrip(store: store, names: entry.logDraftImages,
                                    remove: { store.removeDraftImage($0, on: date) },
-                                   preview: { ImageViewerController.shared.show(store: store, names: entry.logDraftImages, index: $0) })
+                                   preview: { ImageViewerController.shared.openPreview(store: store, names: entry.logDraftImages, index: $0) })
             }
             HStack(spacing: 8) {
                 Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent)

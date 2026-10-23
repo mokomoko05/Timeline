@@ -73,6 +73,42 @@ final class NotesAndImagesTests: XCTestCase {
         XCTAssertEqual(store.galleryImages(around: loose).map(\.name), ["y.png", "z.png"], "没关联任务就只是这条自己的图")
     }
 
+    func testPreviewGroupsTaskImagesAndKeepsClickedImageWhenEarlierFilesAreMissing() throws {
+        let store = makeStore()
+        let task = try XCTUnwrap(store.addParsedTodo("读论文", on: day)).id
+        _ = try store.quickLog("一", images: ["missing.png", "a.png"], taskID: task, on: day, now: day.addingTimeInterval(1))
+        _ = try store.quickLog("二", images: ["b.png", "c.png"], taskID: task, on: day, now: day.addingTimeInterval(2))
+        try FileManager.default.createDirectory(at: store.imageURL("a.png").deletingLastPathComponent(), withIntermediateDirectories: true)
+        for name in ["a.png", "b.png", "c.png"] { try Data([1]).write(to: store.imageURL(name)) }
+        let log = try XCTUnwrap(store.allLogs().first { $0.log.text == "二" }).log
+        let viewer = ImageViewerController()
+        let urls = viewer.previewURLs(store: store, around: log, index: 1)
+        XCTAssertEqual(urls.map(\.lastPathComponent), ["c.png", "a.png", "b.png"])
+        XCTAssertTrue(urls.allSatisfy { $0.deletingLastPathComponent().lastPathComponent == task.uuidString })
+        XCTAssertTrue(urls.allSatisfy { $0.resolvingSymlinksInPath() == store.imageURL($0.lastPathComponent) })
+        XCTAssertFalse(store.unusedImageNames().contains("Preview"), "预览缓存不应被图片清理删除")
+        XCTAssertFalse(viewer.isVisible, "准备 Preview 文件不创建应用内窗口")
+    }
+
+    func testPreviewSeparatesUnicodeTagsAndHandlesEmptyMissingAndDuplicateImages() throws {
+        let store = makeStore()
+        try FileManager.default.createDirectory(at: store.imageURL("a.png").deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([1]).write(to: store.imageURL("a.png"))
+        let viewer = ImageViewerController()
+        var folders = Set<URL>()
+        for tag in ["论文/设计", "会议", "论文-设计"] {
+            _ = try store.quickLogEntry("图片", images: ["a.png"], linkDefault: false, tags: [tag], on: day)
+            let saved = try XCTUnwrap(store.allLogs().first { $0.log.tags == [tag] }).log
+            let urls = viewer.previewURLs(store: store, around: saved, index: 0)
+            folders.insert(try XCTUnwrap(urls.first).deletingLastPathComponent())
+        }
+        XCTAssertEqual(folders.count, 3)
+        let draft = store.directory.appendingPathComponent("Preview/Draft")
+        XCTAssertTrue(viewer.previewURLs(store: store, names: [], index: 0, folder: draft).isEmpty)
+        XCTAssertTrue(viewer.previewURLs(store: store, names: ["missing.png"], index: 0, folder: draft).isEmpty)
+        XCTAssertEqual(viewer.previewURLs(store: store, names: ["a.png", "a.png"], index: 9, folder: draft).count, 1)
+    }
+
     func testViewerStartsAtTheClickedImageAndMovesWithinBounds() throws {
         let store = makeStore()
         let task = try XCTUnwrap(store.addParsedTodo("读论文", on: day)).id

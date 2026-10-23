@@ -5,7 +5,6 @@ import TimelineCore
 
 struct BoardLiveEditor: NSViewRepresentable {
     @ObservedObject var session: BoardLiveEditorSession
-    var vim: Bool
     var sourceMode = false
     @Environment(\.typography) private var typography
     @Environment(\.colorScheme) private var colorScheme
@@ -14,7 +13,7 @@ struct BoardLiveEditor: NSViewRepresentable {
     func makeCoordinator() -> BoardLiveEditorSession { session }
 
     func updateNSView(_ view: WKWebView, context: Context) {
-        session.configure(vim: vim, fontSize: typography.pt(13), dark: colorScheme == .dark, sourceMode: sourceMode)
+        session.configure(fontSize: typography.pt(13), dark: colorScheme == .dark, sourceMode: sourceMode)
     }
 
     static func dismantleNSView(_ view: WKWebView, coordinator: BoardLiveEditorSession) { coordinator.flush() }
@@ -25,7 +24,6 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     static weak var active: BoardLiveEditorSession?
     @Published private(set) var ready = false
     @Published private(set) var error: String?
-    @Published private(set) var browsing = false
     private(set) var webView: WKWebView?
     private let store: JournalStore
     private let boardID: UUID
@@ -49,20 +47,6 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
 
     func undo() { webView?.evaluateJavaScript("window.boardEditor.undo()") }
     func redo() { webView?.evaluateJavaScript("window.boardEditor.redo()") }
-    func beginEditing() { webView?.evaluateJavaScript("window.boardEditor.edit()") }
-    func saveAndBrowse() { webView?.evaluateJavaScript("window.boardEditor.escape(); window.boardEditor.browse()") }
-
-    func handleModeKey(_ event: NSEvent) -> Bool {
-        guard event.type == .keyDown, ready, settings["vim"] as? Bool == true,
-              event.window === webView?.window, hasTextFocus, !composing else { return false }
-        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        let escape = event.keyCode == 53 && modifiers.isEmpty
-        let controlBracket = modifiers == .control && (event.charactersIgnoringModifiers == "["
-            || event.characters == "\u{1b}" || event.keyCode == 33)
-        guard escape || controlBracket else { return false }
-        webView?.evaluateJavaScript("window.boardEditor.escape()")
-        return true
-    }
 
     init(store: JournalStore, board: Board, pasteboard: NSPasteboard = .general) {
         self.store = store
@@ -101,7 +85,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         return view
     }
 
-    func configure(vim: Bool, fontSize: CGFloat, dark: Bool, sourceMode: Bool = false) {
+    func configure(fontSize: CGFloat, dark: Bool, sourceMode: Bool = false) {
         func css(_ color: Color) -> String {
             let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
             var result = ""
@@ -118,10 +102,9 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
                       "selection": css(Color(nsColor: .selectedTextBackgroundColor)),
                       "selection-ink": css(Color(nsColor: .selectedTextColor))]
         for level in 1...6 { colors["heading-\(level)"] = css(Color(nsColor: MarkdownText.headingColor(level))) }
-        settings = ["vim": vim, "fontSize": fontSize, "readOnly": store.isReadOnly, "colors": colors, "sourceMode": sourceMode]
+        settings = ["fontSize": fontSize, "readOnly": store.isReadOnly, "colors": colors, "sourceMode": sourceMode]
         settings["labels"] = ["openLink": AppLocalized("在 Safari 中打开"), "copyCode": AppLocalized("复制代码"),
-                              "copied": AppLocalized("已复制"), "copyFailed": AppLocalized("复制失败，请重试"),
-                              "browse": AppLocalized("浏览 · 按 i 编辑")]
+                              "copied": AppLocalized("已复制"), "copyFailed": AppLocalized("复制失败，请重试")]
         let current = store.boards.first { $0.id == boardID }?.markdown ?? storedSource
         if current != storedSource {
             pending?.cancel()
@@ -137,7 +120,6 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         var configuration = settings
         if sourceNeedsSynchronization {
             configuration["source"] = source
-            configuration["browsing"] = browsing
         }
         guard let data = try? JSONSerialization.data(withJSONObject: configuration, options: [.sortedKeys]),
               data != lastConfiguration else { return }
@@ -154,12 +136,6 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         if kind == "ready" {
             ready = true
             applyConfiguration()
-        } else if kind == "mode", let value = body["browsing"] as? Bool {
-            if browsing != value { browsing = value }
-        } else if kind == "write" {
-            accept(body)
-            flush()
-            store.save()
         } else if kind == "change" || kind == "commit" {
             accept(body)
             if kind == "commit" { flush() }

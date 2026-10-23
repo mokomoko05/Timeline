@@ -367,7 +367,7 @@ struct DailyLogView: View {
                         DailyLogRow(store: store, date: item.date, log: item.log, hasPrevious: index > 0, hasNext: index < group.value.count - 1, segment: segments[item.id], highlighted: editingLogID == item.log.id, next: { focused = true },
                                     selection: selectionState(item.log.id), copy: { copyLogs([$0.id]) },
                                     edit: { beginLogEdit($0, on: $1) },
-                                    preview: { ImageViewerController.shared.show(store: store, around: item.log, index: $0) })
+                                    preview: { ImageViewerController.shared.openPreview(store: store, around: item.log, index: $0) })
                     }
                 }
             }.padding(.horizontal, 4).padding(.vertical, 5)
@@ -386,7 +386,7 @@ struct DailyLogView: View {
                             DailyLogRow(store: store, date: date, log: log, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id], highlighted: editingLogID == log.id, next: { focused = true },
                                         selection: selectionState(log.id), copy: { copyLogs([$0.id]) },
                                         edit: { beginLogEdit($0, on: $1) },
-                                        preview: { ImageViewerController.shared.show(store: store, around: log, index: $0) })
+                                    preview: { ImageViewerController.shared.openPreview(store: store, around: log, index: $0) })
                         }
                         Color.clear.frame(height: 1).id("tail")
                     }
@@ -424,7 +424,7 @@ struct DailyLogView: View {
             if !entry.logDraftImages.isEmpty {
                 PendingImagesStrip(store: store, names: entry.logDraftImages,
                                    remove: { store.removeDraftImage($0, on: date) },
-                                   preview: { ImageViewerController.shared.show(store: store, names: entry.logDraftImages, index: $0) })
+                                   preview: { ImageViewerController.shared.openPreview(store: store, names: entry.logDraftImages, index: $0) })
             }
             if let selected = entry.logTaskID {
                 HStack(spacing: 4) {

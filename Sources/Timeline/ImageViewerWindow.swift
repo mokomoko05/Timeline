@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SwiftUI
 import TimelineCore
 
@@ -72,6 +73,76 @@ final class ImageViewerController: NSObject, NSWindowDelegate {
     /// 还没发送的草稿图片（没有出处可写）。
     func show(store: JournalStore, names: [String], index: Int) {
         show(store: store, items: names.map { .init(name: $0) }, index: index)
+    }
+
+    /// 交给系统「预览」打开整组图片。Preview 自己负责缩放、全屏和前后切换；
+    /// 为每个任务 / 标签建立一个轻量的预览目录，避免把不同上下文的图片混在一起。
+    func openPreview(store: JournalStore, around log: DailyLogEntry, index: Int) {
+        openPreview(urls: previewURLs(store: store, around: log, index: index))
+    }
+
+    func openPreview(store: JournalStore, names: [String], index: Int) {
+        openPreview(urls: previewURLs(store: store, names: names, index: index,
+                                     folder: store.directory.appendingPathComponent("Preview/Draft", isDirectory: true)))
+    }
+
+    func previewURLs(store: JournalStore, around log: DailyLogEntry, index: Int) -> [URL] {
+        let gallery: [JournalStore.GalleryImage]
+        if log.taskID == nil, let tag = (log.tags + log.taskTags).first {
+            gallery = JournalStore.gallery(of: store.allLogs(includeFocus: true).filter {
+                $0.log.taskID == nil && ($0.log.tags + $0.log.taskTags).contains(tag)
+            })
+        } else {
+            gallery = store.galleryImages(around: log)
+        }
+        let start = gallery.firstIndex { $0.logID == log.id }.map { $0 + index } ?? 0
+        return previewURLs(store: store, names: gallery.map(\.name), index: start,
+                           folder: previewFolder(for: log, store: store))
+    }
+
+    func previewURLs(store: JournalStore, names: [String], index: Int, folder: URL) -> [URL] {
+        guard !names.isEmpty else { return [] }
+        let urls = names.map { previewURL(for: $0, store: store, folder: folder) }
+        let existing = urls.enumerated().compactMap { offset, url in
+            FileManager.default.fileExists(atPath: url.path) ? (offset, url) : nil
+        }
+        guard !existing.isEmpty else { return [] }
+        let selectedOffset = min(max(index, 0), urls.count - 1)
+        let selected = existing.first(where: { $0.0 == selectedOffset })?.1 ?? existing[0].1
+        var seen: Set<URL> = [selected]
+        return [selected] + existing.map(\.1).filter { seen.insert($0).inserted }
+    }
+
+    private func openPreview(urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let preview = URL(fileURLWithPath: "/System/Applications/Preview.app", isDirectory: true)
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.open(urls, withApplicationAt: preview, configuration: configuration)
+    }
+
+    private func previewFolder(for log: DailyLogEntry, store: JournalStore) -> URL {
+        if let taskID = log.taskID {
+            return store.directory.appendingPathComponent("Preview/Tasks/\(taskID.uuidString)", isDirectory: true)
+        }
+        let tag = (log.tags + log.taskTags).first.map(Self.previewComponent) ?? "Unlinked"
+        return store.directory.appendingPathComponent("Preview/Tags/\(tag)", isDirectory: true)
+    }
+
+    private func previewURL(for name: String, store: JournalStore, folder: URL) -> URL {
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let target = folder.appendingPathComponent(URL(fileURLWithPath: name).lastPathComponent)
+        let source = store.imageURL(name)
+        if !FileManager.default.fileExists(atPath: target.path), FileManager.default.fileExists(atPath: source.path) {
+            try? FileManager.default.createSymbolicLink(at: target, withDestinationURL: source)
+        }
+        return target
+    }
+
+    private static func previewComponent(_ value: String) -> String {
+        let cleaned = value.replacingOccurrences(of: "[/\\\\:]", with: "-", options: .regularExpression)
+        let digest = SHA256.hash(data: Data(value.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+        return String(cleaned.prefix(48)) + "-" + digest
     }
 
     func close() { window?.close() }

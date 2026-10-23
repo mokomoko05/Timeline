@@ -7,7 +7,7 @@ import TimelineCore
 
 @MainActor
 final class BoardWindowTests: XCTestCase {
-    func testNativeControlBracketAndRepeatedEscapeDoNotHideBoard() async throws {
+    func testNativeRepeatedEscapeDoesNotHideBoard() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let suite = "timeline-board-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -26,21 +26,10 @@ final class BoardWindowTests: XCTestCase {
         let editor = try boardWebView(in: XCTUnwrap(panel.contentView))
         try await waitForBoardEditor(editor)
         let session = controller.navigation.editorSession(for: try XCTUnwrap(store.board(for: board.owner)), store: store)
-        session.configure(vim: true, fontSize: 13, dark: true)
+        session.configure(fontSize: 13, dark: true)
         panel.makeKey()
         panel.makeFirstResponder(editor)
-        _ = try await editor.evaluateJavaScript("window.boardEditor.focus();document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:'i',bubbles:true,cancelable:true}))")
-        XCTAssertTrue(session.handleModeKey(try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
-            modifierFlags: [], timestamp: 0, windowNumber: panel.windowNumber, context: nil,
-            characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))))
-        _ = try await editor.evaluateJavaScript("document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:'i',bubbles:true,cancelable:true}))")
-        let controlBracket = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
-            modifierFlags: .control, timestamp: 0, windowNumber: panel.windowNumber, context: nil,
-            characters: "\u{1b}", charactersIgnoringModifiers: "[", isARepeat: false, keyCode: 33))
-        panel.sendEvent(controlBracket)
-        try await Task.sleep(for: .milliseconds(50))
-        let normal = try await editor.evaluateJavaScript("!window.boardEditor.view().cm.state.vim.insertMode") as? Bool
-        XCTAssertEqual(normal, true)
+        _ = try await editor.evaluateJavaScript("window.boardEditor.focus()")
         let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
             modifierFlags: [], timestamp: 0, windowNumber: panel.windowNumber, context: nil,
             characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))

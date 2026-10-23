@@ -9,18 +9,8 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 #editor .cm-line { padding: 0 14px; min-height: 1.65em; }
 #editor .cm-cursor, #editor .cm-dropCursor { border-left: 2.5px solid var(--accent); margin-left: -1.25px; }
 #editor .cm-cursorLayer { animation: none !important; }
-#editor .cm-fat-cursor { background: var(--ink); color: var(--background) !important; outline: 1px solid var(--ink); min-width: .55em; }
-#editor .cm-editor:not(.cm-focused) .cm-fat-cursor { background: transparent; color: transparent !important; }
-#editor .board-browsing .cm-cursorLayer { display: none !important; }
-#editor .board-browsing .cm-content, #editor .board-browsing .cm-line { caret-color: transparent !important; cursor: default; }
-#editor .board-browsing .cm-content:focus { outline: none; }
-#editor .board-browsing .cm-link { cursor: pointer; }
 #editor .cm-selectionBackground { background: var(--selection) !important; }
-/* Browsing uses the native DOM selection, including text over opaque code backgrounds.
-   Override drawSelection's transparent native highlight, and avoid drawing it twice. */
-#editor .board-browsing .cm-selectionLayer { display: none; }
-#editor .board-browsing .cm-content::selection,
-#editor .board-browsing .cm-content ::selection {
+#editor .cm-content::selection, #editor .cm-content ::selection {
   background: var(--selection) !important;
   color: var(--selection-ink) !important;
 }
@@ -35,15 +25,21 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 .cm-emphasis { font-style: italic; }
 .cm-strike, .cm-task-done { text-decoration: line-through; color: var(--muted); }
 .cm-code { font-family: ui-monospace, SFMono-Regular, monospace; background: var(--soft); border-radius: 3px; }
+#editor .cm-line.cm-code { margin: 0 12px; padding-left: 12px; padding-right: 12px; background: color-mix(in srgb, var(--soft) 82%, var(--background)); border-left: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line)); border-right: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line)); }
+#editor .cm-line.cm-code { border-radius: 0; }
+#editor .cm-line.cm-code-start { margin-top: 8px; border-top: 1px solid var(--line); border-radius: 9px 9px 0 0; padding-top: 4px; }
+#editor .cm-line.cm-code-end { margin-bottom: 8px; border-bottom: 1px solid var(--line); border-radius: 0 0 9px 9px; padding-bottom: 5px; }
+#editor .cm-line.cm-code-start.cm-code-end { border-radius: 9px; }
 .cm-quote { border-left: 2px solid var(--line); color: var(--muted); }
 .cm-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .board-open-link, .board-copy-code { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 4px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); vertical-align: middle; cursor: pointer; }
 .board-open-link { margin-left: 3px; }
-.board-copy-code { float: right; margin-left: 8px; background: var(--background); border-color: var(--line); }
+.board-copy-code { float: right; width: auto; min-width: 58px; gap: 5px; margin: 3px 4px 0 8px; padding: 3px 8px; background: color-mix(in srgb, var(--background) 82%, var(--soft)); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); color: var(--accent); font-size: 11px; font-weight: 600; }
+.board-copy-code::after { content: attr(data-label); }
 .board-open-link svg, .board-copy-code svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .board-open-link:hover, .board-copy-code:hover { color: var(--accent); background: var(--soft); border-color: var(--line); }
 .board-open-link:focus-visible, .board-copy-code:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.board-copy-code[data-copied="true"] { color: var(--success); }
+.board-copy-code[data-copied="true"] { color: var(--success); border-color: color-mix(in srgb, var(--success) 62%, var(--line)); background: color-mix(in srgb, var(--success) 15%, var(--background)); }
 #editor .cm-code-header { min-height: 24px; }
 .board-check { display: inline-flex; vertical-align: -.16em; align-items: center; justify-content: center; width: 1.1em; height: 1.1em; margin-right: .45em; padding: 0; border: 1.4px solid var(--muted); border-radius: 50%; background: transparent; cursor: pointer; }
 .board-check[aria-checked="true"] { border-color: var(--success); background: var(--success); }
@@ -53,6 +49,5 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 .board-details .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board-details:hover { color: var(--accent); }
 .cm-details-body { border-left: 1px solid var(--line); margin-left: 18px; padding-left: 12px; }
-.cm-vim-panel { padding: 3px 12px; color: var(--muted); background: var(--background); border-top: 1px solid var(--line); font-family: ui-monospace, monospace; font-size: 10px; }
 .cm-panels { border: 0 !important; background: var(--background); color: var(--ink); }
 .cm-tooltip { background: var(--background); color: var(--ink); border: 1px solid var(--line); }

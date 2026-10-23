@@ -482,7 +482,7 @@ struct NotesView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             ForEach(Array(log.images.enumerated()), id: \.element) { index, name in
-                                Button { ImageViewerController.shared.show(store: store, around: log, index: index) } label: {
+                                Button { ImageViewerController.shared.openPreview(store: store, around: log, index: index) } label: {
                                     ImageFit(url: store.imageURL(name), maxWidth: 440, maxHeight: 280)
                                 }.buttonStyle(.plain).help("点击查看大图")
                             }
@@ -748,7 +748,7 @@ struct NotesView: View {
             if !pending.isEmpty {
                 PendingImagesStrip(store: store, names: pending,
                                    remove: { name in removeImage(name, from: key) },
-                                   preview: { ImageViewerController.shared.show(store: store, names: pending, index: $0) })
+                                   preview: { ImageViewerController.shared.openPreview(store: store, names: pending, index: $0) })
             }
             MentionList(state: tagMention, store: store, contextTags: [tag])
             HStack(spacing: 8) {
@@ -818,7 +818,7 @@ struct NotesView: View {
             if !pending.isEmpty {
                 PendingImagesStrip(store: store, names: pending,
                                    remove: { name in removeImage(name, from: key) },
-                                   preview: { ImageViewerController.shared.show(store: store, names: pending, index: $0) })
+                                   preview: { ImageViewerController.shared.openPreview(store: store, names: pending, index: $0) })
             }
             MentionList(state: taskMention, store: store)
             HStack(spacing: 8) {

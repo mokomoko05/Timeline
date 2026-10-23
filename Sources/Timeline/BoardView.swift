@@ -7,7 +7,6 @@ final class BoardNavigation: ObservableObject {
     private let defaults: UserDefaults
     private var editorSessions: [UUID: BoardLiveEditorSession] = [:]
     private var editorOrder: [UUID] = []
-    private var selectionRequest: UUID?
 
     func editorSession(for board: Board, store: JournalStore) -> BoardLiveEditorSession {
         if editorSessions[board.id] == nil { editorSessions[board.id] = BoardLiveEditorSession(store: store, board: board) }
@@ -22,15 +21,11 @@ final class BoardNavigation: ObservableObject {
 
     func select(_ id: UUID) {
         guard selection != id else { return }
-        selectionRequest = id
-        guard let selection, let editor = editorSessions[selection], editor.webView != nil else {
-            self.selection = id
-            return
-        }
-        editor.commit { [weak self] in
-            guard let self, self.selectionRequest == id else { return }
-            self.selection = id
-        }
+        // The editor already debounces and flushes every change. Switching boards should
+        // update the lightweight SwiftUI selection immediately instead of waiting for an
+        // asynchronous WebKit round trip; the cached session keeps its caret and scroll.
+        if let selection, let editor = editorSessions[selection] { editor.flush() }
+        self.selection = id
     }
     @Published var selection: UUID? {
         didSet { defaults.set(selection?.uuidString, forKey: "board.selection") }
@@ -70,12 +65,6 @@ final class BoardNavigation: ObservableObject {
 private final class BoardPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 
-    override func sendEvent(_ event: NSEvent) {
-        if let editor = BoardLiveEditorSession.active, editor.webView?.window === self,
-           editor.handleModeKey(event) { return }
-        super.sendEvent(event)
-    }
-
     override func cancelOperation(_ sender: Any?) {}
 }
 
@@ -92,10 +81,13 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
     }
 
     func show(store: JournalStore, owner: BoardOwner? = nil) {
-        panel?.makeFirstResponder(nil)
-        self.store?.save()
+        let replacingContent = panel == nil || self.store !== store
+        if replacingContent {
+            panel?.makeFirstResponder(nil)
+            self.store?.save()
+        }
         self.store = store
-        if let owner, let board = store.ensureBoard(for: owner) { navigation.selection = board.id }
+        if let owner, let board = store.ensureBoard(for: owner) { navigation.select(board.id) }
         if panel == nil {
             let panel = BoardPanel(contentRect: NSRect(x: 0, y: 0, width: 410, height: 560),
                                    styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
@@ -119,9 +111,11 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
             self.panel = panel
         }
         guard let panel else { return }
-        let content = BoardWorkspaceView(store: store, navigation: navigation,
-                                         close: { [weak self] in self?.hide() })
-        panel.contentView = NSHostingView(rootView: LocalizedRoot { content })
+        if replacingContent {
+            let content = BoardWorkspaceView(store: store, navigation: navigation,
+                                             close: { [weak self] in self?.hide() })
+            panel.contentView = NSHostingView(rootView: LocalizedRoot { content })
+        }
         panel.level = .floating
         if Headless.active { panel.alphaValue = 0; panel.ignoresMouseEvents = true }
         if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(panel.frame) }) { panel.center() }
@@ -308,7 +302,6 @@ struct BoardContentView: View {
     let board: Board
     @State private var editing: Bool
     @StateObject private var liveEditor: BoardLiveEditorSession
-    @AppStorage("board.vim") private var vim = false
 
     init(store: JournalStore, navigation: BoardNavigation, board: Board) {
         self.store = store
@@ -359,23 +352,6 @@ struct BoardContentView: View {
                         Button { AppRouter.openNotes(id) } label: { Image(systemName: "note.text") }
                             .help("笔记").accessibilityLabel("笔记")
                     }
-                    Button { vim.toggle() } label: {
-                        Text("Vim").font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundStyle(vim ? Palette.accent : Palette.muted)
-                    }
-                    .help("Vim：:w 保存并浏览，i 编辑，Esc 或 Ctrl+[ 普通模式")
-                    .accessibilityLabel("Vim 模式").accessibilityValue(vim ? "开启" : "关闭")
-                    if vim {
-                        Button {
-                            if liveEditor.browsing { liveEditor.beginEditing() }
-                            else { liveEditor.saveAndBrowse() }
-                        } label: {
-                            Image(systemName: liveEditor.browsing ? "pencil" : "eye")
-                        }
-                        .help(liveEditor.browsing ? "浏览 · 按 i 编辑" : ":w 保存并浏览")
-                        .accessibilityLabel(liveEditor.browsing ? "浏览 · 按 i 编辑" : ":w 保存并浏览")
-                        .disabled(store.isReadOnly)
-                    }
                     Button { setEditing(!editing) } label: {
                         Image(systemName: editing ? "eye" : "chevron.left.forwardslash.chevron.right")
                     }
@@ -403,7 +379,7 @@ struct BoardContentView: View {
                 BoardMarkdownEditor(text: markdown, preview: { setEditing(false) })
                     .padding(10)
             } else {
-                BoardLiveEditor(session: liveEditor, vim: vim, sourceMode: editing)
+                BoardLiveEditor(session: liveEditor, sourceMode: editing)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 relatedBoards.padding(.horizontal, 14)
                 if let error = liveEditor.error {

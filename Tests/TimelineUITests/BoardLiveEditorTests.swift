@@ -26,192 +26,66 @@ func waitForBoardEditor(_ view: WKWebView) async throws {
 
 @MainActor
 final class BoardLiveEditorTests: XCTestCase {
-    func testBrowsingSelectionIsVisibleAcrossRenderedTextAndCodeAndSurvivesCopy() async throws {
-        let source = "## Title\n\n**Selected** [paper](https://example.com) text\n\n```\ncode to copy\n```\n\nEnd"
-        let fixture = try LiveFixture(source: source, vim: true)
+    func testSelectionAcrossRenderedTextAndCodeRemainsVisibleAfterCopy() async throws {
+        let source = "## Title\n\n**Selected** text\n\n```\ncode to copy\n```\n\nEnd"
+        let fixture = try LiveFixture(source: source)
         defer { fixture.close() }
         try await waitForBoardEditor(fixture.webView)
-        _ = try await fixture.webView.evaluateJavaScript("document.hasFocus=()=>true;window.boardEditor.focus()")
-        try await fixture.writeCommand()
         for dark in [true, false] {
-            fixture.session.configure(vim: true, fontSize: 13, dark: dark)
-            try await Task.sleep(for: .milliseconds(30))
+            fixture.session.configure(fontSize: 13, dark: dark)
             _ = try await fixture.webView.evaluateJavaScript("""
             (()=>{
-              const content=document.querySelector('.cm-content');
-              const first=document.querySelector('.cm-strong').firstChild;
-              const code=[...document.querySelectorAll('.cm-code')].find(e=>e.textContent==='code to copy').firstChild;
-              content.focus();
-              const range=document.createRange();
-              range.setStart(first,0);range.setEnd(code,code.textContent.length);
-              const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
+              const editor=window.boardEditor;
+              const start=editor.snapshot().source.indexOf('Selected');
+              const end=editor.snapshot().source.indexOf('code to copy')+'code to copy'.length;
+              editor.focus();editor.select(start,end);
+              editor.view().measure();
             })()
             """)
-            try await Task.sleep(for: .milliseconds(50))
-            let selection = try await fixture.webView.evaluateJavaScript("""
+            try await Task.sleep(for: .milliseconds(60))
+            let result = try await fixture.webView.evaluateJavaScript("""
             (()=>{
-              const content=document.querySelector('.cm-content'), code=[...document.querySelectorAll('.cm-code')].find(e=>e.textContent==='code to copy');
-              const style=getComputedStyle(document.querySelector('.cm-strong'),'::selection');
-              return {text:window.getSelection().toString(),background:style.backgroundColor,
-                codeBackground:getComputedStyle(code,'::selection').backgroundColor,
-                foreground:style.color,bodyBackground:getComputedStyle(content).backgroundColor,
-                hidden:[...document.querySelectorAll('.cm-cursorLayer')].every(e=>getComputedStyle(e).display==='none'),
-                browsing:window.boardEditor.snapshot().browsing};
-            })()
-            """) as? [String: Any] ?? [:]
-            let text = try XCTUnwrap(selection["text"] as? String)
-            XCTAssertTrue(text.contains("Selected"))
-            XCTAssertTrue(text.contains("code to copy"))
-            XCTAssertNotEqual(selection["background"] as? String, "rgba(0, 0, 0, 0)")
-            XCTAssertNotEqual(selection["background"] as? String, selection["foreground"] as? String)
-            XCTAssertEqual(selection["background"] as? String, selection["codeBackground"] as? String)
-            XCTAssertEqual(selection["hidden"] as? Bool, true)
-            XCTAssertEqual(selection["browsing"] as? Bool, true)
-            // Exercise WebKit's native copy command while observing its pasteboard payload.
-            let copied = try await fixture.webView.evaluateJavaScript("""
-            (()=>{
+              const editor=window.boardEditor, selection=editor.view().state.selection.main;
+              const text=editor.view().state.sliceDoc(selection.from,selection.to);
+              const style=getComputedStyle(document.querySelector('.cm-selectionBackground'));
               let copied;
               document.addEventListener('copy',event=>{
-                copied=window.getSelection().toString();event.preventDefault();
+                copied=event.clipboardData.getData('text/plain');
+                event.preventDefault();
               },{once:true});
               document.execCommand('copy');
-              return {copied,after:window.getSelection().toString()};
+              return {text,copied,background:style.backgroundColor,
+                selected:!editor.view().state.selection.main.empty};
             })()
-            """) as? [String: String]
-            XCTAssertEqual(copied?["copied"], text)
-            XCTAssertEqual(copied?["after"], text)
+            """) as? [String: Any] ?? [:]
+            let selected = try XCTUnwrap(result["text"] as? String)
+            XCTAssertTrue(selected.contains("Selected"))
+            XCTAssertTrue(selected.contains("code to copy"))
+            XCTAssertEqual(result["copied"] as? String, selected)
+            XCTAssertEqual(result["selected"] as? Bool, true)
+            XCTAssertNotEqual(result["background"] as? String, "rgba(0, 0, 0, 0)")
             let snapshot = try await fixture.snapshot()
             XCTAssertEqual(snapshot["source"] as? String, source)
-            XCTAssertEqual(snapshot["browsing"] as? Bool, true)
         }
     }
 
-    func testBrowsingHidesCursorBeforeSavingAndKeepsItHiddenWhenFocusReturns() async throws {
-        let fixture = try LiveFixture(source: "# Title\n\n- [ ] Task\n\nEnd", vim: true)
+    func testRegularEditingSurvivesFocusChangesAndWebContentReloadWithoutVim() async throws {
+        let fixture = try LiveFixture(source: "Before body")
         defer { fixture.close() }
         try await waitForBoardEditor(fixture.webView)
-        _ = try await fixture.webView.evaluateJavaScript("""
-        document.hasFocus=()=>true;
-        window.writeStates=[];
-        const handler=window.webkit.messageHandlers.boardEditor;
-        const original=handler.postMessage.bind(handler);
-        handler.postMessage=message=>{
-          if(message.kind==='mode'||message.kind==='write') window.writeStates.push({
-            kind:message.kind,browsing:window.boardEditor.snapshot().browsing,
-            hidden:[...document.querySelectorAll('.cm-cursorLayer')].every(e=>getComputedStyle(e).display==='none')
-          });
-          original(message);
-        };
-        window.boardEditor.focus();
-        """)
-        try await fixture.writeCommand()
-        let states = try await fixture.webView.evaluateJavaScript("window.writeStates") as? [[String: Any]] ?? []
-        XCTAssertEqual(states.compactMap { $0["kind"] as? String }, ["mode", "write"])
-        XCTAssertTrue(states.allSatisfy { $0["browsing"] as? Bool == true && $0["hidden"] as? Bool == true })
+        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.select(7);window.boardEditor.replaceSelection('edited ')")
+        await fixture.commit()
+        fixture.store.save()
         for _ in 0..<3 {
-            fixture.window.resignKey()
-            _ = try await fixture.webView.evaluateJavaScript("document.activeElement?.blur();window.boardEditor.view().dispatch({})")
-            try await Task.sleep(for: .milliseconds(30))
-            fixture.window.makeKey()
-            _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.focus();window.boardEditor.select(0);window.boardEditor.view().measure()")
-            try await Task.sleep(for: .milliseconds(30))
-            let state = try await fixture.webView.evaluateJavaScript("""
-            ({browsing:window.boardEditor.snapshot().browsing,
-              hidden:[...document.querySelectorAll('.cm-cursorLayer')].every(e=>getComputedStyle(e).display==='none'),
-              caret:getComputedStyle(document.querySelector('.cm-content')).caretColor==='rgba(0, 0, 0, 0)',
-              readonly:window.boardEditor.view().state.readOnly,
-              labelled:document.querySelector('.cm-content').getAttribute('aria-label').includes('i')})
-            """) as? [String: Bool]
-            XCTAssertEqual(state, ["browsing": true, "hidden": true, "caret": true, "readonly": true, "labelled": true])
+            _ = try await fixture.webView.evaluateJavaScript("document.activeElement?.blur();window.boardEditor.focus()")
+            let state = try await fixture.webView.evaluateJavaScript("({editable:document.querySelector('.cm-content').isContentEditable,vim:!!window.boardEditor.view().cm,panel:!!document.querySelector('.cm-vim-panel')})") as? [String: Bool]
+            XCTAssertEqual(state, ["editable": true, "vim": false, "panel": false])
         }
-        _ = try await fixture.pressKey("i")
-        let editing = try await fixture.webView.evaluateJavaScript("!window.boardEditor.snapshot().browsing&&document.querySelector('.cm-content').isContentEditable&&[...document.querySelectorAll('.cm-cursorLayer')].some(e=>getComputedStyle(e).display!=='none')") as? Bool
-        XCTAssertEqual(editing, true)
-    }
-
-    func testVimWriteSavesToDiskAndBrowsesUntilExplicitInsert() async throws {
-        let source = "# Title\n\n**Body** [Paper](https://example.com)\n\n<details>\n<summary>Agenda</summary>\n\nDiscussion\n\n</details>\n\n- [ ] Task\n\n```\ncode\n```\n\nEnd"
-        let fixture = try LiveFixture(source: source, vim: true)
-        defer { fixture.close() }
-        try await waitForBoardEditor(fixture.webView)
-        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.focus();window.boardEditor.select(2)")
-        _ = try await fixture.pressKey("i")
-        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.replaceSelection('New ')")
-        _ = try await fixture.pressKey("Escape")
-        try await fixture.writeCommand()
-        XCTAssertTrue(fixture.session.browsing)
-        let saved = try await fixture.snapshot()
-        XCTAssertEqual(saved["source"] as? String, source.replacingOccurrences(of: "# Title", with: "# New Title"))
-        XCTAssertEqual(JournalStore(directory: fixture.directory).boards[0].markdown, saved["source"] as? String)
-        let rendered = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').textContent") as? String ?? ""
-        XCTAssertFalse(rendered.contains("# New"))
-        XCTAssertFalse(rendered.contains("**Body**"))
-        let readonly = try await fixture.webView.evaluateJavaScript("({readonly:window.boardEditor.view().state.readOnly,editable:document.querySelector('.cm-content').isContentEditable,hidden:[...document.querySelectorAll('.cm-cursorLayer')].every(e=>getComputedStyle(e).display==='none')})") as? [String: Bool]
-        XCTAssertEqual(readonly, ["readonly": true, "editable": false, "hidden": true])
-        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-heading-1').dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0}));document.querySelector('.cm-heading-1').dispatchEvent(new MouseEvent('dblclick',{bubbles:true,button:0}));window.boardEditor.select(4);window.boardEditor.replaceSelection('ACCIDENTAL')")
-        _ = try await fixture.pressKey("d")
-        _ = try await fixture.pressKey("d")
-        let afterClick = try await fixture.snapshot()
-        XCTAssertEqual(afterClick["source"] as? String, saved["source"] as? String)
-        XCTAssertEqual(afterClick["browsing"] as? Bool, true)
-        fixture.session.configure(vim: true, fontSize: 14, dark: false, sourceMode: true)
-        try await Task.sleep(for: .milliseconds(50))
-        let stillRendered = try await fixture.webView.evaluateJavaScript("!document.querySelector('.cm-content').textContent.includes('# New')") as? Bool
-        XCTAssertEqual(stillRendered, true)
-        _ = try await fixture.pressKey("i")
-        let editing = try await fixture.webView.evaluateJavaScript("({insert:window.boardEditor.view().cm.state.vim.insertMode,editable:document.querySelector('.cm-content').isContentEditable,browsing:window.boardEditor.snapshot().browsing})") as? [String: Bool]
-        XCTAssertEqual(editing, ["insert": true, "editable": true, "browsing": false])
-        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.replaceSelection('Edited ')")
-        let changed = try await fixture.snapshot()
-        XCTAssertTrue((changed["source"] as? String)?.contains("Edited ") == true)
-        _ = try await fixture.pressKey("Escape")
-        try await fixture.writeCommand("write")
-        XCTAssertTrue(fixture.session.browsing)
-        fixture.session.beginEditing()
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertFalse(fixture.session.browsing)
-        fixture.session.saveAndBrowse()
-        try await Task.sleep(for: .milliseconds(50))
         fixture.session.webViewWebContentProcessDidTerminate(fixture.webView)
-        for _ in 0..<200 {
-            if fixture.webView.isLoading { try await Task.sleep(for: .milliseconds(10)) }
-            else { break }
-        }
         try await waitForBoardEditor(fixture.webView)
         let restored = try await fixture.snapshot()
-        XCTAssertEqual(restored["browsing"] as? Bool, true)
-        XCTAssertEqual(restored["source"] as? String, changed["source"] as? String)
-    }
-
-    func testBrowsingKeepsLinksTasksFoldsAndCopyUsableWithoutEnteringEdit() async throws {
-        let source = "[Paper](https://example.com)\n\n<details>\n<summary>Agenda</summary>\n\n**Discussion**\n\n</details>\n\n- [ ] Task\n\n```\ncode\n```\n\nEnd"
-        let fixture = try LiveFixture(source: source, vim: true)
-        defer { fixture.close() }
-        let (activate, launch) = (SafariLinks.activateExistingTab, SafariLinks.launch)
-        defer { SafariLinks.activateExistingTab = activate; SafariLinks.launch = launch }
-        var opened: [URL] = []
-        SafariLinks.activateExistingTab = { opened.append($0); return true }
-        SafariLinks.launch = { _ in XCTFail("Should reuse Safari tab") }
-        try await waitForBoardEditor(fixture.webView)
-        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.focus()")
-        try await fixture.writeCommand()
-        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('[data-url]').dispatchEvent(new MouseEvent('click',{bubbles:true}));document.querySelector('.board-details').click();document.querySelector('.board-details').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));document.querySelector('.board-check').click();document.querySelector('.board-copy-code').click()")
-        try await Task.sleep(for: .milliseconds(250))
-        XCTAssertEqual(opened.map(\.absoluteString), ["https://example.com"])
-        XCTAssertEqual(fixture.pasteboard.string(forType: .string), "code\n")
-        let state = try await fixture.webView.evaluateJavaScript("({browsing:window.boardEditor.snapshot().browsing,open:document.querySelector('.board-details').getAttribute('aria-expanded')==='true',editable:document.querySelector('.cm-content').isContentEditable,raw:document.querySelector('.cm-content').textContent.includes('<summary>')})") as? [String: Bool]
-        XCTAssertEqual(state, ["browsing": true, "open": true, "editable": false, "raw": false])
-        XCTAssertEqual(fixture.store.boards[0].markdown, source.replacingOccurrences(of: "- [ ]", with: "- [x]"))
-        _ = try await fixture.pressKey("i")
-        _ = try await fixture.pressKey("Escape")
-        fixture.session.saveAndBrowse()
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertTrue(fixture.session.browsing)
-        _ = try await fixture.pressKey("v")
-        _ = try await fixture.pressKey("l")
-        _ = try await fixture.pressKey("i")
-        let resumedInsert = try await fixture.webView.evaluateJavaScript("window.boardEditor.view().cm.state.vim.insertMode&&!window.boardEditor.view().cm.state.vim.visualMode") as? Bool
-        XCTAssertEqual(resumedInsert, true)
+        XCTAssertEqual(restored["source"] as? String, "Before edited body")
+        XCTAssertEqual(JournalStore(directory: fixture.directory).boards[0].markdown, "Before edited body")
     }
 
     func testLinkButtonsUseTaskSafariRoutingWithoutMovingCaretOrChangingMarkdown() async throws {
@@ -257,6 +131,14 @@ final class BoardLiveEditorTests: XCTestCase {
         XCTAssertEqual(fixture.pasteboard.string(forType: .string), "  let value = 42\n\n  print(value)\n")
         let feedback = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-copy-code').dataset.copied") as? String
         XCTAssertEqual(feedback, "true")
+        let style = try await fixture.webView.evaluateJavaScript("""
+        (()=>{const button=document.querySelector('.board-copy-code');
+          return {label:button.dataset.label,top:getComputedStyle(document.querySelector('.cm-code-start')).borderTopLeftRadius,
+            bottom:getComputedStyle([...document.querySelectorAll('.cm-code-end')].at(-1)).borderBottomRightRadius};})()
+        """) as? [String: String]
+        XCTAssertEqual(style?["label"], "已复制")
+        XCTAssertEqual(style?["top"], "9px")
+        XCTAssertEqual(style?["bottom"], "9px", "文档结尾未闭合的代码块也有圆角")
         if let path = ProcessInfo.processInfo.environment["TIMELINE_CODE_SNAPSHOT"] {
             let image = try await fixture.webView.takeSnapshot(configuration: nil)
             let bitmap = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
@@ -275,7 +157,7 @@ final class BoardLiveEditorTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(60))
         let undone = try await fixture.snapshot()
         XCTAssertEqual(undone["source"] as? String, source)
-        fixture.session.configure(vim: false, fontSize: 13, dark: false, sourceMode: true)
+        fixture.session.configure(fontSize: 13, dark: false, sourceMode: true)
         try await Task.sleep(for: .milliseconds(30))
         let rawButtons = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.board-copy-code').length") as? Int
         XCTAssertEqual(rawButtons, 0)
@@ -337,7 +219,7 @@ final class BoardLiveEditorTests: XCTestCase {
         try await waitForBoardEditor(fixture.webView)
         _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.select(8,12);window.boardEditor.replaceSelection('中文 body')")
         let before = try await fixture.snapshot()
-        fixture.session.configure(vim: false, fontSize: 13, dark: true)
+        fixture.session.configure(fontSize: 13, dark: true)
         try await Task.sleep(for: .milliseconds(250))
         let after = try await fixture.snapshot()
         XCTAssertEqual(before["head"] as? Int, after["head"] as? Int)
@@ -353,31 +235,6 @@ final class BoardLiveEditorTests: XCTestCase {
         XCTAssertEqual(undone["source"] as? String, "Before\n\n中文 body\n\nAfter")
     }
 
-    func testVimNormalInsertAndUndoRemainActiveAfterAutosave() async throws {
-        let fixture = try LiveFixture(source: "one two\nthree\n", vim: true)
-        defer { fixture.close() }
-        try await waitForBoardEditor(fixture.webView)
-        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.focus();window.boardEditor.select(0)")
-        func key(_ key: String) async throws {
-            let json = String(decoding: try JSONEncoder().encode(key), as: UTF8.self)
-            _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:\(json),bubbles:true,cancelable:true}))")
-        }
-        try await key("w")
-        let moved = try await fixture.snapshot()
-        XCTAssertEqual(moved["head"] as? Int, 4)
-        try await key("i")
-        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.replaceSelection('VIM ')")
-        try await key("Escape")
-        await fixture.commit()
-        fixture.session.configure(vim: true, fontSize: 13, dark: true)
-        try await key("0")
-        let start = try await fixture.snapshot()
-        XCTAssertEqual(start["head"] as? Int, 0)
-        try await key("u")
-        let undone = try await fixture.snapshot()
-        XCTAssertEqual(undone["source"] as? String, "one two\nthree\n")
-    }
-
     func testArrowKeysMoveThroughFormattedAndCompletedTextCharacterByCharacter() async throws {
         let fixture = try LiveFixture(source: "**Bold** text\n\n- [x] Completed\n\nEnd")
         defer { fixture.close() }
@@ -389,50 +246,27 @@ final class BoardLiveEditorTests: XCTestCase {
         }
     }
 
-    func testControlBracketAndRepeatedEscapeKeepVimNormalAndDisclosuresOpen() async throws {
+    func testRepeatedEscapeKeepsEditorFocusedAndDisclosuresOpen() async throws {
         let source = "<details open>\n<summary>Agenda</summary>\n\nDiscussion\n\n</details>\n\nEnd"
-        let fixture = try LiveFixture(source: source, vim: true)
+        let fixture = try LiveFixture(source: source)
         defer { fixture.close() }
         try await waitForBoardEditor(fixture.webView)
         _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.focus()")
-        for mode in ["i", "v"] {
-            _ = try await fixture.pressKey(mode)
-            let controlBracketHandled = try await fixture.pressKey("[", control: true)
-            XCTAssertTrue(controlBracketHandled)
-            let normal = try await fixture.webView.evaluateJavaScript("(()=>{const vim=window.boardEditor.view().cm.state.vim;return !vim.insertMode&&!vim.visualMode})()") as? Bool
-            XCTAssertEqual(normal, true)
-        }
-        _ = try await fixture.pressKey("i")
-        for _ in 0..<3 {
-            let escapeHandled = try await fixture.pressKey("Escape")
-            XCTAssertTrue(escapeHandled)
-        }
-        _ = try await fixture.pressKey("v")
-        _ = try await fixture.pressKey("l")
-        _ = try await fixture.pressKey("Escape")
-        let state = try await fixture.webView.evaluateJavaScript("({normal:!window.boardEditor.view().cm.state.vim.insertMode&&!window.boardEditor.view().cm.state.vim.visualMode,focused:document.activeElement===document.querySelector('.cm-content'),open:document.querySelector('.board-details').getAttribute('aria-expanded')==='true'})") as? [String: Bool]
-        XCTAssertEqual(state, ["normal": true, "focused": true, "open": true])
+        for _ in 0..<3 { let handled = try await fixture.pressKey("Escape"); XCTAssertTrue(handled) }
+        let state = try await fixture.webView.evaluateJavaScript("({focused:document.activeElement===document.querySelector('.cm-content'),open:document.querySelector('.board-details').getAttribute('aria-expanded')==='true',editable:document.querySelector('.cm-content').isContentEditable})") as? [String: Bool]
+        XCTAssertEqual(state, ["focused": true, "open": true, "editable": true])
         let snapshot = try await fixture.snapshot()
         XCTAssertEqual(snapshot["source"] as? String, source)
-        fixture.session.configure(vim: false, fontSize: 13, dark: true)
-        try await Task.sleep(for: .milliseconds(30))
-        let escapeHandled = try await fixture.pressKey("Escape")
-        XCTAssertTrue(escapeHandled)
     }
 
     func testCursorsRemainVisibleWithStrongContrastInBothAppearances() async throws {
-        let fixture = try LiveFixture(source: "Cursor visibility", vim: true)
+        let fixture = try LiveFixture(source: "Cursor visibility")
         defer { fixture.close() }
         try await waitForBoardEditor(fixture.webView)
         for dark in [true, false] {
-            fixture.session.configure(vim: true, fontSize: 13, dark: dark)
+            fixture.session.configure(fontSize: 13, dark: dark)
             _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.focus();window.boardEditor.select(3);window.boardEditor.view().measure();window.boardEditor.view().dom.classList.add('cm-focused')")
             try await Task.sleep(for: .milliseconds(60))
-            let normal = try await fixture.webView.evaluateJavaScript("(()=>{const cursor=document.querySelector('.cm-fat-cursor');if(!cursor)return {contrast:false,visible:false};const style=getComputedStyle(cursor);const contentStyle=getComputedStyle(document.querySelector('.cm-content'));return {contrast:style.backgroundColor===contentStyle.color&&style.color!==style.backgroundColor,visible:cursor.getBoundingClientRect().width>2&&getComputedStyle(cursor.parentElement).animationName==='none'}})()") as? [String: Bool]
-            XCTAssertEqual(normal, ["contrast": true, "visible": true])
-            _ = try await fixture.pressKey("i")
-            try await Task.sleep(for: .milliseconds(60))
-            _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.view().measure();window.boardEditor.view().dom.classList.add('cm-focused')")
             let insert = try await fixture.webView.evaluateJavaScript("(()=>{const cursor=document.querySelector('.cm-cursor');if(!cursor)return {width:0,steady:false,visible:false};const style=getComputedStyle(cursor);return {width:parseFloat(style.borderLeftWidth),steady:getComputedStyle(cursor.parentElement).animationName==='none',visible:style.display!=='none'}})()") as? [String: Any]
             XCTAssertGreaterThanOrEqual(insert?["width"] as? Double ?? 0, 2)
             XCTAssertEqual(insert?["steady"] as? Bool, true)
@@ -477,19 +311,19 @@ final class BoardLiveEditorTests: XCTestCase {
         defer { fixture.close() }
         try await waitForBoardEditor(fixture.webView)
         _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.select(23)")
-        fixture.session.configure(vim: false, fontSize: 13, dark: true, sourceMode: true)
+        fixture.session.configure(fontSize: 13, dark: true, sourceMode: true)
         try await Task.sleep(for: .milliseconds(40))
         let raw = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').textContent") as? String
         XCTAssertTrue(raw?.contains("# Title") == true)
         XCTAssertTrue(raw?.contains("**Strong**") == true)
-        fixture.session.configure(vim: false, fontSize: 13, dark: true)
+        fixture.session.configure(fontSize: 13, dark: true)
         try await Task.sleep(for: .milliseconds(40))
         let rendered = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').textContent") as? String
         XCTAssertFalse(rendered?.contains("# Title") == true)
         let selection = try await fixture.snapshot()
         XCTAssertEqual(selection["head"] as? Int, 23)
         fixture.store.setBoardMarkdown("# Updated\n\nExternal\n\nAfter", for: fixture.store.boards[0].id)
-        fixture.session.configure(vim: false, fontSize: 13, dark: true)
+        fixture.session.configure(fontSize: 13, dark: true)
         try await Task.sleep(for: .milliseconds(40))
         let external = try await fixture.snapshot()
         XCTAssertEqual(external["source"] as? String, fixture.store.boards[0].markdown)
@@ -506,14 +340,14 @@ private final class LiveFixture {
     let window: NSWindow
     let pasteboard = NSPasteboard(name: .init("board-editor-\(UUID().uuidString)"))
 
-    init(source: String, vim: Bool = false) throws {
+    init(source: String) throws {
         store = JournalStore(directory: directory)
         let board = try XCTUnwrap(store.ensureBoard(for: .tag("Editor")))
         store.setBoardMarkdown(source, for: board.id)
         store.save()
         session = BoardLiveEditorSession(store: store, board: try XCTUnwrap(store.board(for: board.owner)), pasteboard: pasteboard)
         webView = session.makeWebView()
-        session.configure(vim: vim, fontSize: 13, dark: true)
+        session.configure(fontSize: 13, dark: true)
         window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 410, height: 480),
                              styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -530,13 +364,6 @@ private final class LiveFixture {
         let json = String(decoding: try JSONEncoder().encode(key), as: UTF8.self)
         let result = try await webView.evaluateJavaScript("!document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:\(json),ctrlKey:\(control),bubbles:true,cancelable:true}))")
         return result as? Bool == true
-    }
-
-    func writeCommand(_ command: String = "w") async throws {
-        _ = try await pressKey(":")
-        let json = String(decoding: try JSONEncoder().encode(command), as: UTF8.self)
-        _ = try await webView.evaluateJavaScript("(()=>{const input=document.querySelector('.cm-vim-panel input');if(!input)throw new Error('Missing Vim command input');input.value=\(json);input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',keyCode:13,bubbles:true,cancelable:true}))})()")
-        try await Task.sleep(for: .milliseconds(100))
     }
 
     func commit() async {
