@@ -2,14 +2,22 @@ import AppKit
 import SwiftUI
 import TimelineCore
 
-struct DeadlineDayCell: View {
+struct DeadlineDayCell: View, Equatable {
     @Environment(\.typography) private var typography
-    @ObservedObject var store: JournalStore
+    /// 只用来执行操作。格子不观察仓库：显示需要的数据都由月历传进来，
+    /// 配合 `Equatable`，与这一格无关的修改不会让 42 个格子全部重算。
+    let store: JournalStore
     let date: Date
     let selectedDate: Date
     let displayedMonth: Date
     let height: CGFloat
     let items: [ScheduledTask]
+    /// 这一天截止的全部事项（`items` 是其中要显示的部分）。
+    let dueToday: [ScheduledTask]
+    let logCount: Int
+    let readOnly: Bool
+    /// 由月历传入（跨日时月历会刷新），这样 `Equatable` 比较能感知「今天」的变化。
+    let today: Bool
     let select: () -> Void
     let open: () -> Void
     /// 打开这一天的日志（选中的那一格常驻显示按钮，其他格子悬停时出现）。
@@ -27,7 +35,6 @@ struct DeadlineDayCell: View {
         dueItems.sorted(by: TaskSortMode.deadline.precedes)
             .filter { !hideCompleted || !$0.task.completed }
     }
-    private var dueToday: [ScheduledTask] { store.calendarDeadlines[JournalDates.key(date)] ?? [] }
     private static let space = "dayCell"
     /// 创建 DateFormatter 很贵，而 42 个格子每次重绘都要用：只建一次。
     private static let accessibilityFormatter: DateFormatter = {
@@ -43,10 +50,8 @@ struct DeadlineDayCell: View {
         return "\(formatter.string(from: date))，\(summary)\(today ? "，今天" : "")"
     }
     private var selected: Bool { JournalDates.calendar.isDate(date, inSameDayAs: selectedDate) }
-    private var today: Bool { JournalDates.calendar.isDateInToday(date) }
     private var inMonth: Bool { JournalDates.calendar.isDate(date, equalTo: displayedMonth, toGranularity: .month) }
 
-    private var logCount: Int { store.entry(for: date).logs.count }
 
     private var logButton: some View {
         Button(action: openLog) {
@@ -68,6 +73,21 @@ struct DeadlineDayCell: View {
         .accessibilityLabel("打开这一天的日志")
     }
 
+    /// 有事项的日子用卡片底色，空白日只留细线：一眼看出哪些天有安排，今天与选中再用强调色区分。
+    private var cellFill: Color {
+        if selected || targeted { return Palette.soft }
+        if today { return Palette.soft.opacity(0.6) }
+        guard inMonth else { return .clear }
+        return dueToday.isEmpty ? .clear : Palette.card
+    }
+
+    /// 只比较影响显示的数据；动作闭包每次都是新的，但行为由同一份状态决定。
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.date == rhs.date && lhs.selectedDate == rhs.selectedDate && lhs.displayedMonth == rhs.displayedMonth
+            && lhs.height == rhs.height && lhs.items == rhs.items && lhs.dueToday == rhs.dueToday
+            && lhs.logCount == rhs.logCount && lhs.readOnly == rhs.readOnly && lhs.today == rhs.today && lhs.store === rhs.store
+    }
+
     var body: some View {
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 3) {
@@ -78,7 +98,7 @@ struct DeadlineDayCell: View {
                 if selected || hovered { logButton }
                 if !dueToday.isEmpty {
                     Text("\(dueToday.filter(\.task.isDone).count)/\(dueToday.filter { !$0.task.isDropped }.count)")
-                        .font(.system(size: typography.pt(10), design: .monospaced)).foregroundStyle(Palette.muted)
+                        .font(.system(size: typography.pt(10), weight: .medium)).monospacedDigit().foregroundStyle(Palette.muted)
                         .lineLimit(1).minimumScaleFactor(0.75)
                         .help("已完成 / 当天截止的事项")
                 }
@@ -100,12 +120,12 @@ struct DeadlineDayCell: View {
                                  edit: { editTask(item) },
                                  open: SafariLinks.open,
                                  maxLines: 1, displayName: item.task.calendarName, dragTaskID: item.id, compactLines: true)
-                        .disabled(store.isReadOnly)
+                        .disabled(readOnly)
                     Button { store.toggleTodo(item.id, on: item.date) } label: {
                         Image(systemName: item.task.isDropped ? "xmark.circle.fill" : (item.task.completed ? "checkmark.circle.fill" : "circle"))
                             .foregroundStyle(item.task.isDropped ? Palette.muted : (item.task.completed ? Palette.success : Palette.deadline))
                             .frame(width: 16, alignment: .trailing)
-                    }.buttonStyle(HitAreaButtonStyle(compact: true)).disabled(store.isReadOnly)
+                    }.buttonStyle(HitAreaButtonStyle(compact: true)).disabled(readOnly)
                         .background(GeometryReader { proxy in
                             Color.clear.preference(key: CheckboxFramesKey.self, value: [item.id.uuidString: proxy.frame(in: .named(Self.space))])
                         })
@@ -117,8 +137,10 @@ struct DeadlineDayCell: View {
             Spacer(minLength: 0)
         }
         .padding(6).frame(maxWidth: .infinity, alignment: .topLeading).frame(height: height, alignment: .topLeading)
-        .background(selected || today || targeted ? Palette.soft : (inMonth ? Palette.card : Palette.background), in: RoundedRectangle(cornerRadius: 5))
-        .overlay(RoundedRectangle(cornerRadius: 5).stroke(selected || targeted ? Palette.accent : Palette.line.opacity(hovered ? 1 : 0.55), lineWidth: selected || targeted ? 1.5 : 0.5))
+        .background(cellFill, in: RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous)
+            .strokeBorder(selected || targeted ? Palette.accent : (today ? Palette.accent.opacity(0.45) : Palette.line.opacity(hovered ? 0.9 : 0.4)),
+                          lineWidth: selected || targeted ? 1.5 : Metrics.hairline))
         // 悬停的格子浮起一点：能点的感觉。
         .shadow(color: .black.opacity(hovered && !selected ? 0.18 : 0), radius: hovered ? 4 : 0, x: 0, y: hovered ? 2 : 0)
         .animation(Motion.quick, value: hovered)

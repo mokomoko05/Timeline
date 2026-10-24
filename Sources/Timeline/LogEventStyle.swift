@@ -4,10 +4,10 @@ import TimelineCore
 enum LogEventStyle {
     static func color(_ log: DailyLogEntry) -> Color {
         switch log.focusMarker {
-        case "FOCUS": return .blue
-        case "NOTE": return .teal
-        case "REVIEW": return .purple
-        case "END": return log.focusMetMinimum == false ? Color(red: 0.973, green: 0.318, blue: 0.286) : Color(red: 0.247, green: 0.725, blue: 0.314)
+        case "FOCUS": return Palette.accent
+        case "NOTE": return Palette.note
+        case "REVIEW": return Palette.done
+        case "END": return log.focusMetMinimum == false ? Palette.danger : Palette.success
         case "PLAN": return Palette.accent
         case "DONE": return Palette.success
         case "BLOCK": return Palette.deadline
@@ -137,7 +137,7 @@ struct LogTimelineRow<Content: View>: View {
                                         path.move(to: CGPoint(x: 8, y: nodeY))
                                         path.addLine(to: CGPoint(x: 8, y: geometry.size.height))
                                     }
-                                }.stroke(Color.blue.opacity(0.8), lineWidth: 1.5)
+                                }.stroke(Palette.accent.opacity(0.8), lineWidth: 1.5)
                             }
                         }
                         .overlay(alignment: .topLeading) {

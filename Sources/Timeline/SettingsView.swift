@@ -38,11 +38,11 @@ struct SettingsView: View {
                 FocusMinutesSetting(title: "最低专注时长", key: Prefs.focusMinLogMinutes,
                                     fallback: Prefs.defaultFocusMinLogMinutes, minimum: 0)
                 Text("专注记录达标显示绿色勾，未达标显示红色叉。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(Palette.muted)
                 Text("专注期间菜单栏显示倒计时，隐藏工作台后仍可查看。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(Palette.muted)
                 Text("暂停不计时，切换应用不影响专注。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(Palette.muted)
             }
             Section("通用") {
                 Picker("界面语言", selection: Binding(get: { languages.language }, set: { languages.set($0) })) {
@@ -54,7 +54,7 @@ struct SettingsView: View {
                     .disabled(loginItem.isUpdating)
                 Toggle("切到别的应用时自动收起窗口", isOn: $autoHideOnResign)
                 Text("快速记录与专注面板保持显示。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(Palette.muted)
                 Picker("新建终端的布局", selection: $terminalLayout) {
                     Text("三窗格：左边上下两格，右边一栏").tag(TerminalLayout.threePanes.rawValue)
                     Text("单窗格").tag(TerminalLayout.single.rawValue)
@@ -67,7 +67,7 @@ struct SettingsView: View {
                             .font(.caption).foregroundStyle(Palette.deadline)
                     }
                     Text("点击录入快捷键，需包含 ⌃、⌥ 或 ⌘。")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(Palette.muted)
                 }
             }
         }
@@ -95,7 +95,7 @@ struct FocusMinutesSetting: View {
                 .focused($editing)
                 .accessibilityLabel(LocalizedStringKey(title))
                 .onSubmit(commit)
-            Text("分钟").foregroundStyle(.secondary)
+            Text("分钟").foregroundStyle(Palette.muted)
         }
         .onAppear { text = String(UserDefaults.standard.object(forKey: key) as? Int ?? fallback) }
         .onChange(of: text) { value in
@@ -238,7 +238,7 @@ struct FocusStylePicker: View {
                     .accessibilityAddTraits(chosen ? [.isButton, .isSelected] : .isButton)
                 }
             }
-            Text((FocusPanelStyle(rawValue: selection) ?? .card).detail).font(.caption).foregroundStyle(.secondary)
+            Text((FocusPanelStyle(rawValue: selection) ?? .card).detail).font(.caption).foregroundStyle(Palette.muted)
         }
     }
 }
@@ -251,10 +251,10 @@ private struct FocusStyleSample: View {
         ZStack {
             switch style {
             case .card:
-                HStack(spacing: 3) { time; Text("任务").font(.system(size: 8)); Image(systemName: "stop.circle.fill").font(.system(size: 9)).foregroundStyle(.red) }
+                HStack(spacing: 3) { time; Text("任务").font(.system(size: 8)); Image(systemName: "stop.circle.fill").font(.system(size: 9)).foregroundStyle(Palette.danger) }
                     .padding(.horizontal, 6).frame(height: 24).background(Palette.card, in: RoundedRectangle(cornerRadius: 6))
             case .pill:
-                HStack(spacing: 3) { time; Image(systemName: "stop.circle.fill").font(.system(size: 9)).foregroundStyle(.red) }
+                HStack(spacing: 3) { time; Image(systemName: "stop.circle.fill").font(.system(size: 9)).foregroundStyle(Palette.danger) }
                     .padding(.horizontal, 7).frame(height: 20).background(Palette.card, in: Capsule())
             case .digits:
                 time.opacity(0.45)

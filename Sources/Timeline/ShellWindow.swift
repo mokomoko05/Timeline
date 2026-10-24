@@ -37,6 +37,26 @@ final class PaneTerminalView: LocalProcessTerminalView {
     /// 回滚行数：默认 500 行对长时间的 agent 对话太少。
     static let scrollbackLines = 10_000
 
+    /// 底色、前景、光标、选区和 16 色 ANSI 都取自应用配色，随深浅外观切换。
+    func applyTheme() {
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let colors = AppTheme.current.colors(dark: dark)
+        func ns(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
+            NSColor(srgbRed: CGFloat((hex >> 16) & 255) / 255, green: CGFloat((hex >> 8) & 255) / 255,
+                    blue: CGFloat(hex & 255) / 255, alpha: alpha)
+        }
+        nativeBackgroundColor = ns(colors.background)
+        nativeForegroundColor = ns(colors.ink)
+        caretColor = ns(colors.accent)
+        selectedTextBackgroundColor = ns(colors.accent, dark ? 0.35 : 0.25)
+        installColors(TerminalTheme.ansi(dark: dark))
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyTheme()
+    }
+
     /// 结束 shell 并回收子进程。SwiftTerm 的 terminate() 发出 SIGTERM 后就取消了退出监听，
     /// 不会 waitpid，每关一个窗格就留下一个僵尸进程，直到应用退出。
     func end() {
@@ -68,12 +88,41 @@ enum ShellReaper {
     }
 }
 
+/// GitHub 风格的 16 色 ANSI，和「墨蓝」配色同源。
+enum TerminalTheme {
+    private static let darkANSI: [UInt32] = [
+        0x484F58, 0xFF7B72, 0x3FB950, 0xD29922, 0x58A6FF, 0xBC8CFF, 0x39C5CF, 0xB1BAC4,
+        0x6E7681, 0xFFA198, 0x56D364, 0xE3B341, 0x79C0FF, 0xD2A8FF, 0x56D4DD, 0xF0F6FC,
+    ]
+    private static let lightANSI: [UInt32] = [
+        0x24292F, 0xCF222E, 0x116329, 0x4D2D00, 0x0969DA, 0x8250DF, 0x1B7C83, 0x6E7781,
+        0x57606A, 0xA40E26, 0x1A7F37, 0x633C01, 0x218BFF, 0xA475F9, 0x3192AA, 0x8C959F,
+    ]
+
+    static func ansi(dark: Bool) -> [SwiftTerm.Color] {
+        (dark ? darkANSI : lightANSI).map { hex in
+            SwiftTerm.Color(red8: UInt16((hex >> 16) & 255), green8: UInt16((hex >> 8) & 255), blue8: UInt16(hex & 255))
+        }
+    }
+}
+
 /// 包住一个窗格，留出 2pt 空隙，焦点时在这圈空隙里画高亮边框。
 final class PaneFrameView: NSView {
     let terminal: PaneTerminalView
 
     var focused = false {
-        didSet { layer?.borderColor = (focused ? NSColor.controlAccentColor.withAlphaComponent(0.75) : NSColor.clear).cgColor }
+        didSet { updateBorder() }
+    }
+
+    private func updateBorder() {
+        var color = NSColor.clear.cgColor
+        if focused { effectiveAppearance.performAsCurrentDrawingAppearance { color = NativePalette.accent.withAlphaComponent(0.75).cgColor } }
+        layer?.borderColor = color
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBorder()
     }
 
     init(terminal: PaneTerminalView) {
@@ -97,7 +146,7 @@ final class PaneFrameView: NSView {
 }
 
 final class PaneSplitView: NSSplitView {
-    override var dividerColor: NSColor { NSColor(white: 0.2, alpha: 1) }
+    override var dividerColor: NSColor { NativePalette.line }
 }
 
 /// 新建终端窗口 / 标签页的默认布局。
@@ -255,7 +304,7 @@ struct ShellToolbar: View {
         .padding(.horizontal, 10)
         .frame(height: 28)
         .frame(maxWidth: .infinity)
-        .foregroundStyle(Color.white.opacity(0.85))
+        .foregroundStyle(Palette.ink.opacity(0.85))
     }
 
     private func button(_ symbol: String, _ title: String, _ key: String, _ action: @escaping () -> Void) -> some View {
@@ -263,19 +312,19 @@ struct ShellToolbar: View {
             HStack(spacing: 4) {
                 Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
                 Text(title).font(.system(size: 11))
-                Text(key).font(.system(size: 10, design: .monospaced)).foregroundStyle(Color.white.opacity(0.5))
+                Text(key).font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.muted)
             }
             .padding(.horizontal, 7).frame(height: 20)
-            .background(Color.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 5))
             .contentShape(RoundedRectangle(cornerRadius: 5))
         }
         .buttonStyle(.plain)
+        .raisedOnHover(radius: 5)
         .help("\(title)  \(key)")
         .accessibilityLabel("\(title)，快捷键 \(key)")
     }
 
     private func hints(_ text: String) -> some View {
-        Text(text).font(.system(size: 10.5)).foregroundStyle(Color.white.opacity(0.5)).lineLimit(1).fixedSize()
+        Text(text).font(.system(size: 10.5)).foregroundStyle(Palette.muted).lineLimit(1).fixedSize()
     }
 }
 
@@ -508,9 +557,8 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
         let pane = PaneTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
         pane.processDelegate = self
         pane.getTerminal().changeScrollback(PaneTerminalView.scrollbackLines)
-        pane.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
-        pane.nativeBackgroundColor = NSColor(white: 0.035, alpha: 1)
-        pane.nativeForegroundColor = NSColor(white: 0.88, alpha: 1)
+        pane.font = .monospacedSystemFont(ofSize: UIScale.pt(13), weight: .regular)
+        pane.applyTheme()
         return pane
     }
 
@@ -523,8 +571,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
         window.panes = panes
         window.title = "zsh"
         window.titlebarAppearsTransparent = true
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.backgroundColor = NSColor(white: 0.035, alpha: 1)
+        window.backgroundColor = NativePalette.background
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: three ? 640 : 420, height: three ? 360 : 240)
         window.collectionBehavior.insert(.moveToActiveSpace)

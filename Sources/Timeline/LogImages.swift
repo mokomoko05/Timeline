@@ -111,9 +111,9 @@ struct LogFilterPopover: View {
                 Button("清除") { selection = [] }.disabled(selection.isEmpty)
             }
             Text("勾选任务以筛选日志")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(Palette.muted)
             if summaries.isEmpty {
-                Text("还没有待办").font(.callout).foregroundStyle(.secondary).padding(.vertical, 8)
+                Text("还没有待办").font(.callout).foregroundStyle(Palette.muted).padding(.vertical, 8)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
@@ -122,12 +122,12 @@ struct LogFilterPopover: View {
                                                  set: { if $0 { selection.insert(task.id) } else { selection.remove(task.id) } })) {
                                 HStack(spacing: 6) {
                                     if let number = task.number {
-                                        Text("#\(number)").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                                        Text("#\(number)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
                                     }
                                     Text(task.title).lineLimit(1)
-                                    if task.deleted { Text("（已删除）").font(.caption).foregroundStyle(.secondary) }
+                                    if task.deleted { Text("（已删除）").font(.caption).foregroundStyle(Palette.muted) }
                                     Spacer(minLength: 8)
-                                    Text("\(task.count) 条").font(.caption).foregroundStyle(.secondary)
+                                    Text("\(task.count) 条").font(.caption).foregroundStyle(Palette.muted)
                                 }
                             }
                             .toggleStyle(.checkbox).padding(.vertical, 3)

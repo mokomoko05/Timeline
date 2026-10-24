@@ -166,7 +166,7 @@ struct HotKeyRecorder: View {
                     .buttonStyle(.borderless).disabled(binding == action.defaultBinding)
                     .help("恢复默认 \(action.defaultBinding.label)").accessibilityLabel("恢复默认")
             }
-            if let message { Text(LocalizedStringKey(message)).font(.caption).foregroundStyle(.orange) }
+            if let message { Text(LocalizedStringKey(message)).font(.caption).foregroundStyle(Palette.deadline) }
         }
         .onDisappear { stop() }
     }

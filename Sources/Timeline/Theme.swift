@@ -13,6 +13,10 @@ struct ThemeColors: Equatable {
     let line: UInt32         // 分隔线、描边
     let success: UInt32      // 完成、专注中、开始按钮
     let deadline: UInt32     // 截止、逾期、警示
+    let danger: UInt32       // 紧急、删除、失败
+    let attention: UInt32    // 高优先级、提醒
+    let done: UInt32         // 复盘、已归档（紫）
+    let note: UInt32         // 笔记、次要高亮（青）
 
     /// 相对亮度（WCAG）。
     static func luminance(_ hex: UInt32) -> Double {
@@ -47,8 +51,10 @@ struct AppTheme: Identifiable, Equatable {
 
     static let all: [AppTheme] = [
         AppTheme(id: "github", name: "默认 · 墨蓝", subtitle: "GitHub 风格的冷静蓝灰",
-                 light: ThemeColors(background: 0xF6F8FA, card: 0xFFFFFF, ink: 0x1F2328, muted: 0x59636E, accent: 0x0969DA, soft: 0xDDF4FF, line: 0xD1D9E0, success: 0x1A7F37, deadline: 0xBC4C00),
-                 dark: ThemeColors(background: 0x0D1117, card: 0x161B22, ink: 0xF0F6FC, muted: 0x9198A1, accent: 0x4493F8, soft: 0x121D2F, line: 0x3D444D, success: 0x3FB950, deadline: 0xD29922)),
+                 light: ThemeColors(background: 0xF6F8FA, card: 0xFFFFFF, ink: 0x1F2328, muted: 0x59636E, accent: 0x0969DA, soft: 0xDDF4FF, line: 0xD1D9E0, success: 0x1A7F37, deadline: 0xBC4C00,
+                                    danger: 0xCF222E, attention: 0x9A6700, done: 0x8250DF, note: 0x1B7C83),
+                 dark: ThemeColors(background: 0x0D1117, card: 0x161B22, ink: 0xF0F6FC, muted: 0x9198A1, accent: 0x4493F8, soft: 0x121D2F, line: 0x3D444D, success: 0x3FB950, deadline: 0xD29922,
+                                   danger: 0xF85149, attention: 0xDB6D28, done: 0xAB7DF8, note: 0x39C5CF)),
     ]
 
     static let defaultID = "github"
@@ -131,19 +137,37 @@ enum Palette {
     static let line = token(\.line)
     static let success = token(\.success)
     static let deadline = token(\.deadline)
+    static let danger = token(\.danger)
+    static let attention = token(\.attention)
+    static let done = token(\.done)
+    static let note = token(\.note)
     /// 强调色填充（选中的标签、主按钮）上的文字。
     static let onAccent = dynamic { $0.onAccent }
 
-    private static func token(_ key: KeyPath<ThemeColors, UInt32>) -> Color { dynamic { $0[keyPath: key] } }
+    private static func token(_ key: KeyPath<ThemeColors, UInt32>) -> Color { Color(nsColor: NativePalette.color(key)) }
+    private static func dynamic(_ pick: @escaping (ThemeColors) -> UInt32) -> Color { Color(nsColor: NativePalette.dynamic(pick)) }
+}
+
+/// 同一套配色的 AppKit 版本：原生文本视图、分隔条、终端边框用它，跟随外观和配色。
+enum NativePalette {
+    static let accent = color(\.accent)
+    static let line = color(\.line)
+    static let muted = color(\.muted)
+    static let ink = color(\.ink)
+    static let background = color(\.background)
+    static let card = color(\.card)
+    static let soft = color(\.soft)
+
+    static func color(_ key: KeyPath<ThemeColors, UInt32>) -> NSColor { dynamic { $0[keyPath: key] } }
 
     /// 颜色在每次绘制时按当前配色和外观取值，所以切换配色、深浅色都不用重新创建它们。
-    private static func dynamic(_ pick: @escaping (ThemeColors) -> UInt32) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
+    static func dynamic(_ pick: @escaping (ThemeColors) -> UInt32) -> NSColor {
+        NSColor(name: nil) { appearance in
             let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             let value = pick(AppTheme.current.colors(dark: isDark))
             return NSColor(srgbRed: Double((value >> 16) & 255) / 255,
                            green: Double((value >> 8) & 255) / 255,
                            blue: Double(value & 255) / 255, alpha: 1)
-        })
+        }
     }
 }

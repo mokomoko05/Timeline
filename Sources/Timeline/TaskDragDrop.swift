@@ -270,7 +270,7 @@ enum NativeTaskDrag {
             NSShadow().set()
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineBreakMode = .byTruncatingTail
-            let color = (view as? TaskHandleView)?.priorityColor ?? NSColor.controlAccentColor
+            let color = (view as? TaskHandleView)?.priorityColor ?? NativePalette.accent
             color.setFill()
             NSBezierPath(ovalIn: NSRect(x: card.minX + 9, y: card.midY - 3, width: 6, height: 6)).fill()
             (title as NSString).draw(in: NSRect(x: card.minX + 22, y: card.minY + 5, width: card.width - 28, height: 17), withAttributes: [

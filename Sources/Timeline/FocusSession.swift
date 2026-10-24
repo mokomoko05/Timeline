@@ -574,7 +574,7 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
             panel.contentView = host
             panel.isOpaque = false
             panel.backgroundColor = .clear
-            panel.hasShadow = false
+            panel.hasShadow = true
             panel.level = .floating
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
@@ -608,6 +608,7 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         frame.origin.y += frame.height - height
         frame.size.height = height
         panel.setFrame(frame, display: true)
+        panel.invalidateShadow()
     }
 
     private func savedTopLeft(for size: NSSize) -> NSPoint? {
@@ -816,8 +817,7 @@ struct FocusPanelView: View {
         .frame(width: 340, alignment: .leading)
         .frame(minHeight: 158, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
-        .background(Palette.card, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.line))
+        .floatingPanelSurface()
         .foregroundStyle(Palette.ink)
         .tint(Palette.accent)
         .background(GeometryReader { proxy in Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height) })
@@ -909,7 +909,7 @@ struct FocusPanelView: View {
                 .textFieldStyle(.roundedBorder)
             if tasks.isEmpty {
                 Text(query.isEmpty ? "没有未完成的待办" : "没有匹配的任务")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(Palette.muted)
                     .frame(maxWidth: .infinity, minHeight: 60)
             } else {
                 ScrollView {
@@ -1066,26 +1066,34 @@ struct FocusPanelView: View {
                     }
                 } else {
                     Text("已用 \(FocusSession.clock(session.elapsed))")
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.system(size: 11)).monospacedDigit()
                         .foregroundStyle(Palette.muted).lineLimit(1).minimumScaleFactor(0.8)
                 }
                 Spacer(minLength: 0)
+                // 主操作（暂停 / 继续）用实心强调色，延长是次要操作，结束放在最后、只用文字色提示。
                 Button { session.togglePause() } label: {
                     Label(session.isPaused ? "继续" : "暂停", systemImage: session.isPaused ? "play.fill" : "pause.fill")
-                        .frame(minWidth: 48, minHeight: 22)
+                        .padding(.horizontal, 10).frame(minWidth: 64, minHeight: 24)
+                        .background(Palette.accent, in: RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous))
+                        .foregroundStyle(Palette.onAccent)
+                        .contentShape(RoundedRectangle(cornerRadius: Metrics.radiusSmall))
                 }
-                .buttonStyle(HitAreaButtonStyle(pressedScale: 0.98))
-                .foregroundStyle(Palette.accent)
+                .buttonStyle(HitAreaButtonStyle(pressedScale: 0.97))
                 Button { session.extend(by: 5 * 60) } label: {
-                    Text("+5min").frame(minWidth: 48, minHeight: 22)
+                    Text("+5 分钟").monospacedDigit()
+                        .padding(.horizontal, 8).frame(minHeight: 24)
+                        .overlay(RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous)
+                            .strokeBorder(Palette.line, lineWidth: Metrics.hairline))
+                        .contentShape(RoundedRectangle(cornerRadius: Metrics.radiusSmall))
                 }
-                .buttonStyle(HitAreaButtonStyle(pressedScale: 0.98))
-                .foregroundStyle(Palette.accent)
+                .buttonStyle(HitAreaButtonStyle(pressedScale: 0.97))
+                .foregroundStyle(Palette.ink)
+                .help("延长 5 分钟")
                 Button(role: .destructive) { session.stop(reason: "手动结束") } label: {
-                    Text("结束").frame(minWidth: 48, minHeight: 22)
+                    Text("结束").padding(.horizontal, 6).frame(minHeight: 24)
                 }
-                .buttonStyle(HitAreaButtonStyle(pressedScale: 0.98))
-                .foregroundStyle(.red)
+                .buttonStyle(HitAreaButtonStyle(pressedScale: 0.97))
+                .foregroundStyle(Palette.danger)
             }
             .font(.system(size: 11, weight: .medium))
             .frame(height: 30)
@@ -1218,7 +1226,7 @@ struct TaskFocusButton: View {
         } label: {
             ZStack {
                 Text(running ? FocusSession.clock(total) : FocusSession.brief(total))
-                    .font(.system(size: typography.pt(11), design: .monospaced)).monospacedDigit()
+                    .font(.system(size: typography.pt(11), weight: .medium)).monospacedDigit()
                     .padding(.horizontal, 22)
                 HStack {
                     Image(systemName: running ? "stop.fill" : "play.fill")

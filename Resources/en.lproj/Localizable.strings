@@ -809,3 +809,5 @@
 "浏览 · 按 i 编辑" = "Browse · Press i to edit";
 ":w 保存并浏览" = ":w Save and browse";
 "编辑器加载失败，请重新打开工作板。" = "The editor could not load. Reopen the board to retry.";
+"+5 分钟" = "+5 min";
+"延长 5 分钟" = "Extend by 5 minutes";

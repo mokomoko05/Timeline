@@ -6,10 +6,10 @@ struct PriorityMark: View {
     let priority: TaskPriority
     var color: Color {
         switch priority {
-        case .urgent: return .red
-        case .high: return .orange
-        case .normal: return .blue
-        case .lower: return .green
+        case .urgent: return Palette.danger
+        case .high: return Palette.attention
+        case .normal: return Palette.accent
+        case .lower: return Palette.success
         case .low: return Palette.muted
         }
     }
@@ -22,7 +22,8 @@ struct PriorityMark: View {
 }
 
 struct TaskPriorityButton: View {
-    @ObservedObject var store: JournalStore
+    /// 只用来执行操作；不观察仓库，所在的行或格子随数据变化重建它。
+    let store: JournalStore
     let task: Todo
     var dragOrigin: TaskDragOrigin = .taskList
     @Environment(\.taskReorder) private var reorder
@@ -71,7 +72,8 @@ struct PrioritySelectionButton: View {
 }
 
 struct TaskDeadlineButton: View {
-    @ObservedObject var store: JournalStore
+    /// 只用来执行操作；不观察仓库，所在的行或格子随数据变化重建它。
+    let store: JournalStore
     let task: Todo
     var compact = false
     @State private var showing = false
@@ -93,7 +95,7 @@ struct TaskDeadlineButton: View {
                 if !compact { Image(systemName: task.dueHasTime ? "clock" : "calendar") }
                 Text(Self.label(for: task, compact: compact))
             }
-                .font(.system(size: compact ? 9 : 10, weight: .medium, design: .monospaced))
+                .font(.system(size: compact ? 10 : 11, weight: .medium)).monospacedDigit()
                 .lineLimit(1).fixedSize()
                 .foregroundStyle(!task.completed && task.effectiveDeadline.map({ $0 < Date() }) == true ? Palette.deadline : (task.dueHasTime ? Palette.accent : Palette.muted))
                 .padding(.horizontal, compact ? 2 : 4).padding(.vertical, 2)

@@ -149,10 +149,10 @@ struct LogBatchTagView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("给 \(logIDs.count) 条日志加标签").font(.headline)
                 Text("实心：全部选中 · 描边：部分选中")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(Palette.muted)
             }
             if choices.isEmpty {
-                Text("还没有标签").font(.caption).foregroundStyle(.secondary)
+                Text("还没有标签").font(.caption).foregroundStyle(Palette.muted)
             } else {
                 ScrollView {
                     FlowLayout(spacing: 6) {
@@ -173,10 +173,10 @@ struct LogBatchTagView: View {
                 }
                 .padding(.horizontal, 9).padding(.vertical, 6)
                 .background(Palette.card, in: RoundedRectangle(cornerRadius: 7))
-                if let message { Text(LocalizedStringKey(message)).font(.caption).foregroundStyle(.orange) }
+                if let message { Text(LocalizedStringKey(message)).font(.caption).foregroundStyle(Palette.deadline) }
             }
             HStack {
-                Text("加 \(toAdd.count) · 去 \(toRemove.count)").font(.caption).foregroundStyle(.secondary)
+                Text("加 \(toAdd.count) · 去 \(toRemove.count)").font(.caption).foregroundStyle(Palette.muted)
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存") {

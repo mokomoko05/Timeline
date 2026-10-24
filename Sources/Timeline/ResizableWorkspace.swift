@@ -227,7 +227,7 @@ final class ResizeHandleView: NSView {
     override func mouseUp(with event: NSEvent) { mouseDragged(with: event); origin = nil; end?() }
 
     override func draw(_ dirtyRect: NSRect) {
-        (hovered ? NSColor.controlAccentColor : NSColor.separatorColor).setFill()
+        (hovered ? NativePalette.accent : NativePalette.line).setFill()
         switch axis {
         case .horizontal:
             NSBezierPath(rect: NSRect(x: bounds.midX - 0.5, y: 0, width: 1, height: bounds.height)).fill()

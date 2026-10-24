@@ -41,7 +41,7 @@ struct LinkPickerView: View {
                 }.buttonStyle(.plain).foregroundStyle(Palette.muted).raisedOnHover(radius: 6)
             }
             if list.isEmpty {
-                Text(query.isEmpty ? AppLocalized("没有未完成的待办") : AppLocalizedFormat("没有匹配「%@」的待办", query)).font(.caption).foregroundStyle(.secondary)
+                Text(query.isEmpty ? AppLocalized("没有未完成的待办") : AppLocalizedFormat("没有匹配「%@」的待办", query)).font(.caption).foregroundStyle(Palette.muted)
                     .frame(maxWidth: .infinity, minHeight: 60)
             } else {
                 ScrollViewReader { proxy in
@@ -59,7 +59,7 @@ struct LinkPickerView: View {
             HStack {
                 Toggle("显示已完成", isOn: $showCompleted).toggleStyle(.checkbox).font(.caption)
                 Spacer()
-                Text("↑ ↓ 选择 · 回车确认").font(.caption).foregroundStyle(.secondary)
+                Text("↑ ↓ 选择 · 回车确认").font(.caption).foregroundStyle(Palette.muted)
             }
         }
         .padding(14).frame(width: 380)

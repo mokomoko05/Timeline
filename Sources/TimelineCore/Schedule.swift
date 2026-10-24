@@ -79,7 +79,7 @@ public enum RepeatRule: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-public struct ScheduledTask: Identifiable {
+public struct ScheduledTask: Identifiable, Equatable {
     public let date: Date
     public let task: Todo
     public var id: UUID { task.id }

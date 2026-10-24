@@ -16,7 +16,8 @@ final class TaskDragDropTests: XCTestCase {
         let due = try XCTUnwrap(JournalDates.calendar.date(bySettingHour: 14, minute: 30, second: 0, of: source))
         store.updateTodo(item.id, scheduledDate: source, dueDate: due, dueHasTime: true, reminderMinutes: 15, repeatRule: .none)
         let host = NSHostingView(rootView: DeadlineDayCell(store: store, date: source, selectedDate: source,
-            displayedMonth: source, height: 120, items: store.tasks(), select: {}, open: {}, editTask: { _ in })
+            displayedMonth: source, height: 120, items: store.tasks(), dueToday: store.tasks(), logCount: 0,
+            readOnly: false, today: false, select: {}, open: {}, editTask: { _ in })
             .frame(width: 240, height: 120))
         let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 120), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

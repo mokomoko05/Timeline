@@ -76,7 +76,7 @@ struct TaskDetailsView: View {
                 }
                 .font(.system(size: 12)).padding(.trailing, 6).disabled(store.isReadOnly)
             }.frame(height: hasDue ? 540 : 150)
-            if !reminders.status.isEmpty { Text(reminders.status).font(.caption).foregroundStyle(.orange) }
+            if !reminders.status.isEmpty { Text(reminders.status).font(.caption).foregroundStyle(Palette.deadline) }
             HStack {
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -143,9 +143,9 @@ struct AgendaView: View {
                 ForEach(AgendaFilter.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
             }.pickerStyle(.segmented)
             HStack {
-                Text(hits.isEmpty ? " " : AppLocalizedFormat("%lld 条结果", hits.count)).font(.caption).foregroundStyle(.secondary)
+                Text(hits.isEmpty ? " " : AppLocalizedFormat("%lld 条结果", hits.count)).font(.caption).foregroundStyle(Palette.muted)
                 Spacer()
-                Text("↑ ↓ 选择 · 回车跳转 · Esc 关闭").font(.caption).foregroundStyle(.secondary)
+                Text("↑ ↓ 选择 · 回车跳转 · Esc 关闭").font(.caption).foregroundStyle(Palette.muted)
             }
             if hits.isEmpty {
                 VStack(spacing: 8) {
@@ -330,13 +330,13 @@ struct BackupRestoreView: View {
                 Button("导入备份…") { importing = true }.help("选择导出的备份文件夹，或单个 JSON 文件")
                 Button("关闭") { dismiss() }.keyboardShortcut(.cancelAction)
             }
-            Text("自动保留最近 30 天的每日快照。恢复前另存当前记录。").font(.caption).foregroundStyle(.secondary)
+            Text("自动保留最近 30 天的每日快照。恢复前另存当前记录。").font(.caption).foregroundStyle(Palette.muted)
             List(store.backups()) { backup in
                 Button { inspect(backup.url) } label: {
                     HStack {
                         VStack(alignment: .leading) {
                             Text(backup.url.lastPathComponent).lineLimit(1)
-                            Text(backup.date, format: .dateTime.year().month().day().hour().minute()).font(.caption).foregroundStyle(.secondary)
+                            Text(backup.date, format: .dateTime.year().month().day().hour().minute()).font(.caption).foregroundStyle(Palette.muted)
                         }
                         Spacer()
                         if selected == backup.url { Image(systemName: "checkmark") }
@@ -346,7 +346,7 @@ struct BackupRestoreView: View {
             if let preview {
                 Text("\(preview.dayCount) 天 · \(preview.taskCount) 条事项 · \(preview.logCount) 条日志 · \(preview.summaryCount) 篇总结").font(.callout)
             }
-            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            if let error { Text(error).font(.caption).foregroundStyle(Palette.danger) }
             HStack { Spacer(); Button("恢复所选备份") { confirming = true }.disabled(preview == nil) }
         }
         .padding(24).frame(width: 650, height: 500)

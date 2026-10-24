@@ -277,7 +277,7 @@ struct NotesView: View {
         return VStack(alignment: .leading, spacing: 10) {
             Text("重命名 #\(old)").font(.headline)
             TextField("新名字", text: $renameText).textFieldStyle(.roundedBorder).onSubmit { commitRename(old) }
-            if let renameMessage { Text(LocalizedStringKey(renameMessage)).font(.caption).foregroundStyle(.orange) }
+            if let renameMessage { Text(LocalizedStringKey(renameMessage)).font(.caption).foregroundStyle(Palette.deadline) }
             Text(merging ? AppLocalizedFormat("#%@ 已经存在：会把两个标签合并，内容汇到一起。", target ?? "") : AppLocalizedFormat("所有待办、日志里的 #%@（包括它的子标签）都会改成新名字。可以 ⌘Z 撤销。", old))
                 .font(.caption).foregroundStyle(merging ? Palette.accent : .secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
@@ -890,8 +890,8 @@ struct CreateNotebookTagView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("新建标签").font(.headline)
             TextField("标签名称", text: $name).textFieldStyle(.roundedBorder).onSubmit(submit)
-            if let message { Text(LocalizedStringKey(message)).font(.caption).foregroundStyle(.orange) }
-            Text("用 / 分层").font(.caption).foregroundStyle(.secondary)
+            if let message { Text(LocalizedStringKey(message)).font(.caption).foregroundStyle(Palette.deadline) }
+            Text("用 / 分层").font(.caption).foregroundStyle(Palette.muted)
             HStack {
                 Spacer()
                 Button("取消", action: cancel).keyboardShortcut(.cancelAction)

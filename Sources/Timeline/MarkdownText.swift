@@ -63,7 +63,7 @@ enum MarkdownText {
             let destination = (node as? Link)?.destination ?? (node as? Markdown.Image)?.source
             if let destination, let url = TaskText.linkURL(destination) {
                 if result.length == 0 { result.append(text(destination, font: font)) }
-                result.addAttributes([.link: url, .foregroundColor: NSColor.linkColor, .underlineStyle: 1, .cursor: NSCursor.pointingHand], range: result.fullRange)
+                result.addAttributes([.link: url, .foregroundColor: NativePalette.accent, .underlineStyle: 1, .cursor: NSCursor.pointingHand], range: result.fullRange)
             }
             return result
         }
@@ -74,7 +74,7 @@ enum MarkdownText {
                     guard let url = match.url.flatMap({ TaskText.linkURL($0.absoluteString) }),
                           content.attribute(.link, at: match.range.location, effectiveRange: nil) == nil,
                           content.attribute(.backgroundColor, at: match.range.location, effectiveRange: nil) == nil else { continue }
-                    content.addAttributes([.link: url, .foregroundColor: NSColor.linkColor, .underlineStyle: 1], range: match.range)
+                    content.addAttributes([.link: url, .foregroundColor: NativePalette.accent, .underlineStyle: 1], range: match.range)
                 }
             }
             content.append(text("\n"))

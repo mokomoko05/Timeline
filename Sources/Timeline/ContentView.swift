@@ -406,7 +406,7 @@ struct ContentView: View {
                         .animation(Motion.quick, value: summary.doneToday)
                         .accessibilityLabel("今天的进度").accessibilityValue("\(summary.doneToday) / \(summary.totalToday)")
                     Text("今天 \(summary.doneToday)/\(summary.totalToday)")
-                        .font(.system(size: typography.pt(11), weight: .medium, design: .monospaced)).foregroundStyle(Palette.muted).fixedSize()
+                        .font(.system(size: typography.pt(11), weight: .medium)).monospacedDigit().foregroundStyle(Palette.muted).fixedSize()
                 }
             }
         }
@@ -464,7 +464,7 @@ struct ContentView: View {
             summaryBar
             ScrollViewReader { proxy in
                 ScrollView {
-                    TaskTimelineView(store: store, tasks: orderedTasks, today: JournalDates.date(for: currentDayKey) ?? Date(),
+                    TaskTimelineView(store: store, tasks: visible, today: JournalDates.date(for: currentDayKey) ?? Date(),
                                      selectedDate: selectedDate, expanded: $expandedFinished, requestedEdit: $requestedEdit,
                                      navigate: select, selectTask: { interaction.activePane = .tasks }, next: { addingTodo = true })
                         .padding(.vertical, 12)
@@ -597,6 +597,10 @@ struct ContentView: View {
                             DeadlineDayCell(store: store, date: date, selectedDate: selectedDate,
                                             displayedMonth: displayedMonth, height: metrics.weekHeights[index / 7],
                                             items: previews[index],
+                                            dueToday: dueByDay[JournalDates.key(date)] ?? [],
+                                            logCount: store.entry(for: date).logs.count,
+                                            readOnly: store.isReadOnly,
+                                            today: JournalDates.key(date) == currentDayKey,
                                             select: { selectFromCalendar(date) },
                                             open: { selectFromCalendar(date, forceExpand: true); addingTodo = true },
                                             openLog: { selectFromCalendar(date); notesWindow.showJournal(store: store, date: date) },
@@ -607,6 +611,7 @@ struct ContentView: View {
                                 interaction.selectedTaskID = item.id
                                 requestedEdit = item.id
                             })
+                            .equatable()
                         }
                     }
                     .padding(2).padding(.trailing, CalendarGridMetrics.scrollbarGutter)
@@ -625,7 +630,7 @@ struct ContentView: View {
                 Text(selectedDate.relativeLabel).fontWeight(.semibold)
                 let due = store.calendarDeadlines[JournalDates.key(selectedDate)] ?? []
                 if !due.isEmpty {
-                    Text("\(due.filter(\.task.isDone).count)/\(due.filter { !$0.task.isDropped }.count)").font(.system(size: typography.pt(10), design: .monospaced))
+                    Text("\(due.filter(\.task.isDone).count)/\(due.filter { !$0.task.isDropped }.count)").font(.system(size: typography.pt(10))).monospacedDigit()
                 }
             }
             .font(.system(size: typography.pt(11)))

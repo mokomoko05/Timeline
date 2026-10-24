@@ -39,7 +39,7 @@ struct TaskLinkText: NSViewRepresentable {
         view.isHorizontallyResizable = false
         view.isVerticallyResizable = true
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        view.linkTextAttributes = [.foregroundColor: NSColor.linkColor,
+        view.linkTextAttributes = [.foregroundColor: NativePalette.accent,
                                    .underlineStyle: NSUnderlineStyle.single.rawValue,
                                    .cursor: NSCursor.pointingHand]
         return view
@@ -106,7 +106,7 @@ struct TaskLinkText: NSViewRepresentable {
         if completed { text.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: fullRange) }
         text.enumerateAttribute(.link, in: fullRange) { value, range, _ in
             if value != nil {
-                text.addAttributes([.foregroundColor: NSColor.linkColor,
+                text.addAttributes([.foregroundColor: NativePalette.accent,
                                     .underlineStyle: NSUnderlineStyle.single.rawValue,
                                     .cursor: NSCursor.pointingHand], range: range)
             }
@@ -305,10 +305,10 @@ final class InteractiveTaskText: NSTextView {
 
     override func draw(_ dirtyRect: NSRect) {
         for region in linkRegions() where region.rect.intersects(dirtyRect) {
-            NSColor.controlAccentColor.withAlphaComponent(hoveredURL == region.url ? 0.18 : 0.09).setFill()
+            NativePalette.accent.withAlphaComponent(hoveredURL == region.url ? 0.18 : 0.09).setFill()
             let path = NSBezierPath(roundedRect: region.rect, xRadius: 5, yRadius: 5)
             path.fill()
-            NSColor.controlAccentColor.withAlphaComponent(0.18).setStroke()
+            NativePalette.accent.withAlphaComponent(0.18).setStroke()
             path.lineWidth = 0.5
             path.stroke()
         }

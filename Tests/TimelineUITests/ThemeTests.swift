@@ -56,6 +56,10 @@ final class ThemeTests: XCTestCase {
                 atLeast(3, c.success, c.card, "完成色/卡片")
                 atLeast(3, c.deadline, c.background, "警示色/底色")
                 atLeast(3, c.deadline, c.card, "警示色/卡片")
+                for (value, name) in [(c.danger, "危险色"), (c.attention, "提醒色"), (c.done, "复盘色"), (c.note, "笔记色")] {
+                    atLeast(4.5, value, c.background, "\(name)/底色")
+                    atLeast(4.5, value, c.card, "\(name)/卡片")
+                }
                 atLeast(1.15, c.line, c.background, "分隔线/底色")
                 atLeast(4.5, c.onAccent, c.accent, "强调色填充上的文字")
                 XCTAssertNotEqual(c.background, c.card, "\(theme.name)·\(mode)：卡片和底色要能分开")

@@ -283,6 +283,7 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
         frame.origin.y += frame.height - height
         frame.size.height = height
         panel.setFrame(frame, display: true)
+        panel.invalidateShadow()
     }
 
     /// 用户拖到哪里就记住哪里；下次呼出时回到同一位置。
@@ -417,8 +418,7 @@ struct QuickCaptureView: View {
         }
         .padding(16)
         .frame(width: 340)
-        .background(Palette.card, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.line))
+        .floatingPanelSurface()
         .foregroundStyle(Palette.ink)
         .tint(Palette.accent)
         .padding(1)

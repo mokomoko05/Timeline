@@ -424,7 +424,7 @@ struct TimelineDateMarker: View {
                     showingDate = true
                 } label: {
                     Text(date.map { $0.formatted(.dateTime.month(.twoDigits).day(.twoDigits).locale(AppLanguage.current.locale)) } ?? "···")
-                        .font(.system(size: typography.pt(11), weight: .semibold, design: .monospaced))
+                        .font(.system(size: typography.pt(11), weight: .semibold)).monospacedDigit()
                         .foregroundStyle(date.map { JournalDates.calendar.isDateInToday($0) } == true ? Palette.accent : Palette.muted)
                         .frame(width: TaskTimelineLayout.timeWidth(typography), alignment: .trailing)
                         .contentShape(Rectangle())

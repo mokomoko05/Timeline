@@ -104,3 +104,23 @@ struct HitAreaButtonStyle: ButtonStyle {
         }
     }
 }
+
+/// 圆角、间距、描边的统一取值：同类元素用同一档，界面才显得整齐。
+enum Metrics {
+    /// 行内小控件（标签、按钮底）。
+    static let radiusSmall: CGFloat = 6
+    /// 卡片、输入框、日历格。
+    static let radiusMedium: CGFloat = 8
+    /// 浮动面板（快速记录、专注、工作板）。
+    static let radiusPanel: CGFloat = 14
+    static let hairline: CGFloat = 0.75
+}
+
+extension View {
+    /// 浮动面板的外观：卡片底色、大圆角、细描边；阴影由窗口提供。
+    func floatingPanelSurface() -> some View {
+        background(Palette.card, in: RoundedRectangle(cornerRadius: Metrics.radiusPanel, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Metrics.radiusPanel, style: .continuous)
+                .strokeBorder(Palette.line.opacity(0.8), lineWidth: Metrics.hairline))
+    }
+}

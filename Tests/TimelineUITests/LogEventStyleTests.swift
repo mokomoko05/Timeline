@@ -10,14 +10,14 @@ final class LogEventStyleTests: XCTestCase {
         var log = DailyLogEntry(createdAt: Date(), kind: .note, text: "■ 结束专注 · raw details", focus: true,
                                 focusEvent: .end, focusElapsedSeconds: 299, focusMinimumSeconds: 300)
         XCTAssertEqual(LogEventStyle.symbol(log), "xmark")
-        XCTAssertEqual(LogEventStyle.color(log), Color(red: 0.973, green: 0.318, blue: 0.286))
+        XCTAssertEqual(LogEventStyle.color(log), Palette.danger, "未达标用主题的危险色")
         XCTAssertTrue(LogEventStyle.body(log).contains(AppLocalized("未达到最低专注时长")))
         log.text = "Edited end note"
         XCTAssertEqual(LogEventStyle.symbol(log), "xmark")
         XCTAssertEqual(LogEventStyle.body(log), "Edited end note")
         log.focusElapsedSeconds = 300
         XCTAssertEqual(LogEventStyle.symbol(log), "checkmark")
-        XCTAssertEqual(LogEventStyle.color(log), Color(red: 0.247, green: 0.725, blue: 0.314))
+        XCTAssertEqual(LogEventStyle.color(log), Palette.success, "达标用主题的完成色")
         log.focusElapsedSeconds = 301
         XCTAssertEqual(LogEventStyle.symbol(log), "checkmark")
         log.focusMinimumSeconds = 600
