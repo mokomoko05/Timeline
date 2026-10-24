@@ -223,6 +223,8 @@ struct UnifiedJournalView: View {
     @State private var focused = false
     @State private var error: String?
     @State private var editingID: UUID?
+    /// 从节奏条跳过去的那一条短暂高亮，便于在长日志里找到。
+    @State private var highlightedID: UUID?
     @State private var editingDate: Date?
     @State private var editText = ""
     @State private var editFocused = false
@@ -342,6 +344,13 @@ struct UnifiedJournalView: View {
                         .disabled(entry.logs.isEmpty)
                         .padding(.trailing, 20).padding(.top, 14)
                 }
+                if !entry.logs.isEmpty {
+                    DayRhythmStrip(logs: entry.logsInTimeOrder, date: date) { id in
+                        withAnimation(Motion.quick) { proxy.scrollTo(id, anchor: .center) }
+                        highlightedID = id
+                    }
+                    .padding(.horizontal, 20).padding(.bottom, 8)
+                }
                 Divider()
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -355,7 +364,17 @@ struct UnifiedJournalView: View {
                             let logs = entry.logsInTimeOrder
                             let segments = store.timelineSegments()
                             ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
+                                if index > 0, let gap = NoteThread.gapLabel(from: logs[index - 1].createdAt, to: log.createdAt) {
+                                    NoteThreadGap(label: gap)
+                                }
                                 journalRow(log, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id])
+                                    .id(log.id)
+                                    .background {
+                                        RoundedRectangle(cornerRadius: Metrics.radiusMedium, style: .continuous)
+                                            .fill(Palette.accent.opacity(highlightedID == log.id ? 0.1 : 0))
+                                            .padding(.bottom, 8)
+                                            .allowsHitTesting(false)
+                                    }
                             }
                         }
                         Color.clear.frame(height: 1).id("journal-bottom")
@@ -364,6 +383,11 @@ struct UnifiedJournalView: View {
                 }
                 .id(JournalDates.key(date))
                 .contentShape(Rectangle())
+                .task(id: highlightedID) {
+                    guard highlightedID != nil else { return }
+                    try? await Task.sleep(for: .seconds(1.2))
+                    withAnimation(.easeOut(duration: 0.4)) { highlightedID = nil }
+                }
                 Divider()
                 composer
             }
@@ -390,60 +414,60 @@ struct UnifiedJournalView: View {
 
     private func journalRow(_ log: DailyLogEntry, hasPrevious: Bool, hasNext: Bool, segment: LogTimelineSegment?) -> some View {
         let editing = editingID == log.id
-        return LogTimelineRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext, segment: segment) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .top, spacing: 8) {
-                    LogEventBadge(log: log)
-                    if log.showsTimelineContext || !hasPrevious, let label = LogTaskLabel.saved(log, store: store, logDate: date) {
-                        Text(label).font(.system(size: typography.pt(11))).foregroundStyle(Palette.accent)
-                            .padding(.top, 2)
-                    }
-                    Spacer(minLength: 0)
-                    if !store.isReadOnly {
-                        HStack(spacing: 0) {
-                            EntryMetadataButtons(store: store, log: log, date: date)
-                            journalAction("pencil", "编辑这条日志") { beginEdit(log) }
-                            journalAction("trash", "删除这条日志 · ⌘Z 撤销", destructive: true) {
-                                store.deleteLog(log.id, on: date); error = "已删除这条日志，⌘Z 可撤销"
-                            }
-                        }.fixedSize()
-                    }
-                }
-                if editing {
-                    TaskInput(text: $editText, focused: $editFocused, fontSize: 13,
-                              submit: { saveEdit() }, cancel: { editingID = nil }, minHeight: 24, maxLines: 12)
-                        .padding(.horizontal, 8).padding(.vertical, 2)
-                        .background(Palette.card, in: RoundedRectangle(cornerRadius: 6))
-                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Palette.accent.opacity(0.6)))
-                    Text("⌘Enter 保存 · Esc 取消").font(.system(size: 10)).foregroundStyle(Palette.muted)
-                } else if !LogEventStyle.body(log).isEmpty {
-                    TaskLinkText(source: LogEventStyle.body(log), completed: false, color: Palette.ink, fontSize: 13,
-                                 edit: { beginEdit(log) }, open: SafariLinks.open, maxLines: 0,
-                                 markdown: true, compactLines: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                if let detail = LogEventStyle.detail(log) {
-                    Text(detail).font(.system(size: typography.pt(11), design: .monospaced))
-                        .foregroundStyle(Palette.muted)
-                }
-                LogFocusGoal(log: log)
-                if !log.images.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(Array(log.images.enumerated()), id: \.offset) { index, _ in
-                                NoteImageCard(store: store, log: log, index: index, maxWidth: 360, maxHeight: 190)
-                            }
+        return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext,
+                             focusBefore: segment?.focusBefore == true, focusAfter: segment?.focusAfter == true) {
+            Text(NoteThread.shortTime(log.createdAt)).help(LogEventStyle.time(log.createdAt))
+            if let kind = NoteThread.kindLabel(log) {
+                Text(kind).foregroundStyle(LogEventStyle.color(log)).fontWeight(.medium)
+            }
+            if log.showsTimelineContext || !hasPrevious, let label = LogTaskLabel.saved(log, store: store, logDate: date) {
+                Text(label).foregroundStyle(Palette.accent).lineLimit(1)
+            }
+            if log.showsTimelineTags, !log.tags.isEmpty { TaskTagLine(tags: log.tags) }
+        } content: {
+            if editing {
+                TaskInput(text: $editText, focused: $editFocused, fontSize: 13,
+                          submit: { saveEdit() }, cancel: { editingID = nil }, minHeight: 24, maxLines: 12)
+                    .padding(.horizontal, 8).padding(.vertical, 2)
+                    .inputFieldSurface(focused: true)
+                Text("⌘Enter 保存 · Esc 取消").font(.system(size: 10)).foregroundStyle(Palette.muted)
+            } else if !LogEventStyle.body(log).isEmpty {
+                TaskLinkText(source: LogEventStyle.body(log), completed: false, color: log.isFocusMarker ? Palette.muted : Palette.ink,
+                             fontSize: log.isFocusMarker ? 12 : 13,
+                             edit: { beginEdit(log) }, open: SafariLinks.open, maxLines: 0,
+                             markdown: true, compactLines: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let detail = LogEventStyle.detail(log) {
+                Text(detail).font(.system(size: typography.pt(11))).monospacedDigit()
+                    .foregroundStyle(Palette.muted)
+            }
+            LogFocusGoal(log: log)
+            if !log.images.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(log.images.enumerated()), id: \.offset) { index, _ in
+                            NoteImageCard(store: store, log: log, index: index, maxWidth: 360, maxHeight: 190)
                         }
                     }
                 }
-                if log.showsTimelineTags, !log.tags.isEmpty { TaskTagLine(tags: log.tags) }
+            }
+        } actions: {
+            if !store.isReadOnly {
+                HStack(spacing: 0) {
+                    EntryMetadataButtons(store: store, log: log, date: date)
+                    journalAction("pencil", "编辑这条日志") { beginEdit(log) }
+                    journalAction("trash", "删除这条日志 · ⌘Z 撤销", destructive: true) {
+                        store.deleteLog(log.id, on: date); error = "已删除这条日志，⌘Z 可撤销"
+                    }
+                }.fixedSize()
             }
         }
     }
 
     private func journalAction(_ symbol: String, _ help: String, destructive: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol).font(.system(size: 11)).frame(width: 24, height: 22).contentShape(Rectangle()) }
-            .buttonStyle(.plain).foregroundStyle(destructive ? Palette.deadline : Palette.muted)
+            .buttonStyle(.plain).foregroundStyle(destructive ? Palette.danger : Palette.muted)
             .raisedOnHover(radius: 5).help(LocalizedStringKey(help)).accessibilityLabel(LocalizedStringKey(help))
     }
 

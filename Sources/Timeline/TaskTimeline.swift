@@ -218,6 +218,17 @@ struct TimelineDayView: View {
     @State private var calendarDropTargeted = false
     @ObservedObject private var dragSession = TaskDragSession.shared
     @State private var reorder = TaskReorderModel()
+    /// 今天有定了时刻的事项时，「现在」画在第一个还没到点的未完成事项前面；都已过点时画在最后。
+    private var nowMarkerTarget: UUID? {
+        guard axisTone == .today, displayed.contains(where: { $0.task.dueHasTime && !$0.task.completed }) else { return nil }
+        let now = Date()
+        let items = TaskTimelineItem.items(for: displayed, expanded: expanded)
+        return items.first { item in
+            guard let task = item.tasks.first?.task, !task.completed, task.dueHasTime, let due = task.dueDate else { return false }
+            return due > now
+        }?.id ?? TimelineNowMarker.endID
+    }
+
     private var axisTone: TimelineAxisStroke.Tone {
         guard let date else { return .future }
         let calendar = JournalDates.calendar
@@ -244,7 +255,9 @@ struct TimelineDayView: View {
                 if showsFinishedTasks {
                     ForEach(displayed) { taskRow($0) }
                 } else {
+                    let nowBefore = nowMarkerTarget
                     ForEach(TaskTimelineItem.items(for: displayed, expanded: expanded)) { item in
+                        if item.id == nowBefore { TimelineNowMarker() }
                         if item.tasks.first?.task.completed == true {
                             FinishedTaskTimelineBlock(store: store, item: item, expanded: $expanded,
                                                       requestedEdit: $requestedEdit, selectTask: selectTask)
@@ -252,6 +265,7 @@ struct TimelineDayView: View {
                     }
                 }
             }
+            .overlay(alignment: .bottomLeading) { if nowMarkerTarget == TimelineNowMarker.endID { TimelineNowMarker().offset(y: 12) } }
             .padding(.top, displayed.isEmpty ? 0 : 4)
             .padding(.bottom, displayed.isEmpty ? 4 : 10)
         }
@@ -518,3 +532,31 @@ struct TimelineGapView: View {
         .allowsHitTesting(false)
     }
 }
+
+/// 时间轴上的「现在」：轴线上一颗强调色的小点，向右一道渐隐的细线，旁边是当前时刻。
+struct TimelineNowMarker: View {
+    static let endID = UUID(uuidString: "00000000-0000-0000-0000-0000000000E0")!
+    @Environment(\.typography) private var typography
+
+    var body: some View {
+        SwiftUI.TimelineView(.everyMinute) { context in
+            HStack(spacing: 0) {
+                Text(NoteThread.shortTime(context.date))
+                    .font(.system(size: typography.pt(10), weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(Palette.accent)
+                    .frame(width: TaskTimelineLayout.timeWidth(typography), alignment: .trailing)
+                ZStack {
+                    Circle().fill(Palette.accent.opacity(0.2)).frame(width: 12, height: 12)
+                    Circle().fill(Palette.accent).frame(width: 6, height: 6)
+                }
+                .frame(width: 34)
+                LinearGradient(colors: [Palette.accent.opacity(0.6), Palette.accent.opacity(0)], startPoint: .leading, endPoint: .trailing)
+                    .frame(height: 1)
+            }
+            .frame(height: 12)
+        }
+        .allowsHitTesting(false)
+        .accessibilityLabel("现在")
+    }
+}
+

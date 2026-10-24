@@ -828,3 +828,10 @@
 "切换编辑 / 预览" = "Toggle edit / preview";
 "取消编辑" = "Cancel editing";
 "全局快捷键可在设置中修改。" = "Global shortcuts can be changed in Settings.";
+"1 小时后" = "1 hour later";
+"%lld 小时后" = "%lld hours later";
+"计划" = "Plan";
+"受阻" = "Blocked";
+"现在" = "Now";
+"这一天的记录分布" = "Entries across the day";
+"%@ · %lld 条" = "%@ · %lld";

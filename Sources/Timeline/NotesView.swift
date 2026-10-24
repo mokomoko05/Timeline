@@ -343,8 +343,8 @@ struct NotesView: View {
                         LazyVStack(alignment: .leading, spacing: 4) {
                             BoardNotesSection(store: store, owner: .task(id)).id("board-start")
                             ForEach(Dictionary(grouping: notes, by: \.key).sorted { $0.key < $1.key }, id: \.key) { group in
-                                dayHeader(group.key, date: group.value[0].date)
-                                ForEach(group.value) { item in noteRow(item) }
+                                dayHeader(group.key, date: group.value[0].date, count: group.value.count)
+                                threadedRows(group.value)
                             }
                             Color.clear.frame(height: 1).id("end")
                         }.padding(20)
@@ -447,61 +447,63 @@ struct NotesView: View {
             .help(LocalizedStringKey(title)).accessibilityLabel(LocalizedStringKey(title))
     }
 
-    private func dayHeader(_ key: String, date: Date) -> some View {
-        Button { close(); openDay(date) } label: {
-            HStack(spacing: 6) {
-                Text(date.relativeLabel).font(.system(size: 12, weight: .semibold))
-                Text(key).font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
-                Rectangle().fill(Palette.line).frame(height: 1)
-            }
-        }
-        .buttonStyle(.plain).foregroundStyle(Palette.accent)
-        .padding(.top, 14).padding(.bottom, 4)
-        .help("跳到这一天的日志")
+    private func dayHeader(_ key: String, date: Date, count: Int? = nil) -> some View {
+        NoteDayKnot(date: date, key: key, count: count) { close(); openDay(date) }
     }
 
-    private func noteRow(_ item: JournalStore.LoggedLog, showTask: Bool = false, showDate: Bool = false, tag: String? = nil) -> some View {
+    /// 一组笔记穿在同一根线上：第一条以上、最后一条以下不再延伸。
+    private func threadedRows(_ items: [JournalStore.LoggedLog], showTask: Bool = false, showDate: Bool = false, tag: String? = nil) -> some View {
+        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+            if index > 0, let gap = NoteThread.gapLabel(from: items[index - 1].log.createdAt, to: item.log.createdAt) {
+                NoteThreadGap(label: gap)
+            }
+            noteRow(item, showTask: showTask, showDate: showDate, tag: tag, hasPrevious: index > 0, hasNext: index < items.count - 1)
+        }
+    }
+
+    private func noteRow(_ item: JournalStore.LoggedLog, showTask: Bool = false, showDate: Bool = false, tag: String? = nil,
+                         hasPrevious: Bool = true, hasNext: Bool = true) -> some View {
         let log = item.log
-        return HStack(alignment: .top, spacing: 10) {
-            Text((showDate ? String(item.key.dropFirst(5)) + " " : "") + Self.time(log.createdAt)).font(.system(size: typography.pt(11), design: .monospaced)).foregroundStyle(Palette.muted).padding(.top, 2).fixedSize()
-            LogEventBadge(log: log)
-            VStack(alignment: .leading, spacing: 6) {
-                if showTask, let label = Self.sourceLabel(log) {
-                    Button { if let id = log.taskID, store.noteTopic(for: id) != nil { select(task: id) } } label: {
-                        Text(label).font(.system(size: 11)).lineLimit(1)
-                            .padding(.horizontal, 6).padding(.vertical, 1)
-                            .background(Palette.soft, in: RoundedRectangle(cornerRadius: 4))
-                    }
-                    .buttonStyle(.plain).foregroundStyle(Palette.accent).help("查看这个待办的全部笔记")
+        return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext) {
+            // 时间、类型、来源排成一行淡淡的说明，不和正文抢。
+            Text((showDate ? item.date.relativeLabel + " " : "") + NoteThread.shortTime(log.createdAt))
+                .help(item.key + " " + Self.time(log.createdAt))
+            if let kind = NoteThread.kindLabel(log) {
+                Text(kind).foregroundStyle(LogEventStyle.color(log)).fontWeight(.medium)
+            }
+            if showTask, let label = Self.sourceLabel(log) {
+                Button { if let id = log.taskID, store.noteTopic(for: id) != nil { select(task: id) } } label: {
+                    Text(label).lineLimit(1)
                 }
-                if editingNoteID == log.id {
-                    VStack(alignment: .leading, spacing: 4) {
-                        TaskInput(text: $noteEditText, focused: $noteEditFocused, fontSize: 13,
-                                  submit: { saveNoteEdit(item) }, cancel: cancelNoteEdit, minHeight: 24, maxLines: 12)
-                            .padding(.horizontal, 8).padding(.vertical, 2)
-                            .background(Palette.card, in: RoundedRectangle(cornerRadius: 6))
-                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Palette.accent.opacity(0.6)))
-                            .onAppear { noteEditFocused = true }
-                        Text("⌘Enter 保存 · Esc 取消").font(.system(size: 10)).foregroundStyle(Palette.muted)
-                    }
-                } else if !log.text.isEmpty {
-                    TaskLinkText(source: LogEventStyle.body(log), completed: false, color: Palette.ink, fontSize: 13,
-                                 edit: { guard !store.isReadOnly else { return }; beginNoteEdit(item) }, open: SafariLinks.open,
-                                 maxLines: 0, markdown: true, compactLines: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                .buttonStyle(.plain).foregroundStyle(Palette.accent).help("查看这个待办的全部笔记")
+            }
+            if !log.tags.isEmpty { TaskTagLine(tags: log.tags) }
+        } content: {
+            if editingNoteID == log.id {
+                VStack(alignment: .leading, spacing: 4) {
+                    TaskInput(text: $noteEditText, focused: $noteEditFocused, fontSize: 13,
+                              submit: { saveNoteEdit(item) }, cancel: cancelNoteEdit, minHeight: 24, maxLines: 12)
+                        .padding(.horizontal, 8).padding(.vertical, 2)
+                        .inputFieldSurface(focused: true)
+                        .onAppear { noteEditFocused = true }
+                    Text("⌘Enter 保存 · Esc 取消").font(.system(size: 10)).foregroundStyle(Palette.muted)
                 }
-                if !log.tags.isEmpty { TaskTagLine(tags: log.tags) }
-                if !log.images.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(Array(log.images.enumerated()), id: \.offset) { index, _ in
-                                NoteImageCard(store: store, log: log, index: index, tag: tag)
-                            }
+            } else if !log.text.isEmpty {
+                TaskLinkText(source: LogEventStyle.body(log), completed: false, color: Palette.ink, fontSize: 13,
+                             edit: { guard !store.isReadOnly else { return }; beginNoteEdit(item) }, open: SafariLinks.open,
+                             maxLines: 0, markdown: true, compactLines: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if !log.images.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(log.images.enumerated()), id: \.offset) { index, _ in
+                            NoteImageCard(store: store, log: log, index: index, tag: tag)
                         }
                     }
                 }
             }
-            Spacer(minLength: 0)
+        } actions: {
             HStack(spacing: 0) {
                 noteAction("doc.on.doc", log.copyText == nil ? "这条只有图片，没有文字可复制" : "复制这条的文字（不含图片）") { copy(log) }
                     .disabled(log.copyText == nil)
@@ -513,14 +515,21 @@ struct NotesView: View {
             }
             .fixedSize()
         }
-        .padding(.vertical, 5)
+        .contextMenu {
+            if log.copyText != nil { Button("复制文字") { copy(log) } }
+            if !store.isReadOnly {
+                Button("编辑") { beginNoteEdit(item) }
+                Divider()
+                Button("删除 · ⌘Z 撤销", role: .destructive) { deleteNote(item) }
+            }
+        }
     }
 
     private func noteAction(_ symbol: String, _ help: String, destructive: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 11)).frame(width: 24, height: 22).contentShape(Rectangle())
         }
-        .buttonStyle(.plain).foregroundStyle(destructive ? Palette.deadline : Palette.muted)
+        .buttonStyle(.plain).raisedOnHover(radius: 5).foregroundStyle(destructive ? Palette.danger : Palette.muted)
         .help(LocalizedStringKey(help)).accessibilityLabel(LocalizedStringKey(help))
     }
 
@@ -679,7 +688,7 @@ struct NotesView: View {
                 if chapter.notes.isEmpty {
                     Text("还没有笔记").font(.system(size: 11)).foregroundStyle(Palette.muted).padding(.leading, 4).padding(.bottom, 6)
                 }
-                ForEach(chapter.notes) { item in noteRow(item, showDate: true, tag: tag) }
+                threadedRows(chapter.notes, showDate: true, tag: tag)
             }
         }
     }
@@ -713,8 +722,8 @@ struct NotesView: View {
 
     private func dateList(_ notes: [JournalStore.LoggedLog], tag: String) -> some View {
         ForEach(Dictionary(grouping: notes, by: \.key).sorted { $0.key < $1.key }, id: \.key) { group in
-            dayHeader(group.key, date: group.value[0].date)
-            ForEach(group.value) { item in noteRow(item, showTask: true, tag: tag) }
+            dayHeader(group.key, date: group.value[0].date, count: group.value.count)
+            threadedRows(group.value, showTask: true, tag: tag)
         }
     }
 

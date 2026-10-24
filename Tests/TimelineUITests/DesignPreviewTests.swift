@@ -38,14 +38,21 @@ final class DesignPreviewTests: XCTestCase {
             ["id": UUID().uuidString, "number": number, "title": title, "priority": priority, "completed": completed,
              "dueDate": stamp(day), "dueHasTime": false, "tags": tags, "focusSeconds": minutes * 60]
         }
+        func timed(_ number: Int, _ title: String, hour: Int, tags: [String]) -> [String: Any] {
+            var value = task(number, title, "normal", tags: tags)
+            value["dueDate"] = stamp(hour: hour); value["dueHasTime"] = true
+            return value
+        }
         let tasks = [
+            timed(6, "组会同步进度", hour: 1, tags: ["研究"]),
+            timed(7, "给合作者回邮件", hour: 23, tags: []),
             task(1, "读一篇论文，整理方法与问题", "high", tags: ["阅读"], minutes: 50),
             task(2, "收集相关资料", "normal", completed: true, tags: ["阅读"], minutes: 25),
             task(3, "试着复现一个小实验", "normal", tags: ["研究"], minutes: 35),
             task(4, "整理这一周的阅读笔记", "lower", day: 1, tags: ["阅读"]),
             task(5, "给下一个项目画张草图", "low", day: 3, tags: ["想法"]),
         ]
-        let first = tasks[0]["id"] as! String
+        let first = tasks[2]["id"] as! String
         func log(_ hour: Int, _ minute: Int, _ text: String, kind: String = "note", _ extra: [String: Any] = [:]) -> [String: Any] {
             ["id": UUID().uuidString, "createdAt": stamp(hour: hour, minute: minute), "kind": kind, "text": text,
              "taskID": first, "taskNumber": 1, "taskTitle": "读一篇论文，整理方法与问题", "taskTags": ["阅读"]].merging(extra) { $1 }
@@ -57,7 +64,7 @@ final class DesignPreviewTests: XCTestCase {
             log(9, 25, "■ 结束专注 · 用时 25 min · 累计 1 h 15 min · 阶段结束", ["focus": true, "focusEvent": "end", "focusElapsedSeconds": 1500, "focusEndReason": "阶段结束"]),
             log(10, 5, "整理好参考资料，下午开始实验。", kind: "done"),
         ]
-        let document: [String: Any] = ["version": 6, "nextTaskNumber": 6, "days": [
+        let document: [String: Any] = ["version": 6, "nextTaskNumber": 8, "days": [
             JournalDates.key(today): ["todos": tasks, "logs": logs, "summary": "", "deadlineDraft": "", "logDraft": ""],
         ]]
         return try JSONSerialization.data(withJSONObject: document)

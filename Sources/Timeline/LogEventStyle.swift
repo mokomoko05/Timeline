@@ -34,6 +34,10 @@ enum LogEventStyle {
         if log.focusMarker == "FOCUS", log.text == "▶ 开始专注" {
             return log.focusPlannedSeconds.map { AppLocalizedFormat("计划 %@", FocusSession.brief($0)) } ?? ""
         }
+        // 旧记录「▶ 开始专注 · 计划 25 min」：类型已经写在说明行里，正文只留计划。
+        if log.focusMarker == "FOCUS", log.text.hasPrefix("▶ 开始专注 · ") {
+            return String(log.text.dropFirst("▶ 开始专注 · ".count))
+        }
         if log.focusMarker == "END", log.text.hasPrefix("■ 结束专注") {
             let parts = log.text.components(separatedBy: " · ")
             let duration = log.focusElapsedSeconds.map(FocusSession.duration)
