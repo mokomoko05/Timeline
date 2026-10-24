@@ -71,6 +71,30 @@ struct ManagedTaskRow: View {
         .padding(.horizontal, 8)
     }
 
+    /// 截止日期（清单模式）、工作板与专注入口。
+    private var detailColumn: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            if !timeline { TaskDeadlineButton(store: store, task: task) }
+            if store.board(for: .task(task.id)) != nil {
+                BoardOpenButton(store: store, owner: .task(task.id)).font(.system(size: 10)).buttonStyle(.plain)
+            }
+            if let focus {
+                TaskFocusButton(session: focus, task: ScheduledTask(date: date, task: task))
+            }
+        }
+        .padding(.vertical, 2)
+        .frame(maxHeight: .infinity)
+    }
+
+    /// 标签与更多操作。
+    private var rowActions: some View {
+        HStack(spacing: 0) {
+            TagSelectionButton(store: store, tags: Binding(get: { store.locate(task.id)?.task.tags ?? task.tags }, set: { store.setTags(task.id, $0) }))
+            RadialMenuButton(items: { radialItems }, help: "更多操作：笔记、标签、固定、放弃、删除")
+                .popover(isPresented: $showingTags, arrowEdge: .leading) { TagPickerView(store: store, task: task) }
+        }
+    }
+
     private var completionButton: some View {
         Button { selectTask(); withAnimation(Motion.quick) { store.toggleTodo(task.id, on: date) } } label: {
             Image(systemName: task.isDropped ? "xmark.circle.fill" : (task.completed ? "checkmark.circle.fill" : "circle"))
@@ -122,33 +146,31 @@ struct ManagedTaskRow: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // 日期与计时覆盖整块正文的高度，不再挤在标题行中。
-                VStack(alignment: .trailing, spacing: 2) {
-                    if !timeline { TaskDeadlineButton(store: store, task: task) }
-                    if store.board(for: .task(task.id)) != nil {
-                        BoardOpenButton(store: store, owner: .task(task.id)).font(.system(size: 10)).buttonStyle(.plain)
-                    }
-                    if let focus {
-                        TaskFocusButton(session: focus, task: ScheduledTask(date: date, task: task))
-                    }
-                }
-                .opacity(!timeline || hovered || selected ? 1 : 0)
-                .allowsHitTesting(!timeline || hovered || selected)
-                .padding(.vertical, 2)
-                .frame(maxHeight: .infinity)
+                if !timeline { detailColumn }
             }
             // 先按内容确定高度，再让右列分配上下空间，避免 Spacer 撑高条目。
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    TagSelectionButton(store: store, tags: Binding(get: { store.locate(task.id)?.task.tags ?? task.tags }, set: { store.setTags(task.id, $0) }))
-                    RadialMenuButton(items: { radialItems }, help: "更多操作：笔记、标签、固定、放弃、删除")
-                        .popover(isPresented: $showingTags, arrowEdge: .leading) { TagPickerView(store: store, task: task) }
+            // 时间轴里的操作按钮悬停时浮在标题右侧，不占版面：标题能用满整行，悬停也不会让文字重排。
+            .overlay(alignment: .trailing) {
+                if timeline {
+                    HStack(spacing: 2) { detailColumn; rowActions }
+                        .padding(.leading, 18)
+                        .background {
+                            LinearGradient(stops: [.init(color: Palette.background.opacity(0), location: 0),
+                                                   .init(color: Palette.background, location: 0.35)],
+                                           startPoint: .leading, endPoint: .trailing)
+                                .overlay(LinearGradient(stops: [.init(color: Palette.soft.opacity(0), location: 0),
+                                                                .init(color: Palette.soft.opacity(0.6), location: 0.35)],
+                                                        startPoint: .leading, endPoint: .trailing))
+                        }
+                        .opacity(hovered || selected ? 1 : 0)
+                        .allowsHitTesting(hovered || selected)
+                        .accessibilityHidden(!hovered && !selected)
                 }
-                .opacity(!timeline || hovered || selected ? 1 : 0)
-                .allowsHitTesting(!timeline || hovered || selected)
-                .accessibilityHidden(timeline && !hovered && !selected)
+            }
+            HStack(spacing: 0) {
+                if !timeline { rowActions }
                 completionButton
             }
             .fixedSize()

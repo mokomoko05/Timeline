@@ -387,7 +387,7 @@ struct QuickCaptureView: View {
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(Palette.background, in: RoundedRectangle(cornerRadius: 10))
+            .inputFieldSurface(focused: focused, fill: Palette.background)
             if mode == .log, !images.isEmpty {
                 PendingImagesStrip(store: store, names: images,
                                    remove: { name in images.removeAll { $0 == name } },

@@ -124,3 +124,33 @@ extension View {
                 .strokeBorder(Palette.line.opacity(0.8), lineWidth: Metrics.hairline))
     }
 }
+
+/// 细进度条：系统 ProgressView 在窗口不是当前窗口时会变灰，这里始终用主题色。
+struct ThemedProgressBar: View {
+    let fraction: Double
+    var tint: Color = Palette.accent
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Palette.line.opacity(0.6))
+                Capsule().fill(tint)
+                    .frame(width: fraction > 0 ? max(6, proxy.size.width * min(1, fraction)) : 0)
+            }
+        }
+        .frame(height: 6)
+        .accessibilityElement()
+        .accessibilityValue(Text("\(Int((min(1, max(0, fraction)) * 100).rounded()))%"))
+    }
+}
+
+extension View {
+    /// 输入框外观：卡片底色、细边，聚焦时边框换成强调色。各处输入框共用，看起来是同一种控件。
+    func inputFieldSurface(focused: Bool, fill: Color = Palette.card) -> some View {
+        background(fill, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Metrics.radiusMedium, style: .continuous)
+                .strokeBorder(focused ? Palette.accent.opacity(0.7) : Palette.line.opacity(0.7), lineWidth: focused ? 1.25 : Metrics.hairline)
+                .allowsHitTesting(false))
+    }
+}
+

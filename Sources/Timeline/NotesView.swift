@@ -371,67 +371,80 @@ struct NotesView: View {
         }
     }
 
+    /// 标题独占一行，信息一行，操作一行：窄窗口里标题和信息不再被按钮挤成竖排。
+    /// 「完成」是主要操作保留文字，其余用图标按钮（悬停有说明）。
     private func header(_ topic: JournalStore.NoteTopic, notes: [JournalStore.LoggedLog]) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    if let number = topic.number {
-                        Text("#\(number)").font(.system(size: 13, weight: .semibold, design: .monospaced)).foregroundStyle(Palette.accent)
-                    }
-                    Text(topic.title).font(.system(size: 18, weight: .semibold)).lineLimit(2)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if let number = topic.number {
+                    Text("#\(number)").font(.system(size: 13, weight: .semibold)).monospacedDigit().foregroundStyle(Palette.accent)
                 }
-                HStack(spacing: 10) {
-                    if topic.dropped { Label("已放弃", systemImage: "nosign").foregroundStyle(Palette.muted) } else if topic.completed { Label("已完成", systemImage: "checkmark.circle.fill").foregroundStyle(Palette.success) }
-                    if topic.deleted { Label("任务已删除", systemImage: "trash").foregroundStyle(Palette.deadline) }
-                    if let due = topic.dueDate { Label("截止 \(due.relativeLabel)", systemImage: "clock") }
-                    if topic.focusSeconds >= 1 { Label("已专注 \(FocusSession.brief(topic.focusSeconds))", systemImage: "hourglass") }
-                    Text("\(topic.count) 条笔记")
-                }
-                .font(.system(size: 12)).foregroundStyle(Palette.muted)
-                if !topic.tags.isEmpty {
-                    HStack(spacing: 5) {
-                        ForEach(topic.tags, id: \.self) { tag in
-                            Button { select(tag: tag) } label: { TagChip(name: tag, size: 11) }
-                                .buttonStyle(.plain).help("查看 #\(tag) 名下所有待办的笔记")
-                        }
-                    }
+                Text(topic.title).font(.system(size: 18, weight: .semibold)).lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 12) {
+                if topic.dropped { Label("已放弃", systemImage: "nosign").foregroundStyle(Palette.muted) } else if topic.completed { Label("已完成", systemImage: "checkmark.circle.fill").foregroundStyle(Palette.success) }
+                if topic.deleted { Label("任务已删除", systemImage: "trash").foregroundStyle(Palette.deadline) }
+                if let due = topic.dueDate { Label("截止 \(due.relativeLabel)", systemImage: "clock") }
+                if topic.focusSeconds >= 1 { Label("已专注 \(FocusSession.brief(topic.focusSeconds))", systemImage: "hourglass") }
+                Text("\(topic.count) 条笔记")
+                ForEach(topic.tags, id: \.self) { tag in
+                    Button { select(tag: tag) } label: { TagChip(name: tag, size: 11) }
+                        .buttonStyle(.plain).help("查看 #\(tag) 名下所有待办的笔记")
                 }
             }
-            Spacer()
+            .font(.system(size: 12)).monospacedDigit().foregroundStyle(Palette.muted)
+            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+            headerActions(topic, notes: notes)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20).padding(.vertical, 14)
+    }
+
+    private func headerActions(_ topic: JournalStore.NoteTopic, notes: [JournalStore.LoggedLog]) -> some View {
+        HStack(spacing: 4) {
             if let task = store.locate(topic.id), !store.isReadOnly {
-                BoardOpenButton(store: store, owner: .task(task.id))
-                // 和清单里的扇形菜单一致：完成、放弃、标签都能在笔记里直接做。
                 Button { store.toggleTodo(task.id, on: task.date) } label: {
                     Label(task.task.isDone ? "取消完成" : "完成", systemImage: task.task.isDone ? "arrow.uturn.backward.circle" : "checkmark.circle")
+                        .padding(.horizontal, 8).frame(minHeight: 24)
+                        .overlay(RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous)
+                            .strokeBorder(Palette.line, lineWidth: Metrics.hairline))
+                        .contentShape(RoundedRectangle(cornerRadius: Metrics.radiusSmall))
                 }
+                .buttonStyle(HitAreaButtonStyle(pressedScale: 0.97))
+                .foregroundStyle(task.task.isDone ? Palette.ink : Palette.success)
                 .disabled(task.task.isDropped).help(task.task.isDone ? "标记为未完成" : "标记为已完成 · ⌘Z 撤销")
+                iconAction("list.bullet.rectangle", "打开工作板") { BoardWindowController.shared.show(store: store, owner: .task(task.id)) }
                 if !task.task.isDone {
-                    Button { store.dropTodo(task.id, on: task.date) } label: {
-                        Label(task.task.isDropped ? "恢复" : "放弃", systemImage: task.task.isDropped ? "arrow.uturn.backward.circle" : "nosign")
+                    iconAction(task.task.isDropped ? "arrow.uturn.backward.circle" : "nosign", task.task.isDropped ? "恢复" : "放弃") {
+                        store.dropTodo(task.id, on: task.date)
                     }
-                    .help(task.task.isDropped ? "恢复" : "放弃")
                 }
                 TagSelectionButton(store: store, tags: Binding(get: { store.locate(task.id)?.task.tags ?? [] }, set: { store.setTags(task.id, $0) }))
             }
             if !topic.deleted, !topic.completed {
                 let pinned = store.pinnedTask?.id == topic.id
-                Button { store.pinTask(pinned ? nil : topic.id) } label: {
-                    Label(pinned ? "取消固定" : "固定", systemImage: pinned ? "pin.slash" : "pin")
+                iconAction(pinned ? "pin.fill" : "pin", pinned ? "取消固定" : "固定为当前待办", active: pinned) {
+                    store.pinTask(pinned ? nil : topic.id)
                 }
-                .foregroundStyle(pinned ? Palette.accent : Palette.ink)
-                .help(pinned ? "取消固定" : "固定为当前待办")
             }
             if !topic.deleted {
-                Button { close(); reveal(topic.id) } label: { Label("在清单中显示", systemImage: "list.bullet") }
-                    .help("在清单中显示")
+                iconAction("list.bullet", "在清单中显示") { close(); reveal(topic.id) }
             }
-            Button {
+            iconAction("doc.on.doc", "复制为 Markdown") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(Self.markdown(topic, notes: notes), forType: .string)
                 error = "已复制为 Markdown"
-            } label: { Label("复制为 Markdown", systemImage: "doc.on.doc") }
+            }
         }
-        .padding(.horizontal, 20).padding(.vertical, 14)
+        .font(.system(size: 12))
+    }
+
+    private func iconAction(_ symbol: String, _ title: String, active: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol).frame(width: 26, height: 24) }
+            .buttonStyle(HitAreaButtonStyle(pressedScale: 0.97))
+            .foregroundStyle(active ? Palette.accent : Palette.muted)
+            .help(LocalizedStringKey(title)).accessibilityLabel(LocalizedStringKey(title))
     }
 
     private func dayHeader(_ key: String, date: Date) -> some View {
@@ -706,31 +719,31 @@ struct NotesView: View {
     }
 
     private func tagHeader(_ tag: String, tasks: [ScheduledTask], notes: [JournalStore.LoggedLog]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("#" + tag).font(.system(size: 18, weight: .semibold)).foregroundStyle(Palette.accent).lineLimit(2)
-                    Text("\(tasks.count) 个待办（\(tasks.filter { !$0.task.completed }.count) 个未完成） · \(notes.count) 条笔记")
-                        .font(.system(size: 12)).foregroundStyle(Palette.muted)
-                }
-                Spacer()
+        VStack(alignment: .leading, spacing: 8) {
+            Text("#" + tag).font(.system(size: 18, weight: .semibold)).foregroundStyle(Palette.accent).lineLimit(2)
+            Text("\(tasks.count) 个待办（\(tasks.filter { !$0.task.completed }.count) 个未完成） · \(notes.count) 条笔记")
+                .font(.system(size: 12)).monospacedDigit().foregroundStyle(Palette.muted).lineLimit(1)
+            HStack(spacing: 4) {
                 Picker("", selection: $nav.chapterView) {
                     Text("按待办").tag(true)
                     Text("按日期").tag(false)
                 }.pickerStyle(.segmented).labelsHidden().frame(width: 140)
-                BoardOpenButton(store: store, owner: .tag(tag))
+                Spacer().frame(width: 6)
+                iconAction("list.bullet.rectangle", "打开工作板") { BoardWindowController.shared.show(store: store, owner: .tag(tag)) }
                 if chapterView {
-                    Button { nav.showOutline.toggle() } label: { Image(systemName: "sidebar.right") }
-                        .foregroundStyle(nav.showOutline ? Palette.accent : Palette.muted)
-                        .help(nav.showOutline ? "隐藏右侧的章节目录" : "显示右侧的章节目录").accessibilityLabel("章节目录")
+                    iconAction("sidebar.right", nav.showOutline ? "隐藏右侧的章节目录" : "显示右侧的章节目录", active: nav.showOutline) {
+                        nav.showOutline.toggle()
+                    }
                 }
-                Button {
+                iconAction("doc.on.doc", "复制为 Markdown") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(Self.markdown(tag: tag, tasks: tasks, notes: notes), forType: .string)
                     error = "已复制为 Markdown"
-                } label: { Label("复制为 Markdown", systemImage: "doc.on.doc") }
+                }
             }
+            .font(.system(size: 12))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20).padding(.vertical, 14)
     }
 
@@ -763,7 +776,7 @@ struct NotesView: View {
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
+            .inputFieldSurface(focused: tagFocused)
             LogChipsBar(store: store, link: link, unlinked: unlinked, tags: tags, contextTags: [tag])
             if let error {
                 Text(LocalizedStringKey(error)).font(.system(size: 11)).foregroundStyle(error.hasPrefix("已") ? Palette.success : Palette.deadline)
@@ -835,7 +848,7 @@ struct NotesView: View {
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
+            .inputFieldSurface(focused: focused)
             LogChipsBar(store: store, link: .constant(nil), unlinked: .constant(false), tags: tags, showsLink: false)
             if let error {
                 Text(LocalizedStringKey(error)).font(.system(size: 11)).foregroundStyle(error.hasPrefix("已") ? Palette.success : Palette.deadline)

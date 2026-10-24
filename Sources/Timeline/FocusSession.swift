@@ -1020,33 +1020,33 @@ struct FocusPanelView: View {
                               mention: mention, returnSubmits: true)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(minWidth: 0, maxWidth: .infinity)
+                        .disabled(draft.pendingEntryID != nil)
+                    // 标签、关联和发送放在输入框里，和其他输入框同一种布局。
+                    if let store {
+                        HStack(spacing: 0) {
+                            TagSelectionButton(store: store, tags: $draft.tags)
+                            LinkPickerButton(store: store, current: draft.link ?? session.active?.taskID,
+                                             allowsNone: false, pick: { draft.link = $0 }) { MetadataSymbol(symbol: "@", active: draft.link != nil) }
+                                .raisedOnHover(radius: 5)
+                                .help("选择关联的待办").accessibilityLabel("选择关联的待办")
+                        }
+                        .disabled(session.isPaused || draft.pendingEntryID != nil)
+                    }
+                    Button(action: saveNote) {
+                        Image(systemName: draft.pendingEntryID == nil ? "arrow.up.circle.fill" : "arrow.clockwise.circle.fill")
+                            .font(.system(size: 18))
+                    }
+                    .buttonStyle(HitAreaButtonStyle(compact: true))
+                    .foregroundStyle(Palette.accent)
+                    .help(draft.pendingEntryID == nil ? "保存" : "重试保存")
+                    .disabled(draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.images.isEmpty)
                 }
-                .disabled(draft.pendingEntryID != nil)
-                .padding(.horizontal, 9).padding(.vertical, 4)
-                .frame(minHeight: 32)
-                .background(Palette.background, in: RoundedRectangle(cornerRadius: 9))
+                .padding(.leading, 9).padding(.trailing, 4).padding(.vertical, 3)
+                .frame(minHeight: 34)
+                .inputFieldSurface(focused: focused, fill: Palette.background)
                 .popover(isPresented: Binding(get: { mention.isActive }, set: { if !$0 { mention.dismiss() } }), arrowEdge: .bottom) {
                     if let store { MentionList(state: mention, store: store, contextTags: draft.tags).frame(width: 320) }
                 }
-                if let store {
-                    VStack(spacing: 0) {
-                        TagSelectionButton(store: store, tags: $draft.tags)
-                        LinkPickerButton(store: store, current: draft.link ?? session.active?.taskID,
-                                         allowsNone: false, pick: { draft.link = $0 }) { MetadataSymbol(symbol: "@", active: draft.link != nil) }
-                            .raisedOnHover(radius: 5)
-                            .help("选择关联的待办").accessibilityLabel("选择关联的待办")
-                    }
-                    .frame(height: 42)
-                    .disabled(session.isPaused || draft.pendingEntryID != nil)
-                }
-                Button(action: saveNote) {
-                    Image(systemName: draft.pendingEntryID == nil ? "arrow.up.circle.fill" : "arrow.clockwise.circle.fill")
-                        .font(.system(size: 18))
-                }
-                .buttonStyle(HitAreaButtonStyle(compact: true))
-                .foregroundStyle(Palette.accent)
-                .help(draft.pendingEntryID == nil ? "保存" : "重试保存")
-                .disabled(draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.images.isEmpty)
             }
             .frame(minHeight: 42)
             HStack(spacing: 4) {

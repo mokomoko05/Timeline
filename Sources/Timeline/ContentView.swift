@@ -405,7 +405,7 @@ struct ContentView: View {
             }
             if summary.totalToday > 0 {
                 HStack(spacing: 8) {
-                    ProgressView(value: summary.todayFraction).tint(Palette.success)
+                    ThemedProgressBar(fraction: summary.todayFraction, tint: Palette.success)
                         .animation(Motion.quick, value: summary.doneToday)
                         .accessibilityLabel("今天的进度").accessibilityValue("\(summary.doneToday) / \(summary.totalToday)")
                     Text("今天 \(summary.doneToday)/\(summary.totalToday)")

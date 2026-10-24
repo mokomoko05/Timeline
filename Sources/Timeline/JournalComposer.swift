@@ -163,7 +163,7 @@ struct JournalComposer: View {
                     .disabled(store.isReadOnly || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && entry.logDraftImages.isEmpty))
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
+            .inputFieldSurface(focused: focused)
             LogChipsBar(store: store,
                         link: Binding(get: { entry.logTaskID }, set: { store.setLogTask($0, on: date) }),
                         unlinked: $unlinked,
