@@ -175,7 +175,7 @@ struct UnifiedNotesView: View {
             }
             .transaction { $0.animation = nil; $0.disablesAnimations = true }
         }
-        .background(Palette.background)
+        .background(AmbientBackdrop())
         .foregroundStyle(Palette.ink)
         .overlay(alignment: .bottom) { ToastView(center: toast).padding(.bottom, 18) }
         // 在笔记窗口里删除或修改：撤销提示出现在这里（主窗口只在自己是当前窗口时提示）。

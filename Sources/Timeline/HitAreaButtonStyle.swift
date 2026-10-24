@@ -119,9 +119,38 @@ enum Metrics {
 extension View {
     /// 浮动面板的外观：卡片底色、大圆角、细描边；阴影由窗口提供。
     func floatingPanelSurface() -> some View {
-        background(Palette.card, in: RoundedRectangle(cornerRadius: Metrics.radiusPanel, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Metrics.radiusPanel, style: .continuous)
-                .strokeBorder(Palette.line.opacity(0.8), lineWidth: Metrics.hairline))
+        modifier(FloatingPanelSurface())
+    }
+}
+
+/// 浮动面板：卡片色加一点自上而下的光，顶边一道细高光，像一块有厚度的面板。
+private struct FloatingPanelSurface: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Metrics.radiusPanel, style: .continuous)
+        content
+            .background {
+                shape.fill(Palette.card)
+                    .overlay(shape.fill(LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.035 : 0.5), .clear],
+                                                       startPoint: .top, endPoint: .center)))
+            }
+            .overlay(shape.strokeBorder(LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.14 : 0.9), Palette.line.opacity(0.8)],
+                                                       startPoint: .top, endPoint: .bottom), lineWidth: Metrics.hairline)
+                .allowsHitTesting(false))
+    }
+}
+
+/// 窗口底色：主题底色上从左上角透出一点强调色的光，深浅外观都很克制，只让大面积底色不那么平。
+struct AmbientBackdrop: View {
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Palette.background
+            .overlay(RadialGradient(colors: [Palette.accent.opacity(scheme == .dark ? 0.07 : 0.045), .clear],
+                                    center: .topLeading, startRadius: 0, endRadius: 720))
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
     }
 }
 

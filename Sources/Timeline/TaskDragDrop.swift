@@ -87,9 +87,22 @@ final class TaskHandleView: NSView, NSDraggingSource {
 
     override func draw(_ dirtyRect: NSRect) {
         if let priorityColor {
-            priorityColor.setFill()
-            let radius: CGFloat = isPressed ? 4.5 : 3.5
-            NSBezierPath(ovalIn: NSRect(x: bounds.midX - radius, y: bounds.midY - radius, width: radius * 2, height: radius * 2)).fill()
+            // 时间轴是一根线，每个待办是穿在线上的一颗珠子：底色挡住轴线，外圈是优先级色的细环，中间一粒实心。
+            let outer: CGFloat = isPressed ? 6.5 : 5.5
+            let ring = NSRect(x: bounds.midX - outer, y: bounds.midY - outer, width: outer * 2, height: outer * 2)
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                NativePalette.background.setFill()
+                NSBezierPath(ovalIn: ring).fill()
+                priorityColor.withAlphaComponent(0.22).setFill()
+                NSBezierPath(ovalIn: ring).fill()
+                priorityColor.withAlphaComponent(0.85).setStroke()
+                let border = NSBezierPath(ovalIn: ring.insetBy(dx: 0.6, dy: 0.6))
+                border.lineWidth = 1.2
+                border.stroke()
+                priorityColor.setFill()
+                let inner: CGFloat = isPressed ? 3 : 2.5
+                NSBezierPath(ovalIn: NSRect(x: bounds.midX - inner, y: bounds.midY - inner, width: inner * 2, height: inner * 2)).fill()
+            }
             return
         }
         guard drawsHandle else { return }

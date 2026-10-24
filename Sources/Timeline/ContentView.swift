@@ -94,7 +94,7 @@ struct ContentView: View {
         }
         .id("\(themes.themeID)|\(themes.appearance.rawValue)")
         .animation(Motion.quick, value: footerVisible)
-        .background(Palette.background)
+        .background(AmbientBackdrop())
         .foregroundStyle(Palette.ink)
         .tint(Palette.accent)
         .frame(minWidth: 640, minHeight: 560)
@@ -313,8 +313,15 @@ struct ContentView: View {
             Button("快速记录…") { commands.send(.quickCapture) }
             Button("插入链接…") { commands.send(.insertLink) }.disabled(store.isReadOnly)
             Divider()
+            Section("面板") {
+                panelButton("专注计时", "timer", .focusPanel)
+                panelButton("笔记与日记", "note.text", .notes)
+                panelButton("工作板", "list.bullet.rectangle", .board)
+                panelButton("内置终端", "terminal", .shell)
+                panelButton("快速写日志", "square.and.pencil", .log)
+            }
+            Divider()
             Button("搜索任务、日志与总结…") { commands.send(.search) }
-            Button("笔记…") { commands.send(.notes) }
             Button("未完成事项…") { agenda = .unfinished }
             Button("即将截止…") { agenda = .upcoming }
             Button("已逾期…") { agenda = .overdue }
@@ -337,6 +344,13 @@ struct ContentView: View {
         .frame(width: 34, height: 34)
         .help("更多选项")
         .accessibilityLabel("更多选项")
+    }
+
+    /// 菜单里的面板入口，右侧显示当前的全局快捷键。
+    private func panelButton(_ title: String, _ symbol: String, _ action: HotKeyAction) -> some View {
+        Button { AppRouter.togglePanel(action) } label: {
+            Label(AppLocalized(title) + "    " + HotKeyStore.binding(for: action).label, systemImage: symbol)
+        }
     }
 
     private var dateHeader: some View {

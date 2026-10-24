@@ -211,6 +211,8 @@ enum AppRouter {
     static var showQuickCapture: () -> Void = {}
     /// 打开某个任务的笔记。
     static var openNotes: (UUID) -> Void = { _ in }
+    /// 打开 / 收起一个面板，和对应的全局快捷键效果相同（菜单栏图标和主窗口右上角菜单都用它）。
+    static var togglePanel: (HotKeyAction) -> Void = { _ in }
 }
 
 @MainActor

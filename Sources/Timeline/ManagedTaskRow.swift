@@ -33,8 +33,9 @@ struct ManagedTaskRow: View {
                 priorityControl
                     .frame(width: 22).frame(maxHeight: .infinity)
                     .background {
-                        Circle().fill(PriorityMark(priority: task.priority).color.opacity(0.12))
-                            .frame(width: 20, height: 20)
+                        // 悬停 / 选中时珠子外多一圈柔和的光晕。
+                        Circle().fill(PriorityMark(priority: task.priority).color.opacity(0.16))
+                            .frame(width: 22, height: 22)
                             .opacity(hovered || selected ? 1 : 0)
                             .allowsHitTesting(false)
                     }

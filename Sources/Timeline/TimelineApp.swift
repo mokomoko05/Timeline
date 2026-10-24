@@ -150,15 +150,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 await store?.removeUnusedImagesInBackground()
             }
             quickCapture.installStatusItem()
-            logHotKey.onPress = { [weak self] in self?.quickCapture.toggle(.log) }
-            notesHotKey.onPress = { [weak self] in self?.toggleNotesGlobally() }
-            focusHotKey.onPress = { [weak self] in self?.focusPanel?.toggleWorkspace() }
-            mainHotKey.onPress = { [weak self] in self?.toggleMainWindow() }
-            shellHotKey.onPress = { [weak self] in self?.shell.toggle() }
-            boardHotKey.onPress = { [weak self] in
-                guard let self else { return }
-                BoardWindowController.shared.toggle(store: self.store)
-            }
+            AppRouter.togglePanel = { [weak self] action in self?.togglePanel(action) }
+            for (action, hotKey) in allHotKeys { hotKey.onPress = { AppRouter.togglePanel(action) } }
             applyHotKeyPreference()
             NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.applyHotKeyPreference() }
@@ -329,6 +322,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     /// 按设置里最新的绑定重新注册全部快捷键。
+    /// 全局快捷键、菜单栏图标菜单、主窗口右上角菜单打开面板都走这里。
+    private func togglePanel(_ action: HotKeyAction) {
+        switch action {
+        case .log: quickCapture.toggle(.log)
+        case .notes: toggleNotesGlobally()
+        case .focusPanel: focusPanel?.toggleWorkspace()
+        case .main: toggleMainWindow()
+        case .shell: shell.toggle()
+        case .board: BoardWindowController.shared.toggle(store: store)
+        }
+    }
+
     private func registerAllHotKeys() {
         failedHotKeys = []
         for (action, hotKey) in allHotKeys where !hotKey.rebind(HotKeyStore.binding(for: action)) { failedHotKeys.insert(action) }

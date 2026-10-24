@@ -140,22 +140,32 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
         let menu = NSMenu()
         menu.delegate = self
         hotKeyItems = []
-        func hotKeyItem(_ title: String, _ action: HotKeyAction, _ selector: Selector) {
-            let menuItem = menu.addItem(withTitle: AppLocalized(title), action: selector, keyEquivalent: "")
+        func hotKeyItem(_ title: String, _ action: HotKeyAction, symbol: String) {
+            let menuItem = menu.addItem(withTitle: AppLocalized(title), action: #selector(openPanel(_:)), keyEquivalent: "")
             menuItem.target = self
+            menuItem.representedObject = action.rawValue
+            menuItem.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
             hotKeyItems.append((menuItem, action, title))
         }
-        let todoItem = menu.addItem(withTitle: AppLocalized("快速添加待办…"), action: #selector(captureTodo), keyEquivalent: "")
-        todoItem.target = self
-        hotKeyItem("快速写日志…", .log, #selector(captureLog))
-        hotKeyItem("内置终端（zsh）", .shell, #selector(openShellWindow))
-        let reset = menu.addItem(withTitle: AppLocalized("重置快速记录窗口位置"), action: #selector(resetPosition), keyEquivalent: "")
-        reset.target = self
-        menu.addItem(.separator())
         summaryItem.isEnabled = false
         menu.addItem(summaryItem)
-        hotKeyItem("打开 Timeline", .main, #selector(openApp))
         menu.addItem(.separator())
+        let todoItem = menu.addItem(withTitle: AppLocalized("快速添加待办…"), action: #selector(captureTodo), keyEquivalent: "")
+        todoItem.target = self
+        todoItem.image = NSImage(systemSymbolName: "plus.circle", accessibilityDescription: nil)
+        hotKeyItem("快速写日志…", .log, symbol: "square.and.pencil")
+        menu.addItem(.separator())
+        // 每个面板都能从这里打开（和全局快捷键效果相同，快捷键显示在右侧）。
+        hotKeyItem("Timeline 主界面", .main, symbol: "calendar")
+        hotKeyItem("专注计时", .focusPanel, symbol: "timer")
+        hotKeyItem("笔记与日记", .notes, symbol: "note.text")
+        hotKeyItem("工作板", .board, symbol: "list.bullet.rectangle")
+        hotKeyItem("内置终端", .shell, symbol: "terminal")
+        menu.addItem(.separator())
+        let settingsItem = menu.addItem(withTitle: AppLocalized("设置…"), action: #selector(openSettings), keyEquivalent: "")
+        settingsItem.target = self
+        let reset = menu.addItem(withTitle: AppLocalized("重置快速记录窗口位置"), action: #selector(resetPosition), keyEquivalent: "")
+        reset.target = self
         menu.addItem(withTitle: AppLocalized("退出 Timeline"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         item.menu = menu
         statusItem = item
@@ -211,9 +221,11 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
     }
 
     @objc private func captureTodo() { toggle(.todo) }
-    @objc private func captureLog() { toggle(.log) }
-    @objc private func openApp() { openMain() }
-    @objc private func openShellWindow() { openShell() }
+    @objc private func openPanel(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let action = HotKeyAction(rawValue: raw) else { return }
+        AppRouter.togglePanel(action)
+    }
+    @objc private func openSettings() { AppRouter.showSettings() }
 
     /// 像 Spotlight：窗口没开就打开；已经开着时，再按同一个热键关闭，按另一个热键则切换到那个模式。
     func toggle(_ mode: QuickCaptureMode) {

@@ -81,6 +81,15 @@ struct DeadlineDayCell: View, Equatable {
         return dueToday.isEmpty ? .clear : Palette.card
     }
 
+    /// 空白日几乎不画边（悬停时才出现），整张月历不再是一格格的重框；有事项的日子是一张浮起的小卡片。
+    private var cellStroke: Color {
+        if selected || targeted { return Palette.accent }
+        if hovered { return Palette.line }
+        if today { return Palette.accent.opacity(0.35) }
+        if !dueToday.isEmpty { return Palette.line.opacity(0.7) }
+        return Palette.line.opacity(inMonth ? 0.28 : 0.15)
+    }
+
     /// 只比较影响显示的数据；动作闭包每次都是新的，但行为由同一份状态决定。
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.date == rhs.date && lhs.selectedDate == rhs.selectedDate && lhs.displayedMonth == rhs.displayedMonth
@@ -91,9 +100,14 @@ struct DeadlineDayCell: View, Equatable {
     var body: some View {
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 3) {
+                // 今天的日期是一颗实心的「结」，和时间轴上今天的标记一致。
                 Text("\(JournalDates.calendar.component(.day, from: date))")
                     .font(.system(size: typography.pt(12), weight: selected || today ? .bold : .medium, design: .rounded))
-                    .foregroundStyle(today ? Palette.accent : (inMonth ? Palette.ink : Palette.muted))
+                    .monospacedDigit()
+                    .foregroundStyle(today ? Palette.onAccent : (inMonth ? Palette.ink : Palette.muted.opacity(0.7)))
+                    .padding(.horizontal, today ? 5 : 0)
+                    .frame(minWidth: today ? typography.pt(20) : 0, minHeight: typography.pt(18))
+                    .background { if today { Capsule().fill(Palette.accent) } }
                 Spacer(minLength: 0)
                 if selected || hovered { logButton }
                 if !dueToday.isEmpty {
@@ -139,8 +153,7 @@ struct DeadlineDayCell: View, Equatable {
         .padding(6).frame(maxWidth: .infinity, alignment: .topLeading).frame(height: height, alignment: .topLeading)
         .background(cellFill, in: RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous)
-            .strokeBorder(selected || targeted ? Palette.accent : (today ? Palette.accent.opacity(0.45) : Palette.line.opacity(hovered ? 0.9 : 0.4)),
-                          lineWidth: selected || targeted ? 1.5 : Metrics.hairline))
+            .strokeBorder(cellStroke, lineWidth: selected || targeted ? 1.5 : Metrics.hairline))
         // 悬停的格子浮起一点：能点的感觉。
         .shadow(color: .black.opacity(hovered && !selected ? 0.18 : 0), radius: hovered ? 4 : 0, x: 0, y: hovered ? 2 : 0)
         .animation(Motion.quick, value: hovered)

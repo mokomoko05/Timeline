@@ -218,6 +218,12 @@ struct TimelineDayView: View {
     @State private var calendarDropTargeted = false
     @ObservedObject private var dragSession = TaskDragSession.shared
     @State private var reorder = TaskReorderModel()
+    private var axisTone: TimelineAxisStroke.Tone {
+        guard let date else { return .future }
+        let calendar = JournalDates.calendar
+        if calendar.isDateInToday(date) { return .today }
+        return date < calendar.startOfDay(for: Date()) ? .past : .future
+    }
     private var reorderSpace: String { "timeline-order-" + (date.map(TaskTimelineSection.dayID) ?? "undated") }
     private var displayed: [ScheduledTask] { tasks.sorted(by: TaskTimelineSection.precedes) }
     private var visibleIDs: [UUID] {
@@ -256,7 +262,7 @@ struct TimelineDayView: View {
         .onPreferenceChange(TaskRowFramesKey.self) { reorder.frames = $0 }
         .onAppear { configureReorder(visibleIDs) }
         .onChange(of: visibleIDs) { ids in configureReorder(ids) }
-        .background { TimelineAxisStroke(highlighted: false, dashed: date == nil) }
+        .background { TimelineAxisStroke(highlighted: false, dashed: date == nil, tone: axisTone) }
         .background {
             RoundedRectangle(cornerRadius: 6)
                 .fill(calendarDropTargeted ? Palette.soft : .clear)
@@ -417,6 +423,24 @@ struct TimelineDateMarker: View {
     let navigate: (Date) -> Void
     @State private var showingDate = false
 
+    private var isToday: Bool { date.map { JournalDates.calendar.isDateInToday($0) } == true }
+
+    /// 日期是线上的「结」：普通日子是空心小环，今天是带光晕的实心结，未设日期是一段短横。
+    @ViewBuilder private var knot: some View {
+        if date == nil {
+            Capsule().fill(Palette.line).frame(width: 10, height: 2)
+        } else if isToday {
+            ZStack {
+                Circle().fill(Palette.accent.opacity(0.18)).frame(width: 16, height: 16)
+                Circle().fill(Palette.accent).frame(width: 8, height: 8)
+                    .overlay(Circle().strokeBorder(Palette.background, lineWidth: 1.5))
+            }
+        } else {
+            Circle().fill(Palette.background).frame(width: 9, height: 9)
+                .overlay(Circle().strokeBorder(Palette.muted.opacity(0.8), lineWidth: 1.25))
+        }
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             if date != nil {
@@ -434,16 +458,16 @@ struct TimelineDateMarker: View {
                     TimelineDateWindow(initial: date ?? selectedDate) { date in navigate(date); showingDate = false }
                 }
                 Button { showingDate = true } label: {
-                    Rectangle().fill(Palette.muted).frame(width: 12, height: 1).frame(width: 22, height: 24)
-                        .contentShape(Rectangle())
+                    knot.frame(width: 22, height: 24).contentShape(Rectangle())
                 }.buttonStyle(.plain).help("打开日期窗口")
             } else {
                 Color.clear.frame(width: TaskTimelineLayout.timeWidth(typography))
-                Rectangle().fill(Palette.muted).frame(width: 12, height: 1).frame(width: 22, height: 24)
+                knot.frame(width: 22, height: 24)
             }
             Button { if let date { navigate(date) } } label: {
                 Text(date.map { JournalDates.calendar.isDateInToday($0) ? AppLocalized("今天") : "" } ?? AppLocalized("未设日期"))
-                    .font(.system(size: typography.pt(11))).foregroundStyle(Palette.muted)
+                    .font(.system(size: typography.pt(11), weight: isToday ? .semibold : .regular))
+                    .foregroundStyle(isToday ? Palette.accent : Palette.muted)
             }.buttonStyle(.plain).disabled(date == nil)
             Spacer(minLength: 0)
         }

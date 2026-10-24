@@ -1224,22 +1224,25 @@ struct TaskFocusButton: View {
             if running { session.stop(reason: "手动结束") }
             else { session.start(task: task, url: FocusSession.link(in: task.task.title)) }
         } label: {
-            ZStack {
-                Text(running ? FocusSession.clock(total) : FocusSession.brief(total))
-                    .font(.system(size: typography.pt(11), weight: .medium)).monospacedDigit()
-                    .padding(.horizontal, 22)
-                HStack {
-                    Image(systemName: running ? "stop.fill" : "play.fill")
-                        .font(.system(size: typography.pt(10)))
-                    Spacer(minLength: 0)
-                }.padding(.leading, 6)
+            // 紧凑的小胶囊：没有累计时间时只显示图标，计时中显示走动的时间。
+            HStack(spacing: 4) {
+                Image(systemName: running ? "stop.fill" : "play.fill")
+                    .font(.system(size: typography.pt(8), weight: .bold))
+                if running || total >= 1 {
+                    Text(running ? FocusSession.clock(total) : FocusSession.brief(total))
+                        .font(.system(size: typography.pt(10), weight: .medium)).monospacedDigit()
+                        .lineLimit(1)
+                }
             }
-            .fixedSize(horizontal: true, vertical: false)
-            .frame(minWidth: typography.pt(68), minHeight: typography.pt(28))
-            .contentShape(RoundedRectangle(cornerRadius: 5))
+            .padding(.horizontal, 7)
+            .frame(minWidth: typography.pt(24), minHeight: typography.pt(20))
+            .background(running ? Palette.danger.opacity(0.12) : Color.clear, in: Capsule())
+            .overlay(Capsule().strokeBorder(running ? Palette.danger.opacity(0.4) : Palette.line.opacity(0.8), lineWidth: Metrics.hairline))
+            .fixedSize()
+            .contentShape(Capsule())
         }
-        .buttonStyle(.plain).raisedOnHover(radius: 4)
-        .foregroundStyle(running ? Color.red : Palette.muted)
+        .buttonStyle(.plain).raisedOnHover(radius: 10)
+        .foregroundStyle(running ? Palette.danger : Palette.muted)
         .help(running ? "结束专注计时" : "开始专注")
         .accessibilityLabel(running ? "结束专注计时" : "开始专注")
         .accessibilityValue(FocusSession.duration(total))
