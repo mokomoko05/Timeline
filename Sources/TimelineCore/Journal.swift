@@ -429,9 +429,20 @@ public final class JournalStore: ObservableObject {
     private func toggleTask(_ id: UUID, on date: Date, now: Date, dropping: Bool = false, in updated: inout [String: DayEntry]) {
         let key = JournalDates.key(date)
         guard let index = updated[key]?.todos.firstIndex(where: { $0.id == id }) else { return }
+        let wasDropped = updated[key]!.todos[index].isDropped
         updated[key]!.todos[index].completed.toggle()
         // 完成 → 做完了；放弃 → dropping；再点一次（取消完成 / 恢复）→ 都回到未完成。
         updated[key]!.todos[index].dropped = updated[key]!.todos[index].completed && dropping
+        // 从「已放弃」恢复的事项排到同一日期（或未设日期）的最后，不回到放弃前的位置。
+        if wasDropped, !updated[key]!.todos[index].completed {
+            let restored = updated[key]!.todos[index]
+            let calendar = JournalDates.calendar
+            let day = restored.dueDate.map { calendar.startOfDay(for: $0) }
+            let peers = updated.values.flatMap(\.todos).filter { other in
+                other.id != restored.id && other.dueDate.map { calendar.startOfDay(for: $0) } == day
+            }
+            if let last = peers.map(\.sortKey).max() { updated[key]!.todos[index].listPosition = max(last + 1, restored.sortKey) }
+        }
         let task = updated[key]!.todos[index]
         var occurrence = task.repeatRule.nextDate(after: JournalDates.calendar.startOfDay(for: date), monthDay: task.repeatMonthDay)
         while let candidate = occurrence, candidate <= JournalDates.calendar.startOfDay(for: now) {

@@ -38,6 +38,12 @@ final class DesignPreviewTests: XCTestCase {
             ["id": UUID().uuidString, "number": number, "title": title, "priority": priority, "completed": completed,
              "dueDate": stamp(day), "dueHasTime": false, "tags": tags, "focusSeconds": minutes * 60]
         }
+        func undated(_ number: Int, _ title: String, dropped: Bool = false, tags: [String]) -> [String: Any] {
+            var value = task(number, title, "normal", completed: dropped, tags: tags)
+            value.removeValue(forKey: "dueDate")
+            if dropped { value["dropped"] = true }
+            return value
+        }
         func timed(_ number: Int, _ title: String, hour: Int, tags: [String]) -> [String: Any] {
             var value = task(number, title, "normal", tags: tags)
             value["dueDate"] = stamp(hour: hour); value["dueHasTime"] = true
@@ -51,6 +57,10 @@ final class DesignPreviewTests: XCTestCase {
             task(3, "试着复现一个小实验", "normal", tags: ["研究"], minutes: 35),
             task(4, "整理这一周的阅读笔记", "lower", day: 1, tags: ["阅读"]),
             task(5, "给下一个项目画张草图", "low", day: 3, tags: ["想法"]),
+            undated(8, "整理书单", tags: ["阅读"]),
+            undated(9, "试用新的笔记模板", dropped: true, tags: ["想法"]),
+            undated(10, "学一门新语言", tags: []),
+            undated(11, "重写旧博客", dropped: true, tags: []),
         ]
         let first = tasks[2]["id"] as! String
         func log(_ hour: Int, _ minute: Int, _ text: String, kind: String = "note", _ extra: [String: Any] = [:]) -> [String: Any] {
@@ -64,7 +74,7 @@ final class DesignPreviewTests: XCTestCase {
             log(9, 25, "■ 结束专注 · 用时 25 min · 累计 1 h 15 min · 阶段结束", ["focus": true, "focusEvent": "end", "focusElapsedSeconds": 1500, "focusEndReason": "阶段结束"]),
             log(10, 5, "整理好参考资料，下午开始实验。", kind: "done"),
         ]
-        let document: [String: Any] = ["version": 6, "nextTaskNumber": 8, "days": [
+        let document: [String: Any] = ["version": 6, "nextTaskNumber": 12, "days": [
             JournalDates.key(today): ["todos": tasks, "logs": logs, "summary": "", "deadlineDraft": "", "logDraft": ""],
         ]]
         return try JSONSerialization.data(withJSONObject: document)
@@ -106,7 +116,7 @@ final class DesignPreviewTests: XCTestCase {
         }
         defer { focus.stop(reason: "预览结束") }
         for dark in [true, false] {
-            try render("main", size: NSSize(width: 1280, height: 820), dark: dark,
+            try render("main", size: NSSize(width: 1280, height: 1250), dark: dark,
                        ContentView(store: store, loginItem: LoginItem())
                 .environmentObject(ReminderScheduler(store: store)).environmentObject(WorkspaceInteraction())
                 .environmentObject(CommandCenter()).environmentObject(ToastCenter()).environment(\.focusSession, focus))

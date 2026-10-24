@@ -134,16 +134,18 @@ final class TaskTimelineTests: XCTestCase {
         }
         let tasks = [task("completed", completed: true), task("dropped", completed: true, dropped: true),
                      task("open"), task("later completed", completed: true), task("later open")]
+        // 已放弃的事项收进末尾固定的一组，已完成的仍在原位折叠。
         let folded = TaskTimelineItem.items(for: tasks)
-        XCTAssertEqual(folded.map(\.folded), [true, false, true, false])
-        XCTAssertEqual(folded[0].tasks.map(\.id), tasks.prefix(2).map(\.id))
-        XCTAssertEqual(folded.flatMap(\.tasks).map(\.id), tasks.map(\.id), "Folding preserves chronological order")
-        let revealed = TaskTimelineItem.items(for: tasks, expanded: [tasks[1].id])
-        XCTAssertEqual(revealed.map(\.folded), [false, false, true, false])
+        XCTAssertEqual(folded.map(\.folded), [true, false, true, false, true])
+        XCTAssertEqual(folded[0].tasks.map(\.id), [tasks[0].id])
+        XCTAssertEqual(folded.last?.tasks.map(\.id), [tasks[1].id])
+        XCTAssertTrue(folded.last?.droppedGroup == true)
+        XCTAssertEqual(folded.flatMap(\.tasks).map(\.id), [0, 2, 3, 4, 1].map { tasks[$0].id })
+        let revealed = TaskTimelineItem.items(for: tasks, expanded: [tasks[0].id])
+        XCTAssertEqual(revealed.map(\.folded), [false, false, true, false, true])
         XCTAssertTrue(revealed[0].expandedFinished)
-        XCTAssertEqual(revealed[0].tasks.map(\.id), tasks.prefix(2).map(\.id))
         XCTAssertTrue(TaskTimelineItem.items(for: tasks, expanded: Set(tasks.map(\.id))).allSatisfy { !$0.folded })
-        let collapsed = TaskTimelineItem.items(for: tasks, expanded: Set(tasks.map(\.id)).subtracting(revealed[0].tasks.map(\.id)))
+        let collapsed = TaskTimelineItem.items(for: tasks, expanded: Set(tasks.map(\.id)).subtracting([tasks[0].id]))
         XCTAssertTrue(collapsed[0].folded)
         XCTAssertTrue(TaskTimelineItem.items(for: []).isEmpty)
     }

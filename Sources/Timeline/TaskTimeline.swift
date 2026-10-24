@@ -7,18 +7,24 @@ struct TaskTimelineItem: Identifiable {
     let tasks: [ScheduledTask]
     let folded: Bool
     var expandedFinished = false
-    var id: UUID { tasks[0].id }
+    /// 分组末尾的「已放弃」：身份固定，增减其中的事项时不当成新的一块重新出现。
+    var droppedGroup = false
+    static let droppedGroupID = UUID(uuidString: "00000000-0000-0000-0000-0000000000D0")!
+    var id: UUID { droppedGroup ? Self.droppedGroupID : tasks[0].id }
 
+    /// 已完成的事项在原位折叠成一组；已放弃的事项不参与排序，统一收进分组末尾固定的一组，
+    /// 拖动、完成其他事项时不会跟着移动。
     static func items(for tasks: [ScheduledTask], expanded: Set<UUID> = []) -> [Self] {
         var result: [Self] = []
         var finished: [ScheduledTask] = []
+        let dropped = tasks.filter(\.task.isDropped)
         func flush() {
             guard !finished.isEmpty else { return }
             let isExpanded = finished.contains { expanded.contains($0.id) }
             result.append(Self(tasks: finished, folded: !isExpanded, expandedFinished: isExpanded))
             finished = []
         }
-        for task in tasks {
+        for task in tasks where !task.task.isDropped {
             if task.task.completed {
                 if let previous = finished.last, !sameDay(previous.task.dueDate, task.task.dueDate) { flush() }
                 finished.append(task)
@@ -28,6 +34,10 @@ struct TaskTimelineItem: Identifiable {
             }
         }
         flush()
+        if !dropped.isEmpty {
+            let isExpanded = dropped.contains { expanded.contains($0.id) }
+            result.append(Self(tasks: dropped, folded: !isExpanded, expandedFinished: isExpanded, droppedGroup: true))
+        }
         return result
     }
 

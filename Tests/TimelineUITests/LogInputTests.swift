@@ -98,3 +98,28 @@ final class NoteTextBufferTests: XCTestCase {
         XCTAssertEqual(buffer.text, "", "提交后清空同步到输入框")
     }
 }
+
+final class DroppedGroupTests: XCTestCase {
+    private func task(_ title: String, completed: Bool = false, dropped: Bool = false, position: Double) -> ScheduledTask {
+        var todo = Todo(title: title)
+        todo.completed = completed
+        todo.dropped = dropped
+        todo.listPosition = position
+        return ScheduledTask(date: Date(), task: todo)
+    }
+
+    func testDroppedTasksStayInOneTrailingGroupWhateverTheirSortPosition() {
+        let a = task("a", position: 1), b = task("b", position: 3)
+        let droppedEarly = task("dropped early", completed: true, dropped: true, position: 0)
+        let droppedMiddle = task("dropped middle", completed: true, dropped: true, position: 2)
+        let done = task("done", completed: true, position: 4)
+        let before = TaskTimelineItem.items(for: [droppedEarly, a, droppedMiddle, b, done])
+        XCTAssertEqual(before.map { $0.tasks.map(\.task.title) }, [["a"], ["b"], ["done"], ["dropped early", "dropped middle"]])
+        // 拖动重排未完成的事项后，已放弃那一组的位置和身份都不变。
+        let reordered = TaskTimelineItem.items(for: [droppedEarly, b, droppedMiddle, a, done])
+        XCTAssertEqual(reordered.last?.id, before.last?.id)
+        XCTAssertEqual(reordered.map { $0.tasks.map(\.task.title) }, [["b"], ["a"], ["done"], ["dropped early", "dropped middle"]])
+        XCTAssertTrue(TaskTimelineItem.items(for: [a, b]).allSatisfy { !$0.droppedGroup })
+    }
+}
+

@@ -110,4 +110,19 @@ final class HotPathCacheTests: XCTestCase {
         store.renameTodo(task.id, title: "改名后的任务", on: task.date)
         XCTAssertEqual(store.logTaskSummaries(on: today).first { $0.id == task.id }?.title, "改名后的任务", "任务变化后汇总重新计算")
     }
+
+    func testRestoringADroppedTaskPlacesItLastInItsDateGroup() throws {
+        let (store, directory) = makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let today = Date()
+        for title in ["一", "二", "三"] { store.addTodo(title, on: today) }
+        let first = try XCTUnwrap(store.tasks().first { $0.task.title == "一" })
+        XCTAssertTrue(store.dropTodo(first.id, on: first.date))
+        XCTAssertTrue(store.locate(first.id)?.task.isDropped == true)
+        XCTAssertTrue(store.dropTodo(first.id, on: first.date), "再点一次恢复")
+        let restored = try XCTUnwrap(store.locate(first.id))
+        XCTAssertFalse(restored.task.completed)
+        let undated = store.tasks().filter { $0.task.dueDate == nil }.sorted(by: ScheduledTask.listOrder)
+        XCTAssertEqual(undated.last?.id, first.id, "恢复后排在末尾，不回到放弃前的位置")
+    }
 }
