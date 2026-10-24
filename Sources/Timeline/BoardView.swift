@@ -318,9 +318,11 @@ struct BoardContentView: View {
 
     private func setEditing(_ value: Bool) {
         editing = value
+        liveEditor.setSourceMode(value)
     }
 
     private func insertTemplate(_ template: BoardMarkdownTemplate) {
+        setEditing(true)
         if liveEditor.error == nil { liveEditor.insertTemplate(template); return }
         if let editor = NSApp.keyWindow?.firstResponder as? NSTextView,
            editor.isEditable {
@@ -355,8 +357,8 @@ struct BoardContentView: View {
                     Button { setEditing(!editing) } label: {
                         Image(systemName: editing ? "eye" : "chevron.left.forwardslash.chevron.right")
                     }
-                    .help(editing ? "实时预览" : "源码")
-                    .accessibilityLabel(editing ? "实时预览" : "源码")
+                    .help(editing ? "预览" : "编辑 Markdown 源码")
+                    .accessibilityLabel(editing ? "预览" : "编辑 Markdown 源码")
                     .disabled(store.isReadOnly)
                     Button { navigation.toggleFavorite(board.id) } label: {
                         Image(systemName: navigation.isFavorite(board.id) ? "star.fill" : "star")
@@ -376,8 +378,11 @@ struct BoardContentView: View {
             }.padding(.horizontal, 12).padding(.vertical, 8)
             Divider()
             if liveEditor.error != nil {
-                BoardMarkdownEditor(text: markdown, preview: { setEditing(false) })
-                    .padding(10)
+                if editing {
+                    BoardMarkdownEditor(text: markdown, preview: { setEditing(false) }).padding(10)
+                } else {
+                    ScrollView { BoardMarkdownPreview(store: store, board: board).padding(12) }
+                }
             } else {
                 BoardLiveEditor(session: liveEditor, sourceMode: editing)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -475,11 +480,13 @@ private struct BoardMarkdownBlocks: View {
                 switch node {
                 case .markdown(let fragment):
                     TaskLinkText(source: fragment.source, completed: false, color: Palette.ink,
-                                 fontSize: 13, edit: edit, open: { NSWorkspace.shared.open($0) },
+                                 fontSize: 13, edit: edit, open: SafariLinks.open,
                                  maxLines: 0, markdown: true,
                                  toggleMarkdownTask: store.isReadOnly ? nil : { line in
                                      store.toggleBoardMarkdownTask(atLine: line + fragment.lineOffset, in: boardID)
                                  }, compactLines: true)
+                case .code(let code):
+                    BoardCodeBlock(code: code)
                 case .disclosure(let disclosure):
                     let open = cache.isExpanded(disclosure)
                     VStack(alignment: .leading, spacing: 4) {
@@ -488,15 +495,16 @@ private struct BoardMarkdownBlocks: View {
                             transaction.disablesAnimations = true
                             withTransaction(transaction) { cache.toggle(disclosure) }
                         } label: {
-                            HStack(spacing: 7) {
+                            HStack(alignment: .top, spacing: 7) {
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 10, weight: .semibold))
-                                    .rotationEffect(.degrees(open ? 90 : 0)).frame(width: 12)
+                                    .rotationEffect(.degrees(open ? 90 : 0)).frame(width: 12, height: 20)
                                 Text(disclosure.title).font(.system(size: 13, weight: .medium))
-                                    .lineLimit(1).truncationMode(.tail)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .multilineTextAlignment(.leading)
                                 Spacer(minLength: 0)
                             }
-                            .padding(.horizontal, 2).frame(height: 24)
+                            .padding(.horizontal, 2).padding(.vertical, 2).frame(minHeight: 24)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain).foregroundStyle(Palette.ink).help(disclosure.title)

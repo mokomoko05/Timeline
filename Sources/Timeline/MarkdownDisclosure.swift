@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Markdown
 
 struct MarkdownFragment: Identifiable {
     let source: String
@@ -14,14 +15,22 @@ struct MarkdownDisclosure: Identifiable {
     let children: [MarkdownDisclosureNode]
 }
 
+struct MarkdownCodeFragment: Identifiable {
+    let id: Int
+    let language: String
+    let content: String
+}
+
 indirect enum MarkdownDisclosureNode: Identifiable {
     case markdown(MarkdownFragment)
     case disclosure(MarkdownDisclosure)
+    case code(MarkdownCodeFragment)
 
     var id: Int {
         switch self {
         case .markdown(let fragment): return fragment.id
         case .disclosure(let disclosure): return disclosure.id
+        case .code(let code): return code.id
         }
     }
 }
@@ -123,7 +132,29 @@ enum MarkdownDisclosures {
                 guard plainStart < end else { return }
                 let text = lines[plainStart..<end].joined(separator: "\n")
                 if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    result.append(.markdown(MarkdownFragment(source: text, lineOffset: plainStart)))
+                    // Use CommonMark ranges so fenced / indented code remains literal, including
+                    // HTML examples. Preserve absolute line offsets for tasks after each code block.
+                    let document = Document(parsing: text)
+                    var cursor = plainStart
+                    for child in document.children {
+                        guard let code = child as? CodeBlock, let range = code.range else { continue }
+                        let start = plainStart + range.lowerBound.line - 1
+                        let after = min(end, plainStart + range.upperBound.line)
+                        if cursor < start {
+                            let before = lines[cursor..<start].joined(separator: "\n")
+                            if !before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                result.append(.markdown(MarkdownFragment(source: before, lineOffset: cursor)))
+                            }
+                        }
+                        result.append(.code(MarkdownCodeFragment(id: start, language: code.language ?? "", content: code.code)))
+                        cursor = after
+                    }
+                    if cursor < end {
+                        let remaining = lines[cursor..<end].joined(separator: "\n")
+                        if !remaining.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            result.append(.markdown(MarkdownFragment(source: remaining, lineOffset: cursor)))
+                        }
+                    }
                 }
             }
             while index < range.upperBound {

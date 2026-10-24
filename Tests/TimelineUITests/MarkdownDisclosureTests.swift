@@ -38,10 +38,58 @@ final class MarkdownDisclosureTests: XCTestCase {
     func testFencedIndentedAndUnclosedExamplesStayLiteral() throws {
         let source = "~~~html\n<details>\n<summary>Example</summary>\nbody\n</details>\n~~~\n\n    <details>\n    <summary>Indented</summary>\n    body\n    </details>\n\n<details>\n<summary>Unclosed</summary>\nKeep this text"
         let nodes = MarkdownDisclosures.parse(source)
-        XCTAssertEqual(nodes.count, 1)
-        guard case .markdown(let fragment) = nodes.first else { return XCTFail("Expected literal Markdown") }
-        XCTAssertEqual(fragment.source, source)
-        XCTAssertEqual(fragment.lineOffset, 0)
+        XCTAssertEqual(nodes.count, 3)
+        guard case .code(let fenced) = nodes[0], case .code(let indented) = nodes[1],
+              case .markdown(let fragment) = nodes[2] else { return XCTFail("Expected literal code and unclosed Markdown") }
+        XCTAssertEqual(fenced.language, "html")
+        XCTAssertEqual(fenced.content, "<details>\n<summary>Example</summary>\nbody\n</details>\n")
+        XCTAssertTrue(indented.content.contains("<summary>Indented</summary>"))
+        XCTAssertTrue(fragment.source.contains("<summary>Unclosed</summary>"))
+        XCTAssertEqual(fragment.lineOffset, 12)
+    }
+
+    func testCodeInsideDisclosureHasNoFencesAndPreservesFollowingTaskLine() throws {
+        let source = "<details open><summary>Title</summary>\n\n```swift\nlet value = 42\n```\n\n- [ ] Action\n\n</details>\n\n~~~text\nunclosed\n"
+        let nodes = MarkdownDisclosures.parse(source)
+        guard case .disclosure(let disclosure) = nodes[0], case .code(let code) = disclosure.children[0],
+              case .markdown(let task) = disclosure.children[1], case .code(let unclosed) = nodes[1] else {
+            return XCTFail("Missing native code blocks")
+        }
+        XCTAssertEqual(code.language, "swift")
+        XCTAssertEqual(code.content, "let value = 42\n")
+        XCTAssertEqual(code.id, 2)
+        XCTAssertEqual(unclosed.content, "unclosed\n")
+        let rendered = MarkdownText.render(task.source, color: .labelColor, fontSize: 13, interactiveTasks: true)
+        var absoluteLine: Int?
+        rendered.enumerateAttribute(MarkdownText.taskLineKey, in: NSRange(location: 0, length: rendered.length)) { value, _, _ in
+            if let line = value as? Int { absoluteLine = task.lineOffset + line }
+        }
+        XCTAssertEqual(absoluteLine, 7)
+    }
+
+    func testNativeCodeAndLongDisclosureTitleFitWithoutTruncation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let board = try XCTUnwrap(store.ensureBoard(for: .tag("Preview")))
+        let title = String(repeating: "完整显示折叠内容的标题和阅读目标", count: 4)
+        store.setBoardMarkdown("## Reading\n\n```swift\nlet answer = 42\nprint(answer)\n```\n\n<details open><summary>\(title)</summary>\n\n- [ ] Action\n\n</details>", for: board.id)
+        let cache = MarkdownDisclosureCache()
+        let host = NSHostingView(rootView: DisclosureHarness(store: store, cache: cache).padding(12))
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 500),
+                                 styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        try await Task.sleep(for: .milliseconds(150))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(host.fittingSize.height, 230)
+        XCTAssertLessThan(host.fittingSize.height, 500)
+        if let path = ProcessInfo.processInfo.environment["TIMELINE_NATIVE_BOARD_SNAPSHOT"],
+           let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        }
     }
 
     func testCRLFOpenAttributeEmptyBodyAndPlainMarkdownRemainIntact() throws {

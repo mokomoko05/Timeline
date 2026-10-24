@@ -129,6 +129,79 @@ final class NotesAndImagesTests: XCTestCase {
         XCTAssertTrue(viewer.model.canGoForward)
     }
 
+    func testNativeGalleryUsesCurrentTagAndZoomResetsOnlyOnImageChange() throws {
+        let store = makeStore()
+        _ = try store.quickLogEntry("multi", images: ["a.png", "b.png"], linkDefault: false, tags: ["A", "B"], on: day)
+        _ = try store.quickLogEntry("only B", images: ["c.png"], linkDefault: false, tags: ["B"], on: day)
+        _ = try store.quickLogEntry("only A", images: ["d.png"], linkDefault: false, tags: ["A"], on: day)
+        let log = try XCTUnwrap(store.allLogs().first { $0.log.text == "multi" }).log
+        let viewer = ImageViewerController()
+        defer { viewer.close() }
+        viewer.show(store: store, around: log, index: 1, tag: "B")
+        XCTAssertEqual(viewer.model.current?.name, "b.png")
+        XCTAssertEqual(Set(viewer.model.items.map(\.name)), ["a.png", "b.png", "c.png"])
+        viewer.model.zoomIn()
+        XCTAssertEqual(viewer.model.zoom, 1.25)
+        viewer.model.zoomOut()
+        XCTAssertEqual(viewer.model.zoom, 1)
+        viewer.model.setZoom(100)
+        XCTAssertEqual(viewer.model.zoom, 8)
+        viewer.model.setZoom(0)
+        XCTAssertEqual(viewer.model.zoom, 0.25)
+        viewer.model.fit()
+        XCTAssertEqual(viewer.model.zoom, 1)
+        viewer.model.zoomIn()
+        viewer.model.move(viewer.model.canGoForward ? 1 : -1)
+        XCTAssertEqual(viewer.model.zoom, 1)
+    }
+
+    func testImageCopyWritesImageDataAndZoomViewKeepsImageLoaded() throws {
+        let store = makeStore()
+        let url = store.imageURL("copy.tiff")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let image = NSImage(size: NSSize(width: 120, height: 80), flipped: false) { bounds in
+            NSColor.red.setFill(); bounds.fill(); return true
+        }
+        try XCTUnwrap(image.tiffRepresentation).write(to: url)
+        let pasteboard = NSPasteboard(name: .init("image-copy-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        XCTAssertTrue(ImageClipboard.copy(url, to: pasteboard))
+        XCTAssertTrue(pasteboard.canReadObject(forClasses: [NSImage.self]))
+        XCTAssertFalse(ImageClipboard.copy(store.imageURL("missing.png"), to: pasteboard))
+        XCTAssertTrue(pasteboard.canReadObject(forClasses: [NSImage.self]), "复制失败保留剪贴板")
+        let scroll = ImageZoomScrollView(frame: NSRect(x: 0, y: 0, width: 480, height: 320))
+        scroll.layoutSubtreeIfNeeded()
+        scroll.display(url, zoom: 1)
+        let original = try XCTUnwrap((scroll.documentView as? NSImageView)?.image)
+        let fitted = scroll.magnification
+        scroll.display(url, zoom: 2)
+        XCTAssertEqual(scroll.magnification, fitted * 2, accuracy: 0.01)
+        XCTAssertTrue((scroll.documentView as? NSImageView)?.image === original)
+        XCTAssertTrue(scroll.allowsMagnification)
+        XCTAssertTrue(scroll.hasHorizontalScroller && scroll.hasVerticalScroller)
+        let picture = try XCTUnwrap(scroll.documentView)
+        let start = scroll.contentView.bounds.origin.x
+        func mouse(_ type: NSEvent.EventType, x: CGFloat) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: 100), modifierFlags: [], timestamp: 0,
+                              windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        picture.mouseDown(with: mouse(.leftMouseDown, x: 100))
+        picture.mouseDragged(with: mouse(.leftMouseDragged, x: 148))
+        picture.mouseUp(with: mouse(.leftMouseUp, x: 148))
+        XCTAssertLessThan(scroll.contentView.bounds.origin.x, start, "放大后的图片可拖动查看")
+        if let path = ProcessInfo.processInfo.environment["TIMELINE_IMAGE_VIEWER_SNAPSHOT"] {
+            let model = ImageViewerModel()
+            model.load([.init(name: "copy.tiff", caption: "阅读笔记")], index: 0)
+            let host = NSHostingView(rootView: ImageViewerView(store: store, model: model, openPreview: {}).frame(width: 860, height: 620))
+            host.frame = NSRect(x: 0, y: 0, width: 860, height: 620)
+            host.layoutSubtreeIfNeeded()
+            if let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            }
+        }
+    }
+
     func testViewerIsAMovableResizableWindowWithKeyboardNavigationAndIsReused() throws {
         let store = makeStore()
         let viewer = ImageViewerController()
@@ -149,6 +222,12 @@ final class NotesAndImagesTests: XCTestCase {
         XCTAssertTrue(viewer.handleKey(key(123)))
         XCTAssertEqual(viewer.model.index, 1, "← 上一张")
         XCTAssertFalse(viewer.handleKey(key(0)), "其他键交给窗口")
+        window.sendEvent(key(124))
+        XCTAssertEqual(viewer.model.index, 2, "滚动视图获得焦点后，窗口仍处理切图快捷键")
+        window.sendEvent(key(24))
+        XCTAssertEqual(viewer.model.zoom, 1.25)
+        window.sendEvent(key(29))
+        XCTAssertEqual(viewer.model.zoom, 1)
 
         viewer.show(store: store, names: ["z.png"], index: 0)
         XCTAssertTrue(viewer.window === window, "再打开别的图片，复用同一个窗口")

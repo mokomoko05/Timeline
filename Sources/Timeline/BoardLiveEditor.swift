@@ -13,7 +13,8 @@ struct BoardLiveEditor: NSViewRepresentable {
     func makeCoordinator() -> BoardLiveEditorSession { session }
 
     func updateNSView(_ view: WKWebView, context: Context) {
-        session.configure(fontSize: typography.pt(13), dark: colorScheme == .dark, sourceMode: sourceMode)
+        session.configure(fontSize: typography.pt(13), dark: colorScheme == .dark,
+                          sourceMode: sourceMode, previewOnly: !sourceMode)
     }
 
     static func dismantleNSView(_ view: WKWebView, coordinator: BoardLiveEditorSession) { coordinator.flush() }
@@ -85,7 +86,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         return view
     }
 
-    func configure(fontSize: CGFloat, dark: Bool, sourceMode: Bool = false) {
+    func configure(fontSize: CGFloat, dark: Bool, sourceMode: Bool = false, previewOnly: Bool = false) {
         func css(_ color: Color) -> String {
             let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
             var result = ""
@@ -102,7 +103,8 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
                       "selection": css(Color(nsColor: .selectedTextBackgroundColor)),
                       "selection-ink": css(Color(nsColor: .selectedTextColor))]
         for level in 1...6 { colors["heading-\(level)"] = css(Color(nsColor: MarkdownText.headingColor(level))) }
-        settings = ["fontSize": fontSize, "readOnly": store.isReadOnly, "colors": colors, "sourceMode": sourceMode]
+        settings = ["fontSize": fontSize, "readOnly": store.isReadOnly, "colors": colors,
+                    "sourceMode": sourceMode, "previewOnly": previewOnly]
         settings["labels"] = ["openLink": AppLocalized("在 Safari 中打开"), "copyCode": AppLocalized("复制代码"),
                               "copied": AppLocalized("已复制"), "copyFailed": AppLocalized("复制失败，请重试")]
         let current = store.boards.first { $0.id == boardID }?.markdown ?? storedSource
@@ -112,6 +114,12 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
             source = current
             sourceNeedsSynchronization = true
         }
+        applyConfiguration()
+    }
+
+    func setSourceMode(_ enabled: Bool) {
+        settings["sourceMode"] = enabled
+        settings["previewOnly"] = !enabled
         applyConfiguration()
     }
 

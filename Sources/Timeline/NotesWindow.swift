@@ -424,10 +424,8 @@ struct UnifiedJournalView: View {
                 if !log.images.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
-                            ForEach(Array(log.images.enumerated()), id: \.element) { index, name in
-                                Button { ImageViewerController.shared.openPreview(store: store, around: log, index: index) } label: {
-                                    ImageFit(url: store.imageURL(name), maxWidth: 360, maxHeight: 190)
-                                }.buttonStyle(.plain)
+                            ForEach(Array(log.images.enumerated()), id: \.offset) { index, _ in
+                                NoteImageCard(store: store, log: log, index: index, maxWidth: 360, maxHeight: 190)
                             }
                         }
                     }

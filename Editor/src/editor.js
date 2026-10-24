@@ -13,7 +13,7 @@ const editable = new Compartment();
 const livePreview = new Compartment();
 let view;
 let composing = false;
-let currentReadOnly, currentSourceMode;
+let currentReadOnly, currentSourceMode, currentPreviewOnly;
 let labels = {};
 let copyRequest = 0;
 const pendingCopies = new Map();
@@ -180,7 +180,7 @@ function decorations(state, details, expanded) {
       const closingLine = state.doc.lineAt(item.closingFrom).number;
       const previous = closingLine > 1 ? state.doc.line(closingLine - 1) : null;
       const closingFrom = previous && !previous.text.trim() ? previous.from - 1 : item.closingFrom;
-      if (!overlapsSelection(closingFrom, item.to) || state.readOnly) replace(closingFrom, item.to, undefined);
+      if (active == null || !overlapsSelection(closingFrom, item.to)) replace(closingFrom, item.to, undefined);
       const first = state.doc.lineAt(item.headerTo).number + 1;
       const last = state.doc.lineAt(item.closingFrom).number;
       for (let number = first; number < last; number++) {
@@ -212,6 +212,15 @@ function decorations(state, details, expanded) {
         const end = lastChild?.name === "CodeMark" ? state.doc.lineAt(lastChild.from).from : node.to;
         ranges.push(Decoration.line({class: "cm-code-header"}).range(line.from));
         ranges.push(Decoration.widget({widget: new CopyCodeWidget(firstBody, Math.max(firstBody, end)), side: -1}).range(line.from));
+        if (state.readOnly || !editing) {
+          // Keep the header for the copy action, but never expose fences or HTML examples as markup.
+          replace(line.from, line.to, undefined);
+          if (lastChild?.name === "CodeMark" && lastChild.from > line.from) {
+            const closing = state.doc.lineAt(lastChild.from);
+            replace(closing.from, closing.to, undefined);
+            ranges.push(Decoration.line({class: "cm-code-footer"}).range(closing.from));
+          }
+        }
       }
       return false;
     }
@@ -273,7 +282,8 @@ const live = StateField.define({
     }
     const tree = syntaxTree(transaction.state);
     const parsed = tree !== value.tree;
-    if (!changed && !transaction.selection && !effectsChanged && !parsed) return value;
+    const modeChanged = transaction.startState.readOnly !== transaction.state.readOnly;
+    if (!changed && !transaction.selection && !effectsChanged && !parsed && !modeChanged) return value;
     const details = changed || parsed ? parseDetails(transaction.state.doc, tree) : value.details;
     if (transaction.selection && !effectsChanged && !transaction.state.readOnly) {
       const head = transaction.state.selection.main.head;
@@ -311,7 +321,7 @@ window.boardEditor = {
           indentOnInput(), bracketMatching(), markdown({base: markdownLanguage}), syntaxHighlighting(highlighting),
           livePreview.of(config.sourceMode ? [] : live),
           EditorView.atomicRanges.of(view => view.state.field(live, false)?.decorations.update({filter: (_from, _to, decoration) => decoration.spec.atomic === true}) ?? Decoration.none),
-          editable.of(editability(config.readOnly)),
+          editable.of(editability(config.readOnly || config.previewOnly)),
           keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
           Prec.lowest(EditorView.domEventHandlers({keydown(event) {
             if (event.key !== "Escape" || event.isComposing || composing || view.composing) return false;
@@ -351,12 +361,14 @@ window.boardEditor = {
                        annotations: [externalChange, Transaction.addToHistory.of(false)]});
       }
       const effects = [];
-      if (currentReadOnly !== config.readOnly) effects.push(editable.reconfigure(editability(config.readOnly)));
+      if (currentReadOnly !== config.readOnly || currentPreviewOnly !== config.previewOnly) effects.push(editable.reconfigure(editability(config.readOnly || config.previewOnly)));
       if (currentSourceMode !== config.sourceMode) effects.push(livePreview.reconfigure(config.sourceMode ? [] : live));
       if (effects.length) view.dispatch({effects});
     }
     currentReadOnly = config.readOnly;
+    currentPreviewOnly = config.previewOnly;
     currentSourceMode = config.sourceMode;
+    view.dom.dataset.preview = String(!!(config.readOnly || config.previewOnly));
     if (config.colors) for (const [key, value] of Object.entries(config.colors)) document.documentElement.style.setProperty("--" + key, value);
     if (config.fontSize) document.documentElement.style.setProperty("--font-size", config.fontSize + "px");
     return snapshot();

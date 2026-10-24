@@ -14,6 +14,8 @@ final class ImageViewerModel: ObservableObject {
 
     @Published private(set) var items: [Item] = []
     @Published var index = 0
+    /// 1 means fit to the window; larger images can be inspected without losing navigation.
+    @Published private(set) var zoom: CGFloat = 1
 
     var current: Item? { items.indices.contains(index) ? items[index] : nil }
     var canGoBack: Bool { index > 0 }
@@ -22,20 +24,30 @@ final class ImageViewerModel: ObservableObject {
     func load(_ items: [Item], index: Int) {
         self.items = items
         self.index = items.isEmpty ? 0 : min(max(index, 0), items.count - 1)
+        zoom = 1
     }
 
     func move(_ delta: Int) {
         guard !items.isEmpty else { return }
-        index = min(max(index + delta, 0), items.count - 1)
+        let next = min(max(index + delta, 0), items.count - 1)
+        if next != index { index = next; zoom = 1 }
     }
+
+    func setZoom(_ value: CGFloat) { zoom = min(8, max(0.25, value)) }
+    func zoomIn() { setZoom(zoom * 1.25) }
+    func zoomOut() { setZoom(zoom / 1.25) }
+    func fit() { zoom = 1 }
 }
 
 private final class ImageViewerWindow: QuietWindow {
     var onKey: ((NSEvent) -> Bool)?
     override func cancelOperation(_ sender: Any?) { close() }
-    override func keyDown(with event: NSEvent) {
-        if onKey?(event) == true { return }
-        super.keyDown(with: event)
+    override func sendEvent(_ event: NSEvent) {
+        // Keep gallery shortcuts working when the scroll view owns keyboard focus.
+        if event.type == .keyDown,
+           event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+           onKey?(event) == true { return }
+        super.sendEvent(event)
     }
 }
 
@@ -49,13 +61,18 @@ final class ImageViewerController: NSObject, NSWindowDelegate {
     let model = ImageViewerModel()
     private(set) var window: NSWindow?
     private var store: JournalStore?
+    private var previewDirectory: URL?
 
     var isVisible: Bool { window?.isVisible == true }
 
     /// 显示一组图片，从第 `index` 张开始。
-    func show(store: JournalStore, items: [ImageViewerModel.Item], index: Int) {
+    func show(store: JournalStore, items: [ImageViewerModel.Item], index: Int, previewDirectory: URL? = nil) {
         guard !items.isEmpty else { return }
+        if let previous = self.store, previous !== store {
+            window?.contentViewController = makeContent(store: store)
+        }
         self.store = store
+        self.previewDirectory = previewDirectory ?? store.directory.appendingPathComponent("Preview/Draft", isDirectory: true)
         model.load(items, index: index)
         let window = self.window ?? makeWindow(store: store)
         self.window = window
@@ -64,10 +81,11 @@ final class ImageViewerController: NSObject, NSWindowDelegate {
     }
 
     /// 同一个任务的所有笔记里的图片，从这条日志的第 `index` 张开始。
-    func show(store: JournalStore, around log: DailyLogEntry, index: Int) {
-        let gallery = store.galleryImages(around: log)
+    func show(store: JournalStore, around log: DailyLogEntry, index: Int, tag: String? = nil) {
+        let gallery = gallery(store: store, around: log, tag: tag)
         let start = gallery.firstIndex { $0.logID == log.id }.map { $0 + index } ?? 0
-        show(store: store, items: gallery.map { .init(name: $0.name, caption: $0.caption) }, index: start)
+        show(store: store, items: gallery.map { .init(name: $0.name, caption: $0.caption) }, index: start,
+             previewDirectory: previewFolder(for: log, store: store, tag: tag))
     }
 
     /// 还没发送的草稿图片（没有出处可写）。
@@ -77,8 +95,8 @@ final class ImageViewerController: NSObject, NSWindowDelegate {
 
     /// 交给系统「预览」打开整组图片。Preview 自己负责缩放、全屏和前后切换；
     /// 为每个任务 / 标签建立一个轻量的预览目录，避免把不同上下文的图片混在一起。
-    func openPreview(store: JournalStore, around log: DailyLogEntry, index: Int) {
-        openPreview(urls: previewURLs(store: store, around: log, index: index))
+    func openPreview(store: JournalStore, around log: DailyLogEntry, index: Int, tag: String? = nil) {
+        openPreview(urls: previewURLs(store: store, around: log, index: index, tag: tag))
     }
 
     func openPreview(store: JournalStore, names: [String], index: Int) {
@@ -86,18 +104,20 @@ final class ImageViewerController: NSObject, NSWindowDelegate {
                                      folder: store.directory.appendingPathComponent("Preview/Draft", isDirectory: true)))
     }
 
-    func previewURLs(store: JournalStore, around log: DailyLogEntry, index: Int) -> [URL] {
-        let gallery: [JournalStore.GalleryImage]
-        if log.taskID == nil, let tag = (log.tags + log.taskTags).first {
-            gallery = JournalStore.gallery(of: store.allLogs(includeFocus: true).filter {
+    private func gallery(store: JournalStore, around log: DailyLogEntry, tag: String?) -> [JournalStore.GalleryImage] {
+        if log.taskID == nil, let tag = tag ?? (log.tags + log.taskTags).first {
+            return JournalStore.gallery(of: store.allLogs(includeFocus: true).filter {
                 $0.log.taskID == nil && ($0.log.tags + $0.log.taskTags).contains(tag)
             })
-        } else {
-            gallery = store.galleryImages(around: log)
         }
+        return store.galleryImages(around: log)
+    }
+
+    func previewURLs(store: JournalStore, around log: DailyLogEntry, index: Int, tag: String? = nil) -> [URL] {
+        let gallery = gallery(store: store, around: log, tag: tag)
         let start = gallery.firstIndex { $0.logID == log.id }.map { $0 + index } ?? 0
         return previewURLs(store: store, names: gallery.map(\.name), index: start,
-                           folder: previewFolder(for: log, store: store))
+                           folder: previewFolder(for: log, store: store, tag: tag))
     }
 
     func previewURLs(store: JournalStore, names: [String], index: Int, folder: URL) -> [URL] {
@@ -121,11 +141,11 @@ final class ImageViewerController: NSObject, NSWindowDelegate {
         NSWorkspace.shared.open(urls, withApplicationAt: preview, configuration: configuration)
     }
 
-    private func previewFolder(for log: DailyLogEntry, store: JournalStore) -> URL {
+    private func previewFolder(for log: DailyLogEntry, store: JournalStore, tag contextTag: String? = nil) -> URL {
         if let taskID = log.taskID {
             return store.directory.appendingPathComponent("Preview/Tasks/\(taskID.uuidString)", isDirectory: true)
         }
-        let tag = (log.tags + log.taskTags).first.map(Self.previewComponent) ?? "Unlinked"
+        let tag = (contextTag ?? (log.tags + log.taskTags).first).map(Self.previewComponent) ?? "Unlinked"
         return store.directory.appendingPathComponent("Preview/Tags/\(tag)", isDirectory: true)
     }
 
@@ -147,10 +167,17 @@ final class ImageViewerController: NSObject, NSWindowDelegate {
 
     func close() { window?.close() }
 
+    private func makeContent(store: JournalStore) -> NSViewController {
+        let content = ImageViewerView(store: store, model: model, openPreview: { [weak self] in
+            guard let self, let directory = self.previewDirectory else { return }
+            self.openPreview(urls: self.previewURLs(store: store, names: self.model.items.map(\.name),
+                                                    index: self.model.index, folder: directory))
+        })
+        return NSHostingController(rootView: LocalizedRoot { content })
+    }
+
     private func makeWindow(store: JournalStore) -> NSWindow {
-        let content = ImageViewerView(store: store, model: model, close: { [weak self] in self?.close() })
-        let host = NSHostingController(rootView: LocalizedRoot { content })
-        let window = ImageViewerWindow(contentViewController: host)
+        let window = ImageViewerWindow(contentViewController: makeContent(store: store))
         window.title = "图片"
         window.styleMask = [.titled, .closable, .resizable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
@@ -174,6 +201,9 @@ final class ImageViewerController: NSObject, NSWindowDelegate {
         switch event.keyCode {
         case 123: model.move(-1); return true
         case 124, 49: model.move(1); return true
+        case 24, 69: model.zoomIn(); return true
+        case 27, 78: model.zoomOut(); return true
+        case 29, 82: model.fit(); return true
         default: return false
         }
     }
@@ -182,7 +212,7 @@ final class ImageViewerController: NSObject, NSWindowDelegate {
 struct ImageViewerView: View {
     let store: JournalStore
     @ObservedObject var model: ImageViewerModel
-    let close: () -> Void
+    let openPreview: () -> Void
     @ObservedObject private var themes = ThemeStore.shared
     @State private var hovering = false
 
@@ -191,14 +221,8 @@ struct ImageViewerView: View {
             Color.black.opacity(0.92)
             if let item = model.current {
                 let url = store.imageURL(item.name)
-                if let image = NSImage(contentsOf: url) {
-                    Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
-                        .padding(EdgeInsets(top: 34, leading: 14, bottom: 52, trailing: 14))
-                        .id(item.name)
-                        .transition(.opacity)
-                } else {
-                    Label("找不到这张图片的文件", systemImage: "photo.badge.exclamationmark").foregroundStyle(.secondary)
-                }
+                ZoomableImage(url: url, model: model)
+                    .padding(EdgeInsets(top: 34, leading: 14, bottom: 52, trailing: 14))
                 navButton("chevron.left", enabled: model.canGoBack, help: "上一张 · ←") { model.move(-1) }
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 10)
                 navButton("chevron.right", enabled: model.canGoForward, help: "下一张 · → 或空格") { model.move(1) }
@@ -209,7 +233,6 @@ struct ImageViewerView: View {
                 }
             }
         }
-        .animation(Motion.quick, value: model.index)
         .onHover { hovering = $0 }
         .frame(minWidth: 360, minHeight: 280)
         .environment(\.colorScheme, .dark)
@@ -236,14 +259,17 @@ struct ImageViewerView: View {
                 Text(item.caption).font(.system(size: 12)).foregroundStyle(.white.opacity(0.7)).lineLimit(1).truncationMode(.tail)
             }
             Spacer(minLength: 8)
-            Button {
-                if let image = NSImage(contentsOf: url) {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.writeObjects([image])
-                }
-            } label: { Label("复制", systemImage: "doc.on.doc") }
+            Button { model.zoomOut() } label: { Label("缩小", systemImage: "minus.magnifyingglass") }
+                .disabled(model.zoom <= 0.25).help("缩小 · −")
+            Button { model.fit() } label: {
+                Text("\(Int((model.zoom * 100).rounded()))%")
+                    .font(.system(size: 11, design: .monospaced)).frame(minWidth: 42)
+            }.help("适应窗口 · 0")
+            Button { model.zoomIn() } label: { Label("放大", systemImage: "plus.magnifyingglass") }
+                .disabled(model.zoom >= 8).help("放大 · +")
+            ImageCopyButton(url: url)
             Button { NSWorkspace.shared.activateFileViewerSelecting([url]) } label: { Label("在访达中显示", systemImage: "folder") }
-            Button { NSWorkspace.shared.open(url) } label: { Label("用「预览」打开", systemImage: "arrow.up.forward.app") }
+            Button(action: openPreview) { Label("用「预览」打开", systemImage: "arrow.up.forward.app") }
         }
         .buttonStyle(HitAreaButtonStyle(compact: true)).labelStyle(.iconOnly).font(.system(size: 13)).foregroundStyle(.white)
         .padding(.horizontal, 14).frame(height: 40)

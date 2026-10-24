@@ -213,6 +213,77 @@ final class BoardLiveEditorTests: XCTestCase {
         XCTAssertEqual(fixture.store.boards[0].markdown, source)
     }
 
+    func testPreviewNeverRevealsMarkupWhenSelectedAndSourceModeRestoresEditing() async throws {
+        let source = "# Heading\n\n```swift\nlet value = 42\n```\n\n<details open>\n<summary>Agenda</summary>\n\n- [ ] Action\n\n</details>\n\nEnd"
+        let fixture = try LiveFixture(source: source)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        for offset in [0, 14, 46, source.utf16.count] {
+            _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.select(\(offset))")
+            fixture.session.configure(fontSize: 13, dark: true, previewOnly: true)
+            try await Task.sleep(for: .milliseconds(30))
+            let state = try await fixture.webView.evaluateJavaScript("""
+            (()=>{const content=document.querySelector('.cm-content');return {
+              text:content.textContent,editable:content.isContentEditable,
+              readonly:window.boardEditor.view().state.readOnly};})()
+            """) as? [String: Any]
+            let text = try XCTUnwrap(state?["text"] as? String)
+            for marker in ["```", "<details", "<summary", "</details>", "# Heading", "- [ ]"] {
+                XCTAssertFalse(text.contains(marker), marker)
+            }
+            XCTAssertTrue(text.contains("let value = 42"))
+            XCTAssertEqual(state?["editable"] as? Bool, false)
+            XCTAssertEqual(state?["readonly"] as? Bool, true)
+        }
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-check').click()")
+        let checked = try await fixture.snapshot()
+        XCTAssertTrue((checked["source"] as? String)?.contains("- [x] Action") == true)
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-copy-code').click()")
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(fixture.pasteboard.string(forType: .string), "let value = 42\n")
+        fixture.session.setSourceMode(true)
+        try await Task.sleep(for: .milliseconds(40))
+        let raw = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').textContent") as? String
+        XCTAssertTrue(raw?.contains("```swift") == true)
+        XCTAssertTrue(raw?.contains("<summary>Agenda</summary>") == true)
+        let editable = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').isContentEditable") as? Bool
+        XCTAssertEqual(editable, true)
+        fixture.session.setSourceMode(false)
+        try await Task.sleep(for: .milliseconds(40))
+        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.focus();window.boardEditor.select(3)")
+        let preview = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').textContent") as? String
+        XCTAssertFalse(preview?.contains("```") == true)
+        XCTAssertFalse(preview?.contains("<summary>") == true)
+        let cursorHidden = try await fixture.webView.evaluateJavaScript("getComputedStyle(document.querySelector('.cm-cursorLayer')).display==='none'") as? Bool
+        XCTAssertEqual(cursorHidden, true)
+        if let path = ProcessInfo.processInfo.environment["TIMELINE_BOARD_PREVIEW_SNAPSHOT"] {
+            let image = try await fixture.webView.takeSnapshot(configuration: nil)
+            let bitmap = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        }
+    }
+
+    func testLongDisclosureTitleWrapsCompletelyAtNarrowWidths() async throws {
+        let title = String(repeating: "长标题包含完整的议程和阅读目标", count: 8) + String(repeating: "longword", count: 20)
+        let fixture = try LiveFixture(source: "Before\n\n<details>\n<summary>\(title)</summary>\n\nBody\n\n</details>\nAfter")
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        fixture.session.configure(fontSize: 13, dark: true, previewOnly: true)
+        for width in [300, 410] {
+            fixture.window.setContentSize(NSSize(width: width, height: 480))
+            try await Task.sleep(for: .milliseconds(70))
+            let metrics = try await fixture.webView.evaluateJavaScript("""
+            (()=>{const title=document.querySelector('.board-details .title');const style=getComputedStyle(title);
+              return {text:title.textContent,ellipsis:style.textOverflow==='ellipsis',wrapped:title.clientHeight>30,
+                fits:title.scrollWidth<=title.clientWidth+1, height:title.getBoundingClientRect().height};})()
+            """) as? [String: Any]
+            XCTAssertEqual(metrics?["text"] as? String, title)
+            XCTAssertEqual(metrics?["ellipsis"] as? Bool, false)
+            XCTAssertEqual(metrics?["fits"] as? Bool, true)
+            XCTAssertGreaterThan(metrics?["height"] as? Double ?? 0, 50)
+        }
+    }
+
     func testTypingPreservesCaretThroughStoreRefreshAndTemplateUndo() async throws {
         let fixture = try LiveFixture(source: "Before\n\nBody\n\nAfter")
         defer { fixture.close() }
