@@ -55,6 +55,8 @@ enum Prefs {
     /// 专注计时窗口的样式（`FocusPanelStyle.rawValue`）和是否隐藏（专注照常进行，只是不显示）。
     static let focusPanelStyle = "focusPanelStyle"
     static let focusPanelHidden = "focusPanelHidden"
+    /// 专注中把面板收成半透明的小伙伴（悬停展开）。
+    static let focusCompanion = "focusCompanion"
     /// 浮动计时窗口被拖到哪里：窗口左上角。
     static let focusPanelTopLeft = "focusPanelTopLeft"
     static var focusMinLogSeconds: TimeInterval {

@@ -1380,6 +1380,20 @@ public final class JournalStore: ObservableObject {
         replaceDays(updated, action: "调整顺序")
     }
 
+    /// 把任务拖到某一天（nil = 未设日期）的某个位置：改日期和排序作为一次操作，⌘Z 一起撤销。
+    /// `order` 是目标分组里放下后的完整顺序（含被拖的任务）。
+    public func moveTask(_ id: UUID, to day: Date?, order: [UUID]) {
+        guard !isReadOnly, let located = locate(id) else { return }
+        let calendar = JournalDates.calendar
+        let sameDay = located.task.dueDate.map { calendar.startOfDay(for: $0) } == day.map { calendar.startOfDay(for: $0) }
+        undoManager.beginUndoGrouping()
+        if !sameDay { setDeadline(id, to: day) }
+        reorderTasks(order)
+        undoManager.setActionName("移动任务")
+        undoManager.endUndoGrouping()
+        lastAction = ActionEvent(id: (lastAction?.id ?? 0) + 1, name: "移动任务")
+    }
+
     /// 设置或清除截止日期。`keepingTime` 为 true 时保留原来的时分，只换日期。
     public func setDeadline(_ id: UUID, to date: Date?, keepingTime: Bool = true) {
         guard !isReadOnly, let located = locate(id) else { return }

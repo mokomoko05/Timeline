@@ -40,7 +40,7 @@ struct TaskPriorityButton: View {
         NativeTaskHandle(task: task, enabled: !store.isReadOnly, drawsHandle: false,
                          select: select, reorder: reorder.map { model in
                              TaskReorderHooks(begin: { model.begin(task.id) }, update: { model.update($0) },
-                                 end: { model.finish() }, cancel: { model.cancel() })
+                                 end: { model.finish() }, cancel: { model.cancel() }, escaped: { model.hasEscaped($0) })
                          }, priorityItems: items,
                          priorityColor: NSColor(PriorityMark(priority: task.priority).color), dragOrigin: dragOrigin)
             .frame(width: 18, height: 22)

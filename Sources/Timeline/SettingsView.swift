@@ -12,6 +12,7 @@ struct SettingsView: View {
     @AppStorage(Prefs.globalHotKey) private var globalHotKey = true
     @AppStorage(Prefs.terminalLayout) private var terminalLayout = TerminalLayout.threePanes.rawValue
     @AppStorage(Prefs.focusPanelStyle) private var focusPanelStyle = FocusPanelStyle.card.rawValue
+    @AppStorage(Prefs.focusCompanion) private var focusCompanion = true
     @AppStorage(Prefs.focusPanelHidden) private var focusPanelHidden = false
     @AppStorage(AutoHideOnResign.prefKey) private var autoHideOnResign = true
 
@@ -33,6 +34,7 @@ struct SettingsView: View {
             }
             Section("专注计时") {
                 Toggle("隐藏专注工作台", isOn: $focusPanelHidden)
+                Toggle("专注时收成桌面小伙伴（悬停展开）", isOn: $focusCompanion)
                 FocusMinutesSetting(title: "默认专注时长", key: Prefs.focusDefaultMinutes,
                                     fallback: Prefs.defaultFocusMinutes, minimum: 1)
                 FocusMinutesSetting(title: "最低专注时长", key: Prefs.focusMinLogMinutes,

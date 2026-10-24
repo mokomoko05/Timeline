@@ -183,3 +183,30 @@ extension View {
     }
 }
 
+extension View {
+    /// 半透明玻璃：透出后面的桌面，顶边一道细高光，阴影由窗口提供。
+    func glassPanelSurface(radius: CGFloat = Metrics.radiusPanel) -> some View {
+        modifier(GlassPanelSurface(radius: radius))
+    }
+}
+
+private struct GlassPanelSurface: ViewModifier {
+    let radius: CGFloat
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        content
+            .background {
+                shape.fill(.ultraThinMaterial)
+                    .overlay(shape.fill(Palette.card.opacity(scheme == .dark ? 0.35 : 0.45)))
+                    .overlay(shape.fill(LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.06 : 0.35), .clear],
+                                                       startPoint: .top, endPoint: .center)))
+            }
+            .overlay(shape.strokeBorder(LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.22 : 0.9), Palette.line.opacity(0.5)],
+                                                       startPoint: .top, endPoint: .bottom), lineWidth: Metrics.hairline)
+                .allowsHitTesting(false))
+            .clipShape(shape)
+    }
+}
+

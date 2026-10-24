@@ -850,3 +850,7 @@
 "展开这一轮" = "Show session";
 "收起这一轮" = "Collapse session";
 "查看刚记下的内容" = "Show what you just captured";
+"已暂停" = "Paused";
+"悬停展开专注面板" = "Hover to expand the focus panel";
+"专注中，剩余 %@" = "Focusing, %@ left";
+"专注时收成桌面小伙伴（悬停展开）" = "Shrink to a desktop companion while focusing (hover to expand)";

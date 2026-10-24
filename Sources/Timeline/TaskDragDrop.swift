@@ -157,7 +157,8 @@ final class TaskHandleView: NSView, NSDraggingSource {
             NSCursor.closedHand.set()
             // 横向离开清单、或拖进左侧的日期一栏，就切换为改日期的拖放（可以放在日历或时间轴的日期结上）；
             // 越过日期分组仍按组内排序。
-            if leftList(event.locationInWindow) || inDateGutter(event.locationInWindow), let id = taskID {
+            if leftList(event.locationInWindow) || inDateGutter(event.locationInWindow)
+                || reorder?.escaped(translation(event.locationInWindow)) == true, let id = taskID {
                 endReorder(commit: false)
                 startNativeDrag(id, title, self, event)
                 return
@@ -178,7 +179,11 @@ final class TaskHandleView: NSView, NSDraggingSource {
             track(event.locationInWindow)
             return
         }
-        // 单项分组继续等待横向离开清单，避免纵向拖动触发改日期。
+        // 这一天只有它一项：纵向拖出一段距离就是要换日期。
+        if abs(event.locationInWindow.y - initial.locationInWindow.y) > 24 {
+            initialEvent = nil
+            startNativeDrag(id, title, self, event)
+        }
     }
 
     // MARK: - 清单内排序
@@ -233,8 +238,10 @@ final class TaskHandleView: NSView, NSDraggingSource {
     }
 
     /// 指针（窗口坐标）相对按下位置在清单内容里向下的位移 = 指针本身向下移动的距离 + 清单滚动的距离。
+    private func translation(_ point: NSPoint) -> CGFloat { -(point.y - startY) + (scrollOffset() - startScroll) }
+
     private func track(_ point: NSPoint) {
-        reorder?.update(-(point.y - startY) + (scrollOffset() - startScroll))
+        reorder?.update(translation(point))
     }
 
     /// 拖到清单上下边缘附近时自动滚动，按住不动也会继续。
@@ -258,7 +265,25 @@ final class TaskHandleView: NSView, NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
         context == .withinApplication ? .move : []
     }
-    func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) { NSCursor.closedHand.set() }
+    /// 拖到别的日期时，靠近清单上下边缘也会自动滚动，长时间轴也能一路拖到远处的日期。
+    func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
+        NSCursor.closedHand.set()
+        guard let scroll = scrollView, let window = scroll.window, let document = scroll.documentView else { return }
+        let point = window.convertPoint(fromScreen: screenPoint)
+        let frame = scroll.convert(scroll.bounds, to: nil)
+        guard point.x >= frame.minX - 40, point.x <= frame.maxX + 40 else { return }
+        let zone: CGFloat = 44
+        var delta: CGFloat = 0
+        if point.y > frame.maxY - zone { delta = -min(16, (point.y - (frame.maxY - zone)) / 2 + 2) }
+        else if point.y < frame.minY + zone { delta = min(16, ((frame.minY + zone) - point.y) / 2 + 2) }
+        guard delta != 0 else { return }
+        let clip = scroll.contentView
+        let maxY = max(0, document.bounds.height - clip.bounds.height)
+        let sign: CGFloat = document.isFlipped ? 1 : -1
+        let newY = min(max(clip.bounds.origin.y + delta * sign, document.isFlipped ? 0 : -maxY), document.isFlipped ? maxY : 0)
+        clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: newY))
+        scroll.reflectScrolledClipView(clip)
+    }
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         initialEvent = nil
         TaskDragSession.shared.end()

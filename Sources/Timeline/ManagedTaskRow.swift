@@ -193,8 +193,10 @@ struct ManagedTaskRow: View {
             if emphasized && !timeline { Capsule().fill(Palette.accent).frame(width: 3).padding(.vertical, 6).allowsHitTesting(false) }
         }
         .overlay {
+            // 选中只给这一圈描边做过渡；整行（含原生文本）不参与动画，点日期、打开弹窗时不卡。
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(selected ? Palette.accent : .clear, lineWidth: 1.5)
+                .animation(Motion.reduced ? nil : .easeOut(duration: 0.12), value: selected)
                 .allowsHitTesting(false)
         }
     }
@@ -209,7 +211,6 @@ struct ManagedTaskRow: View {
         }
         .contentShape(RoundedRectangle(cornerRadius: 8))
         .simultaneousGesture(TapGesture().onEnded { selectTask() })
-        .animation(.easeInOut(duration: 0.12), value: selected)
         .contextMenu {
             ForEach(Array(menuItems.enumerated()), id: \.offset) { _, item in
                 if item.separator { Divider() } else {

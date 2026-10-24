@@ -226,6 +226,8 @@ struct TimelineDayView: View {
     let next: () -> Void
     var showsFinishedTasks = false
     @State private var calendarDropTargeted = false
+    /// 拖到这一天时插入线的位置（分组坐标）。
+    @State private var insertionY: CGFloat?
     @ObservedObject private var dragSession = TaskDragSession.shared
     @State private var reorder = TaskReorderModel()
     /// 今天有定了时刻的事项时，「现在」画在第一个还没到点的未完成事项前面；都已过点时画在最后。
@@ -297,9 +299,24 @@ struct TimelineDayView: View {
                 .allowsHitTesting(false)
         }
         .contentShape(Rectangle())
-        .onDrop(of: [TaskDragPayload.type], delegate: CalendarTaskDropTarget(store: store, destination: date,
-            calendarSourceOnly: true, targeted: $calendarDropTargeted))
-        .onChange(of: dragSession.activeID) { if $0 == nil { calendarDropTargeted = false } }
+        .overlay(alignment: .topLeading) {
+            if let insertionY {
+                // 放下的位置：轴线上一颗点，向右一道强调色的线。
+                HStack(spacing: 0) {
+                    Circle().fill(Palette.accent).frame(width: 7, height: 7)
+                    Capsule().fill(Palette.accent).frame(height: 2)
+                }
+                .padding(.leading, TaskTimelineLayout.axisX(typography) - 3.5)
+                .offset(y: insertionY - 3.5)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
+        }
+        .onDrop(of: [TaskDragPayload.type], delegate: TimelineDayDrop(
+            store: store, destination: date, enabled: !showsFinishedTasks && !store.isReadOnly,
+            order: { visibleIDs }, frames: { reorder.frames },
+            targeted: $calendarDropTargeted, insertionY: $insertionY))
+        .onChange(of: dragSession.activeID) { if $0 == nil { calendarDropTargeted = false; insertionY = nil } }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(date.map(TaskTimelineSection.dayID) ?? "undated")
     }
@@ -608,6 +625,66 @@ private struct KnotDrop: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// 把任务拖进时间轴的某一天：放在指针所在的位置，跨日期时同时改截止日期。
+/// 同一天里上下拖动仍由组内排序处理；拖出本组或从日历拖来时才走到这里。
+struct TimelineDayDrop: DropDelegate {
+    let store: JournalStore
+    let destination: Date?
+    let enabled: Bool
+    let order: () -> [UUID]
+    let frames: () -> [UUID: CGRect]
+    @Binding var targeted: Bool
+    @Binding var insertionY: CGFloat?
+
+    private var dragged: UUID? { TaskDragSession.shared.activeID }
+
+    /// 被拖任务以外、按显示顺序的行和位置。
+    private func rows() -> [(UUID, CGRect)] {
+        let rects = frames()
+        return order().filter { $0 != dragged }.compactMap { id in rects[id].map { (id, $0) } }
+    }
+
+    private func index(at y: CGFloat) -> Int {
+        rows().filter { $0.1.midY < y }.count
+    }
+
+    private func lineY(for index: Int) -> CGFloat {
+        let list = rows()
+        if list.isEmpty { return 30 }
+        if index < list.count { return list[index].1.minY - 3 }
+        return list[list.count - 1].1.maxY + 3
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        enabled && dragged != nil && info.hasItemsConforming(to: [TaskDragPayload.type])
+    }
+
+    func dropEntered(info: DropInfo) { refresh(info) }
+    func dropExited(info: DropInfo) { targeted = false; insertionY = nil }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        refresh(info)
+        return DropProposal(operation: validateDrop(info: info) ? .move : .forbidden)
+    }
+
+    private func refresh(_ info: DropInfo) {
+        guard validateDrop(info: info) else { targeted = false; insertionY = nil; return }
+        targeted = true
+        let y = lineY(for: index(at: info.location.y))
+        if insertionY != y { withAnimation(Motion.quick) { insertionY = y } }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        defer { targeted = false; insertionY = nil }
+        guard validateDrop(info: info), let id = dragged else { return false }
+        var ids = rows().map(\.0)
+        ids.insert(id, at: min(index(at: info.location.y), ids.count))
+        NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
+        withAnimation(Motion.quick) { store.moveTask(id, to: destination, order: ids) }
+        TaskDragSession.shared.end()
+        return true
     }
 }
 

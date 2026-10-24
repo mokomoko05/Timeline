@@ -49,6 +49,8 @@ struct TaskReorderHooks {
     var update: (CGFloat) -> Void
     var end: () -> Void
     var cancel: () -> Void
+    /// 指针已经越过这一日期分组的上下边界：该切换成「拖到别的日期」。
+    var escaped: (CGFloat) -> Bool = { _ in false }
 }
 
 /// 被拖那一行的实时位移，单独成一个对象：它每次鼠标移动都会变，只让被拖的那一行订阅，其他行不用跟着重算。
@@ -97,6 +99,14 @@ final class TaskReorderModel: ObservableObject {
         drag.value = 0
         withAnimation(Motion.quick) { activeID = id }
         return true
+    }
+
+    /// 指针离开本组的上下边界超过半行：用户要把它拖到别的日期，而不是在组内排序。
+    func hasEscaped(_ translation: CGFloat) -> Bool {
+        guard activeID != nil, groupFrames.indices.contains(activeIndex), let first = groupFrames.first, let last = groupFrames.last else { return false }
+        let row = groupFrames[activeIndex]
+        let margin = max(18, row.height * 0.6)
+        return row.minY + translation < first.minY - margin || row.maxY + translation > last.maxY + margin
     }
 
     /// `translation`：指针相对按下时在清单内容里向下移动的距离（已包含自动滚动的距离）。

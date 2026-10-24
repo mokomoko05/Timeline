@@ -125,4 +125,27 @@ final class HotPathCacheTests: XCTestCase {
         let undated = store.tasks().filter { $0.task.dueDate == nil }.sorted(by: ScheduledTask.listOrder)
         XCTAssertEqual(undated.last?.id, first.id, "恢复后排在末尾，不回到放弃前的位置")
     }
+
+    func testMovingATaskToAnotherDayPlacesItAtTheDropPositionAndUndoesInOneStep() throws {
+        let (store, directory) = makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = JournalDates.calendar
+        let today = calendar.startOfDay(for: Date())
+        let tomorrow = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: today))
+        for title in ["今天一", "今天二"] { store.addTodo(title, on: today) }
+        for title in ["明天一", "明天二"] { store.addTodo(title, on: today) }
+        for item in store.tasks() { store.setDeadline(item.id, to: item.task.title.hasPrefix("今天") ? today : tomorrow) }
+        func ids(on day: Date) -> [UUID] {
+            store.tasks().filter { $0.task.dueDate.map { calendar.isDate($0, inSameDayAs: day) } == true }
+                .sorted(by: ScheduledTask.listOrder).map(\.id)
+        }
+        let moving = try XCTUnwrap(store.tasks().first { $0.task.title == "今天二" }).id
+        let target = ids(on: tomorrow)
+        store.moveTask(moving, to: tomorrow, order: [target[0], moving, target[1]])
+        XCTAssertEqual(ids(on: tomorrow), [target[0], moving, target[1]], "放在两项之间")
+        XCTAssertEqual(ids(on: today).count, 1)
+        store.undo()
+        XCTAssertEqual(ids(on: today).count, 2, "一次撤销同时恢复日期和顺序")
+        XCTAssertEqual(ids(on: tomorrow), target)
+    }
 }

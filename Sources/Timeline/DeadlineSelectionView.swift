@@ -73,7 +73,7 @@ struct DeadlineSelectionView: View {
                         let weekday = (JournalDates.calendar.component(.weekday, from: today) + 5) % 7
                         let day = JournalDates.calendar.date(byAdding: .day, value: offset < 0 ? 7 - weekday : offset, to: today) ?? today
                         due = DeadlineSelection.day(day, keepingTime: due)
-                    }.buttonStyle(.bordered).controlSize(.small)
+                    }.buttonStyle(HitAreaButtonStyle(compact: true)).foregroundStyle(Palette.accent).font(.system(size: 12, weight: .medium))
                 }
             }
             calendar
@@ -103,7 +103,7 @@ struct DeadlineSelectionView: View {
                             Button(String(format: "%02d:00", hour)) {
                                 NSApp.keyWindow?.makeFirstResponder(nil)
                                 due = JournalDates.calendar.date(bySettingHour: hour, minute: 0, second: 0, of: due) ?? due
-                            }.buttonStyle(.bordered).controlSize(.mini)
+                            }.buttonStyle(HitAreaButtonStyle(compact: true)).foregroundStyle(Palette.accent).font(.system(size: 11, weight: .medium)).monospacedDigit()
                         }
                     }
                 } else {
@@ -138,25 +138,9 @@ struct DeadlineSelectionView: View {
                     Text(symbol).font(.system(size: 10)).foregroundStyle(Palette.muted).frame(maxWidth: .infinity)
                 }
             }
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 7), spacing: 2) {
-                ForEach(JournalDates.monthGrid(month, weekStart: sundayFirst ? 1 : 2), id: \.self) { day in
-                    let selected = JournalDates.calendar.isDate(day, inSameDayAs: due)
-                    let inMonth = JournalDates.calendar.isDate(day, equalTo: month, toGranularity: .month)
-                    Button {
-                        NSApp.keyWindow?.makeFirstResponder(nil)
-                        due = DeadlineSelection.day(day, keepingTime: due)
-                    } label: {
-                        Text("\(JournalDates.calendar.component(.day, from: day))")
-                            .font(.system(size: 12, weight: selected ? .semibold : .regular)).monospacedDigit()
-                            .foregroundStyle(selected ? Color.white : Palette.ink.opacity(inMonth ? 1 : 0.35))
-                            .frame(maxWidth: .infinity).frame(height: 28)
-                            .background(selected ? Palette.accent : .clear, in: RoundedRectangle(cornerRadius: 6))
-                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(JournalDates.calendar.isDateInToday(day) && !selected ? Palette.accent : .clear))
-                    }
-                    .raisedOnHover(radius: 6)
-                    .accessibilityLabel(day.formatted(date: .complete, time: .omitted))
-                    .accessibilityAddTraits(selected ? .isSelected : [])
-                }
+            DayGrid(month: month, due: due, weekStart: sundayFirst ? 1 : 2) { day in
+                NSApp.keyWindow?.makeFirstResponder(nil)
+                due = DeadlineSelection.day(day, keepingTime: due)
             }
             .frame(height: 178, alignment: .top)
         }
@@ -165,6 +149,74 @@ struct DeadlineSelectionView: View {
 
     private func shiftMonth(_ delta: Int) {
         month = JournalDates.calendar.date(byAdding: .month, value: delta, to: month) ?? month
+    }
+}
+
+/// 选日期的月格：42 个格子只有一个悬停状态，没有每格的渐变、阴影和动画，弹出和翻月都不掉帧。
+private struct DayGrid: View {
+    let month: Date
+    let due: Date
+    let weekStart: Int
+    let pick: (Date) -> Void
+    @State private var hovered: Date?
+
+    private struct Cell: Identifiable {
+        let date: Date
+        let day: Int
+        let inMonth: Bool
+        let today: Bool
+        var id: Date { date }
+    }
+
+    private var cells: [Cell] {
+        let calendar = JournalDates.calendar
+        return JournalDates.monthGrid(month, weekStart: weekStart).map { date in
+            Cell(date: date, day: calendar.component(.day, from: date),
+                 inMonth: calendar.isDate(date, equalTo: month, toGranularity: .month),
+                 today: calendar.isDateInToday(date))
+        }
+    }
+
+    var body: some View {
+        let selectedDay = JournalDates.calendar.startOfDay(for: due)
+        let rows = cells.chunked(7)
+        Grid(horizontalSpacing: 2, verticalSpacing: 2) {
+            ForEach(rows.indices, id: \.self) { row in
+                GridRow {
+                    ForEach(rows[row]) { cell in
+                        let selected = cell.date == selectedDay
+                        Text("\(cell.day)")
+                            .font(.system(size: 12, weight: selected || cell.today ? .semibold : .regular)).monospacedDigit()
+                            .foregroundStyle(selected ? Palette.onAccent : (cell.today ? Palette.accent : Palette.ink.opacity(cell.inMonth ? 1 : 0.35)))
+                            .frame(maxWidth: .infinity).frame(height: 28)
+                            .background {
+                                RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous)
+                                    .fill(selected ? Palette.accent : (hovered == cell.date ? Palette.soft : .clear))
+                            }
+                            .overlay {
+                                if cell.today && !selected {
+                                    RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous).strokeBorder(Palette.accent.opacity(0.6), lineWidth: 1)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture { pick(cell.date) }
+                            .onHover { inside in
+                                if inside { hovered = cell.date } else if hovered == cell.date { hovered = nil }
+                            }
+                            .accessibilityElement()
+                            .accessibilityLabel(cell.date.formatted(date: .complete, time: .omitted))
+                            .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
+                            .accessibilityAction { pick(cell.date) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private extension Array {
+    func chunked(_ size: Int) -> [[Element]] {
+        stride(from: 0, to: count, by: size).map { Array(self[$0..<Swift.min($0 + size, count)]) }
     }
 }
 

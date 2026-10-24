@@ -125,6 +125,14 @@ final class DesignPreviewTests: XCTestCase {
             try render("capture", size: NSSize(width: 342, height: 170), dark: dark,
                        QuickCaptureView(store: store, model: model, close: {}, resize: { _ in }))
             try render("focus", size: NSSize(width: 340, height: 160), dark: dark, FocusPanelView(session: focus))
+            // 玻璃效果放在一张模拟桌面上看。
+            var companion = FocusPanelView(session: focus)
+            companion.previewCompanion = true
+            try render("companion", size: NSSize(width: 340, height: 220), dark: dark, ZStack {
+                LinearGradient(colors: [Color(red: 0.35, green: 0.45, blue: 0.75), Color(red: 0.85, green: 0.55, blue: 0.45)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                VStack(spacing: 14) { companion; FocusPanelView(session: focus).scaleEffect(0.82) }
+            })
         }
     }
 

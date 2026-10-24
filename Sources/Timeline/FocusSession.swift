@@ -565,7 +565,7 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
             let content = FocusPanelView(session: session, close: { [weak self] in
                     self?.workspaceShown = false
                     self?.refresh()
-                }, resize: { [weak self] height in self?.resize(height: height) })
+                }, resize: { [weak self] size in self?.resize(to: size) })
             let host = NSHostingView(rootView: LocalizedRoot { content })
             host.setFrameSize(size)
             // 不激活的浮动窗口：点它不会抢走前台，否则会被判定为离开目标页面。
@@ -602,11 +602,13 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         return NSPoint(x: frame.maxX - size.width - 18, y: frame.minY + size.height + 18)
     }
 
-    private func resize(height: CGFloat) {
-        guard let panel, height >= Self.workspaceSize.height, abs(panel.frame.height - height) > 0.5 else { return }
+    /// 内容大小变了（伙伴小胶囊 ↔ 完整面板，或输入变高）：保持右下角不动，向左、向上展开。
+    private func resize(to size: CGSize) {
+        guard let panel, size.width > 40, size.height > 30,
+              abs(panel.frame.height - size.height) > 0.5 || abs(panel.frame.width - size.width) > 0.5 else { return }
         var frame = panel.frame
-        frame.origin.y += frame.height - height
-        frame.size.height = height
+        frame.origin.x = frame.maxX - size.width
+        frame.size = size
         panel.setFrame(frame, display: true)
         panel.invalidateShadow()
     }
@@ -773,8 +775,14 @@ struct FocusPanelView: View {
     @ObservedObject private var languages = LanguageStore.shared
     @ObservedObject var session: FocusSession
     let close: () -> Void
-    let resize: (CGFloat) -> Void
+    let resize: (CGSize) -> Void
     @State private var selectedTaskID: UUID?
+    /// 专注进行中默认收成一个半透明的小伙伴，悬停、点击或正在输入时展开成完整面板。
+    @AppStorage(Prefs.focusCompanion) private var companionEnabled = true
+    @State private var expanded = false
+    @State private var collapseTask: Task<Void, Never>?
+    /// 设计预览用：测试环境里也显示收起的样子。
+    var previewCompanion = false
     @AppStorage(Prefs.focusDefaultMinutes) private var defaultMinutes = Prefs.defaultFocusMinutes
     @AppStorage(Prefs.taskSortMode) private var taskSort = TaskSortMode.deadline.rawValue
     @State private var minutes: String
@@ -787,7 +795,7 @@ struct FocusPanelView: View {
     @StateObject private var reflectionDraft = FocusNoteDraft()
     @StateObject private var mention = MentionState()
 
-    init(session: FocusSession, close: @escaping () -> Void = {}, resize: @escaping (CGFloat) -> Void = { _ in }) {
+    init(session: FocusSession, close: @escaping () -> Void = {}, resize: @escaping (CGSize) -> Void = { _ in }) {
         self.session = session
         self.close = close
         self.resize = resize
@@ -805,23 +813,35 @@ struct FocusPanelView: View {
         }
     }
 
+    /// 只有专注进行中、没在写反馈、没在输入时才收起；测试环境始终展开，便于检查面板内容。
+    private var showsCompanion: Bool {
+        guard companionEnabled, !expanded, !Headless.active || previewCompanion, let _ = session.active, !session.needsReflection else { return false }
+        // 有没发出去的笔记就保持展开，免得输入到一半被收起。
+        return draft.text.isEmpty && draft.images.isEmpty
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Capsule().fill(Palette.line).frame(width: 36, height: 4).frame(maxWidth: .infinity)
-                .padding(.bottom, 12)
-            if let active = session.active {
-                if session.needsReflection { reflectionView(active) } else { activeView(active) }
-            } else { pickerView }
+        Group {
+            if showsCompanion, let active = session.active {
+                FocusCompanion(session: session, title: active.title)
+                    .onTapGesture { expand() }
+                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .bottomTrailing)))
+            } else {
+                fullPanel.transition(.opacity)
+            }
         }
-        .padding(11)
-        .frame(width: 340, alignment: .leading)
-        .frame(minHeight: 158, alignment: .topLeading)
-        .fixedSize(horizontal: false, vertical: true)
-        .floatingPanelSurface()
         .foregroundStyle(Palette.ink)
         .tint(Palette.accent)
-        .background(GeometryReader { proxy in Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height) })
-        .onPreferenceChange(PanelHeightKey.self, perform: resize)
+        .background(GeometryReader { proxy in Color.clear.preference(key: FocusPanelSizeKey.self, value: proxy.size) })
+        .onPreferenceChange(FocusPanelSizeKey.self, perform: resize)
+        .onHover { inside in
+            if inside { expand() } else { scheduleCollapse() }
+        }
+        .animation(Motion.reduced ? nil : Motion.spring, value: showsCompanion)
+        .onChange(of: session.active?.taskID) { id in
+            // 刚开始专注时先完整显示一会儿，再收成小伙伴。
+            if id != nil { expand(); scheduleCollapse(after: 2.5) }
+        }
         .onAppear {
             configureMention()
             if selectedTaskID == nil { selectedTaskID = tasks.first?.id }
@@ -834,6 +854,37 @@ struct FocusPanelView: View {
         }
         .onChange(of: session.needsReflection) { needsReflection in
             if needsReflection { focused = true }
+        }
+    }
+
+    private var fullPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Capsule().fill(Palette.line).frame(width: 36, height: 4).frame(maxWidth: .infinity)
+                .padding(.bottom, 12)
+            if let active = session.active {
+                if session.needsReflection { reflectionView(active) } else { activeView(active) }
+            } else { pickerView }
+        }
+        .padding(11)
+        .frame(width: 340, alignment: .leading)
+        .frame(minHeight: 158, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: true)
+        .glassPanelSurface()
+    }
+
+    private func expand() {
+        collapseTask?.cancel()
+        collapseTask = nil
+        if !expanded { expanded = true }
+    }
+
+    /// 鼠标离开后稍等再收起：窗口在两种大小之间切换时，指针短暂落在外面不至于来回闪。
+    private func scheduleCollapse(after delay: Double = 0.6) {
+        collapseTask?.cancel()
+        collapseTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            expanded = false
         }
     }
 
@@ -1043,7 +1094,7 @@ struct FocusPanelView: View {
                 }
                 .padding(.leading, 9).padding(.trailing, 4).padding(.vertical, 3)
                 .frame(minHeight: 34)
-                .inputFieldSurface(focused: focused, fill: Palette.background)
+                .inputFieldSurface(focused: focused, fill: Palette.background.opacity(0.55))
                 .popover(isPresented: Binding(get: { mention.isActive }, set: { if !$0 { mention.dismiss() } }), arrowEdge: .bottom) {
                     if let store { MentionList(state: mention, store: store, contextTags: draft.tags).frame(width: 320) }
                 }
@@ -1250,3 +1301,56 @@ struct TaskFocusButton: View {
         .disabled(task.task.completed && !running)
     }
 }
+
+struct FocusPanelSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+}
+
+/// 专注中的桌面小伙伴：一颗会呼吸的进度环、剩余时间和任务名，浮在半透明的玻璃胶囊里。
+struct FocusCompanion: View {
+    @ObservedObject var session: FocusSession
+    let title: String
+    @State private var breathing = false
+
+    private var tint: Color { session.isPaused ? Palette.muted : Palette.accent }
+
+    var body: some View {
+        HStack(spacing: 9) {
+            ZStack {
+                Circle().fill(tint.opacity(breathing ? 0.22 : 0.08)).frame(width: 30, height: 30)
+                    .scaleEffect(breathing ? 1.08 : 0.92)
+                Circle().stroke(Palette.muted.opacity(0.2), lineWidth: 2).frame(width: 22, height: 22)
+                Circle().trim(from: 1 - session.remainingFraction, to: 1)
+                    .stroke(tint, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                    .rotationEffect(.degrees(-90)).frame(width: 22, height: 22)
+                Circle().fill(tint).frame(width: 5, height: 5)
+            }
+            .frame(width: 32, height: 32)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(FocusSession.clock(session.remainingSeconds))
+                    .font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .foregroundStyle(session.isPaused ? Palette.muted : Palette.ink)
+                Text(session.isPaused ? AppLocalized("已暂停") : title)
+                    .font(.system(size: 10)).foregroundStyle(Palette.muted).lineLimit(1)
+            }
+            .frame(width: 150, alignment: .leading)
+        }
+        .padding(.leading, 8).padding(.trailing, 14).padding(.vertical, 7)
+        .glassPanelSurface(radius: 26)
+        .contentShape(Capsule())
+        .onAppear {
+            guard !Motion.reduced, !session.isPaused else { return }
+            withAnimation(.easeInOut(duration: 2.4).repeatForever(autoreverses: true)) { breathing = true }
+        }
+        .onChange(of: session.isPaused) { paused in
+            if paused { withAnimation(.easeOut(duration: 0.3)) { breathing = false } }
+            else if !Motion.reduced { withAnimation(.easeInOut(duration: 2.4).repeatForever(autoreverses: true)) { breathing = true } }
+        }
+        .help(AppLocalized("悬停展开专注面板"))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(AppLocalizedFormat("专注中，剩余 %@", FocusSession.clock(session.remainingSeconds)))
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
