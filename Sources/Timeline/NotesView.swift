@@ -17,6 +17,9 @@ struct NotesView: View {
     @ObservedObject private var themes = ThemeStore.shared
     @State private var creatingTag = false
     @State private var tagFocused = false
+    /// 刚写下的那条：滚到它所在的位置（按待办分章时它可能在中间某章），并短暂高亮。
+    @State private var revealNoteID: UUID?
+    @State private var flashNoteID: UUID?
     /// 笔记输入的缓冲：按键只刷新输入行，停顿后再写进导航草稿（否则每个字都会重算整页笔记和章节）。
     @State private var tagText = NoteTextBuffer()
     @State private var taskText = NoteTextBuffer()
@@ -355,7 +358,7 @@ struct NotesView: View {
                         if store.board(for: .task(id))?.hasContent == true { proxy.scrollTo("board-start", anchor: .top) }
                         else { proxy.scrollTo("end", anchor: .bottom) }
                     }
-                    .onChange(of: notes.count) { _ in withAnimation(Motion.quick) { proxy.scrollTo("end", anchor: .bottom) } }
+                    .onChange(of: revealNoteID) { reveal($0, proxy: proxy) }
                     .onChange(of: selection) { _ in
                         if store.board(for: .task(id))?.hasContent == true { proxy.scrollTo("board-start", anchor: .top) }
                         else { proxy.scrollTo("end", anchor: .bottom) }
@@ -448,6 +451,23 @@ struct NotesView: View {
             .help(LocalizedStringKey(title)).accessibilityLabel(LocalizedStringKey(title))
     }
 
+    private func openTagPage(_ proxy: ScrollViewProxy, startAtTop: Bool) {
+        proxy.scrollTo(startAtTop ? "board-start" : "end", anchor: startAtTop ? .top : .bottom)
+    }
+
+    /// 等新笔记出现在列表里（下一轮布局）再滚到它，然后短暂高亮。删除、编辑、别处写入都不触发跳转。
+    private func reveal(_ id: UUID?, proxy: ScrollViewProxy) {
+        guard let id else { return }
+        DispatchQueue.main.async {
+            withAnimation(Motion.quick) { proxy.scrollTo(id, anchor: .center) }
+            flashNoteID = id
+            revealNoteID = nil
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            if flashNoteID == id { withAnimation(.easeOut(duration: 0.4)) { flashNoteID = nil } }
+        }
+    }
+
     private func dayHeader(_ key: String, date: Date, count: Int? = nil) -> some View {
         NoteDayKnot(date: date, key: key, count: count) { close(); openDay(date) }
     }
@@ -459,13 +479,14 @@ struct NotesView: View {
                 NoteThreadGap(label: gap)
             }
             noteRow(item, showTask: showTask, showDate: showDate, tag: tag, hasPrevious: index > 0, hasNext: index < items.count - 1)
+                .id(item.id)
         }
     }
 
     private func noteRow(_ item: JournalStore.LoggedLog, showTask: Bool = false, showDate: Bool = false, tag: String? = nil,
                          hasPrevious: Bool = true, hasNext: Bool = true) -> some View {
         let log = item.log
-        return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext) {
+        return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext, highlighted: flashNoteID == log.id) {
             // 时间、类型、来源排成一行淡淡的说明，不和正文抢。
             Text((showDate ? item.date.relativeLabel + " " : "") + NoteThread.shortTime(log.createdAt))
                 .help(item.key + " " + Self.time(log.createdAt))
@@ -601,11 +622,11 @@ struct NotesView: View {
                             }.padding(20)
                         }
                         .contentShape(Rectangle())
-                        .onAppear { proxy.scrollTo(hasBoardContent ? "board-start" : "end", anchor: hasBoardContent ? .top : .bottom) }
-                        .onChange(of: tagSelection) { _ in
-                            proxy.scrollTo(hasBoardContent ? "board-start" : "end", anchor: hasBoardContent ? .top : .bottom)
-                        }
-                        .onChange(of: notes.count) { _ in withAnimation(Motion.quick) { proxy.scrollTo("end", anchor: .bottom) } }
+                        // 按日期看从最新处打开；按待办分章是从上往下读的目录，从顶部打开。
+                        .onAppear { openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
+                        .onChange(of: tagSelection) { _ in openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
+                        .onChange(of: chapterView) { _ in openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
+                        .onChange(of: revealNoteID) { reveal($0, proxy: proxy) }
                         if showsOutline(chapters: chapters, width: geometry.size.width) {
                             Divider()
                             outline(tag, chapters, proxy: proxy)
@@ -801,11 +822,17 @@ struct NotesView: View {
         let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !draft.images.isEmpty else { return }
         do {
-            let command = try store.quickLog(text, images: draft.images, taskID: draft.link, linkDefault: !draft.unlinked, tags: TagText.merge([tag], draft.tags), on: Date())
-            guard case .entry = command else { error = AppLocalizedFormat("这里只能写笔记，不支持 %@ 这类命令。", text); return }
+            let result = try store.quickLogEntry(text, images: draft.images, taskID: draft.link, linkDefault: !draft.unlinked, tags: TagText.merge([tag], draft.tags), on: Date())
+            guard case .entry = result.command else { error = AppLocalizedFormat("这里只能写笔记，不支持 %@ 这类命令。", text); return }
             nav.clearDraft(key)
             error = nil
             tagFocused = true
+            if let entry = result.entry {
+                // 按待办分章时，新笔记落在它关联的那一章：章节折叠着就先展开，再滚过去。
+                let chapter = entry.taskID?.uuidString ?? "direct"
+                if nav.isCollapsed(tag: tag, chapter: chapter) { nav.setCollapsed(false, tag: tag, chapter: chapter) }
+                revealNoteID = entry.id
+            }
             ImageIndexer.run(store: store)
         } catch { self.error = AppErrorDescription(error) }
     }
@@ -873,11 +900,12 @@ struct NotesView: View {
         let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !draft.images.isEmpty else { return }
         do {
-            let command = try store.quickLog(text, images: draft.images, taskID: topic.id, tags: draft.tags, on: Date())
-            guard case .entry = command else { error = AppLocalizedFormat("这里只能写笔记，不支持 %@ 这类命令。", text); return }
+            let result = try store.quickLogEntry(text, images: draft.images, taskID: topic.id, tags: draft.tags, on: Date())
+            guard case .entry = result.command else { error = AppLocalizedFormat("这里只能写笔记，不支持 %@ 这类命令。", text); return }
             nav.clearDraft(key)
             error = nil
             focused = true
+            revealNoteID = result.entry?.id
             ImageIndexer.run(store: store)
         } catch { self.error = AppErrorDescription(error) }
     }

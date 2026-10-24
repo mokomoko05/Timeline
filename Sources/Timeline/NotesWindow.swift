@@ -225,6 +225,8 @@ struct UnifiedJournalView: View {
     @State private var editingID: UUID?
     /// 从节奏条跳过去的那一条短暂高亮，便于在长日志里找到。
     @State private var highlightedID: UUID?
+    /// 刚提交的那条日志：滚过去并高亮。
+    @State private var revealID: UUID?
     @State private var editingDate: Date?
     @State private var editText = ""
     @State private var editFocused = false
@@ -369,12 +371,6 @@ struct UnifiedJournalView: View {
                                 }
                                 journalRow(log, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id])
                                     .id(log.id)
-                                    .background {
-                                        RoundedRectangle(cornerRadius: Metrics.radiusMedium, style: .continuous)
-                                            .fill(Palette.accent.opacity(highlightedID == log.id ? 0.1 : 0))
-                                            .padding(.bottom, 8)
-                                            .allowsHitTesting(false)
-                                    }
                             }
                         }
                         Color.clear.frame(height: 1).id("journal-bottom")
@@ -383,6 +379,17 @@ struct UnifiedJournalView: View {
                 }
                 .id(JournalDates.key(date))
                 .contentShape(Rectangle())
+                // 今天从最新一条开始（接着写），往日从当天第一条开始读。
+                .onAppear { openDay(proxy) }
+                .onChange(of: date) { _ in DispatchQueue.main.async { openDay(proxy) } }
+                .onChange(of: revealID) { id in
+                    guard let id else { return }
+                    DispatchQueue.main.async {
+                        withAnimation(Motion.quick) { proxy.scrollTo(id, anchor: .center) }
+                        highlightedID = id
+                        revealID = nil
+                    }
+                }
                 .task(id: highlightedID) {
                     guard highlightedID != nil else { return }
                     try? await Task.sleep(for: .seconds(1.2))
@@ -426,7 +433,8 @@ struct UnifiedJournalView: View {
     private func journalRow(_ log: DailyLogEntry, hasPrevious: Bool, hasNext: Bool, segment: LogTimelineSegment?) -> some View {
         let editing = editingID == log.id
         return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext,
-                             focusBefore: segment?.focusBefore == true, focusAfter: segment?.focusAfter == true) {
+                             focusBefore: segment?.focusBefore == true, focusAfter: segment?.focusAfter == true,
+                             highlighted: highlightedID == log.id) {
             Text(NoteThread.shortTime(log.createdAt)).help(LogEventStyle.time(log.createdAt))
             if let kind = NoteThread.kindLabel(log) {
                 Text(kind).foregroundStyle(LogEventStyle.color(log)).fontWeight(.medium)
@@ -476,6 +484,12 @@ struct UnifiedJournalView: View {
         }
     }
 
+    private func openDay(_ proxy: ScrollViewProxy) {
+        guard let first = entry.logsInTimeOrder.first else { return }
+        if JournalDates.calendar.isDateInToday(date) { proxy.scrollTo("journal-bottom", anchor: .bottom) }
+        else { proxy.scrollTo(first.id, anchor: .top) }
+    }
+
     private func dayStep(_ symbol: String, _ help: String, _ amount: Int) -> some View {
         Button {
             date = JournalDates.calendar.date(byAdding: .day, value: amount, to: date) ?? date
@@ -513,7 +527,10 @@ struct UnifiedJournalView: View {
         guard !store.isReadOnly, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !entry.logDraftImages.isEmpty else { return }
         do {
             let command = try store.commitLog(on: date, linkDefault: !unlinked)
-            if case .entry = command { error = nil; focused = true; unlinked = false; ImageIndexer.run(store: store) }
+            if case .entry = command {
+                error = nil; focused = true; unlinked = false; ImageIndexer.run(store: store)
+                revealID = store.entry(for: date).logs.max(by: { $0.createdAt < $1.createdAt })?.id
+            }
             else if case .help = command { store.setLogDraft("", on: date); error = "日志命令：/link、/done、/filter、/help" }
         } catch let issue { error = AppErrorDescription(issue) }
     }

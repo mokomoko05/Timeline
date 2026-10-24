@@ -42,6 +42,8 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
     var hasNext = true
     var focusBefore = false
     var focusAfter = false
+    /// 刚写下或刚跳到的那条：短暂铺一层强调色底。
+    var highlighted = false
     @ViewBuilder let meta: () -> Meta
     @ViewBuilder let content: () -> Content
     @ViewBuilder let actions: () -> Actions
@@ -72,7 +74,7 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
         .padding(.horizontal, 8).padding(.top, 6)
         .background {
             RoundedRectangle(cornerRadius: Metrics.radiusMedium, style: .continuous)
-                .fill(Palette.soft.opacity(hovered ? 0.35 : 0))
+                .fill(highlighted ? Palette.accent.opacity(0.12) : Palette.soft.opacity(hovered ? 0.35 : 0))
                 .padding(.bottom, 8)
         }
         .overlay(alignment: .topLeading) { rail.padding(.leading, 8).padding(.top, 6) }

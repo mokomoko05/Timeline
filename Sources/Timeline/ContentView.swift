@@ -150,6 +150,10 @@ struct ContentView: View {
         }
         .onReceive(store.$days.debounce(for: .milliseconds(400), scheduler: RunLoop.main)) { _ in refreshOverview() }
         .onReceive(store.$lastAction.dropFirst()) { event in
+            // 改了截止日期的任务会换到别的日期分组：选中的那一项跟过去，不让它从视野里消失。
+            if event?.name == "安排任务", let id = interaction.selectedTaskID {
+                DispatchQueue.main.async { scrollTarget = id }
+            }
             toast.dismiss()
             // 只在主窗口是当前窗口时提示（在日志窗口里删的，提示出现在日志窗口）。
             guard let event, AppRouter.mainIsKey(), let message = Self.toastMessages[event.name] else { return }
