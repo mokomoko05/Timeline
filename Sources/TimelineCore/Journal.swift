@@ -244,10 +244,14 @@ public final class JournalStore: ObservableObject {
     private var cachedTimelineSegments: [UUID: LogTimelineSegment]?
     /// 每个任务的笔记条数：每一行的菜单都要显示，逐行扫描全部日志太慢。
     private var cachedNoteCounts: [UUID: Int]?
+    /// 按时间排好的全部日志（含专注记录）。笔记、标签、日志面板每次重绘都要用，日志变了才重建。
+    private var cachedChronology: [LoggedLog]?
+    private var cachedTaskSummaries: (key: String, value: [LogTaskSummary])?
 
     /// 输入草稿不影响汇总；只有日志或待办真的改变时才重新扫描历史。
     private func invalidateNotebookIndex(logsChanged: Bool, tasksChanged: Bool) {
-        if logsChanged || tasksChanged { cachedNoteTopics = nil; cachedTagSummaries = nil }
+        if logsChanged || tasksChanged { cachedNoteTopics = nil; cachedTagSummaries = nil; cachedTaskSummaries = nil }
+        if logsChanged { cachedChronology = nil }
         if logsChanged { cachedTimelineSegments = nil; cachedNoteCounts = nil }
     }
 
@@ -1020,24 +1024,37 @@ public final class JournalStore: ObservableObject {
 
     /// 全部日志（跨日期），按时间从早到晚；`includeFocus` 为 false 时不含专注计时的开始、结束记录。
     public func allLogs(includeFocus: Bool = false) -> [LoggedLog] {
-        days.keys.sorted().flatMap { key -> [LoggedLog] in
+        let all = chronology()
+        return includeFocus ? all : all.filter { !$0.log.focus }
+    }
+
+    /// 按日期、同一天内按时间排好的全部日志；只在日志变化后重建一次。
+    private func chronology() -> [LoggedLog] {
+        if let cachedChronology { return cachedChronology }
+        let result = days.keys.sorted().flatMap { key -> [LoggedLog] in
             guard let date = JournalDates.date(for: key), let day = days[key] else { return [] }
-            return day.logs.filter { includeFocus || !$0.focus }
-                .sorted { $0.createdAt < $1.createdAt }.map { LoggedLog(key: key, date: date, log: $0) }
+            return day.logs.sorted { $0.createdAt < $1.createdAt }.map { LoggedLog(key: key, date: date, log: $0) }
         }
+        cachedChronology = result
+        return result
     }
 
     /// 与指定任务相关的全部日志（跨日期），按时间从早到晚。
     public func logs(linkedTo ids: Set<UUID>) -> [LoggedLog] {
         guard !ids.isEmpty else { return [] }
-        return days.keys.sorted().flatMap { key -> [LoggedLog] in
-            guard let date = JournalDates.date(for: key), let day = days[key] else { return [] }
-            return day.logs.filter { $0.taskID.map(ids.contains) == true }.map { LoggedLog(key: key, date: date, log: $0) }
-        }
+        return chronology().filter { $0.log.taskID.map(ids.contains) == true }
     }
 
     /// 可用于筛选的任务：`date` 当天清单里的任务，以及所有被日志关联过的任务（含已删除的）。
     public func logTaskSummaries(on date: Date) -> [LogTaskSummary] {
+        let key = JournalDates.key(date)
+        if let cachedTaskSummaries, cachedTaskSummaries.key == key { return cachedTaskSummaries.value }
+        let value = computeLogTaskSummaries()
+        cachedTaskSummaries = (key, value)
+        return value
+    }
+
+    private func computeLogTaskSummaries() -> [LogTaskSummary] {
         var counts: [UUID: (count: Int, latest: Date, title: String)] = [:]
         for day in days.values {
             for log in day.logs {

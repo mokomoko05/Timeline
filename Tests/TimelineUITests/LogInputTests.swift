@@ -74,3 +74,27 @@ final class LogInputTests: XCTestCase {
         XCTAssertEqual(attributes[.font] as? NSFont, NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
     }
 }
+
+@MainActor
+final class NoteTextBufferTests: XCTestCase {
+    func testTypingStaysLocalUntilFlushAndExternalClearSynchronizes() async throws {
+        let nav = NotesNavigation()
+        let buffer = NoteTextBuffer()
+        buffer.attach(nav: nav, key: "task:a")
+        var publications = 0
+        let subscription = nav.objectWillChange.sink { publications += 1 }
+        for index in 1...30 { buffer.update("想法 \(index)") }
+        XCTAssertEqual(publications, 0, "按键不刷新整个笔记窗口")
+        subscription.cancel()
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(nav.draft("task:a").text, "想法 30", "停顿后写回")
+        buffer.update("切换前没写回的字")
+        buffer.attach(nav: nav, key: "task:b")
+        XCTAssertEqual(nav.draft("task:a").text, "切换前没写回的字", "切换任务前写回")
+        XCTAssertEqual(buffer.text, "")
+        buffer.update("b 的草稿")
+        buffer.flush()
+        nav.clearDraft("task:b")
+        XCTAssertEqual(buffer.text, "", "提交后清空同步到输入框")
+    }
+}

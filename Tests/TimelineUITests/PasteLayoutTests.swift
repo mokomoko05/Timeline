@@ -64,6 +64,8 @@ final class PasteLayoutTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         _ = host.fittingSize
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        // 输入先进缓冲，停顿或提交前才写进草稿；这里显式写回。
+        NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
         XCTAssertEqual(nav.draft(NotesNavigation.draftKey(task: task.id)).text, Self.sample)
         XCTAssertLessThan(CFAbsoluteTimeGetCurrent() - started, 3)
         XCTAssertEqual(input.string, Self.sample)

@@ -17,6 +17,9 @@ struct NotesView: View {
     @ObservedObject private var themes = ThemeStore.shared
     @State private var creatingTag = false
     @State private var tagFocused = false
+    /// 笔记输入的缓冲：按键只刷新输入行，停顿后再写进导航草稿（否则每个字都会重算整页笔记和章节）。
+    @State private var tagText = NoteTextBuffer()
+    @State private var taskText = NoteTextBuffer()
     @State private var editingNoteID: UUID?
     @State private var editingNoteDate: Date?
     @State private var noteEditText = ""
@@ -42,9 +45,6 @@ struct NotesView: View {
     private func taskDraftKey(_ id: UUID) -> String { NotesNavigation.draftKey(task: id) }
     private func tagDraftKey(_ tag: String) -> String { NotesNavigation.draftKey(tag: tag) }
 
-    private func textBinding(_ key: String) -> Binding<String> {
-        Binding(get: { nav.draft(key).text }, set: { value in nav.updateDraft(key) { $0.text = value } })
-    }
     private func images(_ key: String) -> [String] { nav.draft(key).images }
     private func addImages(_ names: [String], to key: String) { nav.updateDraft(key) { $0.images += names } }
     private func removeImage(_ name: String, from key: String) { nav.updateDraft(key) { $0.images.removeAll { $0 == name } } }
@@ -738,7 +738,6 @@ struct NotesView: View {
     private func tagComposer(_ tag: String) -> some View {
         let key = tagDraftKey(tag)
         let pending = images(key)
-        let text = nav.draft(key).text
         let link = Binding<UUID?>(get: { nav.draft(key).link }, set: { value in nav.updateDraft(key) { $0.link = value } })
         let unlinked = Binding<Bool>(get: { nav.draft(key).unlinked }, set: { value in nav.updateDraft(key) { $0.unlinked = value } })
         let tags = Binding<[String]>(get: { nav.draft(key).tags }, set: { value in nav.updateDraft(key) { $0.tags = value } })
@@ -751,15 +750,17 @@ struct NotesView: View {
             MentionList(state: tagMention, store: store, contextTags: [tag])
             HStack(spacing: 8) {
                 Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent)
-                TaskInput(text: textBinding(key), focused: $tagFocused,
-                          placeholder: AppLocalizedFormat("写进 #%@…", tag),
-                          fontSize: 13, submit: { submitTag(tag) }, onPasteImages: { datas in
-                    addImages(ImageTools.save(datas, in: store), to: key)
-                    tagFocused = true
-                }, minHeight: 24, maxLines: 10, mention: tagMention).disabled(store.isReadOnly)
-                Button { submitTag(tag) } label: { Image(systemName: "arrow.turn.down.left") }
-                    .buttonStyle(HitAreaButtonStyle())
-                    .disabled(store.isReadOnly || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty))
+                NoteTextInput(buffer: tagText, nav: nav, key: key) { binding, current in
+                    TaskInput(text: binding, focused: $tagFocused,
+                              placeholder: AppLocalizedFormat("写进 #%@…", tag),
+                              fontSize: 13, submit: { submitTag(tag) }, onPasteImages: { datas in
+                        addImages(ImageTools.save(datas, in: store), to: key)
+                        tagFocused = true
+                    }, minHeight: 24, maxLines: 10, mention: tagMention).disabled(store.isReadOnly)
+                    Button { submitTag(tag) } label: { Image(systemName: "arrow.turn.down.left") }
+                        .buttonStyle(HitAreaButtonStyle())
+                        .disabled(store.isReadOnly || (current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty))
+                }
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
@@ -773,6 +774,7 @@ struct NotesView: View {
 
     private func submitTag(_ tag: String) {
         let key = tagDraftKey(tag)
+        tagText.flush()
         let draft = nav.draft(key)
         let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !draft.images.isEmpty else { return }
@@ -810,7 +812,6 @@ struct NotesView: View {
     private func composer(_ topic: JournalStore.NoteTopic) -> some View {
         let key = taskDraftKey(topic.id)
         let pending = images(key)
-        let text = nav.draft(key).text
         let tags = Binding<[String]>(get: { nav.draft(key).tags }, set: { value in nav.updateDraft(key) { $0.tags = value } })
         return VStack(alignment: .leading, spacing: 6) {
             if !pending.isEmpty {
@@ -821,15 +822,17 @@ struct NotesView: View {
             MentionList(state: taskMention, store: store)
             HStack(spacing: 8) {
                 Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent)
-                TaskInput(text: textBinding(key), focused: $focused,
-                          placeholder: topic.deleted ? AppLocalized("任务已删除，无法追加笔记") : AppLocalized("追加笔记…"),
-                          fontSize: 13, submit: { submit(topic) }, onPasteImages: { datas in
-                    addImages(ImageTools.save(datas, in: store), to: key)
-                    focused = true
-                }, minHeight: 24, maxLines: 10, mention: taskMention).disabled(topic.deleted || store.isReadOnly)
-                Button { submit(topic) } label: { Image(systemName: "arrow.turn.down.left") }
-                    .buttonStyle(HitAreaButtonStyle())
-                    .disabled(topic.deleted || store.isReadOnly || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty))
+                NoteTextInput(buffer: taskText, nav: nav, key: key) { binding, current in
+                    TaskInput(text: binding, focused: $focused,
+                              placeholder: topic.deleted ? AppLocalized("任务已删除，无法追加笔记") : AppLocalized("追加笔记…"),
+                              fontSize: 13, submit: { submit(topic) }, onPasteImages: { datas in
+                        addImages(ImageTools.save(datas, in: store), to: key)
+                        focused = true
+                    }, minHeight: 24, maxLines: 10, mention: taskMention).disabled(topic.deleted || store.isReadOnly)
+                    Button { submit(topic) } label: { Image(systemName: "arrow.turn.down.left") }
+                        .buttonStyle(HitAreaButtonStyle())
+                        .disabled(topic.deleted || store.isReadOnly || (current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty))
+                }
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
@@ -843,6 +846,7 @@ struct NotesView: View {
 
     private func submit(_ topic: JournalStore.NoteTopic) {
         let key = taskDraftKey(topic.id)
+        taskText.flush()
         let draft = nav.draft(key)
         let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !draft.images.isEmpty else { return }

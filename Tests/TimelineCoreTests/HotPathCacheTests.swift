@@ -94,4 +94,20 @@ final class HotPathCacheTests: XCTestCase {
         XCTAssertEqual(texts.sorted(), ["Alpha", "Alpha", "Beta"])
         XCTAssertLessThanOrEqual(publications, 2, "一批结果只触发一次 days 更新（加上保存标记）")
     }
+
+    func testLogIndexAndTaskSummariesRefreshAfterEdits() throws {
+        let (store, directory) = makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let today = Date()
+        store.addTodo("关联任务", on: today)
+        let task = try XCTUnwrap(store.tasks().first)
+        XCTAssertEqual(store.logTaskSummaries(on: today).first { $0.id == task.id }?.count, 0)
+        try store.quickLog("第一条", taskID: task.id, on: today, now: today.addingTimeInterval(10))
+        try store.quickLog("更早的一条", taskID: task.id, on: today, now: today.addingTimeInterval(1))
+        XCTAssertEqual(store.allLogs().map(\.log.text), ["更早的一条", "第一条"], "同一天内按时间排序")
+        XCTAssertEqual(store.logs(linkedTo: [task.id]).count, 2)
+        XCTAssertEqual(store.logTaskSummaries(on: today).first { $0.id == task.id }?.count, 2, "日志变化后汇总重新计算")
+        store.renameTodo(task.id, title: "改名后的任务", on: task.date)
+        XCTAssertEqual(store.logTaskSummaries(on: today).first { $0.id == task.id }?.title, "改名后的任务", "任务变化后汇总重新计算")
+    }
 }

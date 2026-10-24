@@ -1,4 +1,6 @@
+import Combine
 import Foundation
+import SwiftUI
 import TimelineCore
 
 /// 笔记输入框里没发送的内容：文字、图片、可选关联的待办。
@@ -82,3 +84,75 @@ final class NotesNavigation: ObservableObject {
         if selection == nil, tagSelection == nil, let first = store.noteTopics().first?.id { selection = first }
     }
 }
+
+/// 笔记输入框的文字缓冲：按键只更新这里，停顿 300ms 后写进导航草稿；提交、切换任务或标签前立即写回。
+@MainActor
+final class NoteTextBuffer: ObservableObject {
+    @Published private(set) var text = ""
+    private weak var nav: NotesNavigation?
+    private var key: String?
+    private var stored = ""
+    private var pending: Task<Void, Never>?
+    private var subscription: AnyCancellable?
+
+    func attach(nav: NotesNavigation, key: String) {
+        if self.nav === nav, self.key == key { return }
+        flush()
+        if self.nav !== nav {
+            self.nav = nav
+            // 提交后清空、或其他地方改了草稿：同步过来。
+            subscription = nav.$drafts.sink { [weak self] drafts in
+                guard let self, let key = self.key else { return }
+                self.synchronize(drafts[key]?.text ?? "")
+            }
+        }
+        self.key = key
+        let initial = nav.draft(key).text
+        stored = initial
+        if text != initial { text = initial }
+    }
+
+    func update(_ value: String) {
+        guard value != text else { return }
+        text = value
+        pending?.cancel()
+        pending = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+            self?.flush()
+        }
+    }
+
+    func flush() {
+        pending?.cancel()
+        pending = nil
+        guard let nav, let key, text != stored else { return }
+        stored = text
+        let value = text
+        nav.updateDraft(key) { $0.text = value }
+    }
+
+    private func synchronize(_ value: String) {
+        guard value != stored else { return }
+        pending?.cancel()
+        pending = nil
+        stored = value
+        if text != value { text = value }
+    }
+}
+
+/// 只有它观察输入缓冲，输入时重绘范围限于输入框和发送按钮。
+struct NoteTextInput<Content: View>: View {
+    @ObservedObject var buffer: NoteTextBuffer
+    let nav: NotesNavigation
+    let key: String
+    @ViewBuilder let content: (Binding<String>, String) -> Content
+
+    var body: some View {
+        content(Binding(get: { buffer.text }, set: { buffer.update($0) }), buffer.text)
+            .onAppear { buffer.attach(nav: nav, key: key) }
+            .onChange(of: key) { buffer.attach(nav: nav, key: $0) }
+            .onDisappear { buffer.flush() }
+            .onReceive(NotificationCenter.default.publisher(for: .timelineCommitEditing)) { _ in buffer.flush() }
+    }
+}
+
