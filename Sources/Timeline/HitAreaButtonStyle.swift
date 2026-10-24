@@ -185,17 +185,37 @@ extension View {
 
 extension View {
     /// 半透明玻璃：透出后面的桌面，顶边一道细高光，阴影由窗口提供。
-    func glassPanelSurface(radius: CGFloat = Metrics.radiusPanel) -> some View {
-        modifier(GlassPanelSurface(radius: radius))
+    func glassPanelSurface(radius: CGFloat = Metrics.radiusPanel, clear: Bool = false) -> some View {
+        modifier(GlassPanelSurface(radius: radius, clear: clear))
     }
 }
 
 private struct GlassPanelSurface: ViewModifier {
     let radius: CGFloat
+    /// 近乎全透明：几乎不模糊、不着色，只留一道细边勾出轮廓；文字加一层很淡的阴影，放在任何桌面上都看得清。
+    var clear = false
     @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        if clear {
+            content
+                .shadow(color: (scheme == .dark ? Color.black : Color.white).opacity(scheme == .dark ? 0.75 : 0.6), radius: 1.6, y: 0.5)
+                .background {
+                    shape.fill(Palette.background.opacity(scheme == .dark ? 0.08 : 0.1))
+                        .overlay(shape.fill(LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.05 : 0.18), .clear],
+                                                           startPoint: .top, endPoint: .center)))
+                }
+                .overlay(shape.strokeBorder(LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.28 : 0.85), Palette.line.opacity(0.35)],
+                                                           startPoint: .top, endPoint: .bottom), lineWidth: Metrics.hairline)
+                    .allowsHitTesting(false))
+                .clipShape(shape)
+        } else {
+            standard(content, shape: shape)
+        }
+    }
+
+    private func standard(_ content: Content, shape: RoundedRectangle) -> some View {
         content
             .background {
                 // 透明度更高：只留一层很薄的底色，桌面的颜色能透上来；文字靠材质的模糊保持可读。

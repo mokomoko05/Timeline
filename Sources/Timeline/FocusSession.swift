@@ -574,7 +574,8 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
             panel.contentView = host
             panel.isOpaque = false
             panel.backgroundColor = .clear
-            panel.hasShadow = true
+            // 面板近乎全透明：窗口阴影会透出一圈暗影，只用细边勾出轮廓。
+            panel.hasShadow = false
             panel.level = .floating
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
@@ -602,13 +603,27 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         return NSPoint(x: frame.maxX - size.width - 18, y: frame.minY + size.height + 18)
     }
 
-    /// 内容大小变了（伙伴小胶囊 ↔ 完整面板，或输入变高）：保持右下角不动，向左、向上展开。
+    /// 收起时贴着屏幕边缘的距离。
+    private static let edgeInset: CGFloat = 6
+
+    /// 内容大小变了。收成小伙伴时贴到离得近的那条屏幕左 / 右边缘；展开时从那条边向内展开，底边不动。
     private func resize(to size: CGSize) {
         guard let panel, size.width > 40, size.height > 30,
               abs(panel.frame.height - size.height) > 0.5 || abs(panel.frame.width - size.width) > 0.5 else { return }
+        let screen = (panel.screen ?? NSScreen.main)?.visibleFrame ?? panel.frame
+        let compact = size.width < Self.workspaceSize.width - 20
+        let dockedRight = panel.frame.midX >= screen.midX
         var frame = panel.frame
-        frame.origin.x = frame.maxX - size.width
         frame.size = size
+        if compact {
+            // 小伙伴靠边：左半边就贴左边，右半边就贴右边。
+            frame.origin.x = dockedRight ? screen.maxX - size.width - Self.edgeInset : screen.minX + Self.edgeInset
+        } else {
+            // 完整面板从所贴的那条边向内展开，保持在屏幕里。
+            frame.origin.x = dockedRight ? panel.frame.maxX - size.width : panel.frame.minX
+            frame.origin.x = min(max(frame.origin.x, screen.minX + Self.edgeInset), screen.maxX - size.width - Self.edgeInset)
+        }
+        frame.origin.y = min(max(panel.frame.minY, screen.minY + Self.edgeInset), screen.maxY - size.height)
         panel.setFrame(frame, display: true)
         panel.invalidateShadow()
     }
@@ -626,6 +641,40 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         let position = NSStringFromPoint(NSPoint(x: frame.minX, y: frame.maxY))
         if defaults.string(forKey: Prefs.focusPanelTopLeft) != position {
             defaults.set(position, forKey: Prefs.focusPanelTopLeft)
+        }
+        // 小伙伴被拖到中间松手后，滑回离得近的那条边（上下位置保留）。
+        guard !snapping else { return }
+        snapTask?.cancel()
+        snapTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(260))
+            guard !Task.isCancelled else { return }
+            self?.snapToEdge()
+        }
+    }
+
+    private var snapTask: Task<Void, Never>?
+    private var snapping = false
+
+    private func snapToEdge() {
+        guard let panel, panel.isVisible, panel.frame.width < Self.workspaceSize.width - 20,
+              NSEvent.pressedMouseButtons == 0 else { return }
+        let screen = (panel.screen ?? NSScreen.main)?.visibleFrame ?? panel.frame
+        var frame = panel.frame
+        frame.origin.x = frame.midX >= screen.midX ? screen.maxX - frame.width - Self.edgeInset : screen.minX + Self.edgeInset
+        frame.origin.y = min(max(frame.minY, screen.minY + Self.edgeInset), screen.maxY - frame.height)
+        guard abs(frame.minX - panel.frame.minX) > 0.5 || abs(frame.minY - panel.frame.minY) > 0.5 else { return }
+        snapping = true
+        if Motion.reduced || Headless.active {
+            panel.setFrame(frame, display: true)
+            snapping = false
+        } else {
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.22
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().setFrame(frame, display: true)
+            }, completionHandler: { [weak self] in
+                MainActor.assumeIsolated { self?.snapping = false }
+            })
         }
     }
 
@@ -869,7 +918,7 @@ struct FocusPanelView: View {
         .frame(width: 340, alignment: .leading)
         .frame(minHeight: 158, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
-        .glassPanelSurface()
+        .glassPanelSurface(clear: true)
     }
 
     private func expand() {
@@ -912,7 +961,7 @@ struct FocusPanelView: View {
                 Text("分钟").font(.system(size: 11)).foregroundStyle(Palette.muted)
             }
             .padding(.horizontal, 9).frame(height: 28)
-            .inputFieldSurface(focused: false, fill: Palette.background.opacity(0.35))
+            .inputFieldSurface(focused: false, fill: Palette.background.opacity(0.14))
             Button { startFocus() } label: {
                 Label(selectedTask.map { AppLocalizedFormat("开始专注 · #%lld", $0.task.number ?? 0) } ?? AppLocalized("先在时间轴上选一项"),
                       systemImage: "play.fill")
@@ -1084,7 +1133,7 @@ struct FocusPanelView: View {
                 }
                 .padding(.leading, 9).padding(.trailing, 4).padding(.vertical, 3)
                 .frame(minHeight: 34)
-                .inputFieldSurface(focused: focused, fill: Palette.background.opacity(0.55))
+                .inputFieldSurface(focused: focused, fill: Palette.background.opacity(0.18))
                 .popover(isPresented: Binding(get: { mention.isActive }, set: { if !$0 { mention.dismiss() } }), arrowEdge: .bottom) {
                     if let store { MentionList(state: mention, store: store, contextTags: draft.tags).frame(width: 320) }
                 }
@@ -1327,7 +1376,7 @@ struct FocusCompanion: View {
             .frame(width: 150, alignment: .leading)
         }
         .padding(.leading, 8).padding(.trailing, 14).padding(.vertical, 7)
-        .glassPanelSurface(radius: 26)
+        .glassPanelSurface(radius: 26, clear: true)
         .contentShape(Capsule())
         .onAppear {
             guard !Motion.reduced, !session.isPaused else { return }
@@ -1354,6 +1403,10 @@ struct FocusMiniTimeline: View {
     let select: (UUID) -> Void
     let start: (UUID) -> Void
     @State private var hovered: UUID?
+    /// 上一次点击：同一项在系统双击间隔内再点一次就开始专注。自己判断双击，单击才能立即生效
+    /// （同时挂单击和双击手势时，SwiftUI 要等双击超时才认单击，选中会慢半拍）。
+    @State private var lastTap: (id: UUID, time: Date)?
+    @Namespace private var highlight
 
     private struct Group: Identifiable {
         let day: Date?
@@ -1382,7 +1435,8 @@ struct FocusMiniTimeline: View {
                 TextField("搜索标题或编号…", text: $query).textFieldStyle(.plain).font(.system(size: 11))
             }
             .padding(.horizontal, 8).frame(height: 22)
-            .background(Palette.background.opacity(0.3), in: Capsule())
+            .background(Palette.background.opacity(0.14), in: Capsule())
+            .overlay(Capsule().strokeBorder(Palette.line.opacity(0.4), lineWidth: Metrics.hairline))
             if tasks.isEmpty {
                 Text(query.isEmpty ? "没有未完成的待办" : "没有匹配的任务")
                     .font(.system(size: 11)).foregroundStyle(Palette.muted)
@@ -1405,6 +1459,17 @@ struct FocusMiniTimeline: View {
                 }
             }
         }
+    }
+
+    private func tap(_ id: UUID) {
+        let now = Date()
+        if let lastTap, lastTap.id == id, now.timeIntervalSince(lastTap.time) < NSEvent.doubleClickInterval {
+            self.lastTap = nil
+            start(id)
+            return
+        }
+        lastTap = (id, now)
+        withAnimation(Motion.reduced ? nil : .spring(response: 0.2, dampingFraction: 0.9)) { select(id) }
     }
 
     private func knot(_ day: Date?) -> some View {
@@ -1451,13 +1516,20 @@ struct FocusMiniTimeline: View {
         }
         .padding(.trailing, 6).frame(height: 26)
         .background {
-            RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous)
-                .fill(isSelected ? Palette.accent.opacity(0.16) : (hovered == item.id ? Palette.soft.opacity(0.5) : .clear))
-                .padding(.leading, 16)
+            ZStack {
+                if hovered == item.id && !isSelected {
+                    RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous).fill(Palette.soft.opacity(0.35))
+                }
+                // 选中的底色是同一块，在行之间滑过去。
+                if isSelected {
+                    RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous).fill(Palette.accent.opacity(0.16))
+                        .matchedGeometryEffect(id: "selection", in: highlight)
+                }
+            }
+            .padding(.leading, 16)
         }
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { start(item.id) }
-        .onTapGesture { select(item.id) }
+        .onTapGesture { tap(item.id) }
         .onHover { inside in if inside { hovered = item.id } else if hovered == item.id { hovered = nil } }
         .help("单击选中 · 双击开始专注")
         .id(item.id)
