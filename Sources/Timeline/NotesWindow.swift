@@ -397,8 +397,19 @@ struct UnifiedJournalView: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(date.formatted(.dateTime.year().month(.wide).day().locale(locale)))
-                    .font(.system(size: 18, weight: .semibold))
+                HStack(spacing: 6) {
+                    Text(date.formatted(.dateTime.year().month(.wide).day().locale(locale)))
+                        .font(.system(size: 18, weight: .semibold))
+                    dayStep("chevron.left", "前一天 · ⌘⌥←", -1)
+                    dayStep("chevron.right", "后一天 · ⌘⌥→", 1)
+                    if !JournalDates.calendar.isDateInToday(date) {
+                        Button { date = JournalDates.calendar.startOfDay(for: Date()) } label: {
+                            Text("今天").font(.system(size: 11, weight: .medium)).padding(.horizontal, 7).frame(height: 20)
+                                .background(Palette.soft, in: Capsule())
+                        }
+                        .buttonStyle(.plain).foregroundStyle(Palette.accent).raisedOnHover(radius: 10).help("回到今天")
+                    }
+                }
                 HStack(spacing: 10) {
                     Text(date.formatted(.dateTime.weekday(.wide).locale(locale))).foregroundStyle(Palette.muted)
                     Text("\(entry.logs.count) 条日志").foregroundStyle(Palette.muted)
@@ -463,6 +474,16 @@ struct UnifiedJournalView: View {
                 }.fixedSize()
             }
         }
+    }
+
+    private func dayStep(_ symbol: String, _ help: String, _ amount: Int) -> some View {
+        Button {
+            date = JournalDates.calendar.date(byAdding: .day, value: amount, to: date) ?? date
+        } label: {
+            Image(systemName: symbol).font(.system(size: 11, weight: .semibold)).frame(width: 22, height: 22).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).foregroundStyle(Palette.muted).raisedOnHover(radius: 5)
+        .help(LocalizedStringKey(help)).accessibilityLabel(LocalizedStringKey(help))
     }
 
     private func journalAction(_ symbol: String, _ help: String, destructive: Bool = false, action: @escaping () -> Void) -> some View {

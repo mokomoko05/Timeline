@@ -835,3 +835,7 @@
 "现在" = "Now";
 "这一天的记录分布" = "Entries across the day";
 "%@ · %lld 条" = "%@ · %lld";
+"还没有笔记 · 在下方写下第一条" = "No notes yet · write the first one below";
+"这个任务没有留下笔记" = "This task has no notes";
+"前一天 · ⌘⌥←" = "Previous day · ⌘⌥←";
+"后一天 · ⌘⌥→" = "Next day · ⌘⌥→";

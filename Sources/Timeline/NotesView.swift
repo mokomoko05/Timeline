@@ -342,6 +342,7 @@ struct NotesView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 4) {
                             BoardNotesSection(store: store, owner: .task(id)).id("board-start")
+                            if notes.isEmpty { NoteThreadEmpty(text: topic.deleted ? "这个任务没有留下笔记" : "还没有笔记 · 在下方写下第一条") }
                             ForEach(Dictionary(grouping: notes, by: \.key).sorted { $0.key < $1.key }, id: \.key) { group in
                                 dayHeader(group.key, date: group.value[0].date, count: group.value.count)
                                 threadedRows(group.value)
@@ -593,8 +594,7 @@ struct NotesView: View {
                                 Color.clear.frame(height: 1).id("board-start")
                                 BoardNotesSection(store: store, owner: .tag(tag))
                                 if notes.isEmpty && tasks.isEmpty {
-                                    Text("还没有笔记")
-                                        .font(.system(size: 12)).foregroundStyle(Palette.muted).padding(.vertical, 12)
+                                    NoteThreadEmpty(text: "还没有笔记 · 在下方写下第一条")
                                 }
                                 if chapterView { chapterList(tag, chapters) } else { dateList(notes, tag: tag) }
                                 Color.clear.frame(height: 1).id("end")

@@ -244,3 +244,22 @@ struct NoteThreadGap: View {
     }
 }
 
+/// 还没有记录：一段向下延伸、逐渐淡出的线，线头一颗空心珠子，提示从这里开始。
+struct NoteThreadEmpty: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(spacing: 0) {
+                Circle().strokeBorder(Palette.accent.opacity(0.7), lineWidth: 1.3).frame(width: 11, height: 11)
+                LinearGradient(colors: [Palette.accent.opacity(0.45), .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(width: 1.5, height: 46)
+            }
+            .frame(width: NoteThread.gutter)
+            Text(LocalizedStringKey(text)).font(.system(size: 12)).foregroundStyle(Palette.muted).padding(.top, -2)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8).padding(.top, 18)
+    }
+}
+
