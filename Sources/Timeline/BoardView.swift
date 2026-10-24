@@ -7,12 +7,15 @@ final class BoardNavigation: ObservableObject {
     private let defaults: UserDefaults
     private var editorSessions: [UUID: BoardLiveEditorSession] = [:]
     private var editorOrder: [UUID] = []
+    /// 最近用过的几个工作板保留编辑器（光标、撤销历史、滚动位置）。每个编辑器有一份 WebKit 内容进程，
+    /// 长时间后台运行时限制数量；更早的切回来时重新加载正文。
+    static let liveEditorLimit = 4
 
     func editorSession(for board: Board, store: JournalStore) -> BoardLiveEditorSession {
         if editorSessions[board.id] == nil { editorSessions[board.id] = BoardLiveEditorSession(store: store, board: board) }
         editorOrder.removeAll { $0 == board.id }
         editorOrder.append(board.id)
-        while editorOrder.count > 6 {
+        while editorOrder.count > Self.liveEditorLimit {
             let oldest = editorOrder.removeFirst()
             editorSessions.removeValue(forKey: oldest)?.flush()
         }

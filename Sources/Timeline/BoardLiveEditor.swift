@@ -62,13 +62,16 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
 
     deinit { NotificationCenter.default.removeObserver(self) }
 
+    /// 所有编辑器共用一份不落盘的数据存储（编辑器不联网，也不需要互相隔离）。
+    private static let dataStore = WKWebsiteDataStore.nonPersistent()
+
     func makeWebView() -> WKWebView {
         if let webView { Self.active = self; return webView }
         ready = false
         lastConfiguration = nil
         sourceNeedsSynchronization = true
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
+        configuration.websiteDataStore = Self.dataStore
         configuration.userContentController.add(WeakBoardScriptHandler(self), name: "boardEditor")
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = self
