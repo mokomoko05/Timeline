@@ -133,4 +133,23 @@ final class PersistentPanelTests: XCTestCase {
         controller.toggle(.log)
         XCTAssertFalse(panel.isVisible, "The shortcut explicitly hides the panel")
     }
+
+    func testQuickCaptureReusesOnePanelAcrossShowsAndKeepsTheDraft() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let controller = QuickCaptureController(store: store, openMain: {})
+        let existing = Set(NSApp.windows.map(\.windowNumber))
+        controller.show(.log)
+        let panel = try XCTUnwrap(NSApp.windows.first { !existing.contains($0.windowNumber) && $0 is NSPanel })
+        defer { panel.close() }
+        let host = panel.contentView
+        panel.close()
+        controller.show(.todo)
+        let panels = NSApp.windows.filter { !existing.contains($0.windowNumber) && $0 is NSPanel }
+        XCTAssertEqual(panels.count, 1, "再次呼出复用同一个面板")
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertTrue(panel.contentView === host, "不重建视图")
+    }
 }

@@ -425,17 +425,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             alert.addButton(withTitle: AppLocalized("仍然退出"))
             if alert.runModal() == .alertFirstButtonReturn { return .terminateCancel }
         }
+        // 先确认能保存，再结束终端和专注：选「返回 Timeline」时它们必须原样保留。
+        if !store.isReadOnly {
+            store.save()
+            if store.errorMessage != nil {
+                let alert = NSAlert()
+                alert.messageText = AppLocalized("还有未保存的修改")
+                alert.informativeText = AppLocalized("请返回 Timeline 重试保存，或使用「文件」菜单导出备份。直接退出会丢失未保存的修改。")
+                alert.addButton(withTitle: AppLocalized("返回 Timeline"))
+                alert.addButton(withTitle: AppLocalized("仍然退出"))
+                if alert.runModal() == .alertFirstButtonReturn { return .terminateCancel }
+            }
+        }
         shell.terminateAll()
         focus.stop(reason: "应用退出")
-        guard !store.isReadOnly else { return .terminateNow }
-        store.save()
-        guard store.errorMessage != nil else { return .terminateNow }
-        let alert = NSAlert()
-        alert.messageText = AppLocalized("还有未保存的修改")
-        alert.informativeText = AppLocalized("请返回 Timeline 重试保存，或使用「文件」菜单导出备份。直接退出会丢失未保存的修改。")
-        alert.addButton(withTitle: AppLocalized("返回 Timeline"))
-        alert.addButton(withTitle: AppLocalized("仍然退出"))
-        return alert.runModal() == .alertFirstButtonReturn ? .terminateCancel : .terminateNow
+        // 结束专注会写一条记录。
+        if !store.isReadOnly, store.hasPendingSave { store.save() }
+        return .terminateNow
     }
 
     // MARK: - 菜单

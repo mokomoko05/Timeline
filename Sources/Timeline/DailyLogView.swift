@@ -56,17 +56,27 @@ struct DailyLogView: View {
     @State private var dropTargeted = false
     @State private var selectedLogs: Set<UUID> = []
     @State private var showingBatchTags = false
+    /// 输入只刷新这个视图，停顿后才写回仓库（其他窗口不随按键重绘）。
+    @StateObject private var logDraft: LogDraftBuffer
+
+    init(store: JournalStore, date: Date, collapse: (() -> Void)? = nil, autoFocus: Bool = false) {
+        self.store = store
+        self.date = date
+        self.collapse = collapse
+        self.autoFocus = autoFocus
+        _logDraft = StateObject(wrappedValue: LogDraftBuffer(store: store, date: date))
+    }
 
     private var entry: DayEntry { store.entry(for: date) }
     private var draft: Binding<String> {
-        Binding(get: { entry.logDraft }, set: {
-            historyIndex = nil
-            error = nil
-            store.setLogDraft($0, on: date)
+        Binding(get: { logDraft.text }, set: {
+            if historyIndex != nil { historyIndex = nil }
+            if error != nil { error = nil }
+            logDraft.update($0)
         })
     }
     private var completions: [String] {
-        let text = entry.logDraft.lowercased()
+        let text = logDraft.text.lowercased()
         guard focused, text.hasPrefix("/"), !text.contains(where: \.isWhitespace) else { return [] }
         return LogCommand.commands.filter { $0.hasPrefix(text) }
     }
@@ -90,7 +100,8 @@ struct DailyLogView: View {
         .simultaneousGesture(TapGesture().onEnded { interaction.activePane = .summary })
         .onChange(of: interaction.logFocusRequest) { _ in focused = true }
         .onAppear { if autoFocus { DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { focused = true } } }
-        .onChange(of: date) { _ in selectedLogs = [] }
+        .onChange(of: date) { value in selectedLogs = []; logDraft.attach(store: store, date: value) }
+        .onDisappear { logDraft.flush() }
         .onChange(of: interaction.logFilter) { _ in selectedLogs = [] }
         .sheet(isPresented: $preparingReview) {
             ReviewDraftView(store: store, date: date)
@@ -415,7 +426,7 @@ struct DailyLogView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 2) {
                         ForEach(completions, id: \.self) { command in
-                            Button(command) { store.setLogDraft(command + " ", on: date); focused = true }
+                            Button(command) { logDraft.set(command + " "); focused = true }
                                 .font(.system(size: typography.pt(10), design: .monospaced)).buttonStyle(HitAreaButtonStyle(compact: true))
                         }
                     }
@@ -472,10 +483,10 @@ struct DailyLogView: View {
                           onPasteImages: addImages, minHeight: 24, maxLines: 10, mention: mention, returnSubmits: true)
                     .disabled(store.isReadOnly)
                     .accessibilityLabel("日志命令输入，回车提交，Shift+回车换行")
-                    .onChange(of: focused) { if $0 { interaction.activePane = .summary } }
+                    .onChange(of: focused) { if $0 { interaction.activePane = .summary } else { logDraft.flush() } }
                 Button(action: submit) { Image(systemName: "arrow.turn.down.left") }
                     .buttonStyle(HitAreaButtonStyle(compact: true)).help("提交日志")
-                    .disabled(store.isReadOnly || (entry.logDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && entry.logDraftImages.isEmpty))
+                    .disabled(store.isReadOnly || (logDraft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && entry.logDraftImages.isEmpty))
             }
             .padding(.horizontal, 6).padding(.vertical, 3)
             .background(TerminalPalette.surface)
@@ -517,7 +528,8 @@ struct DailyLogView: View {
     }
 
     private func submit() {
-        guard !store.isReadOnly, !entry.logDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !entry.logDraftImages.isEmpty else { return }
+        guard !store.isReadOnly, !logDraft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !entry.logDraftImages.isEmpty else { return }
+        logDraft.flush()
         do {
             let command = try store.commitLog(on: date, linkDefault: !unlinked)
             error = nil
@@ -527,8 +539,8 @@ struct DailyLogView: View {
                 unlinked = false
                 focused = true
                 ImageIndexer.run(store: store)
-            case .help: store.setLogDraft("", on: date); showingHelp = true
-            case .summary: store.setLogDraft("", on: date); openReview()
+            case .help: logDraft.set(""); showingHelp = true
+            case .summary: logDraft.set(""); openReview()
             case .link: focused = true
             case .filter(let numbers): applyFilter(numbers)
             }
@@ -542,7 +554,7 @@ struct DailyLogView: View {
             error = LogInputError.unknownTask(missing.0).localizedDescription
             return
         }
-        store.setLogDraft("", on: date)
+        logDraft.set("")
         interaction.logFilter = Set(located.compactMap { $0.1?.id })
         focused = true
     }
@@ -554,12 +566,12 @@ struct DailyLogView: View {
     }
 
     private func completeCommand() {
-        if let command = completions.first { store.setLogDraft(command + " ", on: date) }
+        if let command = completions.first { logDraft.set(command + " ") }
     }
 
     private func historyUp() {
         guard !entry.logs.isEmpty else { return }
-        if historyIndex == nil { pendingDraft = entry.logDraft; pendingTaskID = entry.logTaskID }
+        if historyIndex == nil { pendingDraft = logDraft.text; pendingTaskID = entry.logTaskID }
         let index = max(0, min((historyIndex ?? entry.logs.count) - 1, entry.logs.count - 1))
         historyIndex = index
         recall(entry.logs[index])
@@ -572,13 +584,13 @@ struct DailyLogView: View {
             recall(entry.logs[index + 1])
         } else {
             historyIndex = nil
-            store.setLogDraft(pendingDraft, on: date)
+            logDraft.set(pendingDraft)
             store.setLogTask(pendingTaskID, on: date)
         }
     }
 
     private func recall(_ log: DailyLogEntry) {
-        store.setLogDraft(log.command, on: date)
+        logDraft.set(log.command)
         store.setLogTask(log.taskID.flatMap { store.locate($0)?.id }, on: date)
     }
 }

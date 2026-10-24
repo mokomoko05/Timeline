@@ -216,7 +216,7 @@ struct ManagedTaskRow: View {
 
     /// 环形菜单里的操作（也是右键菜单的内容）。
     private var radialItems: [RadialItem] {
-        let noteCount = store.notes(for: task.id).count
+        let noteCount = store.noteCount(for: task.id)
         var items: [RadialItem] = [
             RadialItem(id: "board", symbol: "list.bullet.rectangle", title: "打开工作板", action: {
                 selectTask()

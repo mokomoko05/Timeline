@@ -40,8 +40,7 @@ struct MonthJumper: View {
         let calendar = JournalDates.calendar
         let currentYear = calendar.component(.year, from: current)
         let currentMonth = calendar.component(.month, from: current)
-        let formatter = DateFormatter()
-        formatter.locale = locale
+        let formatter = DateFormatters.formatter(locale: locale)
         return VStack(spacing: 10) {
             HStack {
                 Button { year -= 1 } label: { Image(systemName: "chevron.left") }.buttonStyle(HitAreaButtonStyle()).accessibilityLabel("上一年")

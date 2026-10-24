@@ -139,10 +139,19 @@ public struct DayEntry: Codable, Equatable {
 }
 
 public enum JournalDates {
+    private static let cacheLock = NSLock()
+    private static var cachedCalendar: Calendar?
+
+    /// 日期计算在日历格子、排序里大量调用：缓存一份，系统时区变了才重建。
     public static var calendar: Calendar {
+        let zone = TimeZone.current
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let cachedCalendar, cachedCalendar.timeZone == zone { return cachedCalendar }
         var calendar = Calendar(identifier: .gregorian)
         calendar.firstWeekday = 2
-        calendar.timeZone = .current
+        calendar.timeZone = zone
+        cachedCalendar = calendar
         return calendar
     }
 
@@ -200,7 +209,8 @@ public final class JournalStore: ObservableObject {
     var cachedBoardIndices: [BoardOwner: Int]?
     @Published public private(set) var days: [String: DayEntry] = [:]
     @Published public private(set) var errorMessage: String?
-    @Published public private(set) var lastSaved: Date?
+    /// 只供逻辑判断，界面不读；不发布，免得每次保存都让所有窗口重算。
+    public private(set) var lastSaved: Date?
     @Published public private(set) var isReadOnly = false
     @Published public private(set) var canUndoDelete = false
     @Published public private(set) var lastAction: ActionEvent?
@@ -221,14 +231,32 @@ public final class JournalStore: ObservableObject {
     private var dailyBackupKey: String?
     private var deletedTodo: (task: Todo, date: Date, index: Int)?
     private var indexedTasks: [ScheduledTask]?
+    /// 按 id / 编号定位任务，和 `indexedTasks` 一起失效。
+    private var taskPositions: (byID: [UUID: Int], byNumber: [Int: Int])?
     private var cachedNoteTopics: [NoteTopic]?
     var cachedTagSummaries: [TagSummary]?
     private var cachedTimelineSegments: [UUID: LogTimelineSegment]?
+    /// 每个任务的笔记条数：每一行的菜单都要显示，逐行扫描全部日志太慢。
+    private var cachedNoteCounts: [UUID: Int]?
 
     /// 输入草稿不影响汇总；只有日志或待办真的改变时才重新扫描历史。
     private func invalidateNotebookIndex(logsChanged: Bool, tasksChanged: Bool) {
         if logsChanged || tasksChanged { cachedNoteTopics = nil; cachedTagSummaries = nil }
-        if logsChanged { cachedTimelineSegments = nil }
+        if logsChanged { cachedTimelineSegments = nil; cachedNoteCounts = nil }
+    }
+
+    /// 等同 `notes(for:).count`，但只在日志变化后扫描一次。
+    public func noteCount(for taskID: UUID) -> Int {
+        if cachedNoteCounts == nil {
+            var counts: [UUID: Int] = [:]
+            for day in days.values {
+                for log in day.logs where log.isNotebookEntry {
+                    if let id = log.taskID { counts[id, default: 0] += 1 }
+                }
+            }
+            cachedNoteCounts = counts
+        }
+        return cachedNoteCounts?[taskID] ?? 0
     }
 
     public func timelineSegments() -> [UUID: LogTimelineSegment] {
@@ -1174,8 +1202,9 @@ public final class JournalStore: ObservableObject {
             try makeDailyBackup(data)
             try data.write(to: fileURL, options: .atomic)
             lastSaved = Date()
-            hasPendingSave = false
-            errorMessage = nil
+            // 值没变就不赋值：@Published 每次赋值都会通知所有观察的窗口。
+            if hasPendingSave { hasPendingSave = false }
+            if errorMessage != nil { errorMessage = nil }
         } catch {
             errorMessage = "保存失败，当前修改仍保留在内存中。请释放磁盘空间或检查权限后重试。\n\(error.localizedDescription)"
         }
@@ -1216,13 +1245,28 @@ public final class JournalStore: ObservableObject {
 
     private func invalidateTaskIndex() {
         indexedTasks = nil
+        taskPositions = nil
         indexedDeadlines = nil
         // 固定关联的待办完成或删除后，固定自动取消（之后即使撤销完成，也不会悄悄恢复）。
         if let pinnedTaskID, locate(pinnedTaskID).map({ $0.task.completed }) != false { self.pinnedTaskID = nil }
     }
 
+    private func taskIndex() -> (tasks: [ScheduledTask], byID: [UUID: Int], byNumber: [Int: Int]) {
+        let all = tasks()
+        if let taskPositions { return (all, taskPositions.byID, taskPositions.byNumber) }
+        var byID: [UUID: Int] = [:], byNumber: [Int: Int] = [:]
+        byID.reserveCapacity(all.count)
+        for (index, item) in all.enumerated() {
+            if byID[item.id] == nil { byID[item.id] = index }
+            if let number = item.task.number, byNumber[number] == nil { byNumber[number] = index }
+        }
+        taskPositions = (byID, byNumber)
+        return (all, byID, byNumber)
+    }
+
     public func locate(_ id: UUID) -> ScheduledTask? {
-        tasks().first { $0.id == id }
+        let index = taskIndex()
+        return index.byID[id].map { index.tasks[$0] }
     }
 
     /// 任务的永久编号（`on` 仅为兼容旧调用）。
@@ -1232,7 +1276,8 @@ public final class JournalStore: ObservableObject {
 
     /// 按永久编号找任务。
     public func locate(number: Int) -> ScheduledTask? {
-        tasks().first { $0.task.number == number }
+        let index = taskIndex()
+        return index.byNumber[number].map { index.tasks[$0] }
     }
 
     /// 全部任务，按截止时间从早到晚；没有截止日期的排在最后，同一时间按编号。手动拖过位置的任务按它的手动位置排。

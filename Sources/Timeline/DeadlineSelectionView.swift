@@ -117,9 +117,7 @@ struct DeadlineSelectionView: View {
     }
 
     private var weekdays: [String] {
-        let formatter = DateFormatter()
-        formatter.locale = locale
-        let symbols = formatter.shortStandaloneWeekdaySymbols ?? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        let symbols = DateFormatters.formatter(locale: locale).shortStandaloneWeekdaySymbols ?? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
         let start = sundayFirst ? 0 : 1
         return (0..<7).map { symbols[($0 + start) % 7] }
     }

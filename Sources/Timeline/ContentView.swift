@@ -16,6 +16,8 @@ struct ContentView: View {
     @ObservedObject var store: JournalStore
     @ObservedObject var loginItem: LoginItem
     @State private var selectedDate = JournalDates.calendar.startOfDay(for: Date())
+    /// 待办输入的缓冲。放在 @State（不是 @StateObject）里：只有输入行观察它，按键不重绘整个主界面。
+    @State private var todoDraft = LogDraftBuffer(field: .deadline)
     @State private var displayedMonth = JournalDates.monthStart(Date())
     @State private var actionError: String?
     @State private var showingLinkComposer = false
@@ -60,7 +62,7 @@ struct ContentView: View {
     private var weekStart: Int { weekStartsSunday ? 1 : 2 }
     private var footerVisible: Bool { store.errorMessage != nil || !reminders.status.isEmpty }
     private var draft: Binding<String> {
-        Binding(get: { entry.deadlineDraft }, set: { store.setDeadlineDraft($0, on: selectedDate) })
+        Binding(get: { todoDraft.text }, set: { todoDraft.update($0) })
     }
 
     /// 带「撤销」提示的操作。普通编辑不打扰用户。
@@ -95,7 +97,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingLinkComposer, onDismiss: {
             if linkInsertion?.finish(inserting: pendingLink) != true {
-                if let pendingLink { draft.wrappedValue += (draft.wrappedValue.isEmpty ? "" : " ") + pendingLink }
+                if let pendingLink { todoDraft.set(todoDraft.text + (todoDraft.text.isEmpty ? "" : " ") + pendingLink) }
                 tasksVisible = true
                 addingTodo = true
             }
@@ -124,8 +126,10 @@ struct ContentView: View {
             Text(actionError ?? loginItem.errorMessage ?? "")
         }
         .onAppear {
+            todoDraft.attach(store: store, date: selectedDate)
             refreshOverview()
         }
+        .onChange(of: selectedDate) { todoDraft.attach(store: store, date: $0) }
         .onReceive(dayTimer) { now in
             refreshOverview()
             let newKey = JournalDates.key(now)
@@ -513,13 +517,13 @@ struct ContentView: View {
                 }
             }
             .frame(maxHeight: .infinity)
-            TaskComposerRow(store: store, text: draft, focused: $addingTodo, options: $creationOptions,
+            ObservingDraft(draft: todoDraft) { _ in TaskComposerRow(store: store, text: draft, focused: $addingTodo, options: $creationOptions,
                             defaultDate: selectedDate, submit: addTodo, cancel: { addingTodo = false }, previous: {
                 if let newest = visible.max(by: { ($0.task.number ?? 0) < ($1.task.number ?? 0) }) {
                     addingTodo = false
                     requestedEdit = newest.id
                 }
-            })
+            }) }
         }
         .disabled(store.isReadOnly)
         .modifier(Card())
@@ -534,9 +538,7 @@ struct ContentView: View {
         let previews = dates.map { date in
             DeadlineDayCell.previewItems(dueItems: dueByDay[JournalDates.key(date)] ?? [], hideCompleted: hideCompleted)
         }
-        let formatter = DateFormatter()
-        formatter.locale = locale
-        let weekdays = formatter.veryShortStandaloneWeekdaySymbols ?? []
+        let weekdays = DateFormatters.formatter(locale: locale).veryShortStandaloneWeekdaySymbols ?? []
         let ordered = (0..<7).map { weekdays[($0 + weekStart - 1) % 7] }
         return VStack(spacing: 12) {
             HStack {
@@ -690,6 +692,7 @@ struct ContentView: View {
 
     private func addTodo() {
         guard !store.isReadOnly else { return }
+        todoDraft.flush()
         let added = store.commitDraft(on: selectedDate, options: creationOptions)
         if !added.isEmpty { creationOptions = TaskCreationOptions() }
         addingTodo = true
@@ -703,16 +706,11 @@ struct ContentView: View {
     }
 
     private func format(_ date: Date, _ pattern: String) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = locale
-        formatter.calendar = JournalDates.calendar
-        if formatter.locale.language.languageCode?.identifier == "en" {
+        if locale.language.languageCode?.identifier == "en" {
             let templates = ["M月d日": "MMMd", "yyyy年 · EEEE": "yEEEE", "yyyy年 M月": "yMMMM", "yyyy年M月": "yMMMM"]
-            formatter.setLocalizedDateFormatFromTemplate(templates[pattern] ?? pattern)
-        } else {
-            formatter.dateFormat = pattern
+            return DateFormatters.formatter(locale: locale, template: templates[pattern] ?? pattern).string(from: date)
         }
-        return formatter.string(from: date)
+        return DateFormatters.formatter(locale: locale, format: pattern).string(from: date)
     }
 
     /// 导出为文件夹：journal.json 加上日志里用到的全部图片。

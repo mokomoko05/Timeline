@@ -289,6 +289,26 @@ enum Motion {
     static var quick: Animation? { reduced ? nil : .easeOut(duration: 0.16) }
 }
 
+/// 创建 DateFormatter 很贵，列表和日历每次重绘都要格式化日期：按语言和格式缓存。只在主线程使用。
+enum DateFormatters {
+    private static var cache: [String: DateFormatter] = [:]
+
+    /// `template` 走本地化模板；否则 `format` 是固定格式。
+    static func formatter(locale: Locale, template: String? = nil, format: String? = nil) -> DateFormatter {
+        let zone = TimeZone.current
+        let key = "\(locale.identifier)|\(template ?? "")|\(format ?? "")"
+        if let cached = cache[key], cached.timeZone == zone { return cached }
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.calendar = JournalDates.calendar
+        formatter.timeZone = zone
+        if let template { formatter.setLocalizedDateFormatFromTemplate(template) }
+        if let format { formatter.dateFormat = format }
+        cache[key] = formatter
+        return formatter
+    }
+}
+
 extension Date {
     /// 「今天 / 明天 / 10月8日」之类的短标签。
     var relativeLabel: String {
@@ -296,9 +316,7 @@ extension Date {
         if calendar.isDateInToday(self) { return AppLocalized("今天") }
         if calendar.isDateInTomorrow(self) { return AppLocalized("明天") }
         if calendar.isDateInYesterday(self) { return AppLocalized("昨天") }
-        let formatter = DateFormatter()
-        formatter.locale = AppLanguage.current.locale
-        formatter.setLocalizedDateFormatFromTemplate(calendar.isDate(self, equalTo: Date(), toGranularity: .year) ? "MMMd" : "yMMMd")
-        return formatter.string(from: self)
+        let template = calendar.isDate(self, equalTo: Date(), toGranularity: .year) ? "MMMd" : "yMMMd"
+        return DateFormatters.formatter(locale: AppLanguage.current.locale, template: template).string(from: self)
     }
 }

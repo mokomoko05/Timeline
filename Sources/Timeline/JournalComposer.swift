@@ -1,26 +1,69 @@
 import AppKit
+import Combine
 import SwiftUI
 import TimelineCore
 
-/// 输入在独立视图中即时显示，停顿后再同步草稿，避免每个字都刷新整个日记窗口。
+/// 输入在独立视图中即时显示，停顿后再同步草稿，避免每个字都刷新所有观察仓库的窗口。
+/// 只有直接观察它的输入视图随按键重绘；提交、切换日期、失焦、退出前都会先写回。
 @MainActor
 final class LogDraftBuffer: ObservableObject {
+    enum Field { case log, deadline }
+
     @Published private(set) var text: String
-    private let store: JournalStore
-    private let date: Date
+    private var store: JournalStore?
+    private var date: Date
+    private let field: Field
     private var storedText: String
     private var pending: Task<Void, Never>?
+    private var subscriptions: [AnyCancellable] = []
 
-    init(store: JournalStore, date: Date) {
+    init(store: JournalStore, date: Date, field: Field = .log) {
+        self.field = field
+        self.date = date
+        text = ""
+        storedText = ""
+        attach(store: store, date: date)
+    }
+
+    /// 还没拿到仓库时先建一个空缓冲（放进 @State 时用，避免每次构造视图都订阅仓库）。
+    init(field: Field) {
+        self.field = field
+        date = Date()
+        text = ""
+        storedText = ""
+    }
+
+    private func stored(in entry: DayEntry?) -> String {
+        switch field {
+        case .log: return entry?.logDraft ?? ""
+        case .deadline: return entry?.deadlineDraft ?? ""
+        }
+    }
+
+    /// 绑定到某一天的草稿；换日期前先把旧日期的输入写回。
+    func attach(store: JournalStore, date: Date) {
+        if self.store === store, JournalDates.key(self.date) == JournalDates.key(date) { return }
+        flush()
+        let first = self.store == nil
         self.store = store
         self.date = date
-        let initial = store.entry(for: date).logDraft
-        text = initial
+        let initial = stored(in: store.entry(for: date))
         storedText = initial
+        if text != initial { text = initial }
+        guard first else { return }
+        // `$days` 在赋值前发出新值：其他窗口、提交、历史调取改了草稿时立即同步。
+        store.$days.sink { [weak self] days in
+            guard let self else { return }
+            self.synchronize(self.stored(in: days[JournalDates.key(self.date)]))
+        }.store(in: &subscriptions)
+        let center = NotificationCenter.default
+        for name in [Notification.Name.timelineCommitEditing, NSApplication.willTerminateNotification] {
+            center.publisher(for: name).sink { [weak self] _ in self?.flush() }.store(in: &subscriptions)
+        }
     }
 
     func update(_ text: String) {
-        guard !store.isReadOnly, text != self.text else { return }
+        guard let store, !store.isReadOnly, text != self.text else { return }
         self.text = text
         pending?.cancel()
         pending = Task { @MainActor [weak self] in
@@ -29,12 +72,29 @@ final class LogDraftBuffer: ObservableObject {
         }
     }
 
+    /// 程序写入（补全命令、调取历史、清空）：立即写回仓库。
+    func set(_ text: String) {
+        pending?.cancel()
+        pending = nil
+        self.text = text
+        storedText = text
+        write(text)
+    }
+
     func flush() {
         pending?.cancel()
         pending = nil
-        guard text != storedText else { return }
+        guard store != nil, text != storedText else { return }
         storedText = text
-        store.setLogDraft(text, on: date)
+        write(text)
+    }
+
+    private func write(_ text: String) {
+        guard let store else { return }
+        switch field {
+        case .log: store.setLogDraft(text, on: date)
+        case .deadline: store.setDeadlineDraft(text, on: date)
+        }
     }
 
     /// 其他窗口、提交或历史调取改变了草稿时，取消旧输入的延迟写入。
@@ -43,8 +103,16 @@ final class LogDraftBuffer: ObservableObject {
         pending?.cancel()
         pending = nil
         storedText = text
-        self.text = text
+        if self.text != text { self.text = text }
     }
+}
+
+/// 只有它观察草稿缓冲：输入时重绘的范围限于输入行本身。
+struct ObservingDraft<Content: View>: View {
+    @ObservedObject var draft: LogDraftBuffer
+    @ViewBuilder let content: (String) -> Content
+
+    var body: some View { content(draft.text) }
 }
 
 struct JournalComposer: View {
@@ -105,11 +173,9 @@ struct JournalComposer: View {
                         }))
         }
         .padding(.horizontal, 20).padding(.vertical, 12)
-        .onReceive(store.$days) { draft.synchronize($0[JournalDates.key(date)]?.logDraft ?? "") }
         .onChange(of: focused) { if !$0 { draft.flush() } }
+        .onChange(of: date) { draft.attach(store: store, date: $0) }
         .onDisappear { draft.flush() }
-        .onReceive(NotificationCenter.default.publisher(for: .timelineCommitEditing)) { _ in draft.flush() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in draft.flush() }
         .popover(isPresented: Binding(get: { mention.isActive }, set: { if !$0 { mention.dismiss() } }), arrowEdge: .bottom) {
             MentionList(state: mention, store: store).frame(width: 340)
         }

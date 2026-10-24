@@ -129,4 +129,42 @@ final class JournalEditingTests: XCTestCase {
         XCTAssertTrue(store.entry(for: first).logs.isEmpty)
         XCTAssertTrue(store.entry(for: second).logs.isEmpty)
     }
+
+    func testTodoDraftBufferTypesLocallyAndRetargetsDatesWithoutLosingText() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let first = JournalDates.calendar.startOfDay(for: Date())
+        let second = first.addingTimeInterval(86400)
+        let buffer = LogDraftBuffer(field: .deadline)
+        buffer.attach(store: store, date: first)
+        var publications = 0
+        let subscription = store.objectWillChange.sink { publications += 1 }
+        for index in 1...50 { buffer.update("Todo \(index)") }
+        XCTAssertEqual(publications, 0, "每个字不能发布整个仓库")
+        subscription.cancel()
+        buffer.attach(store: store, date: second)
+        XCTAssertEqual(store.entry(for: first).deadlineDraft, "Todo 50", "切换日期前写回旧日期")
+        XCTAssertEqual(buffer.text, "")
+        buffer.update("Second day todo")
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(store.entry(for: second).deadlineDraft, "Second day todo")
+        _ = store.commitDraft(on: second)
+        XCTAssertEqual(buffer.text, "", "提交后缓冲随仓库清空")
+        XCTAssertTrue(store.entry(for: first).logDraft.isEmpty)
+    }
+
+    func testProgrammaticDraftWriteIsImmediateAndCancelsPendingTyping() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let date = Date()
+        let buffer = LogDraftBuffer(store: store, date: date)
+        buffer.update("/he")
+        buffer.set("/help ")
+        XCTAssertEqual(store.entry(for: date).logDraft, "/help ")
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(store.entry(for: date).logDraft, "/help ")
+        XCTAssertEqual(buffer.text, "/help ")
+    }
 }

@@ -82,6 +82,10 @@ final class QuickCaptureModel: ObservableObject {
     /// 这条日志明确关联的待办（`@` 选的，或用选择器选的）；`unlinked` 表示明确不关联。都没有时按专注 / 固定关联自动处理。
     @Published var link: UUID?
     @Published var unlinked = false
+    /// 每次呼出加一：面板复用，视图据此重置提示和焦点（相当于重新出现）。
+    @Published private(set) var presentation = 0
+
+    func presented() { presentation += 1 }
 
     var hasDraft: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !tags.isEmpty || link != nil
@@ -220,9 +224,29 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
         show(mode)
     }
 
+    /// 面板和视图只建一次，之后的呼出只调整位置并前置，热键响应不必重新排版整个界面。
     func show(_ mode: QuickCaptureMode) {
         if let panel, panel.isVisible { panel.close() }
         model.mode = mode
+        if let panel, let host = panel.contentView {
+            model.presented()
+            host.layoutSubtreeIfNeeded()
+            let fitted = host.fittingSize
+            let size = NSSize(width: 340, height: fitted.height > 60 ? fitted.height : panel.frame.height)
+            panel.setFrame(NSRect(origin: restoredOrigin(for: size), size: size), display: false)
+            panel.makeKeyAndOrderFront(nil)
+            // 复用的视图里焦点状态可能没变，直接把光标放回输入框。
+            DispatchQueue.main.async { [weak panel] in
+                func editor(in view: NSView) -> NSTextView? {
+                    if let text = view as? NSTextView, text.isEditable { return text }
+                    return view.subviews.lazy.compactMap(editor).first
+                }
+                guard let panel, panel.isKeyWindow, let content = panel.contentView, let target = editor(in: content),
+                      panel.firstResponder !== target else { return }
+                panel.makeFirstResponder(target)
+            }
+            return
+        }
         let view = QuickCaptureView(store: store, model: model, close: { [weak self] in self?.panel?.close() },
                                     resize: { [weak self] height in self?.resize(height: height) })
         let host = NSHostingView(rootView: LocalizedRoot { view })
@@ -408,6 +432,12 @@ struct QuickCaptureView: View {
                 try await Task.sleep(for: .milliseconds(700))
                 message = nil
             } catch {}
+        }
+        .onChange(of: model.presentation) { _ in
+            message = nil
+            failure = nil
+            restored = model.hasDraft
+            focused = true
         }
         .onAppear {
             restored = model.hasDraft
