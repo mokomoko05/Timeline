@@ -265,3 +265,77 @@ struct NoteThreadEmpty: View {
     }
 }
 
+
+/// 日记里的一轮专注：从「开始专注」到「结束」之间的记录。
+struct FocusRun: Identifiable {
+    let start: DailyLogEntry
+    let end: DailyLogEntry
+    /// 中间的笔记、反馈（不含开始和结束本身）。
+    let inner: [DailyLogEntry]
+    var id: UUID { start.id }
+
+    var noteCount: Int { inner.filter { !$0.isFocusMarker || $0.focusMarker == "NOTE" }.count }
+    var reviewed: Bool { inner.contains { $0.focusMarker == "REVIEW" } }
+    var seconds: TimeInterval { end.focusElapsedSeconds ?? end.createdAt.timeIntervalSince(start.createdAt) }
+
+    /// 按时间顺序配对开始和结束；还没结束的一轮不算（仍在进行，不折叠）。
+    static func runs(in logs: [DailyLogEntry]) -> [FocusRun] {
+        var result: [FocusRun] = []
+        var open: (start: DailyLogEntry, inner: [DailyLogEntry])?
+        for log in logs {
+            switch log.focusMarker {
+            case "FOCUS": open = (log, [])
+            case "END":
+                if let current = open { result.append(FocusRun(start: current.start, end: log, inner: current.inner)) }
+                open = nil
+            default: open?.inner.append(log)
+            }
+        }
+        return result
+    }
+}
+
+/// 一轮专注结束后的小结：用时、目标、记了几条、是否写了反馈；可以把这一轮折叠成一行。
+struct FocusRunSummary: View {
+    @Environment(\.typography) private var typography
+    let run: FocusRun
+    let folded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Color.clear.frame(width: NoteThread.gutter)
+            HStack(spacing: 10) {
+                Image(systemName: run.end.focusMetMinimum == false ? "xmark.circle" : "checkmark.seal")
+                    .foregroundStyle(run.end.focusMetMinimum == false ? Palette.danger : Palette.success)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text(AppLocalizedFormat("专注 %@", FocusSession.brief(run.seconds))).fontWeight(.semibold)
+                        Text(NoteThread.shortTime(run.start.createdAt) + "–" + NoteThread.shortTime(run.end.createdAt))
+                            .foregroundStyle(Palette.muted)
+                        if run.noteCount > 0 { Text(AppLocalizedFormat("%lld 条笔记", run.noteCount)).foregroundStyle(Palette.muted) }
+                        if run.reviewed { Text("已反馈").foregroundStyle(Palette.done) }
+                    }
+                    if let goal = run.start.focusGoal, !goal.isEmpty {
+                        Label(goal, systemImage: "flag").foregroundStyle(Palette.muted).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                Button(action: toggle) {
+                    Label(folded ? "展开这一轮" : "收起这一轮", systemImage: folded ? "chevron.down" : "chevron.up")
+                        .labelStyle(.titleAndIcon)
+                        .font(.system(size: typography.pt(10), weight: .medium))
+                        .padding(.horizontal, 7).frame(height: 20)
+                }
+                .buttonStyle(.plain).foregroundStyle(Palette.accent).raisedOnHover(radius: 10)
+            }
+            .font(.system(size: typography.pt(11))).monospacedDigit()
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .background(Palette.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: Metrics.radiusMedium, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Metrics.radiusMedium, style: .continuous)
+                .strokeBorder(Palette.accent.opacity(0.18), lineWidth: Metrics.hairline))
+        }
+        .padding(.horizontal, 8).padding(.bottom, 12)
+        .accessibilityElement(children: .combine)
+    }
+}

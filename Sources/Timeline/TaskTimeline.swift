@@ -259,7 +259,7 @@ struct TimelineDayView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            TimelineDateMarker(date: date, selectedDate: selectedDate, compact: true, navigate: navigate)
+            TimelineDateMarker(date: date, selectedDate: selectedDate, compact: true, navigate: navigate, store: store)
             // 刻度属于边界；任务始终位于边界之间。
             VStack(alignment: .leading, spacing: TaskTimelineLayout.spacing) {
                 if showsFinishedTasks {
@@ -445,13 +445,23 @@ struct TimelineDateMarker: View {
     let selectedDate: Date
     var compact = false
     let navigate: (Date) -> Void
+    /// 有它时，日期结可以接住拖来的任务：放下即改到这一天（未设日期的结 = 清除日期）。
+    var store: JournalStore?
     @State private var showingDate = false
+    @State private var dropTargeted = false
+    @ObservedObject private var dragSession = TaskDragSession.shared
 
     private var isToday: Bool { date.map { JournalDates.calendar.isDateInToday($0) } == true }
 
     /// 日期是线上的「结」：普通日子是空心小环，今天是带光晕的实心结，未设日期是一段短横。
     @ViewBuilder private var knot: some View {
-        if date == nil {
+        if dropTargeted {
+            ZStack {
+                Circle().fill(Palette.accent.opacity(0.22)).frame(width: 22, height: 22)
+                Circle().fill(Palette.accent).frame(width: 10, height: 10)
+                    .overlay(Circle().strokeBorder(Palette.background, lineWidth: 1.5))
+            }
+        } else if date == nil {
             Capsule().fill(Palette.line).frame(width: 10, height: 2)
         } else if isToday {
             ZStack {
@@ -493,8 +503,21 @@ struct TimelineDateMarker: View {
                     .font(.system(size: typography.pt(11), weight: isToday ? .semibold : .regular))
                     .foregroundStyle(isToday ? Palette.accent : Palette.muted)
             }.buttonStyle(.plain).disabled(date == nil)
+            if dropTargeted {
+                Text(date.map { AppLocalizedFormat("放下改到 %@", $0.relativeLabel) } ?? AppLocalized("放下清除日期"))
+                    .font(.system(size: typography.pt(10), weight: .medium)).foregroundStyle(Palette.accent)
+                    .padding(.horizontal, 6).frame(height: 18)
+                    .background(Palette.soft, in: Capsule())
+                    .transition(.opacity)
+            } else if dragSession.activeID != nil, store != nil {
+                // 拖动中提示：日期结可以接住任务。
+                Text(date.map { $0.relativeLabel } ?? "").font(.system(size: typography.pt(10))).foregroundStyle(Palette.muted.opacity(0.7))
+            }
             Spacer(minLength: 0)
         }
+        .animation(Motion.quick, value: dropTargeted)
+        .contentShape(Rectangle())
+        .modifier(KnotDrop(store: store, date: date, targeted: $dropTargeted))
         .frame(height: typography.pt(compact ? 24 : 30))
     }
 }
@@ -567,6 +590,24 @@ struct TimelineNowMarker: View {
         }
         .allowsHitTesting(false)
         .accessibilityLabel("现在")
+    }
+}
+
+/// 日期结作为放置目标：接受任何来源的任务（时间轴里横向拖到日期一侧、或从日历拖回来）。
+private struct KnotDrop: ViewModifier {
+    let store: JournalStore?
+    let date: Date?
+    @Binding var targeted: Bool
+    @ObservedObject private var dragSession = TaskDragSession.shared
+
+    func body(content: Content) -> some View {
+        if let store {
+            content
+                .onDrop(of: [TaskDragPayload.type], delegate: CalendarTaskDropTarget(store: store, destination: date, targeted: $targeted))
+                .onChange(of: dragSession.activeID) { if $0 == nil { targeted = false } }
+        } else {
+            content
+        }
     }
 }
 

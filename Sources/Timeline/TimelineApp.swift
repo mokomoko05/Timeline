@@ -151,6 +151,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
             quickCapture.installStatusItem()
             AppRouter.togglePanel = { [weak self] action in self?.togglePanel(action) }
+            AppRouter.openLog = { [weak self] date, id in
+                guard let self else { return }
+                PreviousApp.remember()
+                NSApp.unhide(nil)
+                NotesWindowController.shared.showJournal(store: self.store, date: date, log: id)
+            }
             for (action, hotKey) in allHotKeys { hotKey.onPress = { AppRouter.togglePanel(action) } }
             applyHotKeyPreference()
             NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -381,6 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case 35 where interaction.selectedTaskID != nil && !shift: commands.send(.pinSelected)       // P
         case 7 where interaction.selectedTaskID != nil && !shift: commands.send(.dropSelected)       // X
         case 3 where interaction.selectedTaskID != nil && !shift: commands.send(.focusSelected)      // F
+        case 46 where interaction.selectedTaskID != nil: commands.send(.postponeSelected(shift ? -1 : 1)) // M / ⇧M
         case 44 where shift: commands.send(.shortcuts)                                               // ?
         default: return false
         }
@@ -643,6 +650,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             menuItem("固定 / 取消固定（P）", typingSensitive: true, send(.pinSelected)),
             menuItem("放弃 / 恢复（X）", typingSensitive: true, send(.dropSelected)),
             menuItem("开始 / 结束专注（F）", typingSensitive: true, send(.focusSelected)),
+            menuItem("推到明天（M）", typingSensitive: true, send(.postponeSelected(1))),
+            menuItem("提前一天（⇧M）", typingSensitive: true, send(.postponeSelected(-1))),
             .separator(),
             menuItem("把逾期事项的截止日期改到今天", key: "m", modifiers: [.command, .shift], send(.rollover)),
         ])

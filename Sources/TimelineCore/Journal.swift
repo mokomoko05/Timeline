@@ -244,6 +244,8 @@ public final class JournalStore: ObservableObject {
     private var cachedTimelineSegments: [UUID: LogTimelineSegment]?
     /// 每个任务的笔记条数：每一行的菜单都要显示，逐行扫描全部日志太慢。
     private var cachedNoteCounts: [UUID: Int]?
+    /// 每天的有效专注秒数（按结束记录累加），月历每格都要用。
+    private var cachedFocusByDay: [String: TimeInterval]?
     /// 按时间排好的全部日志（含专注记录）。笔记、标签、日志面板每次重绘都要用，日志变了才重建。
     private var cachedChronology: [LoggedLog]?
     private var cachedTaskSummaries: (key: String, value: [LogTaskSummary])?
@@ -252,7 +254,20 @@ public final class JournalStore: ObservableObject {
     private func invalidateNotebookIndex(logsChanged: Bool, tasksChanged: Bool) {
         if logsChanged || tasksChanged { cachedNoteTopics = nil; cachedTagSummaries = nil; cachedTaskSummaries = nil }
         if logsChanged { cachedChronology = nil }
-        if logsChanged { cachedTimelineSegments = nil; cachedNoteCounts = nil }
+        if logsChanged { cachedTimelineSegments = nil; cachedNoteCounts = nil; cachedFocusByDay = nil }
+    }
+
+    /// 这一天记录到的有效专注时长（结束记录里的用时之和）。
+    public func focusSeconds(on date: Date) -> TimeInterval {
+        if cachedFocusByDay == nil {
+            var totals: [String: TimeInterval] = [:]
+            for (key, day) in days {
+                let seconds = day.logs.filter { $0.focusMarker == "END" }.compactMap(\.focusElapsedSeconds).reduce(0, +)
+                if seconds > 0 { totals[key] = seconds }
+            }
+            cachedFocusByDay = totals
+        }
+        return cachedFocusByDay?[JournalDates.key(date)] ?? 0
     }
 
     /// 等同 `notes(for:).count`，但只在日志变化后扫描一次。

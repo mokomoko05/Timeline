@@ -155,8 +155,9 @@ final class TaskHandleView: NSView, NSDraggingSource {
     override func mouseDragged(with event: NSEvent) {
         if reordering {
             NSCursor.closedHand.set()
-            // 只有横向离开清单才切换为日历拖放；越过日期分组仍按组内排序。
-            if leftList(event.locationInWindow), let id = taskID {
+            // 横向离开清单、或拖进左侧的日期一栏，就切换为改日期的拖放（可以放在日历或时间轴的日期结上）；
+            // 越过日期分组仍按组内排序。
+            if leftList(event.locationInWindow) || inDateGutter(event.locationInWindow), let id = taskID {
                 endReorder(commit: false)
                 startNativeDrag(id, title, self, event)
                 return
@@ -167,7 +168,7 @@ final class TaskHandleView: NSView, NSDraggingSource {
         guard let id = taskID, let initial = initialEvent,
               hypot(event.locationInWindow.x - initial.locationInWindow.x,
                     event.locationInWindow.y - initial.locationInWindow.y) > 3 else { return }
-        if reorder == nil || leftList(event.locationInWindow) {
+        if reorder == nil || leftList(event.locationInWindow) || inDateGutter(event.locationInWindow) {
             initialEvent = nil
             startNativeDrag(id, title, self, event)
             return
@@ -216,6 +217,13 @@ final class TaskHandleView: NSView, NSDraggingSource {
         if commit { reorder?.end() } else { reorder?.cancel() }
         NSCursor.arrow.set()
         window?.invalidateCursorRects(for: self)
+    }
+
+    /// 指针进了时间轴左侧的日期一栏（轴线左边）。
+    private func inDateGutter(_ point: NSPoint) -> Bool {
+        guard let scroll = scrollView else { return false }
+        let frame = scroll.convert(scroll.bounds, to: nil)
+        return point.x < frame.minX + 46 * UIScale.factor && point.x >= frame.minX - 70
     }
 
     private func leftList(_ point: NSPoint) -> Bool {

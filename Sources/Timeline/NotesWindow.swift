@@ -58,12 +58,12 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
     }
 
     /// 打开合并窗口的日记模式。日期列表和右侧日志视图共用同一个窗口及窗口状态。
-    func showJournal(store: JournalStore, date: Date,
+    func showJournal(store: JournalStore, date: Date, log: UUID? = nil,
                      reveal: @escaping (UUID) -> Void = { _ in }, openDay: @escaping (Date) -> Void = { _ in }) {
         let window = self.window ?? makeWindow()
         self.window = window
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
-        workspace.open(.journal, date: date)
+        workspace.open(.journal, date: date, log: log)
         let view = UnifiedNotesView(store: store, workspace: workspace, nav: nav,
                                     close: { [weak self] in self?.close() },
                                     reveal: reveal, openDay: openDay)
@@ -145,10 +145,13 @@ final class NotesWorkspaceNavigation: ObservableObject {
     @Published var mode: UnifiedNotesMode = .notes
     @Published var date = JournalDates.calendar.startOfDay(for: Date())
     @Published private(set) var requestID = 0
+    /// 打开时要定位并高亮的那条日志（来自搜索结果）。
+    @Published var revealLog: UUID?
 
-    func open(_ mode: UnifiedNotesMode, date: Date? = nil) {
+    func open(_ mode: UnifiedNotesMode, date: Date? = nil, log: UUID? = nil) {
         self.mode = mode
         if let date { self.date = JournalDates.calendar.startOfDay(for: date) }
+        revealLog = log
         requestID += 1
     }
 }
@@ -207,7 +210,8 @@ struct UnifiedNotesView: View {
     }
 
     private var journalBody: some View {
-        UnifiedJournalView(store: store, date: $workspace.date, navigationRequest: workspace.requestID)
+        UnifiedJournalView(store: store, date: $workspace.date, navigationRequest: workspace.requestID,
+                           revealLog: $workspace.revealLog)
     }
 
 }
@@ -219,12 +223,22 @@ struct UnifiedJournalView: View {
     @ObservedObject var store: JournalStore
     @Binding var date: Date
     let navigationRequest: Int
+    @Binding var revealLog: UUID?
+
+    init(store: JournalStore, date: Binding<Date>, navigationRequest: Int, revealLog: Binding<UUID?> = .constant(nil)) {
+        self.store = store
+        _date = date
+        self.navigationRequest = navigationRequest
+        _revealLog = revealLog
+    }
     @StateObject private var mention = MentionState()
     @State private var focused = false
     @State private var error: String?
     @State private var editingID: UUID?
     /// 从节奏条跳过去的那一条短暂高亮，便于在长日志里找到。
     @State private var highlightedID: UUID?
+    /// 收起的专注轮次（只在窗口打开期间保留）。
+    @State private var foldedRuns: Set<UUID> = []
     /// 刚提交的那条日志：滚过去并高亮。
     @State private var revealID: UUID?
     @State private var editingDate: Date?
@@ -363,7 +377,12 @@ struct UnifiedJournalView: View {
                             }
                             .frame(maxWidth: .infinity).padding(.vertical, 60)
                         } else {
-                            let logs = entry.logsInTimeOrder
+                            let all = entry.logsInTimeOrder
+                            let runs = FocusRun.runs(in: all)
+                            // 折叠的一轮专注只留结束那一条和它的小结，中间的开始、笔记、反馈都收起来。
+                            let hidden = Set(runs.filter { foldedRuns.contains($0.id) }.flatMap { [$0.start.id] + $0.inner.map(\.id) })
+                            let logs = all.filter { !hidden.contains($0.id) }
+                            let summaries = Dictionary(uniqueKeysWithValues: runs.map { ($0.end.id, $0) })
                             let segments = store.timelineSegments()
                             ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
                                 if index > 0, let gap = NoteThread.gapLabel(from: logs[index - 1].createdAt, to: log.createdAt) {
@@ -371,6 +390,13 @@ struct UnifiedJournalView: View {
                                 }
                                 journalRow(log, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id])
                                     .id(log.id)
+                                if let run = summaries[log.id] {
+                                    FocusRunSummary(run: run, folded: foldedRuns.contains(run.id)) {
+                                        withAnimation(Motion.quick) {
+                                            if foldedRuns.contains(run.id) { foldedRuns.remove(run.id) } else { foldedRuns.insert(run.id) }
+                                        }
+                                    }
+                                }
                             }
                         }
                         Color.clear.frame(height: 1).id("journal-bottom")
@@ -380,7 +406,10 @@ struct UnifiedJournalView: View {
                 .id(JournalDates.key(date))
                 .contentShape(Rectangle())
                 // 今天从最新一条开始（接着写），往日从当天第一条开始读。
-                .onAppear { openDay(proxy) }
+                .onAppear {
+                    if let id = revealLog { revealID = id; revealLog = nil } else { openDay(proxy) }
+                }
+                .onChange(of: revealLog) { id in if let id { revealID = id; revealLog = nil } }
                 .onChange(of: date) { _ in DispatchQueue.main.async { openDay(proxy) } }
                 .onChange(of: revealID) { id in
                     guard let id else { return }

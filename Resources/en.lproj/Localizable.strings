@@ -839,3 +839,14 @@
 "这个任务没有留下笔记" = "This task has no notes";
 "前一天 · ⌘⌥←" = "Previous day · ⌘⌥←";
 "后一天 · ⌘⌥→" = "Next day · ⌘⌥→";
+"放下改到 %@" = "Drop to move to %@";
+"放下清除日期" = "Drop to clear the date";
+"推到明天（M）" = "Move to Tomorrow (M)";
+"提前一天（⇧M）" = "Move One Day Earlier (⇧M)";
+"已改到 %@" = "Moved to %@";
+"推到明天 / 提前一天" = "Tomorrow / one day earlier";
+"专注 %@" = "Focus %@";
+"已反馈" = "Reflected";
+"展开这一轮" = "Show session";
+"收起这一轮" = "Collapse session";
+"查看刚记下的内容" = "Show what you just captured";

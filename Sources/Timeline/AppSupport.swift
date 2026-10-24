@@ -185,6 +185,8 @@ extension EnvironmentValues {
 enum AppCommand {
     /// 选中的任务：打开截止日期、标签面板；固定、放弃、开始专注、打开笔记（键盘也能做到扇形菜单里的事）。
     case deadlineSelected, tagsSelected, pinSelected, dropSelected, focusSelected, notesSelected
+    /// 选中的任务往后 / 往前挪一天（没有日期的从今天算起）。
+    case postponeSelected(Int)
     case newTodo, newLog, insertLink, today, search
     case shiftDay(Int), shiftMonth(Int)
     case agenda(AgendaFilter)
@@ -213,6 +215,8 @@ enum AppRouter {
     static var openNotes: (UUID) -> Void = { _ in }
     /// 打开 / 收起一个面板，和对应的全局快捷键效果相同（菜单栏图标和主窗口右上角菜单都用它）。
     static var togglePanel: (HotKeyAction) -> Void = { _ in }
+    /// 打开日记并定位到某条日志。
+    static var openLog: (Date, UUID) -> Void = { _, _ in }
 }
 
 @MainActor

@@ -104,6 +104,8 @@ struct AgendaView: View {
     @Environment(\.typography) private var typography
     @ObservedObject var store: JournalStore
     let navigate: (Date?, UUID?) -> Void
+    /// 打开日记并定位到某条日志。没有时退回到只打开那一天。
+    var openLog: ((Date, UUID) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State var filter: AgendaFilter
     @State private var query = ""
@@ -191,10 +193,29 @@ struct AgendaView: View {
                 ManagedTaskRow(store: store, date: item.date, task: item.task, requestedEdit: $requestedEdit)
             }
         case .log(let key, let entry):
-            Button { open(key) } label: {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("\(key) · \(entry.kind.label)").font(.caption).foregroundStyle(Palette.accent)
-                    Text(highlighted(String(TaskText.rendered(entry.text).characters))).font(.system(size: typography.pt(12), design: .monospaced)).lineLimit(3)
+            // 日志结果也画在一根线上：珠子颜色表示类型，日期和时间是淡淡的说明行，正文高亮关键词。
+            Button { open(key, log: entry.id) } label: {
+                HStack(alignment: .top, spacing: 10) {
+                    ZStack(alignment: .top) {
+                        Rectangle().fill(Palette.line.opacity(0.6)).frame(width: 1).frame(maxHeight: .infinity)
+                        Circle().fill(LogEventStyle.color(entry)).frame(width: 7, height: 7)
+                            .overlay(Circle().strokeBorder(Palette.background, lineWidth: 1.5))
+                            .padding(.top, 4)
+                    }
+                    .frame(width: NoteThread.gutter)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text((JournalDates.date(for: key)?.relativeLabel ?? key) + " " + NoteThread.shortTime(entry.createdAt))
+                            if let kind = NoteThread.kindLabel(entry) { Text(kind).foregroundStyle(LogEventStyle.color(entry)) }
+                            if let title = entry.taskTitle { Text(title).foregroundStyle(Palette.accent).lineLimit(1) }
+                        }
+                        .font(.system(size: typography.pt(11))).monospacedDigit().foregroundStyle(Palette.muted)
+                        Text(highlighted(String(TaskText.rendered(LogEventStyle.body(entry)).characters)))
+                            .font(.system(size: typography.pt(13))).foregroundStyle(Palette.ink).lineLimit(3)
+                        if let line = recognizedLine(entry) {
+                            Text(highlighted(line)).font(.system(size: typography.pt(11))).foregroundStyle(Palette.muted).lineLimit(1)
+                        }
+                    }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.buttonStyle(HitAreaButtonStyle())
         case .summary(let key, let text):
@@ -246,8 +267,10 @@ struct AgendaView: View {
         selection = min(selection, max(0, result.count - 1))
     }
 
-    private func open(_ key: String) {
-        if let date = JournalDates.date(for: key) { navigate(date, nil); dismiss() }
+    private func open(_ key: String, log: UUID? = nil) {
+        guard let date = JournalDates.date(for: key) else { return }
+        if let log, let openLog { openLog(date, log) } else { navigate(date, nil) }
+        dismiss()
     }
 
     private func moveSelection(_ amount: Int) {
@@ -259,7 +282,8 @@ struct AgendaView: View {
         guard hits.indices.contains(selection) else { return }
         switch hits[selection] {
         case .task(let item): navigate(item.task.dueDate, item.id); dismiss()
-        case .log(let key, _), .summary(let key, _): open(key)
+        case .log(let key, let entry): open(key, log: entry.id)
+        case .summary(let key, _): open(key)
         }
     }
 }

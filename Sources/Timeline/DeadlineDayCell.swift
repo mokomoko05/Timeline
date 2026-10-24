@@ -15,6 +15,8 @@ struct DeadlineDayCell: View, Equatable {
     /// 这一天截止的全部事项（`items` 是其中要显示的部分）。
     let dueToday: [ScheduledTask]
     let logCount: Int
+    /// 这一天的专注时长：格子底部一条细线，满格 = 4 小时。
+    var focusSeconds: TimeInterval = 0
     let readOnly: Bool
     /// 由月历传入（跨日时月历会刷新），这样 `Equatable` 比较能感知「今天」的变化。
     let today: Bool
@@ -94,7 +96,7 @@ struct DeadlineDayCell: View, Equatable {
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.date == rhs.date && lhs.selectedDate == rhs.selectedDate && lhs.displayedMonth == rhs.displayedMonth
             && lhs.height == rhs.height && lhs.items == rhs.items && lhs.dueToday == rhs.dueToday
-            && lhs.logCount == rhs.logCount && lhs.readOnly == rhs.readOnly && lhs.today == rhs.today && lhs.store === rhs.store
+            && lhs.logCount == rhs.logCount && lhs.focusSeconds == rhs.focusSeconds && lhs.readOnly == rhs.readOnly && lhs.today == rhs.today && lhs.store === rhs.store
     }
 
     var body: some View {
@@ -151,6 +153,17 @@ struct DeadlineDayCell: View, Equatable {
             Spacer(minLength: 0)
         }
         .padding(6).frame(maxWidth: .infinity, alignment: .topLeading).frame(height: height, alignment: .topLeading)
+        .overlay(alignment: .bottomLeading) {
+            if focusSeconds > 0 {
+                GeometryReader { proxy in
+                    Capsule().fill(Palette.accent.opacity(0.55))
+                        .frame(width: max(6, (proxy.size.width - 12) * min(1, focusSeconds / (4 * 3600))), height: 2.5)
+                        .offset(x: 6, y: proxy.size.height - 6)
+                }
+                .allowsHitTesting(false)
+                .help(AppLocalizedFormat("专注 %@", FocusSession.brief(focusSeconds)))
+            }
+        }
         .background(cellFill, in: RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous)
             .strokeBorder(cellStroke, lineWidth: selected || targeted ? 1.5 : Metrics.hairline))

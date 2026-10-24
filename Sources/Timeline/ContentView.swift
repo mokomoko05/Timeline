@@ -124,7 +124,7 @@ struct ContentView: View {
                 } else {
                     reveal(date: date, taskID: id)
                 }
-            }, filter: filter)
+            }, openLog: { date, id in notesWindow.showJournal(store: store, date: date, log: id) }, filter: filter)
         }
         .sheet(isPresented: $showingBackups) { BackupRestoreView(store: store) }
         .sheet(isPresented: $showingShortcuts) { ShortcutsView(close: { showingShortcuts = false }) }
@@ -185,7 +185,8 @@ struct ContentView: View {
     private static func needsMainWindow(_ command: AppCommand) -> Bool {
         switch command {
         case .newTodo, .search, .agenda, .reveal, .backups, .export, .rollover, .toggleTasks, .shiftMonth, .today, .shiftDay,
-             .selectAdjacent, .toggleSelected, .editSelected, .deleteSelected, .deadlineSelected, .tagsSelected, .shortcuts:
+             .selectAdjacent, .toggleSelected, .editSelected, .deleteSelected, .deadlineSelected, .tagsSelected, .shortcuts,
+             .postponeSelected:
             return true
         default: return false
         }
@@ -212,6 +213,15 @@ struct ContentView: View {
             if focus.active?.taskID == task.id { focus.stop(reason: "手动结束") } else { focus.start(task: task, url: FocusSession.link(in: task.task.title)) }
         case .notesSelected:
             showNotes(tag: nil)
+        case .postponeSelected(let days):
+            guard let task = selectedTask, !task.task.completed, !store.isReadOnly else { return }
+            let calendar = JournalDates.calendar
+            let base = calendar.startOfDay(for: task.task.dueDate ?? Date())
+            // 逾期的任务往后推时从今天起算：推一次就到明天，不是从原来的截止日再加一天。
+            let start = days > 0 ? max(base, calendar.startOfDay(for: Date())) : base
+            guard let target = calendar.date(byAdding: .day, value: days, to: start) else { return }
+            withAnimation(Motion.quick) { store.setDeadline(task.id, to: target) }
+            toast.show(AppLocalizedFormat("已改到 %@", target.relativeLabel), actionTitle: "撤销") { store.undo() }
         case .newTodo:
             tasksVisible = true
             interaction.activePane = .tasks
@@ -620,6 +630,7 @@ struct ContentView: View {
                                             items: previews[index],
                                             dueToday: dueByDay[JournalDates.key(date)] ?? [],
                                             logCount: store.entry(for: date).logs.count,
+                                            focusSeconds: store.focusSeconds(on: date),
                                             readOnly: store.isReadOnly,
                                             today: JournalDates.key(date) == currentDayKey,
                                             select: { selectFromCalendar(date) },

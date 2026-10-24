@@ -89,11 +89,21 @@ struct TaskDeadlineButton: View {
         return task.dueHasTime ? due.relativeLabel + " " + time(due) : due.relativeLabel
     }
 
+    /// 时间轴里没有日期的事项：平时留空，悬停时只出现一个日历小图标（不再每行写一遍「设置日期」）。
+    @State private var hovered = false
+    /// 所在的行被悬停 / 选中时也显示图标（整行都是触发区，不必对准这一小块）。
+    var rowActive = false
+    private var quietUndated: Bool { compact && task.dueDate == nil }
+
     var body: some View {
         Button { showing = true } label: {
             HStack(spacing: 3) {
-                if !compact { Image(systemName: task.dueHasTime ? "clock" : "calendar") }
-                Text(Self.label(for: task, compact: compact))
+                if quietUndated {
+                    Image(systemName: "calendar.badge.plus").opacity(hovered || rowActive ? 1 : 0)
+                } else {
+                    if !compact { Image(systemName: task.dueHasTime ? "clock" : "calendar") }
+                    Text(Self.label(for: task, compact: compact))
+                }
             }
                 .font(.system(size: compact ? 10 : 11, weight: .medium)).monospacedDigit()
                 .lineLimit(1).fixedSize()
@@ -101,6 +111,7 @@ struct TaskDeadlineButton: View {
                 .padding(.horizontal, compact ? 2 : 4).padding(.vertical, 2)
         }
         .buttonStyle(.plain).raisedOnHover(radius: 4).disabled(store.isReadOnly)
+        .onHover { hovered = $0 }
         .help(task.dueDate.map { $0.formatted(date: .complete, time: task.dueHasTime ? .shortened : .omitted) } ?? AppLocalized("设置截止日期与时间"))
         .accessibilityLabel(AppLocalized("截止日期与时间") + " " + Self.label(for: task))
         .accessibilityIdentifier("task-deadline-" + task.id.uuidString)

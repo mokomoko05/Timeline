@@ -72,6 +72,11 @@ enum QuickCaptureMode: String { case todo, log }
 
 /// 控制器和窗口里的视图共用：窗口开着时按另一个热键，直接切换模式。
 @MainActor
+enum CaptureDestination: Equatable {
+    case task(UUID)
+    case log(Date, UUID)
+}
+
 final class QuickCaptureModel: ObservableObject {
     @Published var mode: QuickCaptureMode = .todo
     @Published var creationOptions = TaskCreationOptions()
@@ -345,6 +350,8 @@ struct QuickCaptureView: View {
     @State private var restored = false
     @State private var focused = true
     @State private var message: String?
+    /// 刚记下的东西在哪：点提示可以过去看（待办在清单里定位，日志在日记里定位）。
+    @State private var destination: CaptureDestination?
     @State private var failure: String?
     /// 草稿都在 model 里（窗口关掉也不丢）。
     private var text: String { get { model.text } nonmutating set { model.text = newValue } }
@@ -407,7 +414,14 @@ struct QuickCaptureView: View {
             }
             Group {
                 if let message {
-                    Label(message, systemImage: "checkmark.circle.fill").foregroundStyle(Palette.success)
+                    Button { openDestination() } label: {
+                        HStack(spacing: 4) {
+                            Label(message, systemImage: "checkmark.circle.fill").lineLimit(1)
+                            if destination != nil { Image(systemName: "arrow.up.forward").font(.system(size: 9, weight: .bold)) }
+                        }
+                    }
+                    .buttonStyle(.plain).foregroundStyle(Palette.success)
+                    .help(destination == nil ? "" : AppLocalized("查看刚记下的内容"))
                 } else if let failure {
                     Label(failure, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.deadline)
                 } else if restored, model.hasDraft {
@@ -441,8 +455,10 @@ struct QuickCaptureView: View {
         .task(id: message) {
             guard message != nil else { return }
             do {
-                try await Task.sleep(for: .milliseconds(700))
+                // 有去处时多停一会儿，给点击的时间。
+                try await Task.sleep(for: .milliseconds(destination == nil ? 700 : 2600))
                 message = nil
+                destination = nil
             } catch {}
         }
         .onChange(of: model.presentation) { _ in
@@ -468,6 +484,19 @@ struct QuickCaptureView: View {
         }
     }
 
+    private func openDestination() {
+        guard let destination else { return }
+        switch destination {
+        case .task(let id):
+            AppRouter.presentMain()
+            NotificationCenter.default.post(name: .timelineReveal, object: id)
+        case .log(let date, let id):
+            AppRouter.openLog(date, id)
+        }
+        message = nil
+        self.destination = nil
+    }
+
     private func switchMode(to choice: QuickCaptureMode) {
         guard mode != choice else { return }
         // 原生切换控件接收第一次点击，保留编辑器焦点，不触发失焦后重新抢焦点。
@@ -490,6 +519,7 @@ struct QuickCaptureView: View {
             guard let added = store.addParsedTodo(value, on: Date(), options: model.creationOptions) else { failure = AppLocalized("当前数据只读，无法保存。"); return }
             model.creationOptions = TaskCreationOptions()
             message = added.task.dueDate.map { AppLocalizedFormat("已添加 #%lld，截止%@", added.task.number ?? 0, $0.relativeLabel) } ?? AppLocalizedFormat("已添加 #%lld，还没有截止日期", added.task.number ?? 0)
+            destination = .task(added.id)
         case .log:
             do {
                 let paused = store.focusPaused
@@ -506,6 +536,7 @@ struct QuickCaptureView: View {
                 tags = []
                 model.link = nil
                 model.unlinked = false
+                if let entry = result.entry { destination = .log(Date(), entry.id) }
                 ImageIndexer.run(store: store)
             } catch { failure = AppErrorDescription(error); return }
         }

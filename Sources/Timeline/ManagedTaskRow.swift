@@ -28,7 +28,7 @@ struct ManagedTaskRow: View {
     var body: some View {
         HStack(spacing: 6) {
             if timeline {
-                TaskDeadlineButton(store: store, task: task, compact: true)
+                TaskDeadlineButton(store: store, task: task, compact: true, rowActive: hovered || selected)
                 .frame(width: TaskTimelineLayout.timeWidth(typography), alignment: .trailing)
                 priorityControl
                     .frame(width: 22).frame(maxHeight: .infinity)
