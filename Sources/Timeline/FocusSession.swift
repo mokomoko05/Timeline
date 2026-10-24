@@ -715,6 +715,8 @@ final class FocusNoteDraft: ObservableObject {
                 error = AppLocalized("这里只能写笔记，请使用普通文字或 /note /done /block /plan。")
                 return false
             }
+            // 专注笔记要确认已落盘才清空输入：同步写入（排在后台写入之后）。
+            store.save()
             if store.hasPendingSave {
                 pendingEntryID = entry.id
                 error = AppLocalized("未能写入磁盘，输入已保留。请检查磁盘空间或权限后再次发送以重试。")

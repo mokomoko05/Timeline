@@ -44,6 +44,20 @@ final class JournalPerformanceAuditTests: XCTestCase {
         XCTAssertEqual(reloaded.tasks().count, 1000)
         XCTAssertEqual(reloaded.allLogs(includeFocus: true).count, 10000)
         XCTAssertTrue(reloaded.allTags().contains { $0.name == "Audit/New" })
+        // 同样的历史，开启后台写入后主线程只付快照的代价。
+        let background = JournalStore(directory: url)
+        background.writesInBackground = true
+        let task = try XCTUnwrap(background.tasks().first)
+        var toggles: [Double] = []
+        for _ in 0..<10 {
+            let begin = Date()
+            background.toggleTodo(task.id, on: task.date)
+            toggles.append(Date().timeIntervalSince(begin) * 1000)
+        }
+        background.waitForPendingWrites()
+        toggles.sort()
+        print("PERFORMANCE AUDIT: 1000 tasks, 10000 logs, toggle main-thread ms with background writes min/median/max: \(toggles.first!)/\(toggles[5])/\(toggles.last!) (debug)")
+        XCTAssertEqual(JournalStore(directory: url, readOnlySnapshot: true).locate(task.id)?.task.completed, background.locate(task.id)?.task.completed)
     }
 
     /// Explicit opt-in: work only on a temporary copy, never change the source journal.

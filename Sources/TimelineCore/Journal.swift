@@ -228,7 +228,13 @@ public final class JournalStore: ObservableObject {
     @Published public private(set) var hasPendingSave = false
     private var pendingSave: Task<Void, Never>?
     public let undoManager = UndoManager()
-    private var dailyBackupKey: String?
+    /// 编码和写盘的串行队列。
+    private lazy var writer = JournalWriter(fileURL: fileURL, backupsDirectory: backupsDirectory)
+    /// 每次修改后的文档版本；写入完成时据此判断有没有更新的修改还没落盘。
+    private var documentVersion = 0
+    /// 为 true 时，修改后的保存在后台编码写入，不阻塞界面。应用开启它；测试默认同步，便于立即读取文件。
+    /// `save()` 始终同步，并排在已提交的后台写入之后。
+    public var writesInBackground = false
     private var deletedTodo: (task: Todo, date: Date, index: Int)?
     private var indexedTasks: [ScheduledTask]?
     /// 按 id / 编号定位任务，和 `indexedTasks` 一起失效。
@@ -1191,23 +1197,41 @@ public final class JournalStore: ObservableObject {
         return removed
     }
 
+    /// 同步保存并确认落盘：退出、关窗口、需要立即知道结果的操作用它。
     public func save() {
         guard !isReadOnly else { return }
         pendingSave?.cancel()
         pendingSave = nil
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(documentSnapshot)
-            try makeDailyBackup(data)
-            try data.write(to: fileURL, options: .atomic)
-            lastSaved = Date()
-            // 值没变就不赋值：@Published 每次赋值都会通知所有观察的窗口。
-            if hasPendingSave { hasPendingSave = false }
-            if errorMessage != nil { errorMessage = nil }
-        } catch {
-            errorMessage = "保存失败，当前修改仍保留在内存中。请释放磁盘空间或检查权限后重试。\n\(error.localizedDescription)"
+        documentVersion += 1
+        finishSave(writer.writeNow(documentSnapshot, version: documentVersion), version: documentVersion)
+    }
+
+    /// 修改后的保存：开启后台写入时不阻塞界面，否则同 `save()`。
+    private func persist() {
+        guard writesInBackground else { save(); return }
+        guard !isReadOnly else { return }
+        pendingSave?.cancel()
+        pendingSave = nil
+        documentVersion += 1
+        let version = documentVersion
+        writer.write(documentSnapshot, version: version) { [weak self] error in
+            MainActor.assumeIsolated { self?.finishSave(error, version: version) }
         }
+    }
+
+    /// 等所有后台写入完成（测试用）。
+    public func waitForPendingWrites() { writer.waitUntilIdle() }
+
+    private func finishSave(_ error: Error?, version: Int) {
+        if let error {
+            errorMessage = "保存失败，当前修改仍保留在内存中。请释放磁盘空间或检查权限后重试。\n\(error.localizedDescription)"
+            return
+        }
+        lastSaved = Date()
+        // 期间又有修改：等那次写入完成再清除标记。值没变就不赋值，免得通知所有观察的窗口。
+        guard version == documentVersion else { return }
+        if hasPendingSave { hasPendingSave = false }
+        if errorMessage != nil { errorMessage = nil }
     }
 
     public func export(to url: URL) throws {
@@ -1426,6 +1450,7 @@ public final class JournalStore: ObservableObject {
         replaceBoards(document.boards ?? [], action: "恢复备份")
         replaceDays(restored, action: "恢复备份", force: true)
         undoManager.endUndoGrouping()
+        save()
         if let errorMessage { throw NSError(domain: "Timeline", code: 1, userInfo: [NSLocalizedDescriptionKey: errorMessage]) }
     }
 
@@ -1439,19 +1464,6 @@ public final class JournalStore: ObservableObject {
         let boards = document.boards ?? []
         guard Set(boards.map(\.id)).count == boards.count else { throw CocoaError(.fileReadCorruptFile) }
         return document
-    }
-
-    private func makeDailyBackup(_ data: Data) throws {
-        let key = JournalDates.key(Date())
-        guard dailyBackupKey != key else { return }
-        try FileManager.default.createDirectory(at: backupsDirectory, withIntermediateDirectories: true)
-        let daily = backupsDirectory.appendingPathComponent("\(key).json")
-        if !FileManager.default.fileExists(atPath: daily.path) { try data.write(to: daily, options: .atomic) }
-        let snapshots = try FileManager.default.contentsOfDirectory(at: backupsDirectory, includingPropertiesForKeys: nil)
-            .filter { JournalDates.date(for: $0.deletingPathExtension().lastPathComponent) != nil }
-            .sorted { $0.lastPathComponent > $1.lastPathComponent }
-        for obsolete in snapshots.dropFirst(30) { try FileManager.default.removeItem(at: obsolete) }
-        dailyBackupKey = key
     }
 
     private func registerUndo(_ previous: [String: DayEntry], replacing updated: [String: DayEntry], action: String) {
@@ -1491,7 +1503,7 @@ public final class JournalStore: ObservableObject {
         days = updated
         if tasksChanged { invalidateTaskIndex() }
         hasPendingSave = true
-        if debounce { scheduleSave() } else { save() }
+        if debounce { scheduleSave() } else { persist() }
     }
 
     func change(_ date: Date, debounce: Bool = false, action: String = "修改事项", mutation: (inout DayEntry) -> Void) {
@@ -1511,14 +1523,14 @@ public final class JournalStore: ObservableObject {
         if debounce {
             scheduleSave()
         } else {
-            save()
+            persist()
         }
     }
 
     /// 标签注册表变了：落盘（注册表不进撤销栈）。
     func registryChanged() {
         hasPendingSave = true
-        save()
+        persist()
     }
 
     private var documentSnapshot: JournalDocument {
@@ -1539,14 +1551,14 @@ public final class JournalStore: ObservableObject {
             cachedTagSummaries = nil
         }
         hasPendingSave = true
-        if debounce { scheduleSave() } else { save() }
+        if debounce { scheduleSave() } else { persist() }
     }
 
     private func scheduleSave() {
         pendingSave?.cancel()
         pendingSave = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return }
-            self?.save()
+            self?.persist()
         }
     }
 }

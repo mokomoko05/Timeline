@@ -83,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSWindow.allowsAutomaticWindowTabbing = false
         let snapshotRun = CommandLine.arguments.contains("--snapshot")
         store = JournalStore()
+        store.writesInBackground = true
         reminders = ReminderScheduler(store: store)
         reminders.isEnabled = !snapshotRun
         focus.store = store

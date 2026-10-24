@@ -1,0 +1,85 @@
+import XCTest
+@testable import TimelineCore
+
+/// 后台保存：不阻塞主线程，按版本顺序落盘，旧快照不会覆盖新内容。
+@MainActor
+final class BackgroundSaveTests: XCTestCase {
+    private var directories: [URL] = []
+
+    override func tearDown() {
+        directories.forEach { try? FileManager.default.removeItem(at: $0) }
+        directories = []
+        super.tearDown()
+    }
+
+    private func makeStore() -> JournalStore {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        directories.append(directory)
+        let store = JournalStore(directory: directory)
+        store.writesInBackground = true
+        return store
+    }
+
+    private func reloaded(_ store: JournalStore) -> JournalStore {
+        JournalStore(directory: store.directory, readOnlySnapshot: true)
+    }
+
+    func testRapidMutationsAllLandOnDiskInOrder() {
+        let store = makeStore()
+        let today = Date()
+        for index in 1...40 { store.addTodo("Task \(index)", on: today) }
+        store.waitForPendingWrites()
+        let titles = Set(reloaded(store).tasks().map(\.task.title))
+        XCTAssertEqual(titles, Set((1...40).map { "Task \($0)" }))
+    }
+
+    func testPendingFlagClearsOnlyAfterTheLatestWriteCompletes() async throws {
+        let store = makeStore()
+        store.addTodo("First", on: Date())
+        XCTAssertTrue(store.hasPendingSave, "后台写入完成前仍标记为未保存")
+        store.addTodo("Second", on: Date())
+        store.waitForPendingWrites()
+        // 完成回调在主队列上：让出一次主线程。
+        for _ in 0..<20 where store.hasPendingSave { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(store.hasPendingSave)
+        XCTAssertNil(store.errorMessage)
+        XCTAssertEqual(reloaded(store).tasks().count, 2)
+    }
+
+    func testSynchronousSaveIsABarrierAfterQueuedBackgroundWrites() {
+        let store = makeStore()
+        for index in 1...10 { store.addTodo("Queued \(index)", on: Date()) }
+        store.save()
+        XCTAssertFalse(store.hasPendingSave)
+        XCTAssertEqual(reloaded(store).tasks().count, 10, "save() 返回时文件已包含全部修改")
+    }
+
+    func testCompletionOfAnOlderWriteDoesNotClearNewerPendingChanges() async throws {
+        let store = makeStore()
+        store.addTodo("Older", on: Date())
+        // 旧写入已落盘，但它的完成回调还排在主队列里；此时又有新修改。
+        store.waitForPendingWrites()
+        store.addTodo("Newer", on: Date())
+        await Task.yield()
+        XCTAssertTrue(store.hasPendingSave, "旧写入的回调不能清掉新修改的未保存标记")
+        store.waitForPendingWrites()
+        for _ in 0..<20 where store.hasPendingSave { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(store.hasPendingSave)
+        XCTAssertEqual(Set(reloaded(store).tasks().map(\.task.title)), ["Older", "Newer"])
+    }
+
+    func testFailedBackgroundWriteKeepsChangesAndReportsError() async throws {
+        let store = makeStore()
+        store.addTodo("Saved", on: Date())
+        store.waitForPendingWrites()
+        // 把 journal.json 换成目录，原子写入必然失败。
+        try FileManager.default.removeItem(at: store.fileURL)
+        try FileManager.default.createDirectory(at: store.fileURL, withIntermediateDirectories: false)
+        store.addTodo("Unsaved", on: Date())
+        store.waitForPendingWrites()
+        for _ in 0..<20 where store.errorMessage == nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNotNil(store.errorMessage)
+        XCTAssertTrue(store.hasPendingSave, "失败后仍标记未保存，退出时会提示")
+        XCTAssertEqual(store.tasks().count, 2, "修改保留在内存中")
+    }
+}
