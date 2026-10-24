@@ -116,9 +116,11 @@ final class DesignPreviewTests: XCTestCase {
         }
         defer { focus.stop(reason: "预览结束") }
         for dark in [true, false] {
+            let interaction = WorkspaceInteraction()
+            interaction.selectedTaskID = store.sortedTasks().first { $0.task.title.hasPrefix("试着") }?.id
             try render("main", size: NSSize(width: 1280, height: 1250), dark: dark,
                        ContentView(store: store, loginItem: LoginItem())
-                .environmentObject(ReminderScheduler(store: store)).environmentObject(WorkspaceInteraction())
+                .environmentObject(ReminderScheduler(store: store)).environmentObject(interaction)
                 .environmentObject(CommandCenter()).environmentObject(ToastCenter()).environment(\.focusSession, focus))
             let model = QuickCaptureModel()
             model.mode = .log
@@ -128,6 +130,13 @@ final class DesignPreviewTests: XCTestCase {
             // 玻璃效果放在一张模拟桌面上看。
             var companion = FocusPanelView(session: focus)
             companion.previewCompanion = true
+            let picker = FocusSession()
+            picker.store = store
+            try render("picker", size: NSSize(width: 380, height: 420), dark: dark, ZStack {
+                LinearGradient(colors: [Color(red: 0.35, green: 0.45, blue: 0.75), Color(red: 0.85, green: 0.55, blue: 0.45)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                FocusPanelView(session: picker)
+            })
             try render("companion", size: NSSize(width: 340, height: 220), dark: dark, ZStack {
                 LinearGradient(colors: [Color(red: 0.35, green: 0.45, blue: 0.75), Color(red: 0.85, green: 0.55, blue: 0.45)],
                                startPoint: .topLeading, endPoint: .bottomTrailing)

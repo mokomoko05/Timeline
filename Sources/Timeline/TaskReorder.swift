@@ -194,8 +194,11 @@ private struct TaskReorderShift: ViewModifier {
             .background {
                 // 阴影画在行的背后，而不是给整行（里面有原生文本控件）加 .shadow，否则每帧都要把整行离屏渲染一遍。
                 if active {
-                    RoundedRectangle(cornerRadius: 8).fill(Palette.card)
-                        .shadow(color: .black.opacity(0.35), radius: 7, y: 3)
+                    // 被拖的行浮起：卡片底色加一道细边和固定的轻阴影，合成成一张图层跟手移动。
+                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Palette.card)
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Palette.accent.opacity(0.35), lineWidth: Metrics.hairline))
+                        .shadow(color: .black.opacity(0.22), radius: 6, y: 3)
+                        .drawingGroup()
                 }
             }
             // 让位的距离必须作为参数传下去：SwiftUI 发现下层修饰器的输入没变就会跳过重算，

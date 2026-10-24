@@ -900,48 +900,38 @@ struct FocusPanelView: View {
                     .buttonStyle(HitAreaButtonStyle(compact: true))
                     .foregroundStyle(Palette.muted)
             }
-            Button { showingTaskPicker = true } label: {
-                HStack(spacing: 7) {
-                    if let selected = selectedTask {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.success)
-                        Text("#\(selected.task.number ?? 0)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
-                        PriorityMark(priority: selected.task.priority)
-                        Text(String(TaskText.rendered(selected.task.title).characters)).lineLimit(1)
-                        Spacer(minLength: 0)
-                        dueText(for: selected)
-                    } else {
-                        Image(systemName: "circle").foregroundStyle(Palette.muted)
-                        Text("选择一个任务").foregroundStyle(Palette.muted)
-                        Spacer()
-                    }
-                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.muted)
-                }
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(Palette.background, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line))
-            }
-            .buttonStyle(.plain)
-            .raisedOnHover(radius: 8)
-            .popover(isPresented: $showingTaskPicker, arrowEdge: .bottom) {
-                taskPicker
-            }
-            HStack(spacing: 7) {
-                Label("时长", systemImage: "clock").font(.system(size: 11)).foregroundStyle(Palette.muted)
-                TextField(String(Prefs.focusDurationMinutes()), text: $minutes).textFieldStyle(.roundedBorder).frame(width: 52)
-                Text("分钟").font(.system(size: 11)).foregroundStyle(Palette.muted)
-                Spacer(minLength: 0)
-            }
-            HStack(spacing: 7) {
-                Image(systemName: "flag.fill").font(.system(size: 11)).foregroundStyle(Palette.accent)
-                TextField("本轮目标（可选）", text: $goal).textFieldStyle(.roundedBorder)
+            FocusMiniTimeline(tasks: timelineTasks, selected: selectedTaskID, pinned: store?.pinnedTask?.id,
+                              query: $query, select: { selectedTaskID = $0 }, start: { selectedTaskID = $0; startFocus() })
+            HStack(spacing: 6) {
+                Image(systemName: "flag").font(.system(size: 11)).foregroundStyle(Palette.accent)
+                TextField("本轮目标（可选）", text: $goal).textFieldStyle(.plain).font(.system(size: 12))
                     .frame(maxWidth: .infinity)
-                Button("开始专注") { startFocus() }
-                    .buttonStyle(HitAreaButtonStyle())
-                    .foregroundStyle(Palette.accent)
-                    .keyboardShortcut(.return)
-                    .disabled(selectedTaskID == nil || positiveMinutes == nil)
+                Divider().frame(height: 14)
+                TextField(String(Prefs.focusDurationMinutes()), text: $minutes).textFieldStyle(.plain)
+                    .font(.system(size: 12, weight: .medium)).monospacedDigit().multilineTextAlignment(.trailing).frame(width: 30)
+                Text("分钟").font(.system(size: 11)).foregroundStyle(Palette.muted)
             }
+            .padding(.horizontal, 9).frame(height: 28)
+            .inputFieldSurface(focused: false, fill: Palette.background.opacity(0.35))
+            Button { startFocus() } label: {
+                Label(selectedTask.map { AppLocalizedFormat("开始专注 · #%lld", $0.task.number ?? 0) } ?? AppLocalized("先在时间轴上选一项"),
+                      systemImage: "play.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(maxWidth: .infinity, minHeight: 28)
+                    .background(selectedTaskID == nil ? Palette.line.opacity(0.4) : Palette.accent,
+                                in: RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous))
+                    .foregroundStyle(selectedTaskID == nil ? Palette.muted : Palette.onAccent)
+                    .contentShape(RoundedRectangle(cornerRadius: Metrics.radiusSmall))
+            }
+            .buttonStyle(HitAreaButtonStyle(pressedScale: 0.98))
+            .keyboardShortcut(.return)
+            .disabled(selectedTaskID == nil || positiveMinutes == nil)
         }
+    }
+
+    /// 小时间轴的顺序和主界面一致：按日期，同一天按手动顺序；未完成的才列出。
+    private var timelineTasks: [ScheduledTask] {
+        tasks.sorted(by: TaskTimelineSection.precedes)
     }
 
     private var selectedTask: ScheduledTask? {
@@ -1351,6 +1341,130 @@ struct FocusCompanion: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(AppLocalizedFormat("专注中，剩余 %@", FocusSession.clock(session.remainingSeconds)))
         .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// 专注面板里的小时间轴：一根线串起未完成的待办，日期是线上的结，待办是珠子。
+/// 单击选中，双击直接开始；顶部的搜索框按标题或编号过滤。
+struct FocusMiniTimeline: View {
+    let tasks: [ScheduledTask]
+    let selected: UUID?
+    let pinned: UUID?
+    @Binding var query: String
+    let select: (UUID) -> Void
+    let start: (UUID) -> Void
+    @State private var hovered: UUID?
+
+    private struct Group: Identifiable {
+        let day: Date?
+        let tasks: [ScheduledTask]
+        var id: String { day.map(JournalDates.key) ?? "undated" }
+    }
+
+    private var groups: [Group] {
+        let calendar = JournalDates.calendar
+        var result: [Group] = []
+        for item in tasks {
+            let day = item.task.dueDate.map { calendar.startOfDay(for: $0) }
+            if let last = result.last, last.day == day {
+                result[result.count - 1] = Group(day: day, tasks: last.tasks + [item])
+            } else {
+                result.append(Group(day: day, tasks: [item]))
+            }
+        }
+        return result
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").font(.system(size: 10)).foregroundStyle(Palette.muted)
+                TextField("搜索标题或编号…", text: $query).textFieldStyle(.plain).font(.system(size: 11))
+            }
+            .padding(.horizontal, 8).frame(height: 22)
+            .background(Palette.background.opacity(0.3), in: Capsule())
+            if tasks.isEmpty {
+                Text(query.isEmpty ? "没有未完成的待办" : "没有匹配的任务")
+                    .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                    .frame(maxWidth: .infinity, minHeight: 50)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(groups) { group in
+                                knot(group.day)
+                                ForEach(group.tasks) { item in row(item) }
+                            }
+                        }
+                        .background(alignment: .leading) {
+                            Rectangle().fill(Palette.line.opacity(0.7)).frame(width: 1).padding(.leading, 9.5).padding(.vertical, 8)
+                        }
+                    }
+                    .frame(height: min(CGFloat(tasks.count * 26 + groups.count * 20) + 4, 196))
+                    .onAppear { if let selected { proxy.scrollTo(selected, anchor: .center) } }
+                }
+            }
+        }
+    }
+
+    private func knot(_ day: Date?) -> some View {
+        let today = day.map { JournalDates.calendar.isDateInToday($0) } == true
+        let overdue = day.map { $0 < JournalDates.calendar.startOfDay(for: Date()) } == true
+        return HStack(spacing: 8) {
+            ZStack {
+                if today { Circle().fill(Palette.accent.opacity(0.2)).frame(width: 13, height: 13) }
+                Circle().fill(today ? Palette.accent : Palette.background).frame(width: 7, height: 7)
+                    .overlay(Circle().strokeBorder(today ? Palette.background : Palette.muted.opacity(0.8), lineWidth: today ? 1.2 : 1))
+            }
+            .frame(width: 20)
+            Text(day.map { overdue ? AppLocalizedFormat("%@ · 已逾期", $0.relativeLabel) : $0.relativeLabel } ?? AppLocalized("未设日期"))
+                .font(.system(size: 10, weight: today ? .semibold : .medium))
+                .foregroundStyle(today ? Palette.accent : (overdue ? Palette.deadline : Palette.muted))
+            Spacer(minLength: 0)
+        }
+        .frame(height: 20)
+    }
+
+    private func row(_ item: ScheduledTask) -> some View {
+        let isSelected = item.id == selected
+        let color = PriorityMark(priority: item.task.priority).color
+        return HStack(spacing: 8) {
+            ZStack {
+                Circle().fill(Palette.background).frame(width: 11, height: 11)
+                Circle().fill(color.opacity(0.22)).frame(width: 11, height: 11)
+                Circle().strokeBorder(color.opacity(0.85), lineWidth: 1.1).frame(width: 11, height: 11)
+                Circle().fill(color).frame(width: isSelected ? 6 : 4, height: isSelected ? 6 : 4)
+            }
+            .frame(width: 20)
+            Text(String(TaskText.rendered(item.task.title).characters)).font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                .lineLimit(1)
+            if item.id == pinned { Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(Palette.accent) }
+            Spacer(minLength: 4)
+            if item.task.dueHasTime, let due = item.task.dueDate {
+                Text(NoteThread.shortTime(due)).font(.system(size: 10)).monospacedDigit().foregroundStyle(Palette.muted)
+            }
+            if item.task.focusSeconds >= 60 {
+                Text(FocusSession.brief(item.task.focusSeconds)).font(.system(size: 10)).monospacedDigit().foregroundStyle(Palette.muted)
+            }
+            Image(systemName: "play.fill").font(.system(size: 8))
+                .foregroundStyle(Palette.accent).opacity(hovered == item.id ? 1 : 0)
+        }
+        .padding(.trailing, 6).frame(height: 26)
+        .background {
+            RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous)
+                .fill(isSelected ? Palette.accent.opacity(0.16) : (hovered == item.id ? Palette.soft.opacity(0.5) : .clear))
+                .padding(.leading, 16)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { start(item.id) }
+        .onTapGesture { select(item.id) }
+        .onHover { inside in if inside { hovered = item.id } else if hovered == item.id { hovered = nil } }
+        .help("单击选中 · 双击开始专注")
+        .id(item.id)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+        .accessibilityAction { select(item.id) }
+        .accessibilityAction(named: "开始专注") { start(item.id) }
     }
 }
 

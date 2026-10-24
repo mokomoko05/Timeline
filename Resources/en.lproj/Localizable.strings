@@ -854,3 +854,7 @@
 "悬停展开专注面板" = "Hover to expand the focus panel";
 "专注中，剩余 %@" = "Focusing, %@ left";
 "专注时收成桌面小伙伴（悬停展开）" = "Shrink to a desktop companion while focusing (hover to expand)";
+"%@ · 已逾期" = "%@ · overdue";
+"先在时间轴上选一项" = "Pick a task on the timeline";
+"开始专注 · #%lld" = "Start focus · #%lld";
+"单击选中 · 双击开始专注" = "Click to select · double-click to start";

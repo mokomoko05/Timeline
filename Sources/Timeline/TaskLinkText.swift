@@ -27,6 +27,9 @@ struct TaskLinkText: NSViewRepresentable {
 
     func makeNSView(context: Context) -> InteractiveTaskText {
         let view = InteractiveTaskText()
+        // 有图层、只在内容变了才重画：拖动排序时行只是平移，由图层合成，不再每帧重新排版、绘制文字。
+        view.wantsLayer = true
+        view.layerContentsRedrawPolicy = .onSetNeedsDisplay
         view.isEditable = false
         view.isSelectable = true
         view.drawsBackground = false
@@ -334,11 +337,13 @@ final class InteractiveTaskText: NSTextView {
     }
 
     override func mouseMoved(with event: NSEvent) {
+        let previous = hoveredURL
         hoveredURL = interactionEnabled ? link(at: convert(event.locationInWindow, from: nil)) : nil
         if interactionEnabled, dragTaskID != nil {
             (TaskDragSession.shared.activeID != nil ? NSCursor.closedHand : (hoveredURL == nil ? NSCursor.openHand : NSCursor.pointingHand)).set()
         }
-        needsDisplay = true
+        // 只有悬停的链接变了才重画链接底色；鼠标在正文上移动不触发整段文字重绘。
+        if previous != hoveredURL { needsDisplay = true }
     }
 
     override func mouseExited(with event: NSEvent) {

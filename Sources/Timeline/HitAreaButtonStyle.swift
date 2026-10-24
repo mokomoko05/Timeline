@@ -198,9 +198,10 @@ private struct GlassPanelSurface: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         content
             .background {
+                // 透明度更高：只留一层很薄的底色，桌面的颜色能透上来；文字靠材质的模糊保持可读。
                 shape.fill(.ultraThinMaterial)
-                    .overlay(shape.fill(Palette.card.opacity(scheme == .dark ? 0.35 : 0.45)))
-                    .overlay(shape.fill(LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.06 : 0.35), .clear],
+                    .overlay(shape.fill(Palette.card.opacity(scheme == .dark ? 0.12 : 0.18)))
+                    .overlay(shape.fill(LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.08 : 0.28), .clear],
                                                        startPoint: .top, endPoint: .center)))
             }
             .overlay(shape.strokeBorder(LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.22 : 0.9), Palette.line.opacity(0.5)],

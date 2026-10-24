@@ -52,7 +52,13 @@ struct NativeTaskHandle: NSViewRepresentable {
     var priorityColor: NSColor?
     var dragOrigin: TaskDragOrigin = .taskList
 
-    func makeNSView(context: Context) -> TaskHandleView { TaskHandleView() }
+    func makeNSView(context: Context) -> TaskHandleView {
+        let view = TaskHandleView()
+        // 平移时由图层合成，不每帧重画珠子。
+        view.wantsLayer = true
+        view.layerContentsRedrawPolicy = .onSetNeedsDisplay
+        return view
+    }
     func updateNSView(_ view: TaskHandleView, context: Context) {
         view.priorityItems = priorityItems
         view.dragOrigin = dragOrigin

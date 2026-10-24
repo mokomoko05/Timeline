@@ -37,6 +37,7 @@ struct ManagedTaskRow: View {
                         Circle().fill(PriorityMark(priority: task.priority).color.opacity(0.16))
                             .frame(width: 22, height: 22)
                             .opacity(hovered || selected ? 1 : 0)
+                            .animation(decorationAnimation, value: hovered || selected)
                             .allowsHitTesting(false)
                     }
             }
@@ -44,9 +45,12 @@ struct ManagedTaskRow: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .onHover { hovered = $0 }
-        .animation(Motion.quick, value: hovered)
+        // 悬停、选中的过渡只作用在底色、描边、光晕这些装饰层上（见 decorationAnimation），
+        // 整行（含原生文本）不进动画事务：拖动排序和选中时不再每帧重算整行。
         .animation(Motion.quick, value: task.completed)
     }
+
+    private var decorationAnimation: Animation? { Motion.reduced ? nil : .easeOut(duration: 0.16) }
 
     private var priorityControl: some View {
         TaskPriorityButton(store: store, task: task, select: {
@@ -156,16 +160,18 @@ struct ManagedTaskRow: View {
             .overlay(alignment: .trailing) {
                 if timeline {
                     HStack(spacing: 2) { detailColumn; rowActions }
-                        .padding(.leading, 18)
+                        .padding(.leading, 22)
+                        // 只在左缘做一段渐隐，盖住被按钮压住的标题末尾；底色与这一行当前的底色一致，看不出边界。
                         .background {
-                            LinearGradient(stops: [.init(color: Palette.background.opacity(0), location: 0),
-                                                   .init(color: Palette.background, location: 0.35)],
-                                           startPoint: .leading, endPoint: .trailing)
-                                .overlay(LinearGradient(stops: [.init(color: Palette.soft.opacity(0), location: 0),
-                                                                .init(color: Palette.soft.opacity(0.6), location: 0.35)],
-                                                        startPoint: .leading, endPoint: .trailing))
+                            ZStack {
+                                Palette.background
+                                (selected ? Palette.accent.opacity(0.11) : Palette.soft.opacity(0.45))
+                            }
+                            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.3)],
+                                                 startPoint: .leading, endPoint: .trailing))
                         }
                         .opacity(hovered || selected ? 1 : 0)
+                        .animation(decorationAnimation, value: hovered || selected)
                         .allowsHitTesting(hovered || selected)
                         .accessibilityHidden(!hovered && !selected)
                 }
@@ -178,7 +184,8 @@ struct ManagedTaskRow: View {
         }
         .padding(.horizontal, 6).padding(.vertical, compact ? 4 : 7)
         .background {
-            RoundedRectangle(cornerRadius: 6).fill(timeline ? (hovered || selected ? Palette.soft.opacity(0.6) : .clear) : Palette.card)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(timeline ? (selected ? Palette.accent.opacity(0.11) : (hovered ? Palette.soft.opacity(0.45) : .clear)) : Palette.card)
                 .overlay {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(LinearGradient(colors: [.white.opacity(timeline ? 0 : (hovered ? 0.055 : 0.025)), .clear],
@@ -186,17 +193,27 @@ struct ManagedTaskRow: View {
                 }
                 .shadow(color: .black.opacity(timeline ? 0 : (hovered || selected ? 0.18 : 0.07)),
                         radius: hovered || selected ? 5 : 2, x: 0, y: hovered || selected ? 2 : 1)
+                .animation(decorationAnimation, value: hovered)
+                .animation(decorationAnimation, value: selected)
         }
         // 常驻一道很淡的细边（有质感但不花），悬停时浮起来：边变清晰、下面有一点阴影。
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line.opacity(timeline ? 0 : (hovered ? 0.9 : 0.35)), lineWidth: 0.75).allowsHitTesting(false))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line.opacity(timeline ? 0 : (hovered ? 0.9 : 0.35)), lineWidth: 0.75)
+            .animation(decorationAnimation, value: hovered).allowsHitTesting(false))
         .overlay(alignment: .leading) {
             if emphasized && !timeline { Capsule().fill(Palette.accent).frame(width: 3).padding(.vertical, 6).allowsHitTesting(false) }
         }
         .overlay {
-            // 选中只给这一圈描边做过渡；整行（含原生文本）不参与动画，点日期、打开弹窗时不卡。
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(selected ? Palette.accent : .clear, lineWidth: 1.5)
-                .animation(Motion.reduced ? nil : .easeOut(duration: 0.12), value: selected)
+            // 时间轴里的选中是一层柔和的底色和极细的边，不再是一圈生硬的粗框；清单卡片保留描边。
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(selected ? Palette.accent.opacity(timeline ? 0.35 : 1) : .clear, lineWidth: timeline ? Metrics.hairline : 1.5)
+                .animation(decorationAnimation, value: selected)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .leading) {
+            Capsule().fill(Palette.accent).frame(width: 2.5).padding(.vertical, 8)
+                .opacity(timeline && selected ? 1 : 0)
+                .scaleEffect(x: 1, y: timeline && selected ? 1 : 0.4, anchor: .center)
+                .animation(Motion.reduced ? nil : Motion.spring, value: selected)
                 .allowsHitTesting(false)
         }
     }
