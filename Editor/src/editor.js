@@ -338,6 +338,15 @@ window.boardEditor = {
             }
           }),
           EditorView.domEventHandlers({
+            // 浏览时复制系统原生选区里看到的文字（CodeMirror 自己的选区在只读时不跟随拖选）。
+            copy(event, view) {
+              if (!view.state.readOnly) return false;
+              const text = window.getSelection()?.toString() ?? "";
+              if (!text) return false;
+              event.clipboardData?.setData("text/plain", text);
+              event.preventDefault();
+              return true;
+            },
             compositionstart() { composing = true; },
             compositionend() { composing = false; setTimeout(() => post({kind: "change", ...snapshot()}), 0); },
             blur() { post({kind: "commit", ...snapshot()}); },
@@ -353,6 +362,14 @@ window.boardEditor = {
             }
           })]
       })});
+      // 浏览（只读）时交给系统原生选区：CodeMirror 的鼠标选择在渲染后的标题、折叠块和浮动按钮附近
+      // 算出的位置和看到的文字不一致，拖选会错位。捕获阶段截住按下事件、不阻止默认行为，
+      // 原生选区照常工作，CodeMirror 不再另算一份选区。按钮类控件不受影响。
+      view.dom.addEventListener("mousedown", event => {
+        if (!view.state.readOnly || event.button !== 0) return;
+        if (event.target.closest?.("button, .board-check, .board-details, .board-open-link, .board-copy-code")) return;
+        event.stopPropagation();
+      }, true);
     } else {
       if (typeof config.source === "string" && config.source !== view.state.doc.toString() && !view.composing && !composing) {
         const old = view.state.selection.main;

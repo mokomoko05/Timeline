@@ -144,3 +144,58 @@ final class DesignPreviewTests: XCTestCase {
         }
     }
 }
+
+/// 只读工作板的选区：不排窗口到屏幕上，检查鼠标按下不再被 CodeMirror 接管、复制取原生选区。
+@MainActor
+final class BoardBrowseSelectionProbe: XCTestCase {
+    func testBrowseModeUsesNativeSelectionForDragAndCopy() async throws {
+        guard ProcessInfo.processInfo.environment["TIMELINE_DESIGN_PREVIEW"] != nil else { throw XCTSkip("离屏探测，按需运行") }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let board = try XCTUnwrap(store.ensureBoard(for: .tag("Probe")))
+        let source = "# 标题\n\n第一段 **加粗** 文字，[链接](https://example.com) 结尾。\n\n```\nlet code = 1\n```\n\n最后一段"
+        store.setBoardMarkdown(source, for: board.id)
+        let session = BoardLiveEditorSession(store: store, board: try XCTUnwrap(store.board(for: board.owner)))
+        let webView = session.makeWebView()
+        session.configure(fontSize: 13, dark: true)
+        // WebKit 只在窗口排进窗口列表后加载页面：用测试专用的透明窗口（透明度 0、不接收鼠标、不成为键盘窗口）。
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 480), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = webView
+        window.orderBack(nil)
+        defer { window.contentView = nil; window.orderOut(nil) }
+        try await waitForBoardEditor(webView)
+        session.configure(fontSize: 13, dark: true, previewOnly: true)
+        try await Task.sleep(for: .milliseconds(80))
+        let result = try await webView.evaluateJavaScript("""
+        (()=>{
+          const editor=window.boardEditor, view=editor.view();
+          const before=view.state.selection.main.head;
+          const line=[...document.querySelectorAll('.cm-line')].find(l=>l.textContent.includes('第一段'));
+          const r=line.getBoundingClientRect();
+          line.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,clientX:r.left+40,clientY:r.top+5,button:0}));
+          const prevented=false;
+          document.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,clientX:r.left+40,clientY:r.top+5,button:0}));
+          const after=view.state.selection.main.head;
+          const range=document.createRange(); const walker=document.createTreeWalker(line,NodeFilter.SHOW_TEXT);
+          let node; const nodes=[]; while((node=walker.nextNode())) nodes.push(node);
+          range.setStart(nodes[0],0); range.setEnd(nodes[nodes.length-1],nodes[nodes.length-1].length);
+          const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+          let copied=null;
+          document.addEventListener('copy',e=>{setTimeout(()=>{},0)},{once:true});
+          const event=new ClipboardEvent('copy',{bubbles:true,cancelable:true,clipboardData:new DataTransfer()});
+          view.contentDOM.dispatchEvent(event);
+          copied=event.clipboardData.getData('text/plain');
+          const layer=getComputedStyle(document.querySelector('.cm-selectionLayer')).display;
+          return {before,after,copied,visible:sel.toString(),layer};
+        })()
+        """) as? [String: Any] ?? [:]
+        print("BOARD PROBE", result)
+        XCTAssertEqual(result["before"] as? Int, result["after"] as? Int, "只读时按下鼠标不由 CodeMirror 重新定位")
+        XCTAssertEqual(result["copied"] as? String, result["visible"] as? String, "复制的就是看到的选区")
+        XCTAssertEqual(result["layer"] as? String, "none")
+        XCTAssertTrue((result["copied"] as? String)?.contains("加粗") == true)
+        XCTAssertEqual(store.boards.first?.markdown, source)
+    }
+}

@@ -13,6 +13,9 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 #editor .cm-cursorLayer { animation: none !important; }
 #editor .cm-editor[data-preview="true"] .cm-cursorLayer { display: none; }
 #editor .cm-editor[data-preview="true"] .cm-content { caret-color: transparent; }
+/* 浏览时只显示系统原生选区，不再叠加 CodeMirror 自绘的一层（两层不一致看起来就是错位）。 */
+#editor .cm-editor[data-preview="true"] .cm-selectionLayer { display: none; }
+#editor .cm-editor[data-preview="true"] .cm-content { user-select: text; -webkit-user-select: text; cursor: text; }
 #editor .cm-selectionBackground { background: var(--selection) !important; }
 #editor .cm-content::selection, #editor .cm-content ::selection {
   background: var(--selection) !important;
