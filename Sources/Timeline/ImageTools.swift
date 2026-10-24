@@ -77,7 +77,33 @@ enum ImageTools {
         return CGSize(width: (natural.width * ratio).rounded(), height: (natural.height * ratio).rounded())
     }
 
-    static func thumbnail(_ url: URL, maxPixel: Int = 240) -> NSImage? {
+    /// 已经解码过的缩略图（不读盘）。
+    static func cachedThumbnail(_ url: URL, maxPixel: Int) -> NSImage? {
+        thumbnails.object(forKey: "\(url.path)#\(maxPixel)" as NSString)
+    }
+
+    /// 只读文件头得到像素尺寸，不解码；占位用它保持最终大小，加载完成时版面不跳动。
+    nonisolated static func pixelSize(_ url: URL) -> CGSize? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? CGFloat,
+              let height = properties[kCGImagePropertyPixelHeight] as? CGFloat else { return nil }
+        let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+        return orientation >= 5 ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
+    }
+
+    private static let decodeQueue = DispatchQueue(label: "Timeline.Thumbnails", qos: .userInitiated, attributes: .concurrent)
+
+    /// 在后台解码，完成后回到主线程。滚动长列表时不在主线程读盘解码。
+    @MainActor static func loadThumbnail(_ url: URL, maxPixel: Int, completion: @escaping @MainActor (NSImage?) -> Void) {
+        if let cached = cachedThumbnail(url, maxPixel: maxPixel) { completion(cached); return }
+        decodeQueue.async {
+            let image = thumbnail(url, maxPixel: maxPixel)
+            DispatchQueue.main.async { MainActor.assumeIsolated { completion(image) } }
+        }
+    }
+
+    nonisolated static func thumbnail(_ url: URL, maxPixel: Int = 240) -> NSImage? {
         let key = "\(url.path)#\(maxPixel)" as NSString
         if let cached = thumbnails.object(forKey: key) { return cached }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }

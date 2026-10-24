@@ -92,7 +92,7 @@ final class DayLogWindowController: NSObject, NSWindowDelegate {
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.minSize = Self.minSize
-        window.collectionBehavior = [.fullScreenAuxiliary]
+        window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
         window.delegate = self
         if !window.setFrameUsingName(frameName) {
             window.setContentSize(NSSize(width: 1040, height: 700))

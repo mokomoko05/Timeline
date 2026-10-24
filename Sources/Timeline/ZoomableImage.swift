@@ -6,6 +6,7 @@ struct ZoomableImage: NSViewRepresentable {
     @ObservedObject var model: ImageViewerModel
 
     func makeNSView(context: Context) -> ImageZoomScrollView { ImageZoomScrollView() }
+    static func dismantleNSView(_ view: ImageZoomScrollView, coordinator: ()) { view.clear() }
     func updateNSView(_ view: ImageZoomScrollView, context: Context) {
         view.onZoom = { [weak model] in model?.setZoom($0) }
         view.display(url, zoom: model.zoom)
@@ -43,6 +44,11 @@ final class ImageZoomScrollView: NSScrollView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func clear() {
+        url = nil
+        picture.image = nil
+    }
 
     func display(_ url: URL, zoom: CGFloat) {
         if self.url != url {

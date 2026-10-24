@@ -72,6 +72,10 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        // 与其他窗口同一底色和强调色，分组卡片用主题的卡片色。
+        .scrollContentBackground(.hidden)
+        .background(Palette.background)
+        .tint(Palette.accent)
         .frame(width: 520, height: 830)
     }
 }

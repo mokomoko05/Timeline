@@ -167,6 +167,11 @@ final class ImageViewerController: NSObject, NSWindowDelegate {
 
     func close() { window?.close() }
 
+    /// 关闭后不再持有原图：长时间运行时大图不会一直留在内存里。
+    func windowWillClose(_ notification: Notification) {
+        model.load([], index: 0)
+    }
+
     private func makeContent(store: JournalStore) -> NSViewController {
         let content = ImageViewerView(store: store, model: model, openPreview: { [weak self] in
             guard let self, let directory = self.previewDirectory else { return }
@@ -185,7 +190,10 @@ final class ImageViewerController: NSObject, NSWindowDelegate {
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 360, height: 280)
-        window.collectionBehavior = [.fullScreenAuxiliary]
+        window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
+        // 看图始终用深色：照片和截图在暗底上对比最好；颜色取自主题的深色版本。
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = NativePalette.background
         window.delegate = self
         window.onKey = { [weak self] event in self?.handleKey(event) ?? false }
         if !window.setFrameUsingName(Self.frameName) {
@@ -218,7 +226,7 @@ struct ImageViewerView: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.92)
+            Palette.background
             if let item = model.current {
                 let url = store.imageURL(item.name)
                 ZoomableImage(url: url, model: model)
@@ -242,11 +250,11 @@ struct ImageViewerView: View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 18, weight: .semibold))
                 .frame(width: 40, height: 40)
-                .background(.ultraThinMaterial, in: Circle())
-                .overlay(Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.75))
-                .shadow(color: .black.opacity(0.4), radius: 4, y: 2)
+                .background(Palette.card.opacity(0.9), in: Circle())
+                .overlay(Circle().strokeBorder(Palette.line, lineWidth: Metrics.hairline))
+                .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
         }
-        .buttonStyle(.plain).foregroundStyle(.white)
+        .buttonStyle(.plain).foregroundStyle(Palette.ink)
         .opacity(enabled ? (hovering ? 1 : 0.55) : 0)
         .disabled(!enabled)
         .help(help).accessibilityLabel(help)
@@ -254,16 +262,16 @@ struct ImageViewerView: View {
 
     private func toolbar(_ item: ImageViewerModel.Item, url: URL) -> some View {
         HStack(spacing: 12) {
-            Text("\(model.index + 1) / \(model.items.count)").font(.system(size: 12, weight: .medium, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
+            Text("\(model.index + 1) / \(model.items.count)").font(.system(size: 12, weight: .medium)).monospacedDigit().foregroundStyle(Palette.ink)
             if !item.caption.isEmpty {
-                Text(item.caption).font(.system(size: 12)).foregroundStyle(.white.opacity(0.7)).lineLimit(1).truncationMode(.tail)
+                Text(item.caption).font(.system(size: 12)).foregroundStyle(Palette.muted).lineLimit(1).truncationMode(.tail)
             }
             Spacer(minLength: 8)
             Button { model.zoomOut() } label: { Label("缩小", systemImage: "minus.magnifyingglass") }
                 .disabled(model.zoom <= 0.25).help("缩小 · −")
             Button { model.fit() } label: {
                 Text("\(Int((model.zoom * 100).rounded()))%")
-                    .font(.system(size: 11, design: .monospaced)).frame(minWidth: 42)
+                    .font(.system(size: 11, weight: .medium)).monospacedDigit().frame(minWidth: 42)
             }.help("适应窗口 · 0")
             Button { model.zoomIn() } label: { Label("放大", systemImage: "plus.magnifyingglass") }
                 .disabled(model.zoom >= 8).help("放大 · +")
@@ -271,8 +279,9 @@ struct ImageViewerView: View {
             Button { NSWorkspace.shared.activateFileViewerSelecting([url]) } label: { Label("在访达中显示", systemImage: "folder") }
             Button(action: openPreview) { Label("用「预览」打开", systemImage: "arrow.up.forward.app") }
         }
-        .buttonStyle(HitAreaButtonStyle(compact: true)).labelStyle(.iconOnly).font(.system(size: 13)).foregroundStyle(.white)
+        .buttonStyle(HitAreaButtonStyle(compact: true)).labelStyle(.iconOnly).font(.system(size: 13)).foregroundStyle(Palette.ink)
         .padding(.horizontal, 14).frame(height: 40)
-        .background(.ultraThinMaterial)
+        .background(Palette.card.opacity(0.92))
+        .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: Metrics.hairline) }
     }
 }

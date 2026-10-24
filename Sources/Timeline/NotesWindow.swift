@@ -177,6 +177,12 @@ struct UnifiedNotesView: View {
         }
         .background(Palette.background)
         .foregroundStyle(Palette.ink)
+        .overlay(alignment: .bottom) { ToastView(center: toast).padding(.bottom, 18) }
+        // 在笔记窗口里删除或修改：撤销提示出现在这里（主窗口只在自己是当前窗口时提示）。
+        .onReceive(store.$lastAction.dropFirst()) { event in
+            guard let event, NotesWindowController.shared.isKey, let message = ToastCenter.undoMessages[event.name] else { return }
+            toast.show(message, actionTitle: "撤销") { store.undo() }
+        }
         .environmentObject(interaction)
         .environmentObject(toast)
     }

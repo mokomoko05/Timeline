@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var pendingLink: String?
     @State private var agenda: AgendaFilter?
     @State private var showingBackups = false
+    @State private var showingShortcuts = false
     @State private var requestedEdit: UUID?
     @State private var showingMonthJumper = false
     private let notesWindow = NotesWindowController.shared
@@ -126,6 +127,7 @@ struct ContentView: View {
             }, filter: filter)
         }
         .sheet(isPresented: $showingBackups) { BackupRestoreView(store: store) }
+        .sheet(isPresented: $showingShortcuts) { ShortcutsView(close: { showingShortcuts = false }) }
         .alert("暂时无法完成操作", isPresented: Binding(
             get: { actionError != nil || loginItem.errorMessage != nil },
             set: { if !$0 { actionError = nil; loginItem.errorMessage = nil } }
@@ -179,7 +181,7 @@ struct ContentView: View {
     private static func needsMainWindow(_ command: AppCommand) -> Bool {
         switch command {
         case .newTodo, .search, .agenda, .reveal, .backups, .export, .rollover, .toggleTasks, .shiftMonth, .today, .shiftDay,
-             .selectAdjacent, .toggleSelected, .editSelected, .deleteSelected, .deadlineSelected, .tagsSelected:
+             .selectAdjacent, .toggleSelected, .editSelected, .deleteSelected, .deadlineSelected, .tagsSelected, .shortcuts:
             return true
         default: return false
         }
@@ -260,6 +262,7 @@ struct ContentView: View {
         case .reveal(let id): reveal(date: store.locate(id)?.task.dueDate, taskID: id)
         case .export: exportJournal()
         case .backups: showingBackups = true
+        case .shortcuts: showingShortcuts = true
         case .settings: AppRouter.showSettings()
         case .quickCapture: AppRouter.showQuickCapture()
         }

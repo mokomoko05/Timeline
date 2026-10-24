@@ -376,6 +376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case 35 where interaction.selectedTaskID != nil && !shift: commands.send(.pinSelected)       // P
         case 7 where interaction.selectedTaskID != nil && !shift: commands.send(.dropSelected)       // X
         case 3 where interaction.selectedTaskID != nil && !shift: commands.send(.focusSelected)      // F
+        case 44 where shift: commands.send(.shortcuts)                                               // ?
         default: return false
         }
         return true
@@ -675,7 +676,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let windowItem = NSMenuItem(title: AppLocalized("窗口"), action: nil, keyEquivalent: "")
         windowItem.submenu = windowMenu
         mainMenu.addItem(windowItem)
+        let helpMenu = NSMenu(title: AppLocalized("帮助"))
+        helpMenu.addItem(menuItem("快捷键一览    ?", key: "/", modifiers: [.command]) { [weak self] in self?.commands.send(.shortcuts) })
+        let helpItem = NSMenuItem(title: AppLocalized("帮助"), action: nil, keyEquivalent: "")
+        helpItem.submenu = helpMenu
+        mainMenu.addItem(helpItem)
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu
+        NSApp.helpMenu = helpMenu
     }
 }

@@ -2,16 +2,38 @@ import AppKit
 import SwiftUI
 import TimelineCore
 
+/// 缩略图：缓存里有就直接显示，否则后台解码，期间显示同样大小的占位。
+@MainActor
+final class ThumbnailLoader: ObservableObject {
+    enum State: Equatable { case loading, loaded(NSImage), missing }
+    @Published private(set) var state: State = .loading
+    private var key: String?
+
+    func load(_ url: URL, maxPixel: Int) {
+        let key = "\(url.path)#\(maxPixel)"
+        guard key != self.key else { return }
+        self.key = key
+        if let cached = ImageTools.cachedThumbnail(url, maxPixel: maxPixel) { state = .loaded(cached); return }
+        state = .loading
+        ImageTools.loadThumbnail(url, maxPixel: maxPixel) { [weak self] image in
+            guard let self, self.key == key else { return }
+            self.state = image.map(State.loaded) ?? .missing
+        }
+    }
+}
+
 /// 缩略图方块；文件缺失时显示占位。
 struct ImageThumb: View {
     let url: URL
     var size: CGFloat = 56
+    @StateObject private var loader = ThumbnailLoader()
 
     var body: some View {
         Group {
-            if let image = ImageTools.thumbnail(url, maxPixel: Int(size * 3)) {
-                Image(nsImage: image).resizable().scaledToFit()
-            } else {
+            switch loader.state {
+            case .loaded(let image): Image(nsImage: image).resizable().scaledToFit()
+            case .loading: Color.clear
+            case .missing:
                 Image(systemName: "photo.badge.exclamationmark").font(.system(size: size * 0.35)).foregroundStyle(TerminalPalette.muted)
             }
         }
@@ -19,6 +41,8 @@ struct ImageThumb: View {
         .background(Palette.line.opacity(0.35))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Palette.line))
+        .onAppear { loader.load(url, maxPixel: Int(size * 3)) }
+        .onChange(of: url) { loader.load($0, maxPixel: Int(size * 3)) }
     }
 }
 
@@ -27,17 +51,40 @@ struct ImageFit: View {
     let url: URL
     var maxWidth: CGFloat = 320
     var maxHeight: CGFloat = 170
+    @StateObject private var loader = ThumbnailLoader()
+    @State private var placeholder: CGSize?
+
+    private var maxPixel: Int { Int(max(maxWidth, maxHeight) * 3) }
 
     var body: some View {
-        if let image = ImageTools.thumbnail(url, maxPixel: Int(max(maxWidth, maxHeight) * 3)) {
-            let size = ImageTools.fittedSize(pixels: image.size, maxWidth: maxWidth, maxHeight: maxHeight)
-            Image(nsImage: image).resizable().interpolation(.high)
-                .frame(width: size.width, height: size.height)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Palette.line))
-        } else {
-            ImageThumb(url: url, size: 56)
+        Group {
+            switch loader.state {
+            case .loaded(let image):
+                let size = ImageTools.fittedSize(pixels: image.size, maxWidth: maxWidth, maxHeight: maxHeight)
+                Image(nsImage: image).resizable().interpolation(.high)
+                    .frame(width: size.width, height: size.height)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Palette.line))
+            case .loading:
+                let size = placeholder ?? CGSize(width: 56, height: 56)
+                RoundedRectangle(cornerRadius: 4).fill(Palette.line.opacity(0.25))
+                    .frame(width: size.width, height: size.height)
+            case .missing:
+                ImageThumb(url: url, size: 56)
+            }
         }
+        .onAppear { start(url) }
+        .onChange(of: url) { start($0) }
+    }
+
+    private func start(_ url: URL) {
+        if ImageTools.cachedThumbnail(url, maxPixel: maxPixel) == nil, let pixels = ImageTools.pixelSize(url) {
+            // 缩略图的长边不超过 maxPixel，按同样比例估算显示尺寸。
+            let scale = min(1, CGFloat(maxPixel) / max(pixels.width, pixels.height))
+            placeholder = ImageTools.fittedSize(pixels: CGSize(width: pixels.width * scale, height: pixels.height * scale),
+                                                maxWidth: maxWidth, maxHeight: maxHeight)
+        }
+        loader.load(url, maxPixel: maxPixel)
     }
 }
 
