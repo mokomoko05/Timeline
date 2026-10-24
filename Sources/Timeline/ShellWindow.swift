@@ -33,7 +33,40 @@ enum WindowFade {
 }
 
 /// 一个窗格里的终端。焦点变化由所在窗口的 makeFirstResponder 感知，用来高亮当前窗格。
-final class PaneTerminalView: LocalProcessTerminalView {}
+final class PaneTerminalView: LocalProcessTerminalView {
+    /// 回滚行数：默认 500 行对长时间的 agent 对话太少。
+    static let scrollbackLines = 10_000
+
+    /// 结束 shell 并回收子进程。SwiftTerm 的 terminate() 发出 SIGTERM 后就取消了退出监听，
+    /// 不会 waitpid，每关一个窗格就留下一个僵尸进程，直到应用退出。
+    func end() {
+        let pid = process?.shellPid ?? 0
+        terminate()
+        guard pid > 0 else { return }
+        ShellReaper.reap(pid)
+    }
+}
+
+/// 在后台回收已结束的 shell。交互式 zsh 忽略 SIGTERM，所以像真正的终端关闭时一样向整个进程组发 SIGHUP；
+/// 一秒后仍未退出就 SIGKILL。每个进程各自等待，关闭多个窗格时互不排队。
+enum ShellReaper {
+    private static let queue = DispatchQueue(label: "Timeline.ShellReaper", qos: .utility, attributes: .concurrent)
+
+    static func reap(_ pid: pid_t) {
+        killpg(pid, SIGHUP)
+        kill(pid, SIGHUP)
+        queue.async {
+            var status: Int32 = 0
+            for attempt in 0..<40 {
+                let result = waitpid(pid, &status, WNOHANG)
+                if result == pid || (result == -1 && errno == ECHILD) { return }
+                if attempt == 20 { killpg(pid, SIGKILL); kill(pid, SIGKILL) }
+                usleep(50_000)
+            }
+            waitpid(pid, &status, 0)
+        }
+    }
+}
 
 /// 包住一个窗格，留出 2pt 空隙，焦点时在这圈空隙里画高亮边框。
 final class PaneFrameView: NSView {
@@ -440,7 +473,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
             return
         }
         if let process = pane.process, ShellProcessInfo.hasForegroundProgram(fd: process.childfd, shellPid: process.shellPid), !confirmClose(window) { return }
-        pane.terminate()
+        pane.end()
         finish(pane, in: window)
     }
 
@@ -474,6 +507,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
     private func makePane() -> PaneTerminalView {
         let pane = PaneTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
         pane.processDelegate = self
+        pane.getTerminal().changeScrollback(PaneTerminalView.scrollbackLines)
         pane.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
         pane.nativeBackgroundColor = NSColor(white: 0.035, alpha: 1)
         pane.nativeForegroundColor = NSColor(white: 0.88, alpha: 1)
@@ -580,7 +614,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
 
     /// 退出 Timeline 前结束全部 shell。
     func terminateAll() {
-        for window in windows { window.panes.forEach { $0.terminate() } }
+        for window in windows { window.panes.forEach { $0.end() } }
     }
 
     static func askToClose(_ window: TerminalWindow) -> Bool {
@@ -601,7 +635,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
 
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? TerminalWindow else { return }
-        window.panes.forEach { $0.terminate() }
+        window.panes.forEach { $0.end() }
         windows.removeAll { $0 === window }
         if lastKey === window { lastKey = windows.last }
     }

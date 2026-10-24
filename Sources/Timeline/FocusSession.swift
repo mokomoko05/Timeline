@@ -133,6 +133,8 @@ final class FocusSession: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+        // 计时按实际时间计算，晚一点触发不影响读数；允许系统合并唤醒以省电。
+        timer?.tolerance = 0.15
     }
 
     func stop(reason: String, now: Date = Date()) {

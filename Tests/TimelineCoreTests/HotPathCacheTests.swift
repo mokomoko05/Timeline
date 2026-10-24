@@ -77,4 +77,21 @@ final class HotPathCacheTests: XCTestCase {
         let key = JournalDates.key(Date())
         XCTAssertEqual(JournalDates.date(for: key).map(JournalDates.key), key)
     }
+
+    func testBatchedImageTextWritesEveryReferenceWithOnePublish() throws {
+        let (store, directory) = makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let today = Date()
+        try store.quickLog("两张图", images: ["a.png", "b.png"], on: today)
+        try store.quickLog("同一张图再次引用", images: ["a.png"], on: today)
+        XCTAssertEqual(Set(store.imagesMissingText()), ["a.png", "b.png"])
+        var publications = 0
+        let subscription = store.objectWillChange.sink { publications += 1 }
+        store.setImageTexts(["a.png": "Alpha", "b.png": "Beta"])
+        subscription.cancel()
+        XCTAssertTrue(store.imagesMissingText().isEmpty)
+        let texts = store.allLogs().flatMap { $0.log.imageText.values }
+        XCTAssertEqual(texts.sorted(), ["Alpha", "Alpha", "Beta"])
+        XCTAssertLessThanOrEqual(publications, 2, "一批结果只触发一次 days 更新（加上保存标记）")
+    }
 }

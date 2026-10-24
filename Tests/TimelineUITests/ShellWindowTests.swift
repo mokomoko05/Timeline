@@ -286,4 +286,20 @@ final class ShellWindowTests: XCTestCase {
         controller.show()
         XCTAssertEqual(controller.windows.count, 1)
     }
+
+    func testClosedPanesAreReapedInsteadOfLeftAsZombiesAndKeepLongScrollback() async throws {
+        let controller = controller(["-f", "-i"])
+        controller.layoutOverride = .threePanes
+        let window = controller.newWindow()
+        XCTAssertEqual(window.panes.first?.getTerminal().options.scrollback, PaneTerminalView.scrollbackLines)
+        let pids = window.panes.compactMap { $0.process?.shellPid }.filter { $0 > 0 }
+        XCTAssertEqual(pids.count, 3)
+        controller.closePane()
+        controller.closePane()
+        controller.closePane()
+        func alive(_ pid: pid_t) -> Bool { kill(pid, 0) == 0 }
+        // 被回收后 pid 不再存在；僵尸进程在回收前对 kill(pid, 0) 仍返回 0。
+        await wait(2) { !pids.contains(where: alive) }
+        XCTAssertFalse(pids.contains(where: alive), "关闭的窗格必须回收子进程，不能留下僵尸")
+    }
 }

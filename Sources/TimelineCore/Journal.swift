@@ -1096,13 +1096,21 @@ public final class JournalStore: ObservableObject {
 
     /// 写入识别结果；不进入撤销栈，也不改变其他内容。
     public func setImageText(_ text: String, image name: String) {
-        guard !isReadOnly else { return }
+        setImageTexts([name: text])
+    }
+
+    /// 一次写入多张图片的识别结果：只扫描一遍日志、发布一次，避免大量图片排队时逐张刷新所有窗口。
+    public func setImageTexts(_ texts: [String: String]) {
+        guard !isReadOnly, !texts.isEmpty else { return }
         var updated = days
         var changed = false
         for (key, entry) in days {
-            for index in entry.logs.indices where entry.logs[index].images.contains(name) && entry.logs[index].imageText[name] != text {
-                updated[key]!.logs[index].imageText[name] = text
-                changed = true
+            for index in entry.logs.indices {
+                for name in entry.logs[index].images {
+                    guard let text = texts[name], entry.logs[index].imageText[name] != text else { continue }
+                    updated[key]!.logs[index].imageText[name] = text
+                    changed = true
+                }
             }
         }
         guard changed else { return }

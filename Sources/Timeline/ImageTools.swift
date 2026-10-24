@@ -117,12 +117,24 @@ enum ImageIndexer {
         running = true
         let urls = pending.map { ($0, store.imageURL($0)) }
         Task.detached(priority: .utility) {
+            // 结果攒一批再写回：每 8 张或每 2 秒一次，大量图片也只触发少量界面刷新和保存。
+            var batch: [String: String] = [:]
+            var lastFlush = Date()
             for (name, url) in urls {
                 let exists = FileManager.default.fileExists(atPath: url.path)
-                let text = exists ? autoreleasepool { ImageTools.recognizeText(at: url) } : ""
-                await MainActor.run { store.setImageText(text, image: name) }
+                batch[name] = exists ? autoreleasepool { ImageTools.recognizeText(at: url) } : ""
+                if batch.count >= 8 || Date().timeIntervalSince(lastFlush) >= 2 {
+                    let results = batch
+                    batch = [:]
+                    lastFlush = Date()
+                    await MainActor.run { store.setImageTexts(results) }
+                }
             }
-            await MainActor.run { running = false }
+            let results = batch
+            await MainActor.run {
+                store.setImageTexts(results)
+                running = false
+            }
         }
     }
 }

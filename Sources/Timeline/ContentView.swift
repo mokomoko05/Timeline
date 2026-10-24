@@ -48,7 +48,16 @@ struct ContentView: View {
     @State private var addingTodo = false
     @State private var creationOptions = TaskCreationOptions()
     @AppStorage("tasksPaneExpanded") private var tasksVisible = false
-    private let dayTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+    /// 跨日、唤醒、改系统时间时立即刷新；平时每分钟兜底一次（逾期角标），允许系统合并唤醒。
+    private let dayTimer = Publishers.Merge(
+        Timer.publish(every: 60, tolerance: 15, on: .main, in: .common).autoconnect(),
+        Publishers.MergeMany([
+            NotificationCenter.default.publisher(for: .NSCalendarDayChanged),
+            NotificationCenter.default.publisher(for: NSNotification.Name.NSSystemClockDidChange),
+            NotificationCenter.default.publisher(for: NSNotification.Name.NSSystemTimeZoneDidChange),
+            NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification),
+        ]).receive(on: RunLoop.main).map { _ in Date() }
+    )
     private var entry: DayEntry { store.entry(for: selectedDate) }
     /// 全部任务（不属于某一天），按截止时间排序；隐藏已完成时过滤掉已完成的。
     private var orderedTasks: [ScheduledTask] {
