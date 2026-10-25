@@ -525,8 +525,8 @@ struct NotesView: View {
     }
 
     /// 一页里展开显示的笔记不多时整页一次排好：滚动条的长短和位置按真实高度算，不会边滚边变。
-    /// 很长的历史才按需加载。
-    static let lazyThreshold = 400
+    /// 更长的才按需加载：每条笔记常驻约 1 MB（文字图层和视图），一次排好几百条会占用数百 MB。
+    static let lazyThreshold = 40
 
     private func visibleNoteCount(chapters: [NotebookChapter], notes: [JournalStore.LoggedLog], tag: String) -> Int {
         guard chapterView else { return notes.count }

@@ -146,11 +146,58 @@ struct AmbientBackdrop: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        Palette.background
-            .overlay(RadialGradient(colors: [Palette.accent.opacity(scheme == .dark ? 0.07 : 0.045), .clear],
-                                    center: .topLeading, startRadius: 0, endRadius: 720))
+        AmbientBackdropLayer(dark: scheme == .dark)
             .ignoresSafeArea()
             .allowsHitTesting(false)
+    }
+}
+
+/// 用图层画背景：纯色和径向渐变都由系统合成，不像 SwiftUI 渐变那样在应用里常驻一张整窗大小的位图（每个窗口约 19 MB）。
+private struct AmbientBackdropLayer: NSViewRepresentable {
+    let dark: Bool
+
+    func makeNSView(context: Context) -> AmbientBackdropView { AmbientBackdropView() }
+    func updateNSView(_ view: AmbientBackdropView, context: Context) { view.dark = dark }
+}
+
+final class AmbientBackdropView: NSView {
+    static let radius: CGFloat = 720
+    let gradient = CAGradientLayer()
+    var dark = false { didSet { if dark != oldValue { refreshColors() } } }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        gradient.type = .radial
+        layer?.addSublayer(gradient)
+        refreshColors()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.frame = bounds
+        // 圆心在左上角（图层坐标原点在左下），半径按单位坐标换算。
+        gradient.startPoint = CGPoint(x: 0, y: 1)
+        gradient.endPoint = CGPoint(x: Self.radius / max(bounds.width, 1), y: 1 - Self.radius / max(bounds.height, 1))
+        CATransaction.commit()
+    }
+
+    private func refreshColors() {
+        NSAppearance(named: dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance {
+            let accent = NativePalette.accent.usingColorSpace(.sRGB) ?? NativePalette.accent
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer?.backgroundColor = NativePalette.background.cgColor
+            // 渐变终点用同色透明，避免和黑色透明插值出灰边。
+            gradient.colors = [accent.withAlphaComponent(dark ? 0.07 : 0.045).cgColor, accent.withAlphaComponent(0).cgColor]
+            CATransaction.commit()
+        }
     }
 }
 

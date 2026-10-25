@@ -78,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var focusPanel: FocusPanelController?
     private var autoHide: AutoHideOnResign?
     private var languageObserver: NSObjectProtocol?
+    private var memoryPressure: DispatchSourceMemoryPressure?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
@@ -164,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 MainActor.assumeIsolated { self?.applyHotKeyPreference() }
             }
             installKeyboardNavigation()
+            installMemoryPressureHandler()
             NotificationCenter.default.addObserver(forName: .timelineHotKeysChanged, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.applyNotesShortcut(); self?.rebindHotKeysIfNeeded() }
             }
@@ -351,6 +353,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func rebindHotKeysIfNeeded() {
         guard hotKeysAttempted else { return }
         registerAllHotKeys()
+    }
+
+    // MARK: - 内存压力
+
+    /// 系统内存紧张时释放能重建的东西：看不见的工作板编辑器（各占一份 WebKit 内容）和预加载的空编辑器。
+    private func installMemoryPressureHandler() {
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler {
+            MainActor.assumeIsolated {
+                BoardWindowController.shared.navigation.releaseInactiveEditors()
+                BoardLiveEditorSession.releaseSpare()
+            }
+        }
+        source.resume()
+        memoryPressure = source
     }
 
     // MARK: - 键盘导航

@@ -58,14 +58,12 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
                 HStack(alignment: .center, spacing: 6) {
                     meta()
                     Spacer(minLength: 8)
-                    actions()
-                        .opacity(hovered ? 1 : 0)
-                        .allowsHitTesting(hovered)
-                        .accessibilityHidden(!hovered)
+                    // 悬停时才构建：每行常驻四五个透明按钮，长笔记页会多占几十 MB。行高按按钮高度预留，出现时不跳动。
+                    if hovered { actions() }
                 }
                 .font(.system(size: typography.pt(11))).monospacedDigit()
                 .foregroundStyle(Palette.muted)
-                .frame(minHeight: typography.pt(16))
+                .frame(minHeight: max(typography.pt(16), 22))
                 content()
             }
             .frame(maxWidth: .infinity, alignment: .leading)

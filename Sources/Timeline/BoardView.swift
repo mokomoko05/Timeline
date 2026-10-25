@@ -30,6 +30,12 @@ final class BoardNavigation: ObservableObject {
         return editorSessions[board.id]!
     }
 
+    /// 系统内存紧张时：只留当前工作板的编辑器，其余的保存后释放（切回来时重新加载正文）。
+    func releaseInactiveEditors() {
+        for id in editorOrder where id != selection { editorSessions.removeValue(forKey: id)?.flush() }
+        editorOrder.removeAll { $0 != selection }
+    }
+
     /// 当前工作板是在看源码还是预览；换工作板回到预览。
     @Published var sourceMode = false
 

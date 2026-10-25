@@ -134,6 +134,13 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         return taken
     }
 
+    /// 系统内存紧张时丢掉预加载的空编辑器；下次打开新工作板时再按需创建。
+    static func releaseSpare() {
+        spareTask?.cancel()
+        spareTask = nil
+        spare = nil
+    }
+
     fileprivate static func discardSpare(_ view: WKWebView) {
         if spare?.view === view { spare = nil }
     }
