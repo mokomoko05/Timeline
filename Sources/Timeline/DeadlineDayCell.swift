@@ -99,7 +99,16 @@ struct DeadlineDayCell: View, Equatable {
             && lhs.logCount == rhs.logCount && lhs.focusSeconds == rhs.focusSeconds && lhs.readOnly == rhs.readOnly && lhs.today == rhs.today && lhs.store === rhs.store
     }
 
+    /// 格子里放得下几行事项；放不下时最后一行换成「还有 N 项」。
+    static func visibleCount(total: Int, cellHeight: CGFloat, headerHeight: CGFloat, rowHeight: CGFloat) -> Int {
+        let available = cellHeight - 12 - headerHeight
+        let rows = max(0, Int(floor((available + 3) / (rowHeight + 3))))
+        return total <= rows ? total : max(0, rows - 1)
+    }
+
     var body: some View {
+        let headerHeight = ceil(max(18, typography.pt(15)))
+        let shown = Self.visibleCount(total: items.count, cellHeight: height, headerHeight: headerHeight, rowHeight: typography.pt(22))
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 3) {
                 // 今天的日期是一颗实心的「结」，和时间轴上今天的标记一致。
@@ -119,8 +128,8 @@ struct DeadlineDayCell: View, Equatable {
                         .help("已完成 / 当天截止的事项")
                 }
             }
-            .frame(height: ceil(max(18, typography.pt(15))))
-            ForEach(items) { item in
+            .frame(height: headerHeight)
+            ForEach(items.prefix(shown)) { item in
                 HStack(alignment: .top, spacing: 0) {
                     TaskPriorityButton(store: store, task: item.task, dragOrigin: .calendar)
                         .background(GeometryReader { proxy in
@@ -148,7 +157,18 @@ struct DeadlineDayCell: View, Equatable {
                         .accessibilityLabel((item.task.isDropped ? "恢复已放弃的待办：" : (item.task.completed ? "标记未完成：" : "标记完成：")) + item.task.title)
                 }.font(.system(size: typography.pt(11))).frame(height: typography.pt(22))
                     .background(Palette.background, in: RoundedRectangle(cornerRadius: 4))
+                    .overlay { TaskLandingFlash(id: item.id, radius: 4) }
                     .contentShape(RoundedRectangle(cornerRadius: 4))
+            }
+            if shown < items.count {
+                Button(action: select) {
+                    Text("还有 \(items.count - shown) 项")
+                        .font(.system(size: typography.pt(10), weight: .medium)).foregroundStyle(Palette.muted)
+                        .padding(.horizontal, 4).frame(height: typography.pt(18))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("选中这一天，在左侧清单里看全部事项")
             }
             Spacer(minLength: 0)
         }

@@ -30,3 +30,13 @@ final class CalendarPreviewOrderTests: XCTestCase {
                        items.sorted(by: TaskTimelineSection.precedes).map(\.task.title))
     }
 }
+
+final class CalendarOverflowTests: XCTestCase {
+    func testOverflowRowReplacesTheLastRowThatDoesNotFit() {
+        // 可用高度 120 - 12 - 18 = 90，每行 22 + 3：放得下 3 行。
+        XCTAssertEqual(DeadlineDayCell.visibleCount(total: 2, cellHeight: 120, headerHeight: 18, rowHeight: 22), 2)
+        XCTAssertEqual(DeadlineDayCell.visibleCount(total: 3, cellHeight: 120, headerHeight: 18, rowHeight: 22), 3)
+        XCTAssertEqual(DeadlineDayCell.visibleCount(total: 7, cellHeight: 120, headerHeight: 18, rowHeight: 22), 2, "第三行换成「还有 5 项」")
+        XCTAssertEqual(DeadlineDayCell.visibleCount(total: 4, cellHeight: 20, headerHeight: 18, rowHeight: 22), 0)
+    }
+}

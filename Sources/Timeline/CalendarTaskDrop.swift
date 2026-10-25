@@ -38,10 +38,18 @@ final class TaskLanding: ObservableObject {
     @Published private(set) var mark: Mark?
 
     func land(_ id: UUID, _ change: () -> Void) {
+        _ = landing(change)
+        mark = Mark(id: id, time: Date())
+    }
+
+    /// 改动返回落点（比如新建的任务），结果不在动画里排版，再让落点闪一下。
+    @discardableResult
+    func landing<T>(_ change: () -> T, at id: (T) -> UUID? = { _ in nil }) -> T {
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
-        withTransaction(transaction, change)
-        mark = Mark(id: id, time: Date())
+        let result = withTransaction(transaction, change)
+        if let target = id(result) { mark = Mark(id: target, time: Date()) }
+        return result
     }
 
     /// 跨日期移动时这一行会在新的分组里重新创建，出现时看一下是不是刚落下的那一项。
@@ -54,13 +62,14 @@ final class TaskLanding: ObservableObject {
 /// 落点高亮：只是一层底色和细边的透明度变化，不牵动布局。
 struct TaskLandingFlash: View {
     let id: UUID
+    var radius: CGFloat = 8
     @ObservedObject private var landing = TaskLanding.shared
     @State private var glow = 0.0
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
             .fill(Palette.accent.opacity(0.14 * glow))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
                 .strokeBorder(Palette.accent.opacity(0.55 * glow), lineWidth: Metrics.hairline))
             .allowsHitTesting(false)
             .accessibilityHidden(true)

@@ -22,8 +22,12 @@ final class BoardNavigation: ObservableObject {
         return editorSessions[board.id]!
     }
 
+    /// 当前工作板是在看源码还是预览；换工作板回到预览。
+    @Published var sourceMode = false
+
     func select(_ id: UUID) {
         guard selection != id else { return }
+        if sourceMode { sourceMode = false }
         // The editor already debounces and flushes every change. Switching boards should
         // update the lightweight SwiftUI selection immediately instead of waiting for an
         // asynchronous WebKit round trip; the cached session keeps its caret and scroll.
@@ -163,33 +167,26 @@ struct BoardWorkspaceView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "list.bullet.rectangle").foregroundStyle(Palette.accent)
-                Text("工作板").font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Button { choosing.toggle() } label: { Label("切换", systemImage: "arrow.left.arrow.right") }
-                    .popover(isPresented: $choosing) {
-                        BoardChooser(store: store, navigation: navigation, close: { choosing = false })
-                    }
-                Button(action: close) { Image(systemName: "xmark") }.accessibilityLabel("关闭工作板")
-            }
-            .buttonStyle(HitAreaButtonStyle(compact: true))
-            .font(.system(size: 12)).foregroundStyle(Palette.muted)
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            Divider()
-            if !navigation.favoriteBoards(in: store).isEmpty {
-                favoritesBar
-                Divider()
-            }
             if let board {
-                BoardContentView(store: store, navigation: navigation, board: board).id(board.id)
+                // 标题栏和常用一栏在切换时保留（常用一栏的横向滚动位置不丢），只有编辑区按工作板重建。
+                BoardContentView(store: store, navigation: navigation, board: board,
+                                 choose: { choosing.toggle() }, close: close,
+                                 favorites: navigation.favoriteBoards(in: store).isEmpty ? nil : AnyView(favoritesBar))
             } else {
+                HStack {
+                    Spacer()
+                    Button(action: close) { Image(systemName: "xmark") }
+                        .buttonStyle(HitAreaButtonStyle(compact: true)).foregroundStyle(Palette.muted)
+                        .help("关闭工作板").accessibilityLabel("关闭工作板")
+                }
+                .padding(.horizontal, 10).padding(.top, 8)
                 VStack(spacing: 14) {
                     Image(systemName: "list.bullet.rectangle").font(.system(size: 34)).foregroundStyle(Palette.accent)
                     Text("把内容和资料放在眼前").font(.headline)
                     Text("选择一个待办或标签，整理议程、阅读目标与参考链接。")
                         .font(.system(size: 12)).foregroundStyle(Palette.muted).multilineTextAlignment(.center)
                     Button("选择待办或标签") { choosing = true }.buttonStyle(.borderedProminent)
+                        .keyboardShortcut("k", modifiers: .command)
                 }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             if let error = store.errorMessage {
@@ -199,8 +196,21 @@ struct BoardWorkspaceView: View {
                 }.padding(10)
             }
         }
+        .overlay {
+            if choosing {
+                ZStack(alignment: .top) {
+                    // 点空白处关闭；底下一层很淡的遮罩，让切换器从内容里浮出来。
+                    Color.black.opacity(0.12).contentShape(Rectangle()).onTapGesture { choosing = false }
+                    BoardSwitcher(store: store, navigation: navigation, close: { choosing = false })
+                        .padding(.horizontal, 10).padding(.top, 44)
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(Motion.reduced ? nil : .easeOut(duration: 0.12), value: choosing)
         .background(Palette.background).foregroundStyle(Palette.ink).tint(Palette.accent)
         .ignoresSafeArea(.container, edges: .top)
+        .onAppear { if !Headless.active { BoardLiveEditorSession.prepareSpare() } }
     }
 
     private var favoritesBar: some View {
@@ -216,86 +226,8 @@ struct BoardWorkspaceView: View {
                   let index = navigation.favoriteBoardIDs.firstIndex(of: visible[destination].id) else { return }
             navigation.moveFavorite(id, to: index)
         }, remove: { navigation.toggleFavorite($0) })
-        .frame(height: 38)
+        .frame(height: 34)
         .accessibilityLabel("常用工作板")
-    }
-}
-
-private struct BoardChooser: View {
-    @ObservedObject var store: JournalStore
-    @ObservedObject var navigation: BoardNavigation
-    let close: () -> Void
-    @State private var query = ""
-
-    private func matches(_ title: String) -> Bool { query.isEmpty || title.localizedStandardContains(query) }
-    private func select(_ owner: BoardOwner) {
-        NSApp.keyWindow?.makeFirstResponder(nil)
-        store.save()
-        guard let board = store.ensureBoard(for: owner) else { return }
-        navigation.select(board.id)
-        close()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField("搜索待办、标签和工作板", text: $query).textFieldStyle(.roundedBorder)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
-                    let favorites = navigation.favoriteBoards(in: store).filter { matches(store.boardTitle($0)) }
-                    if !favorites.isEmpty {
-                        Text("常用工作板").font(.caption).foregroundStyle(Palette.muted)
-                        ForEach(favorites) { board in boardRow(board) }
-                        Divider()
-                    }
-                    let remaining = store.boards.filter { !navigation.isFavorite($0.id) && matches(store.boardTitle($0)) }
-                    if !remaining.isEmpty {
-                        Text("已有工作板").font(.caption).foregroundStyle(Palette.muted)
-                        ForEach(remaining.sorted { $0.updatedAt > $1.updatedAt }) { board in boardRow(board) }
-                        Divider()
-                    }
-                    Text("待办").font(.caption).foregroundStyle(Palette.muted)
-                    ForEach(store.sortedTasks().filter { !$0.task.completed && matches($0.task.title) }) { task in
-                        Button { select(.task(task.id)) } label: {
-                            Label(String(TaskText.rendered(task.task.title).characters), systemImage: "circle").lineLimit(2)
-                                .padding(.vertical, 5).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                        }.disabled(store.isReadOnly && store.board(for: .task(task.id)) == nil)
-                    }
-                    Divider()
-                    Text("标签").font(.caption).foregroundStyle(Palette.muted)
-                    ForEach(store.allTags().filter { matches($0.name) }) { tag in
-                        Button { select(.tag(tag.name)) } label: {
-                            Label(tag.name, systemImage: "tag").padding(.vertical, 5)
-                                .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                        }.disabled(store.isReadOnly && store.board(for: .tag(tag.name)) == nil)
-                    }
-                }.buttonStyle(.plain)
-            }.frame(height: 340)
-        }.padding(14).frame(width: 310).foregroundStyle(Palette.ink).background(Palette.background)
-    }
-
-    private func boardRow(_ board: Board) -> some View {
-        HStack(spacing: 8) {
-            Button {
-                NSApp.keyWindow?.makeFirstResponder(nil)
-                store.save()
-                navigation.select(board.id)
-                close()
-            } label: {
-                HStack {
-                    Image(systemName: store.isBoardArchived(board) ? "archivebox" : "list.bullet.rectangle")
-                    Text(store.boardTitle(board)).lineLimit(2)
-                    Spacer()
-                    if navigation.selection == board.id { Image(systemName: "checkmark") }
-                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }
-            Button { navigation.toggleFavorite(board.id) } label: {
-                Image(systemName: navigation.isFavorite(board.id) ? "star.fill" : "star")
-                    .foregroundStyle(navigation.isFavorite(board.id) ? Palette.accent : Palette.muted)
-                    .frame(width: 24, height: 24)
-            }
-            .help(navigation.isFavorite(board.id) ? "取消常用固定" : "固定到常用")
-            .accessibilityLabel(navigation.isFavorite(board.id) ? "取消常用固定" : "固定到常用")
-        }.padding(.vertical, 4)
     }
 }
 
@@ -303,16 +235,22 @@ struct BoardContentView: View {
     @ObservedObject var store: JournalStore
     @ObservedObject var navigation: BoardNavigation
     let board: Board
-    @State private var editing: Bool
-    @StateObject private var liveEditor: BoardLiveEditorSession
+    var choose: () -> Void = {}
+    var close: () -> Void = {}
+    /// 常用工作板一栏，排在标题下面。
+    var favorites: AnyView?
 
-    init(store: JournalStore, navigation: BoardNavigation, board: Board) {
+    init(store: JournalStore, navigation: BoardNavigation, board: Board,
+         choose: @escaping () -> Void = {}, close: @escaping () -> Void = {}, favorites: AnyView? = nil) {
         self.store = store
         self.navigation = navigation
         self.board = board
-        _editing = State(initialValue: false)
-        _liveEditor = StateObject(wrappedValue: navigation.editorSession(for: board, store: store))
+        self.choose = choose
+        self.close = close
+        self.favorites = favorites
     }
+
+    private var editing: Bool { navigation.sourceMode }
 
     private var markdown: Binding<String> {
         Binding(get: { store.boards.first { $0.id == board.id }?.markdown ?? board.markdown },
@@ -320,12 +258,13 @@ struct BoardContentView: View {
     }
 
     private func setEditing(_ value: Bool) {
-        editing = value
-        liveEditor.setSourceMode(value)
+        navigation.sourceMode = value
+        navigation.editorSession(for: board, store: store).setSourceMode(value)
     }
 
     private func insertTemplate(_ template: BoardMarkdownTemplate) {
         setEditing(true)
+        let liveEditor = navigation.editorSession(for: board, store: store)
         if liveEditor.error == nil { liveEditor.insertTemplate(template); return }
         if let editor = NSApp.keyWindow?.firstResponder as? NSTextView,
            editor.isEditable {
@@ -347,86 +286,100 @@ struct BoardContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(store.boardTitle(board)).font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Palette.ink)
-                        .lineLimit(2)
-                        .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                    if case .task(let id) = board.owner, store.locate(id) != nil {
-                        Button { AppRouter.openNotes(id) } label: { Image(systemName: "note.text") }
-                            .help("笔记").accessibilityLabel("笔记")
-                    }
-                    Button { setEditing(!editing) } label: {
-                        Image(systemName: editing ? "eye" : "chevron.left.forwardslash.chevron.right")
-                    }
-                    .help(editing ? "预览" : "编辑 Markdown 源码")
-                    .accessibilityLabel(editing ? "预览" : "编辑 Markdown 源码")
-                    .disabled(store.isReadOnly)
-                    Button { navigation.toggleFavorite(board.id) } label: {
-                        Image(systemName: navigation.isFavorite(board.id) ? "star.fill" : "star")
-                            .foregroundStyle(navigation.isFavorite(board.id) ? Palette.accent : Palette.muted)
-                    }
-                    .help(navigation.isFavorite(board.id) ? "取消常用固定" : "固定到常用")
-                    .accessibilityLabel(navigation.isFavorite(board.id) ? "取消常用固定" : "固定到常用")
-                }.font(.system(size: 11)).foregroundStyle(Palette.muted)
-                    .buttonStyle(HitAreaButtonStyle(compact: true))
-                if store.isBoardArchived(board) {
-                    Label("已归档 · 内容保留", systemImage: "archivebox")
-                        .font(.system(size: 10)).foregroundStyle(Palette.muted)
-                } else if case .task(let id) = board.owner, store.locate(id)?.task.completed == true {
-                    Label("任务已结束", systemImage: "checkmark.circle")
-                        .font(.system(size: 10)).foregroundStyle(Palette.muted)
-                }
-            }.padding(.horizontal, 12).padding(.vertical, 8)
+            header
+            if let favorites { favorites.padding(.horizontal, 4) }
             Divider()
-            if liveEditor.error != nil {
-                if editing {
-                    BoardMarkdownEditor(text: markdown, preview: { setEditing(false) }).padding(10)
-                } else {
-                    ScrollView { BoardMarkdownPreview(store: store, board: board).padding(12) }
+            BoardEditorArea(store: store, navigation: navigation, board: board, markdown: markdown,
+                            preview: { setEditing(false) })
+                .id(board.id)
+            relatedBoards
+        }
+    }
+
+    /// 一行标题栏：左边是当前工作板（点它切换），右边是一组同样大小的图标按钮。
+    private var header: some View {
+        HStack(spacing: 2) {
+            Button(action: choose) {
+                HStack(spacing: 7) {
+                    Image(systemName: ownerSymbol).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.accent)
+                        .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(store.boardTitle(board)).font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.ink)
+                            .lineLimit(1).truncationMode(.tail)
+                        Text(subtitle).font(.system(size: 10)).foregroundStyle(Palette.muted).lineLimit(1)
+                    }
+                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(Palette.muted)
                 }
-            } else {
-                BoardLiveEditor(session: liveEditor, sourceMode: editing)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                relatedBoards.padding(.horizontal, 14)
-                if let error = liveEditor.error {
-                    Text(error).font(.caption).foregroundStyle(Palette.deadline).padding(8)
-                }
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .contentShape(Rectangle())
             }
-            Divider()
-            HStack(spacing: 6) {
+            .buttonStyle(HitAreaButtonStyle(compact: true, pressedScale: 0.98))
+            .keyboardShortcut("k", modifiers: .command)
+            .help("切换工作板 · ⌘K")
+            .accessibilityLabel(AppLocalizedFormat("切换工作板，当前 %@", store.boardTitle(board)))
+            .layoutPriority(1)
+            Spacer(minLength: 6)
+            Group {
                 if !store.isReadOnly {
-                    templateButton("折叠内容", systemImage: "chevron.down.square", template: .disclosure)
-                    templateButton("论文阅读", systemImage: "book.closed", template: .paper)
-                    templateButton("会议议程", systemImage: "list.bullet", template: .meeting)
-                } else {
-                    Spacer()
-                    Text("只读").font(.system(size: 10)).foregroundStyle(Palette.muted)
+                    Menu {
+                        templateItem("折叠内容", systemImage: "chevron.down.square", template: .disclosure)
+                        templateItem("论文阅读", systemImage: "book.closed", template: .paper)
+                        templateItem("会议议程", systemImage: "list.bullet", template: .meeting)
+                    } label: {
+                        Image(systemName: "plus").frame(width: 26, height: 24).contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .tint(Palette.muted).foregroundStyle(Palette.muted)
+                    .help("插入模板").accessibilityLabel("插入模板")
+                    headerButton(editing ? "eye" : "chevron.left.forwardslash.chevron.right",
+                                 editing ? "预览" : "编辑 Markdown 源码", active: editing) { setEditing(!editing) }
                 }
-            }.padding(.horizontal, 12).padding(.vertical, 8).background(Palette.card)
-        }
-        .onDisappear { liveEditor.flush() }
-    }
-
-    private func templateButton(_ title: LocalizedStringKey, systemImage: String,
-                                template: BoardMarkdownTemplate) -> some View {
-        Button { insertTemplate(template) } label: {
-            ViewThatFits(in: .horizontal) {
-                Label(title, systemImage: systemImage).fixedSize()
-                Text(title).fixedSize()
+                if case .task(let id) = board.owner, store.locate(id) != nil {
+                    headerButton("note.text", "笔记") { AppRouter.openNotes(id) }
+                }
+                headerButton(navigation.isFavorite(board.id) ? "star.fill" : "star",
+                             navigation.isFavorite(board.id) ? "取消常用固定" : "固定到常用",
+                             active: navigation.isFavorite(board.id)) { navigation.toggleFavorite(board.id) }
+                Divider().frame(height: 14).padding(.horizontal, 3)
+                headerButton("xmark", "关闭工作板", action: close)
             }
-            .font(.system(size: 11, weight: .medium))
-            .frame(maxWidth: .infinity, minHeight: 24)
-            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .font(.system(size: 12))
         }
-        .buttonStyle(HitAreaButtonStyle(compact: true, pressedScale: 0.98))
-        .foregroundStyle(Palette.muted)
-        .background(Palette.background, in: RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Palette.line.opacity(0.7), lineWidth: 0.5))
-        .accessibilityLabel(title)
+        .padding(.leading, 6).padding(.trailing, 8).padding(.top, 6).padding(.bottom, 4)
     }
 
+    private var ownerSymbol: String {
+        if store.isBoardArchived(board) { return "archivebox" }
+        if case .tag = board.owner { return "number" }
+        return "list.bullet.rectangle"
+    }
+
+    private var subtitle: String {
+        if store.isReadOnly { return AppLocalized("只读") }
+        if store.isBoardArchived(board) { return AppLocalized("已归档 · 内容保留") }
+        switch board.owner {
+        case .task(let id):
+            guard let task = store.locate(id) else { return AppLocalized("待办") }
+            if task.task.completed { return AppLocalized("任务已结束") }
+            if let due = task.task.dueDate { return AppLocalizedFormat("待办 · 截止 %@", due.relativeLabel) }
+            return AppLocalized("待办")
+        case .tag(let tag):
+            return AppLocalizedFormat("标签 · %lld 个待办", store.tasks(taggedWith: tag).count)
+        }
+    }
+
+    private func headerButton(_ symbol: String, _ title: String, active: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol).frame(width: 26, height: 24).contentShape(Rectangle()) }
+            .buttonStyle(HitAreaButtonStyle(compact: true))
+            .foregroundStyle(active ? Palette.accent : Palette.muted)
+            .help(LocalizedStringKey(title)).accessibilityLabel(LocalizedStringKey(title))
+    }
+
+    private func templateItem(_ title: LocalizedStringKey, systemImage: String, template: BoardMarkdownTemplate) -> some View {
+        Button { insertTemplate(template) } label: { Label(title, systemImage: systemImage) }
+    }
+
+    /// 标签工作板底部：这个标签下各待办的工作板，排成一行可以横向滚动的小标签。
     @ViewBuilder private var relatedBoards: some View {
         if case .tag(let tag) = board.owner, !board.archived {
             let taskIDs = Set(store.tasks(taggedWith: tag).map(\.id))
@@ -435,19 +388,64 @@ struct BoardContentView: View {
                 return taskIDs.contains(id)
             }
             if !related.isEmpty {
-                Divider().padding(.top, 12)
-                Text("标签下的工作板").font(.caption).foregroundStyle(Palette.muted)
-                ForEach(related) { candidate in
-                    Button {
-                        NSApp.keyWindow?.makeFirstResponder(nil)
-                        navigation.select(candidate.id)
-                    } label: {
-                        Label(store.boardTitle(candidate), systemImage: "list.bullet.rectangle")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }.buttonStyle(.plain)
+                Divider()
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        Text("标签下的工作板").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.muted)
+                        ForEach(related) { candidate in
+                            Button {
+                                NSApp.keyWindow?.makeFirstResponder(nil)
+                                navigation.select(candidate.id)
+                            } label: {
+                                Label(store.boardTitle(candidate), systemImage: "list.bullet.rectangle")
+                                    .font(.system(size: 11)).lineLimit(1)
+                                    .padding(.horizontal, 8).frame(height: 22)
+                                    .background(Palette.soft.opacity(0.6), in: Capsule())
+                                    .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain).foregroundStyle(Palette.ink)
+                            .help("打开这个待办的工作板")
+                        }
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 6)
                 }
             }
         }
+    }
+}
+
+/// 一个工作板的编辑区：每个工作板一份，持有它的编辑器会话。
+private struct BoardEditorArea: View {
+    @ObservedObject var store: JournalStore
+    @ObservedObject var navigation: BoardNavigation
+    let board: Board
+    let markdown: Binding<String>
+    let preview: () -> Void
+    @StateObject private var liveEditor: BoardLiveEditorSession
+
+    init(store: JournalStore, navigation: BoardNavigation, board: Board, markdown: Binding<String>, preview: @escaping () -> Void) {
+        self.store = store
+        self.navigation = navigation
+        self.board = board
+        self.markdown = markdown
+        self.preview = preview
+        _liveEditor = StateObject(wrappedValue: navigation.editorSession(for: board, store: store))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if liveEditor.error != nil {
+                if navigation.sourceMode {
+                    BoardMarkdownEditor(text: markdown, preview: preview).padding(10)
+                } else {
+                    ScrollView { BoardMarkdownPreview(store: store, board: board).padding(12) }
+                }
+            } else {
+                BoardLiveEditor(session: liveEditor, sourceMode: navigation.sourceMode)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .onDisappear { liveEditor.flush() }
     }
 }
 

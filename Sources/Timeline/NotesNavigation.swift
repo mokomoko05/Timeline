@@ -29,6 +29,8 @@ final class NotesNavigation: ObservableObject {
     @Published var chapterView: Bool { didSet { if chapterView != oldValue { defaults?.set(chapterView, forKey: prefix + ".chapters") } } }
     /// 标签页右侧的目录（章节列表）显示与否。
     @Published var showOutline: Bool { didSet { if showOutline != oldValue { defaults?.set(showOutline, forKey: prefix + ".outline") } } }
+    /// 目录列章节还是时间线（只有按待办分章的标签页可以选）。
+    @Published var outlineMode: NotesOutlineMode { didSet { if outlineMode != oldValue { defaults?.set(outlineMode.rawValue, forKey: prefix + ".outlineMode") } } }
     /// 折叠起来的章节（只在应用运行期间保留）：`标签|章节` 的键。
     /// 待办章节默认折叠，只记被展开的；「直接记录」章节默认展开，只记被折叠的。（只在应用运行期间保留）
     @Published var collapsed: Set<String> = []
@@ -77,6 +79,7 @@ final class NotesNavigation: ObservableObject {
         query = defaults?.string(forKey: prefix + ".query") ?? ""
         chapterView = defaults?.object(forKey: prefix + ".chapters") as? Bool ?? true
         showOutline = defaults?.object(forKey: prefix + ".outline") as? Bool ?? true
+        outlineMode = defaults?.string(forKey: prefix + ".outlineMode").flatMap(NotesOutlineMode.init(rawValue:)) ?? .chapters
     }
 
     func open(task id: UUID) {

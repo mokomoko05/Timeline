@@ -173,6 +173,47 @@ final class DesignPreviewTests: XCTestCase {
     }
 }
 
+extension DesignPreviewTests {
+    func testRenderNotebookOutlineAndBoard() throws {
+        let store = JournalStore(directory: directory)
+        let calendar = JournalDates.calendar
+        let today = calendar.startOfDay(for: Date())
+        // 一个没有任何待办、只有直接记录的笔记本，跨越两个月。
+        for (offset, texts) in [(-34, ["换个角度看问题：先写结论再找证据"]), (-6, ["周末读到的一段话", "可以试试把卡片按主题串起来"]),
+                                (-2, ["## 草图\n\n- 首页只放三件事\n- 次要信息折叠"]), (0, ["今天的灵感：日历上的任务顺序应该跟清单一致"])] {
+            let day = calendar.date(byAdding: .day, value: offset, to: today)!
+            for (index, text) in texts.enumerated() {
+                _ = try store.quickLogEntry(text, linkDefault: false, tags: ["灵感"], on: day,
+                                            now: day.addingTimeInterval(TimeInterval(9 * 3600 + index * 1800)))
+            }
+        }
+        for dark in [true, false] {
+            let nav = NotesNavigation()
+            nav.open(tag: "灵感")
+            try render("notebook-outline", size: NSSize(width: 1180, height: 680), dark: dark,
+                       NotesView(store: store, nav: nav, reveal: { _ in }, openDay: { _ in }))
+            let narrow = NotesNavigation()
+            narrow.open(tag: "灵感")
+            narrow.chapterView = false
+            try render("notebook-narrow", size: NSSize(width: 760, height: 560), dark: dark,
+                       NotesView(store: store, nav: narrow, reveal: { _ in }, openDay: { _ in }))
+            let suite = "design-board-\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: suite)!
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let navigation = BoardNavigation(defaults: defaults)
+            if let task = store.sortedTasks().first, let board = store.ensureBoard(for: .task(task.id)) {
+                navigation.select(board.id)
+                navigation.toggleFavorite(board.id)
+            }
+            if let tagBoard = store.ensureBoard(for: .tag("阅读")) { navigation.toggleFavorite(tagBoard.id) }
+            try render("board", size: NSSize(width: 410, height: 300), dark: dark,
+                       BoardWorkspaceView(store: store, navigation: navigation))
+            try render("board-switcher", size: NSSize(width: 410, height: 420), dark: dark,
+                       BoardSwitcher(store: store, navigation: navigation, close: {}).padding(10).background(Palette.background))
+        }
+    }
+}
+
 /// 只读工作板的选区：不排窗口到屏幕上，检查鼠标按下不再被 CodeMirror 接管、复制取原生选区。
 @MainActor
 final class BoardBrowseSelectionProbe: XCTestCase {

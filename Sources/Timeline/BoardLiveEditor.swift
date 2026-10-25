@@ -70,23 +70,70 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         ready = false
         lastConfiguration = nil
         sourceNeedsSynchronization = true
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = Self.dataStore
-        configuration.userContentController.add(WeakBoardScriptHandler(self), name: "boardEditor")
-        let view = WKWebView(frame: .zero, configuration: configuration)
-        view.navigationDelegate = self
-        view.setValue(false, forKey: "drawsBackground")
-        view.setAccessibilityLabel(AppLocalized("工作板 Markdown 内容"))
-        webView = view
         Self.active = self
+        // 切到一个没有缓存编辑器的工作板时，接手预先加载好的空编辑器：省掉网页加载（约 100ms 的空白）。
+        if let spare = Self.takeSpare() {
+            spare.handler.session = self
+            spare.view.navigationDelegate = self
+            webView = spare.view
+            if spare.handler.pendingReady { ready = true }
+            return spare.view
+        }
+        let handler = WeakBoardScriptHandler()
+        handler.session = self
+        guard let view = Self.makeEditorView(handler: handler) else {
+            error = AppLocalized("编辑器加载失败，请重新打开工作板。")
+            let view = WKWebView(frame: .zero)
+            webView = view
+            return view
+        }
+        view.navigationDelegate = self
+        webView = view
+        return view
+    }
+
+    private static func makeEditorView(handler: WeakBoardScriptHandler) -> WKWebView? {
         let installed = Bundle.main.resourceURL?.appendingPathComponent("Timeline_Timeline.bundle")
         let resources = installed.flatMap(Bundle.init(url:)) ?? Bundle.module
-        if let directory = resources.url(forResource: "EditorAssets", withExtension: nil) {
-            view.loadFileURL(directory.appendingPathComponent("index.html"), allowingReadAccessTo: directory)
-        } else {
-            error = AppLocalized("编辑器加载失败，请重新打开工作板。")
-        }
+        guard let directory = resources.url(forResource: "EditorAssets", withExtension: nil) else { return nil }
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = dataStore
+        configuration.userContentController.add(handler, name: "boardEditor")
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        view.setValue(false, forKey: "drawsBackground")
+        view.setAccessibilityLabel(AppLocalized("工作板 Markdown 内容"))
+        view.loadFileURL(directory.appendingPathComponent("index.html"), allowingReadAccessTo: directory)
         return view
+    }
+
+    // MARK: 预加载
+
+    private static var spare: (view: WKWebView, handler: WeakBoardScriptHandler)?
+    private static let spareWatcher = SpareEditorWatcher()
+    private static var spareTask: Task<Void, Never>?
+
+    /// 空闲时预先加载一个编辑器，留给下一次切换到新工作板时用。已有一个就不再建。
+    static func prepareSpare(after delay: Duration = .milliseconds(600)) {
+        guard spare == nil, spareTask == nil else { return }
+        spareTask = Task { @MainActor in
+            try? await Task.sleep(for: delay)
+            spareTask = nil
+            let handler = WeakBoardScriptHandler()
+            guard spare == nil, let view = makeEditorView(handler: handler) else { return }
+            view.navigationDelegate = spareWatcher
+            spare = (view, handler)
+        }
+    }
+
+    private static func takeSpare() -> (view: WKWebView, handler: WeakBoardScriptHandler)? {
+        guard let taken = spare else { return nil }
+        spare = nil
+        prepareSpare()
+        return taken
+    }
+
+    fileprivate static func discardSpare(_ view: WKWebView) {
+        if spare?.view === view { spare = nil }
     }
 
     func configure(fontSize: CGFloat, dark: Bool, sourceMode: Bool = false, previewOnly: Bool = false) {
@@ -224,10 +271,26 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     }
 }
 
-private final class WeakBoardScriptHandler: NSObject, WKScriptMessageHandler {
-    private weak var session: BoardLiveEditorSession?
-    init(_ session: BoardLiveEditorSession) { self.session = session }
+/// 脚本消息转给编辑器会话；预加载的编辑器还没有主人时，只记下它已经就绪。
+final class WeakBoardScriptHandler: NSObject, WKScriptMessageHandler {
+    weak var session: BoardLiveEditorSession?
+    private(set) var pendingReady = false
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        session?.userContentController(userContentController, didReceive: message)
+        if let session {
+            session.userContentController(userContentController, didReceive: message)
+        } else if (message.body as? [String: Any])?["kind"] as? String == "ready" {
+            pendingReady = true
+        }
+    }
+}
+
+/// 预加载编辑器的网页进程退出了，就丢掉它，下次重新建。
+private final class SpareEditorWatcher: NSObject, WKNavigationDelegate {
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        MainActor.assumeIsolated { BoardLiveEditorSession.discardSpare(webView) }
+    }
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        decisionHandler(navigationAction.request.url?.isFileURL == true ? .allow : .cancel)
     }
 }

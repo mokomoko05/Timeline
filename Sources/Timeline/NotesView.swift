@@ -29,6 +29,9 @@ struct NotesView: View {
     @State private var noteEditFocused = false
     @State private var focused = false
     @State private var error: String?
+    /// 右侧笔记区的宽度：够宽时目录是一栏，窄时浮在内容上面。
+    @State private var detailWidth: CGFloat = 1000
+    @State private var floatingOutline = false
     /// 标签的右键操作：改名 / 合并、删除（内容保留）。
     @State private var renamingTag: String?
     @State private var renameText = ""
@@ -103,6 +106,10 @@ struct NotesView: View {
             sidebar.frame(width: 250)
             Divider()
             detail.frame(maxWidth: .infinity)
+                .background(GeometryReader { proxy in
+                    Color.clear.onAppear { detailWidth = proxy.size.width }
+                        .onChange(of: proxy.size.width) { detailWidth = $0 }
+                })
         }
         .id(themes.themeID + themes.appearance.rawValue)
         .frame(minWidth: 640, minHeight: 420)
@@ -342,26 +349,43 @@ struct NotesView: View {
                 header(topic, notes: notes)
                 Divider()
                 ScrollViewReader { proxy in
-                    ScrollView {
-                        NotesStack(lazy: notes.count > Self.lazyThreshold) {
-                            BoardNotesSection(store: store, owner: .task(id)).id("board-start")
-                            if notes.isEmpty { NoteThreadEmpty(text: topic.deleted ? "这个任务没有留下笔记" : "还没有笔记 · 在下方写下第一条") }
-                            ForEach(Dictionary(grouping: notes, by: \.key).sorted { $0.key < $1.key }, id: \.key) { group in
-                                dayHeader(group.key, date: group.value[0].date, count: group.value.count)
-                                threadedRows(group.value)
+                    let months = NotesTimelineIndex.months(notes)
+                    HStack(spacing: 0) {
+                        ScrollView {
+                            NotesStack(lazy: notes.count > Self.lazyThreshold) {
+                                Color.clear.frame(height: 1).id("top").notesScrollEdge(.top)
+                                BoardNotesSection(store: store, owner: .task(id)).id("board-start")
+                                if notes.isEmpty { NoteThreadEmpty(text: topic.deleted ? "这个任务没有留下笔记" : "还没有笔记 · 在下方写下第一条") }
+                                ForEach(Dictionary(grouping: notes, by: \.key).sorted { $0.key < $1.key }, id: \.key) { group in
+                                    dayHeader(group.key, date: group.value[0].date, count: group.value.count)
+                                    threadedRows(group.value)
+                                }
+                                Color.clear.frame(height: 1).id("end").notesScrollEdge(.bottom)
                             }
-                            Color.clear.frame(height: 1).id("end")
-                        }.padding(20)
-                    }
-                    .contentShape(Rectangle())
-                    .onAppear {
-                        if store.board(for: .task(id))?.hasContent == true { proxy.scrollTo("board-start", anchor: .top) }
-                        else { proxy.scrollTo("end", anchor: .bottom) }
-                    }
-                    .onChange(of: revealNoteID) { reveal($0, proxy: proxy) }
-                    .onChange(of: selection) { _ in
-                        if store.board(for: .task(id))?.hasContent == true { proxy.scrollTo("board-start", anchor: .top) }
-                        else { proxy.scrollTo("end", anchor: .bottom) }
+                            .readingColumn()
+                        }
+                        .contentShape(Rectangle())
+                        .notesScrollButtons { scrollToEdge($0, proxy: proxy) }
+                        .onAppear {
+                            if store.board(for: .task(id))?.hasContent == true { proxy.scrollTo("board-start", anchor: .top) }
+                            else { proxy.scrollTo("end", anchor: .bottom) }
+                        }
+                        .onChange(of: revealNoteID) { reveal($0, proxy: proxy) }
+                        .onChange(of: selection) { _ in
+                            floatingOutline = false
+                            if store.board(for: .task(id))?.hasContent == true { proxy.scrollTo("board-start", anchor: .top) }
+                            else { proxy.scrollTo("end", anchor: .bottom) }
+                        }
+                        .overlay(alignment: .topTrailing) {
+                            if floatingOutline && !outlineFits && taskOutlineAvailable(months) {
+                                timelineOutline(months, floating: true) { day in jumpToDay(day, proxy: proxy) }
+                                    .padding(10)
+                            }
+                        }
+                        if outlineFits && nav.showOutline && taskOutlineAvailable(months) {
+                            Divider()
+                            timelineOutline(months, floating: false) { day in jumpToDay(day, proxy: proxy) }
+                        }
                     }
                 }
                 Divider()
@@ -440,8 +464,57 @@ struct NotesView: View {
                 NSPasteboard.general.setString(Self.markdown(topic, notes: notes), forType: .string)
                 error = "已复制为 Markdown"
             }
+            if taskOutlineAvailable(NotesTimelineIndex.months(notes)) { outlineToggle }
         }
         .font(.system(size: 12))
+    }
+
+    /// 单个待办的笔记跨了两天以上才有必要列目录。
+    private func taskOutlineAvailable(_ months: [NotesTimelineIndex.Month]) -> Bool {
+        months.reduce(0) { $0 + $1.days.count } >= 2
+    }
+
+    /// 右侧放得下一栏目录（210pt），笔记正文也还留得够宽。
+    private var outlineFits: Bool { detailWidth >= 640 }
+
+    /// 目录按钮：宽窗口里开关右侧那一栏（记住选择），窄窗口里临时浮出一块。
+    private var outlineToggle: some View {
+        let shown = outlineFits ? nav.showOutline : floatingOutline
+        return iconAction("sidebar.right", shown ? "隐藏目录" : "显示目录", active: shown) {
+            if outlineFits { nav.showOutline.toggle() } else { floatingOutline.toggle() }
+        }
+    }
+
+    private func timelineOutline(_ months: [NotesTimelineIndex.Month], floating: Bool,
+                                 jump: @escaping (NotesTimelineIndex.Day) -> Void) -> some View {
+        NotesOutlinePanel(months: months, chapterCount: nil, mode: .constant(.timeline), floating: floating,
+                          jump: { day in jump(day); if floating { floatingOutline = false } },
+                          close: { floatingOutline = false }) { EmptyView() }
+    }
+
+    private func scrollToEdge(_ edge: NotesScrollEdge, proxy: ScrollViewProxy) {
+        // 定位操作直接落到目标位置：长列表的滚动动画会拖沓，懒加载时还会一路排版。
+        proxy.scrollTo(edge == .top ? "top" : "end", anchor: edge == .top ? .top : .bottom)
+    }
+
+    /// 跳到某一天：按日期排列时落在那一天的日期结上；按待办分章时落在那一天最早的一条（所在章节折叠着就先展开）。
+    private func jumpToDay(_ day: NotesTimelineIndex.Day, proxy: ScrollViewProxy, tag: String? = nil, chapters: [NotebookChapter] = []) {
+        if tag != nil, chapterView, let tag {
+            guard let chapter = chapters.first(where: { $0.notes.contains { $0.key == day.key } }),
+                  let note = chapter.notes.first(where: { $0.key == day.key }) else { return }
+            if nav.isCollapsed(tag: tag, chapter: chapter.id) { nav.setCollapsed(false, tag: tag, chapter: chapter.id) }
+            DispatchQueue.main.async { proxy.scrollTo(note.id, anchor: .top) }
+            flash(note.id)
+        } else {
+            proxy.scrollTo(NotesTimelineIndex.dayAnchor(day.key), anchor: .top)
+        }
+    }
+
+    private func flash(_ id: UUID) {
+        flashNoteID = id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            if flashNoteID == id { withAnimation(.easeOut(duration: 0.4)) { flashNoteID = nil } }
+        }
     }
 
     private func iconAction(_ symbol: String, _ title: String, active: Bool = false, action: @escaping () -> Void) -> some View {
@@ -479,6 +552,7 @@ struct NotesView: View {
 
     private func dayHeader(_ key: String, date: Date, count: Int? = nil) -> some View {
         NoteDayKnot(date: date, key: key, count: count) { close(); openDay(date) }
+            .id(NotesTimelineIndex.dayAnchor(key))
     }
 
     /// 一组笔记穿在同一根线上：第一条以上、最后一条以下不再延伸。
@@ -602,9 +676,9 @@ struct NotesView: View {
         return (log.taskNumber.map { "#\($0) " } ?? "") + title
     }
 
-    /// 目录至少要有两章、窗口够宽才显示。
-    private func showsOutline(chapters: [NotebookChapter], width: CGFloat) -> Bool {
-        chapterView && nav.showOutline && chapters.count >= 2 && width >= 640
+    /// 按待办分章且至少两章时，目录可以列章节；否则（没有待办的笔记本、按日期看）只列时间线。
+    private func outlineChapterCount(_ chapters: [NotebookChapter]) -> Int? {
+        chapterView && chapters.count >= 2 ? chapters.count : nil
     }
 
     private func tagDetail(_ tag: String) -> some View {
@@ -616,30 +690,38 @@ struct NotesView: View {
         return VStack(spacing: 0) {
             tagHeader(tag, tasks: tasks, notes: notes)
             Divider()
-            GeometryReader { geometry in
-                ScrollViewReader { proxy in
-                    HStack(spacing: 0) {
-                        ScrollView {
-                            NotesStack(lazy: visibleNoteCount(chapters: chapters, notes: notes, tag: tag) > Self.lazyThreshold) {
-                                Color.clear.frame(height: 1).id("board-start")
-                                BoardNotesSection(store: store, owner: .tag(tag))
-                                if notes.isEmpty && tasks.isEmpty {
-                                    NoteThreadEmpty(text: "还没有笔记 · 在下方写下第一条")
-                                }
-                                if chapterView { chapterList(tag, chapters) } else { dateList(notes, tag: tag) }
-                                Color.clear.frame(height: 1).id("end")
-                            }.padding(20)
+            ScrollViewReader { proxy in
+                let months = NotesTimelineIndex.months(notes)
+                HStack(spacing: 0) {
+                    ScrollView {
+                        NotesStack(lazy: visibleNoteCount(chapters: chapters, notes: notes, tag: tag) > Self.lazyThreshold) {
+                            Color.clear.frame(height: 1).id("board-start").notesScrollEdge(.top)
+                            BoardNotesSection(store: store, owner: .tag(tag))
+                            if notes.isEmpty && tasks.isEmpty {
+                                NoteThreadEmpty(text: "还没有笔记 · 在下方写下第一条")
+                            }
+                            if chapterView { chapterList(tag, chapters) } else { dateList(notes, tag: tag) }
+                            Color.clear.frame(height: 1).id("end").notesScrollEdge(.bottom)
                         }
-                        .contentShape(Rectangle())
-                        // 按日期看从最新处打开；按待办分章是从上往下读的目录，从顶部打开。
-                        .onAppear { openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
-                        .onChange(of: tagSelection) { _ in openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
-                        .onChange(of: chapterView) { _ in openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
-                        .onChange(of: revealNoteID) { reveal($0, proxy: proxy) }
-                        if showsOutline(chapters: chapters, width: geometry.size.width) {
-                            Divider()
-                            outline(tag, chapters, proxy: proxy)
+                        .readingColumn()
+                    }
+                    .contentShape(Rectangle())
+                    .notesScrollButtons { edge in
+                        proxy.scrollTo(edge == .top ? "board-start" : "end", anchor: edge == .top ? .top : .bottom)
+                    }
+                    // 按日期看从最新处打开；按待办分章是从上往下读的目录，从顶部打开。
+                    .onAppear { openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
+                    .onChange(of: tagSelection) { _ in floatingOutline = false; openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
+                    .onChange(of: chapterView) { _ in openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
+                    .onChange(of: revealNoteID) { reveal($0, proxy: proxy) }
+                    .overlay(alignment: .topTrailing) {
+                        if floatingOutline && !outlineFits {
+                            outline(tag, chapters, months: months, floating: true, proxy: proxy).padding(10)
                         }
+                    }
+                    if outlineFits && nav.showOutline {
+                        Divider()
+                        outline(tag, chapters, months: months, floating: false, proxy: proxy)
                     }
                 }
             }
@@ -652,35 +734,42 @@ struct NotesView: View {
 
     static func chapterAnchor(_ chapter: NotebookChapter) -> String { "chapter-" + chapter.id }
 
-    /// 这个标签下的待办（章节）目录：点一项跳到那一章（折叠着就先展开）；内容很长时不用一路往下翻。
-    private func outline(_ tag: String, _ chapters: [NotebookChapter], proxy: ScrollViewProxy) -> some View {
+    /// 标签页的目录：按待办分章时可以列章节（点一项跳到那一章，折叠着就先展开），也可以列时间线；
+    /// 没有待办的笔记本、按日期看时只有时间线。
+    private func outline(_ tag: String, _ chapters: [NotebookChapter], months: [NotesTimelineIndex.Month],
+                         floating: Bool, proxy: ScrollViewProxy) -> some View {
         let allCollapsed = chapters.allSatisfy { nav.isCollapsed(tag: tag, chapter: $0.id) }
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("目录").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)
-                Text("\(chapters.count)").font(.system(size: 11)).monospacedDigit().foregroundStyle(Palette.muted)
-                Spacer()
-                Button(allCollapsed ? "全部展开" : "全部折叠") {
-                    for chapter in chapters { nav.setCollapsed(!allCollapsed, tag: tag, chapter: chapter.id) }
+        return NotesOutlinePanel(months: months, chapterCount: outlineChapterCount(chapters), mode: $nav.outlineMode,
+                                 floating: floating,
+                                 jump: { day in
+                                     jumpToDay(day, proxy: proxy, tag: tag, chapters: chapters)
+                                     if floating { floatingOutline = false }
+                                 },
+                                 close: { floatingOutline = false }) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Spacer()
+                    Button(allCollapsed ? "全部展开" : "全部折叠") {
+                        for chapter in chapters { nav.setCollapsed(!allCollapsed, tag: tag, chapter: chapter.id) }
+                    }
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Palette.accent)
+                    .help(allCollapsed ? "展开所有章节" : "折叠所有章节，只留标题")
                 }
-                .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Palette.accent)
-                .help(allCollapsed ? "展开所有章节" : "折叠所有章节，只留标题")
-            }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(chapters) { chapter in outlineRow(tag, chapter, proxy: proxy) }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(chapters) { chapter in
+                            outlineRow(tag, chapter, proxy: proxy) { if floating { floatingOutline = false } }
+                        }
+                    }
                 }
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 12)
-        .frame(width: 210)
-        .background(Palette.background)
-        .accessibilityElement(children: .contain).accessibilityLabel("章节目录")
     }
 
-    private func outlineRow(_ tag: String, _ chapter: NotebookChapter, proxy: ScrollViewProxy) -> some View {
+    private func outlineRow(_ tag: String, _ chapter: NotebookChapter, proxy: ScrollViewProxy, jumped: @escaping () -> Void) -> some View {
         let folded = nav.isCollapsed(tag: tag, chapter: chapter.id)
         return Button {
+            jumped()
             if folded { nav.setCollapsed(false, tag: tag, chapter: chapter.id) }
             let anchor = Self.chapterAnchor(chapter)
             // 刚展开时先等布局更新，再滚过去。
@@ -702,7 +791,7 @@ struct NotesView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).raisedOnHover(radius: 5)
         .help("跳到这一章")
         .accessibilityLabel("\(chapter.number.map { "#\($0) " } ?? "")\(chapter.title)，\(chapter.notes.count) 条笔记")
     }
@@ -769,11 +858,7 @@ struct NotesView: View {
                 }.pickerStyle(.segmented).labelsHidden().frame(width: 140)
                 Spacer().frame(width: 6)
                 iconAction("list.bullet.rectangle", "打开工作板") { BoardWindowController.shared.show(store: store, owner: .tag(tag)) }
-                if chapterView {
-                    iconAction("sidebar.right", nav.showOutline ? "隐藏右侧的章节目录" : "显示右侧的章节目录", active: nav.showOutline) {
-                        nav.showOutline.toggle()
-                    }
-                }
+                outlineToggle
                 iconAction("doc.on.doc", "复制为 Markdown") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(Self.markdown(tag: tag, tasks: tasks, notes: notes), forType: .string)
@@ -976,6 +1061,13 @@ struct CreateNotebookTagView: View {
             guard let tag = store.createTag(normalized) else { submitting = false; return }
             created(tag)
         }
+    }
+}
+
+extension View {
+    /// 笔记正文限制在适合阅读的宽度里，宽窗口时居中，不拉成很长的行。
+    func readingColumn() -> some View {
+        padding(20).frame(maxWidth: 820).frame(maxWidth: .infinity)
     }
 }
 

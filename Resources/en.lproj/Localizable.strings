@@ -868,3 +868,29 @@
 "隐藏" = "Hide";
 "隐藏 · %@" = "Hide · %@";
 "隐藏 · Esc" = "Hide · Esc";
+
+/* Board switcher, notes outline, calendar overflow */
+"切换工作板" = "Switch board";
+"切换工作板 · ⌘K" = "Switch board · ⌘K";
+"切换工作板，当前 %@" = "Switch board, current: %@";
+"预览" = "Preview";
+"编辑 Markdown 源码" = "Edit Markdown source";
+"只读" = "Read-only";
+"待办 · 截止 %@" = "Task · due %@";
+"标签 · %lld 个待办" = "Tag · %lld tasks";
+"打开这个待办的工作板" = "Open this task's board";
+"最近的工作板" = "Recent boards";
+"搜索工作板、待办和标签" = "Search boards, tasks and tags";
+"还没有可以打开的工作板" = "No boards to open yet";
+"没有匹配的结果" = "No matches";
+"新建" = "New";
+"章节 %lld" = "Chapters %lld";
+"时间" = "Dates";
+"时间线" = "Timeline";
+"%lld 天" = "%lld days";
+"关闭目录" = "Close outline";
+"回到顶部" = "Back to top";
+"隐藏目录" = "Hide outline";
+"显示目录" = "Show outline";
+"还有 %lld 项" = "%lld more";
+"选中这一天，在左侧清单里看全部事项" = "Select this day to see all its tasks in the list";

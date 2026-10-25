@@ -744,7 +744,8 @@ struct ContentView: View {
     private func addTodo() {
         guard !store.isReadOnly else { return }
         todoDraft.flush()
-        let added = store.commitDraft(on: selectedDate, options: creationOptions)
+        // 新任务直接出现在它的位置上并闪一下；不让整条时间轴跟着插值移动。
+        let added = TaskLanding.shared.landing({ store.commitDraft(on: selectedDate, options: creationOptions) }, at: { $0.last?.id })
         if !added.isEmpty { creationOptions = TaskCreationOptions() }
         addingTodo = true
         scrollTarget = added.last?.id

@@ -208,7 +208,7 @@ struct TaskTimelineView: View {
                 }
             }
         }
-        .animation(Motion.quick, value: tasks.map(\.id))
+        // 增删任务不再让整条时间轴插值移动（每一行的原生文本都要跟着重排，帧率很低）；新任务和放下的任务用落点高亮提示。
         .animation(Motion.quick, value: expanded)
     }
 }
