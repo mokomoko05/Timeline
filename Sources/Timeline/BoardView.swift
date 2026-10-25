@@ -519,6 +519,8 @@ struct BoardMarkdownPreview: View {
     }
 
     var body: some View {
+        // 标题收起、折叠块展开和工作板用同一份折叠记忆。
+        let _ = cache.bind(board.id)
         BoardMarkdownBlocks(store: store, boardID: board.id, nodes: cache.parse(board.markdown),
                             cache: cache, edit: edit)
     }
@@ -533,17 +535,22 @@ private struct BoardMarkdownBlocks: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            let hidden = cache.layout.hiddenRanges(cache.folds)
             ForEach(nodes) { node in
                 switch node {
                 case .markdown(let fragment):
-                    TaskLinkText(source: fragment.source, completed: false, color: Palette.ink,
-                                 fontSize: 13, edit: edit, open: SafariLinks.open,
-                                 maxLines: 0, markdown: true,
-                                 toggleMarkdownTask: store.isReadOnly ? nil : { line in
-                                     store.toggleBoardMarkdownTask(atLine: line + fragment.lineOffset, in: boardID)
-                                 }, compactLines: true)
+                    if let marks = Self.marks(for: fragment, layout: cache.layout, folds: cache.folds, hidden: hidden) {
+                        TaskLinkText(source: fragment.source, completed: false, color: Palette.ink,
+                                     fontSize: 13, edit: edit, open: SafariLinks.open,
+                                     maxLines: 0, markdown: true,
+                                     toggleMarkdownTask: store.isReadOnly ? nil : { line in
+                                         store.toggleBoardMarkdownTask(atLine: line + fragment.lineOffset, in: boardID)
+                                     }, compactLines: true, boardFolds: marks, toggleHeading: { cache.toggleHeading($0) })
+                    }
                 case .code(let code):
-                    BoardCodeBlock(code: code)
+                    if !hidden.contains(where: { $0.contains(code.id) }) { BoardCodeBlock(code: code) }
+                case .disclosure(let disclosure) where hidden.contains(where: { $0.contains(disclosure.id) }):
+                    EmptyView()
                 case .disclosure(let disclosure):
                     let open = cache.isExpanded(disclosure)
                     VStack(alignment: .leading, spacing: 4) {
@@ -579,6 +586,24 @@ private struct BoardMarkdownBlocks: View {
                 }
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 这一段里哪些标题能折叠、哪些行收起藏着（换成段内行号）；整段都藏起来了就是 nil。
+    static func marks(for fragment: MarkdownFragment, layout: BoardFoldLayout, folds: [String: Bool],
+                      hidden: [ClosedRange<Int>]) -> MarkdownText.BoardFoldMarks? {
+        let lines = fragment.source.components(separatedBy: "\n")
+        let first = fragment.lineOffset, last = fragment.lineOffset + lines.count - 1
+        let visible = lines.indices.contains { index in
+            !lines[index].trimmingCharacters(in: .whitespaces).isEmpty && !hidden.contains { $0.contains(first + index) }
+        }
+        guard visible else { return nil }
+        var marks = MarkdownText.BoardFoldMarks()
+        for heading in layout.headings where (first...last).contains(heading.line) {
+            marks.headings[heading.line - first + 1] = .init(key: heading.key, folded: folds[heading.key] == true)
+        }
+        marks.hidden = hidden.filter { $0.overlaps(first...last) }
+            .map { (max($0.lowerBound, first) - first + 1)...(min($0.upperBound, last) - first + 1) }
+        return marks
     }
 }
 

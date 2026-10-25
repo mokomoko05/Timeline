@@ -14,9 +14,19 @@ func boardWebView(in root: NSView) throws -> WKWebView {
     throw NSError(domain: "BoardTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing live editor"])
 }
 
+/// 等界面里的工作板编辑器就绪，返回它（迟迟没就绪被重建过就是新放进界面的那个）。
 @MainActor
-func waitForBoardEditor(_ view: WKWebView) async throws {
-    for _ in 0..<400 {
+func waitForBoardEditor(in root: NSView) async throws -> WKWebView {
+    let initial = try boardWebView(in: root)
+    try await waitForBoardEditor({ root.layoutSubtreeIfNeeded(); return (try? boardWebView(in: root)) ?? initial }())
+    return try boardWebView(in: root)
+}
+
+@MainActor
+func waitForBoardEditor(_ current: @autoclosure () -> WKWebView) async throws {
+    // 编辑器网页迟迟没就绪时会被重建（换成新的视图），每次都取当前的。
+    for _ in 0..<600 {
+        let view = current()
         // 编辑器网页是共用的：上一个测试留下的页面可能还在重新加载，等加载完再用。
         if !view.isLoading, (try? await view.evaluateJavaScript("!!window.boardEditor?.view()")) as? Bool == true { return }
         try await Task.sleep(for: .milliseconds(20))
@@ -76,7 +86,7 @@ final class BoardLiveEditorTests: XCTestCase {
         defer { fixture.close() }
         try await waitForBoardEditor(fixture.webView)
         var previews = 0
-        fixture.session.onPreview = { previews += 1; fixture.session.setSourceMode(false) }
+        fixture.session.onPreview = { [unowned fixture] in previews += 1; fixture.session.setSourceMode(false) }
         fixture.session.setSourceMode(true)
         _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.select(7);window.boardEditor.replaceSelection('edited ')")
         let handled = try await fixture.webView.evaluateJavaScript(
@@ -512,6 +522,118 @@ final class BoardLiveEditorTests: XCTestCase {
         XCTAssertEqual(caretBack, 1, "回到浏览时在刚才编辑的地方留着光标")
     }
 
+    /// 浏览时光标能用方向键移动；按住 Shift 选出的范围看得见，进入编辑后仍是选区。
+    func testBrowseCaretMovesWithTheKeyboard() async throws {
+        let source = "First line\n\nSecond line\n\nThird line"
+        let fixture = try LiveFixture(source: source)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        try await browse(fixture.session, fixture.webView)
+        let caretAtEnd = try await fixture.snapshot()["head"] as? Int
+        XCTAssertEqual(caretAtEnd, (source as NSString).length, "从编辑回到浏览，光标留在刚才编辑的地方（末尾）")
+        _ = try await fixture.webView.evaluateJavaScript(Self.clickScript(Self.lineContaining("First"), fraction: 0.01))
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').focus()")
+        let value2 = try await fixture.snapshot()["head"] as? Int
+        XCTAssertEqual(value2, 0)
+        let value3 = try await fixture.pressKey("ArrowDown")
+        XCTAssertTrue(value3)
+        let value4 = try await fixture.pressKey("ArrowDown")
+        XCTAssertTrue(value4)
+        let value5 = try await fixture.snapshot()["head"] as? Int
+        let moved = try XCTUnwrap(value5)
+        XCTAssertEqual(moved, (source as NSString).range(of: "Second").location, "向下两行到了第二段")
+        let value6 = try await fixture.pressKey("ArrowRight")
+        XCTAssertTrue(value6)
+        let value7 = try await fixture.snapshot()["head"] as? Int
+        XCTAssertEqual(value7, moved + 1)
+        let caret = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.cm-browse-caret').length") as? Int
+        XCTAssertEqual(caret, 1)
+        let selected = try await fixture.webView.evaluateJavaScript(
+            "!document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',shiftKey:true,bubbles:true,cancelable:true}))") as? Bool
+        XCTAssertEqual(selected, true)
+        let range = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-browse-range')?.textContent") as? String
+        XCTAssertEqual(range, "e", "Shift 选出的范围看得见")
+        XCTAssertEqual(fixture.store.boards[0].markdown, source, "浏览时按键不改动正文")
+        fixture.session.setMode(editing: true, raw: false)
+        for _ in 0..<50 {
+            if (try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').isContentEditable") as? Bool) == true { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let editing = try await fixture.snapshot()
+        XCTAssertEqual(editing["anchor"] as? Int, moved + 1)
+        XCTAssertEqual(editing["head"] as? Int, moved + 2, "进入编辑时选区还在")
+    }
+
+    /// 收起的标题在编辑时也收起：⌘↩ 在浏览和编辑之间切换时版面不变，光标停在同一行、屏幕上同一个高度。
+    func testFoldsStayWhileEditingSoTheCaretKeepsItsPlace() async throws {
+        let filler = (1...12).map { "Filler \($0)" }.joined(separator: "\n\n")
+        let source = "# Top\n\n\(filler)\n\n# Target\n\n\((1...20).map { "Row \($0)" }.joined(separator: "\n\n"))"
+        let fixture = try LiveFixture(source: source)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        BoardFolds.set("h1:Top#0", true, board: fixture.store.boards[0].id, defaults: fixture.defaults)
+        try await browse(fixture.session, fixture.webView)
+        var text = try await visibleText(fixture.webView)
+        XCTAssertFalse(text.contains("Filler 3"), "别处改的折叠记忆传到编辑器")
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-scroller').scrollTop=120")
+        try await Task.sleep(for: .milliseconds(60))
+        let line = Self.lineContaining("Row 6")
+        _ = try await fixture.webView.evaluateJavaScript(Self.clickScript(line, fraction: 0.1))
+        let value8 = try await fixture.snapshot()["head"] as? Int
+        let head = try XCTUnwrap(value8)
+        let topBeforeValue = try await fixture.webView.evaluateJavaScript("\(line).getBoundingClientRect().top") as? Double
+        let topBefore = try XCTUnwrap(topBeforeValue)
+
+        fixture.session.setMode(editing: true, raw: false)
+        for _ in 0..<50 {
+            if (try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').isContentEditable") as? Bool) == true { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try await Task.sleep(for: .milliseconds(80))
+        text = try await visibleText(fixture.webView)
+        XCTAssertFalse(text.contains("Filler 3"), "编辑时收起的标题仍收起")
+        let value10 = try await fixture.snapshot()["head"] as? Int
+        XCTAssertEqual(value10, head)
+        let topEditingValue = try await fixture.webView.evaluateJavaScript("\(line).getBoundingClientRect().top") as? Double
+        let topEditing = try XCTUnwrap(topEditingValue)
+        XCTAssertEqual(topEditing, topBefore, accuracy: 2, "进入编辑时那一行在屏幕上原来的高度")
+
+        fixture.session.onPreview = { [unowned fixture] in fixture.session.setMode(editing: false, raw: false) }
+        let saved = try await fixture.webView.evaluateJavaScript(
+            "!document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',metaKey:true,bubbles:true,cancelable:true}))") as? Bool
+        XCTAssertEqual(saved, true)
+        try await browse(fixture.session, fixture.webView)
+        try await Task.sleep(for: .milliseconds(80))
+        let topBackValue = try await fixture.webView.evaluateJavaScript("\(line).getBoundingClientRect().top") as? Double
+        let topBack = try XCTUnwrap(topBackValue)
+        XCTAssertEqual(topBack, topBefore, accuracy: 2, "⌘↩ 回到浏览时也不动")
+
+        // 编辑时在收起的标题末尾回车：光标进了收起的那一节，展开它。
+        fixture.session.setMode(editing: true, raw: false)
+        let topEnd = (source as NSString).range(of: "# Top").length
+        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.select(\(topEnd));window.boardEditor.replaceSelection('\\n')")
+        text = try await visibleText(fixture.webView)
+        XCTAssertTrue(text.contains("Filler 3"))
+        XCTAssertNil(BoardFolds.load(fixture.store.boards[0].id, defaults: fixture.defaults)["h1:Top#0"])
+    }
+
+    /// 编辑器网页迟迟没就绪（网页进程没起来或卡住，收不到退出通知）：重建一个，工作板照常能用，不会一直空白。
+    func testEditorPageThatNeverBecomesReadyIsRebuilt() async throws {
+        autoreleasepool { BoardLiveEditorSession.releaseSharedEditor() }
+        let previous = BoardLiveEditorSession.loadTimeout
+        BoardLiveEditorSession.loadTimeout = .milliseconds(1)
+        let fixture = try LiveFixture(source: "Rebuilt body")
+        BoardLiveEditorSession.loadTimeout = previous
+        defer { fixture.close() }
+        let original = try XCTUnwrap(fixture.session.webView)
+        for _ in 0..<50 where fixture.session.webView === original { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(fixture.session.webView === original, "没就绪的编辑器被换掉")
+        try await waitForBoardEditor(fixture.webView)
+        let snapshot = try await fixture.snapshot()
+        XCTAssertEqual(snapshot["source"] as? String, "Rebuilt body")
+        XCTAssertTrue(fixture.session.ready)
+    }
+
     /// 默认的编辑是所见即所得：正文照样渲染，只有光标所在的那一行露出 Markdown 标记。
     func testLiveEditingShowsMarkupOnlyOnTheCaretLine() async throws {
         let fixture = try LiveFixture(source: "# Title\n\n**Strong**\n\nAfter")
@@ -708,8 +830,13 @@ private final class LiveFixture {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let store: JournalStore
     let session: BoardLiveEditorSession
-    let webView: WKWebView
     let window: NSWindow
+    /// 当前的编辑器视图（迟迟没就绪被重建过就是新的那个，同时放进测试窗口）。
+    var webView: WKWebView {
+        guard let view = session.webView else { return window.contentView as? WKWebView ?? WKWebView() }
+        if window.contentView !== view { window.contentView = view }
+        return view
+    }
     let pasteboard = NSPasteboard(name: .init("board-editor-\(UUID().uuidString)"))
     let defaults: UserDefaults
 
@@ -721,7 +848,7 @@ private final class LiveFixture {
         store.save()
         session = BoardLiveEditorSession(store: store, board: try XCTUnwrap(store.board(for: board.owner)), pasteboard: pasteboard,
                                          defaults: defaults)
-        webView = session.makeWebView()
+        let webView = session.makeWebView()
         session.configure(fontSize: 13, dark: true)
         window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 410, height: 480),
                              styleMask: [.borderless], backing: .buffered, defer: false)

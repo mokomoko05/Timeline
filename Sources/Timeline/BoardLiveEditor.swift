@@ -53,8 +53,6 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     private let boardID: UUID
     private let pasteboard: NSPasteboard
     private let defaults: UserDefaults
-    /// 折叠记忆：哪些标题收起了、哪些折叠块展开了。按工作板存进偏好，下次打开照旧显示。
-    private var folds: [String: Bool]
     /// 搜索结果要跳到的行（编辑器还没加载好时先记下）。
     private var pendingReveal: (line: Int, query: String)?
     private var storedSource: String
@@ -64,6 +62,9 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     private var settings: [String: Any] = [:]
     private var lastConfiguration: Data?
     private var sourceNeedsSynchronization = true
+    private var loadWatch: Task<Void, Never>?
+    /// 编辑器网页多久还没就绪就重建（测试里改短）。
+    static var loadTimeout: Duration = .seconds(6)
 
     var handlesTextCommands: Bool {
         webView?.window === NSApp.keyWindow && hasTextFocus
@@ -89,18 +90,28 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         self.store = store
         self.pasteboard = pasteboard
         self.defaults = defaults
-        folds = defaults.dictionary(forKey: Self.foldsKey(board.id)) as? [String: Bool] ?? [:]
         boardID = board.id
         storedSource = board.markdown
         source = board.markdown
         super.init()
         NotificationCenter.default.addObserver(self, selector: #selector(commitEditing),
                                                name: .timelineCommitEditing, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(foldsChanged(_:)),
+                                               name: .boardFoldsChanged, object: nil)
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
 
-    static func foldsKey(_ id: UUID) -> String { "board.folds.\(id.uuidString)" }
+    static func foldsKey(_ id: UUID) -> String { BoardFolds.key(id) }
+
+    /// 折叠记忆（哪些标题收起了、哪些折叠块展开了）在别处改了（比如笔记里的看板内容）：编辑器跟着变。
+    @objc private func foldsChanged(_ notification: Notification) {
+        guard notification.userInfo?["board"] as? UUID == boardID, !settings.isEmpty else { return }
+        let folds = BoardFolds.load(boardID, defaults: defaults)
+        guard settings["folds"] as? [String: Bool] != folds else { return }
+        settings["folds"] = folds
+        applyConfiguration()
+    }
 
     /// 跳到第 `line` 行（从 1 开始）：展开包住它的标题和折叠块，滚到中间并高亮命中的文字。
     func reveal(line: Int, query: String) {
@@ -139,11 +150,31 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         lastConfiguration = nil
         sourceNeedsSynchronization = true
         applyConfiguration()
+        if !ready { watchLoading() }
         return host.view
+    }
+
+    /// 编辑器网页迟迟没有就绪（网页进程没起来或卡住了，这时收不到进程退出的通知）：丢掉重建一个，
+    /// 不然这块和之后打开的工作板都是空白。界面跟着 `objectWillChange` 把新的编辑器放进来。
+    private func watchLoading() {
+        loadWatch?.cancel()
+        let timeout = Self.loadTimeout
+        loadWatch = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: timeout)
+            guard !Task.isCancelled, let self, Self.owner === self, !self.ready else { return }
+            Self.shared?.handler.session = nil
+            Self.shared?.view.removeFromSuperview()
+            Self.shared = nil
+            Self.owner = nil
+            self.webView = nil
+            self.objectWillChange.send()
+            _ = self.makeWebView()
+        }
     }
 
     /// 交出编辑器：内容先保存，之后这块工作板不再向网页发任何指令，直到再次拿到编辑器。
     private func detach() {
+        loadWatch?.cancel()
         flush()
         webView = nil
         ready = false
@@ -233,7 +264,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
                       "selection-ink": css(Color(nsColor: .selectedTextColor))]
         for level in 1...6 { colors["heading-\(level)"] = css(Color(nsColor: MarkdownText.headingColor(level))) }
         settings = ["fontSize": fontSize, "readOnly": store.isReadOnly, "colors": colors,
-                    "sourceMode": sourceMode, "previewOnly": previewOnly, "folds": folds, "key": boardID.uuidString]
+                    "sourceMode": sourceMode, "previewOnly": previewOnly, "folds": BoardFolds.load(boardID, defaults: defaults), "key": boardID.uuidString]
         settings["labels"] = ["openLink": AppLocalized("在 Safari 中打开"), "copyCode": AppLocalized("复制代码"),
                               "copied": AppLocalized("已复制"), "copyFailed": AppLocalized("复制失败，请重试"),
                               "expand": AppLocalized("展开标题下的内容"), "collapse": AppLocalized("收起标题下的内容")]
@@ -276,8 +307,10 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let body = message.body as? [String: Any], let kind = body["kind"] as? String else { return }
+        guard let body = message.body as? [String: Any], let kind = body["kind"] as? String,
+              message.webView == nil || message.webView === webView else { return }
         if kind == "ready" {
+            loadWatch?.cancel()
             ready = true
             applyConfiguration()
         } else if kind == "change" || kind == "commit" {
@@ -292,11 +325,8 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
                 }
             }
         } else if kind == "fold", let key = body["key"] as? String, let value = body["value"] as? Bool {
-            folds[key] = value
-            // 只记和默认不同的：标题默认展开，折叠块的默认由 open 属性决定，两种都存下来以免默认值变化。
-            if key.hasPrefix("h"), !value { folds.removeValue(forKey: key) }
-            settings["folds"] = folds
-            defaults.set(folds, forKey: Self.foldsKey(boardID))
+            // 存进共用的折叠记忆；通知回到 foldsChanged 更新配置（编辑器里已经是这个状态，不会重画）。
+            BoardFolds.set(key, value, board: boardID, defaults: defaults)
         } else if kind == "history" {
             undoDepth = body["undo"] as? Int ?? 0
             redoDepth = body["redo"] as? Int ?? 0
@@ -367,6 +397,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         lastConfiguration = nil
         sourceNeedsSynchronization = true
         webView.reload()
+        watchLoading()
     }
 }
 

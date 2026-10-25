@@ -25,6 +25,9 @@ struct TaskLinkText: NSViewRepresentable {
     var menuItems: [TextMenuItem] = []
     /// Markdown 标题可以折叠（点标题收起 / 展开），折叠状态按这个标识记住（比如某条笔记）。
     var foldID: String?
+    /// 工作板正文的一段：按工作板的折叠记忆画标题的收起 / 展开，点标题时调用 `toggleHeading`。
+    var boardFolds: MarkdownText.BoardFoldMarks?
+    var toggleHeading: ((String) -> Void)?
     @Environment(\.isEnabled) private var enabled
     @State private var foldRevision = 0
 
@@ -61,14 +64,14 @@ struct TaskLinkText: NSViewRepresentable {
         view.menuItems = menuItems
         view.interactionEnabled = enabled
         let folds = markdown ? foldID.map { _ = foldRevision; return HeadingFolds.folded(in: $0) } : nil
-        view.onToggleHeading = markdown ? foldID.map { id in { key in
+        view.onToggleHeading = markdown ? toggleHeading ?? foldID.map { id in { key in
             HeadingFolds.toggle(key, in: id)
             foldRevision += 1
         } } : nil
         view.dragTaskID = dragTaskID
         view.textContainerInset = NSSize(width: compactLines ? 2 : 5, height: compactLines ? 0 : 4)
         let foreground = NSColor(completed ? Palette.muted : color)
-        if view.source != source || view.displayName != displayName || view.completed != completed || view.pointSize != fontSize || view.foreground != foreground || view.monospaced != monospaced || view.compactLines != compactLines || view.markdown != markdown || view.interactiveTasks != (toggleMarkdownTask != nil) || view.uiScaleFactor != typography.scale || view.configuredLineSpacing != Double(typography.lineSpacing) || view.foldedHeadings != folds {
+        if view.source != source || view.displayName != displayName || view.completed != completed || view.pointSize != fontSize || view.foreground != foreground || view.monospaced != monospaced || view.compactLines != compactLines || view.markdown != markdown || view.interactiveTasks != (toggleMarkdownTask != nil) || view.uiScaleFactor != typography.scale || view.configuredLineSpacing != Double(typography.lineSpacing) || view.foldedHeadings != folds || view.boardFolds != boardFolds {
             let sourceChanged = view.source != source || view.displayName != displayName || view.markdown != markdown
             let selection = view.selectedRanges
             if sourceChanged {
@@ -87,8 +90,9 @@ struct TaskLinkText: NSViewRepresentable {
             view.uiScaleFactor = typography.scale
             view.configuredLineSpacing = Double(typography.lineSpacing)
             view.foldedHeadings = folds
+            view.boardFolds = boardFolds
             let styled = markdown
-                ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced, lineSpacing: typography.lineSpacing, scale: typography.scale, document: view.markdownDocument, interactiveTasks: view.interactiveTasks, folds: folds)
+                ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced, lineSpacing: typography.lineSpacing, scale: typography.scale, document: view.markdownDocument, interactiveTasks: view.interactiveTasks, folds: folds, boardFolds: boardFolds)
                 : Self.styledText(source, completed: completed, color: foreground, fontSize: fontSize, displayName: displayName, monospaced: monospaced, compactLines: compactLines, lineSpacing: compactLines ? 0 : typography.lineSpacing, scale: typography.scale, rendered: view.inlineText)
             view.textStorage?.setAttributedString(styled)
             if !sourceChanged { view.selectedRanges = selection }
@@ -245,6 +249,7 @@ final class InteractiveTaskText: NSTextView {
     var configuredLineSpacing = 2.0
     /// 收起的 Markdown 标题（nil：标题不能折叠）。
     var foldedHeadings: Set<String>?
+    var boardFolds: MarkdownText.BoardFoldMarks?
     var onToggleHeading: ((String) -> Void)?
     private var mouseDownEvent: NSEvent?
     private var dragged = false

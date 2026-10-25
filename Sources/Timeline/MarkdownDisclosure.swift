@@ -35,35 +35,110 @@ indirect enum MarkdownDisclosureNode: Identifiable {
     }
 }
 
+@MainActor
 final class MarkdownDisclosureCache: ObservableObject {
     @Published private(set) var expanded: [Int: Bool] = [:]
+    /// 绑定了工作板时，标题收起、折叠块展开都用工作板的折叠记忆（和工作板编辑器共用）。
+    @Published private var foldRevision = 0
+    private(set) var folds: [String: Bool] = [:]
+    private(set) var layout = BoardFoldLayout("")
+    private var boardID: UUID?
+    private var observer: NSObjectProtocol?
     private var source: String?
     private var nodes: [MarkdownDisclosureNode] = []
     private var rendered: Set<Int> = []
+
+    deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
 
     func parse(_ source: String) -> [MarkdownDisclosureNode] {
         if self.source != source {
             self.source = source
             nodes = MarkdownDisclosures.parse(source)
+            layout = BoardFoldLayout(source)
         }
         return nodes
     }
 
+    /// 跟随这块工作板的折叠记忆（在显示时调用；只读不发布变化，之后的变化由通知带来）。
+    func bind(_ id: UUID) {
+        guard boardID != id else { return }
+        boardID = id
+        folds = BoardFolds.load(id)
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = NotificationCenter.default.addObserver(forName: .boardFoldsChanged, object: nil, queue: nil) { [weak self] note in
+            guard note.userInfo?["board"] as? UUID == id else { return }
+            MainActor.assumeIsolated {
+                guard let self, self.boardID == id else { return }
+                let folds = BoardFolds.load(id)
+                guard folds != self.folds else { return }
+                self.folds = folds
+                self.foldRevision += 1
+            }
+        }
+    }
+
     func isExpanded(_ disclosure: MarkdownDisclosure) -> Bool {
-        expanded[disclosure.id] ?? disclosure.initiallyOpen
+        if boardID != nil, let key = layout.disclosureKeys[disclosure.id] { return folds[key] ?? disclosure.initiallyOpen }
+        return expanded[disclosure.id] ?? disclosure.initiallyOpen
     }
 
     func toggle(_ disclosure: MarkdownDisclosure) {
         rendered.insert(disclosure.id)
-        expanded[disclosure.id] = !isExpanded(disclosure)
+        let open = !isExpanded(disclosure)
+        if let boardID, let key = layout.disclosureKeys[disclosure.id] {
+            folds[key] = open
+            foldRevision += 1
+            BoardFolds.set(key, open, board: boardID)
+        } else {
+            expanded[disclosure.id] = open
+        }
+    }
+
+    /// 收起 / 展开标题（只在绑定了工作板时有用）。
+    func toggleHeading(_ key: String) {
+        guard let boardID else { return }
+        let folded = folds[key] != true
+        if folded { folds[key] = true } else { folds.removeValue(forKey: key) }
+        foldRevision += 1
+        BoardFolds.set(key, folded, board: boardID)
     }
 
     func hasRendered(_ disclosure: MarkdownDisclosure) -> Bool { isExpanded(disclosure) || rendered.contains(disclosure.id) }
 }
 
+extension Notification.Name {
+    /// 某块工作板的折叠记忆变了（userInfo["board"] 是工作板的 UUID）。
+    static let boardFoldsChanged = Notification.Name("TimelineBoardFoldsChanged")
+}
+
+/// 工作板的折叠记忆：标题收起（"h…" → true）、折叠块展开 / 收起（"d…" → true / false），按工作板存进偏好。
+/// 工作板编辑器和笔记里的看板内容共用这一份，一边改了另一边跟着变。
+@MainActor
+enum BoardFolds {
+    static var defaults: UserDefaults = .standard
+
+    static func key(_ id: UUID) -> String { "board.folds.\(id.uuidString)" }
+
+    static func load(_ id: UUID, defaults: UserDefaults? = nil) -> [String: Bool] {
+        (defaults ?? Self.defaults).dictionary(forKey: key(id)) as? [String: Bool] ?? [:]
+    }
+
+    static func set(_ fold: String, _ value: Bool, board id: UUID, defaults: UserDefaults? = nil) {
+        let defaults = defaults ?? Self.defaults
+        var folds = load(id, defaults: defaults)
+        folds[fold] = value
+        // 只记和默认不同的：标题默认展开；折叠块的默认由 open 属性决定，两种都存下来以免默认值变化。
+        if fold.hasPrefix("h"), !value { folds.removeValue(forKey: fold) }
+        defaults.set(folds, forKey: key(id))
+        NotificationCenter.default.post(name: .boardFoldsChanged, object: nil, userInfo: ["board": id])
+    }
+}
+
 enum MarkdownDisclosures {
-    private struct Opening {
+    fileprivate struct Opening {
         let title: String
+        /// 折叠记忆里用的名字：和编辑器一致，不随界面语言变。
+        let foldName: String
         let initiallyOpen: Bool
         let bodyStart: Int
     }
@@ -71,10 +146,11 @@ enum MarkdownDisclosures {
     private static let opening = try! NSRegularExpression(pattern: #"^<details(?:\s+(open)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?\s*>\s*(?:<summary\s*>(.*?)</summary\s*>)?\s*$"#, options: [.caseInsensitive])
     private static let summary = try! NSRegularExpression(pattern: #"^<summary\s*>(.*?)</summary\s*>\s*$"#, options: [.caseInsensitive])
 
-    static func parse(_ source: String) -> [MarkdownDisclosureNode] {
-        let lines = source.components(separatedBy: "\n")
+    /// 逐行找出折叠块的开头、结尾（代码块里的不算），和代码块占的行。
+    fileprivate static func scan(_ lines: [String]) -> (openings: [Int: Opening], closingLines: [Int: Int], codeLines: Set<Int>) {
         var openings: [Int: Opening] = [:]
         var closingLines: [Int: Int] = [:]
+        var codeLines: Set<Int> = []
         var stack: [Int] = []
         var fence: (marker: Character, length: Int)?
         for index in lines.indices {
@@ -83,6 +159,7 @@ enum MarkdownDisclosures {
             let indentation = raw.prefix { $0 == " " || $0 == "\t" }
             let indented = indentation.contains("\t") || indentation.count > 3
             if let active = fence {
+                codeLines.insert(index)
                 let run = line.prefix { $0 == active.marker }
                 if run.count >= active.length && line.dropFirst(run.count).trimmingCharacters(in: .whitespaces).isEmpty {
                     fence = nil
@@ -93,6 +170,7 @@ enum MarkdownDisclosures {
                 let run = line.prefix { $0 == marker }
                 if run.count >= 3 {
                     fence = (marker, run.count)
+                    codeLines.insert(index)
                     continue
                 }
             }
@@ -116,6 +194,7 @@ enum MarkdownDisclosures {
                 }
                 let decoded = decodeTitle(title ?? "")
                 openings[index] = Opening(title: decoded.isEmpty ? AppLocalized("折叠内容") : decoded,
+                                          foldName: decoded.isEmpty ? "折叠内容" : decoded,
                                           initiallyOpen: match.range(at: 1).location != NSNotFound,
                                           bodyStart: bodyStart)
                 stack.append(index)
@@ -123,6 +202,12 @@ enum MarkdownDisclosures {
                 closingLines[start] = index
             }
         }
+        return (openings, closingLines, codeLines)
+    }
+
+    static func parse(_ source: String) -> [MarkdownDisclosureNode] {
+        let lines = source.components(separatedBy: "\n")
+        let (openings, closingLines, _) = scan(lines)
 
         func nodes(in range: Range<Int>) -> [MarkdownDisclosureNode] {
             var result: [MarkdownDisclosureNode] = []
@@ -175,12 +260,85 @@ enum MarkdownDisclosures {
         return nodes(in: lines.indices)
     }
 
-    private static func decodeTitle(_ title: String) -> String {
+    fileprivate static func decodeTitle(_ title: String) -> String {
         title.replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")
             .replacingOccurrences(of: "&quot;", with: "\"")
             .replacingOccurrences(of: "&#39;", with: "'")
             .replacingOccurrences(of: "&amp;", with: "&")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// 工作板正文里可以折叠的标题和折叠块，算法和编辑器（Editor/src/editor.js 的 parseHeadings / parseDetails）一致，
+/// 折叠记忆的键也一样，所以笔记里的看板内容和工作板显示同样的收起 / 展开。行号从 0 开始。
+struct BoardFoldLayout: Equatable {
+    struct Heading: Equatable {
+        let line: Int
+        let level: Int
+        let key: String
+        /// 收起时藏到哪一行（含）；末尾的空行不藏，和下一个标题之间仍有间隔。
+        let lastLine: Int
+    }
+
+    /// 有内容可收起的标题。
+    let headings: [Heading]
+    /// 折叠块开头那一行 → 折叠记忆的键。
+    let disclosureKeys: [Int: String]
+
+    private static let atxHeading = try! NSRegularExpression(pattern: #"^[ \t]{0,3}(#{1,6})(?:[ \t]|$)"#)
+    private static let headingMarks = try! NSRegularExpression(pattern: #"^\s{0,3}#{1,6}\s*"#)
+    private static let closingMarks = try! NSRegularExpression(pattern: #"\s+#+\s*$"#)
+    private static let htmlBlock = try! NSRegularExpression(pattern: #"^[ ]{0,3}</?[A-Za-z]"#)
+
+    init(_ source: String) {
+        let lines = source.components(separatedBy: "\n")
+        let (openings, closingLines, codeLines) = MarkdownDisclosures.scan(lines)
+        var keys: [Int: String] = [:]
+        var seenDisclosures: [String: Int] = [:]
+        for start in openings.keys.sorted() {
+            guard let opening = openings[start] else { continue }
+            let occurrence = seenDisclosures[opening.foldName, default: 0]
+            seenDisclosures[opening.foldName] = occurrence + 1
+            keys[start] = "d:\(opening.foldName)#\(occurrence)"
+        }
+        disclosureKeys = keys
+        let containers = closingLines.map { (open: $0.key, close: $0.value) }
+
+        struct Found { let line: Int; let level: Int; let key: String; let container: Int? }
+        var found: [Found] = []
+        var seen: [String: Int] = [:]
+        var inHTML = false
+        for (index, raw) in lines.enumerated() where !codeLines.contains(index) {
+            if raw.trimmingCharacters(in: .whitespaces).isEmpty { inHTML = false; continue }
+            let range = NSRange(location: 0, length: (raw as NSString).length)
+            // 和 Markdown 解析一致：HTML 块（比如 <details> 开头的几行）一直到空行为止，里面的 # 不是标题。
+            if inHTML { continue }
+            if Self.htmlBlock.firstMatch(in: raw, range: range) != nil { inHTML = true; continue }
+            guard let match = Self.atxHeading.firstMatch(in: raw, range: range) else { continue }
+            var text = Self.headingMarks.stringByReplacingMatches(in: raw, range: range, withTemplate: "")
+            text = Self.closingMarks.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: (text as NSString).length), withTemplate: "")
+            let level = match.range(at: 1).length
+            let name = "h\(level):\(text.trimmingCharacters(in: .whitespacesAndNewlines))"
+            let occurrence = seen[name, default: 0]
+            seen[name] = occurrence + 1
+            let container = containers.filter { $0.open < index && index < $0.close }.max { $0.open < $1.open }?.open
+            found.append(Found(line: index, level: level, key: "\(name)#\(occurrence)", container: container))
+        }
+        var result: [Heading] = []
+        for (position, heading) in found.enumerated() {
+            var boundary = heading.container.flatMap { closingLines[$0] } ?? lines.count
+            if let next = found[(position + 1)...].first(where: { $0.container == heading.container && $0.level <= heading.level }),
+               next.line < boundary { boundary = next.line }
+            var last = boundary - 1
+            while last > heading.line && lines[last].trimmingCharacters(in: .whitespaces).isEmpty { last -= 1 }
+            if last > heading.line { result.append(Heading(line: heading.line, level: heading.level, key: heading.key, lastLine: last)) }
+        }
+        headings = result
+    }
+
+    /// 按折叠记忆收起后藏起来的行（含两端）。
+    func hiddenRanges(_ folds: [String: Bool]) -> [ClosedRange<Int>] {
+        headings.filter { folds[$0.key] == true }.map { ($0.line + 1)...$0.lastLine }
     }
 }

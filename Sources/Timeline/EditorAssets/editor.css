@@ -85,6 +85,7 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 #editor .cm-line.cm-browse-line { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .cm-browse-caret { box-shadow: inset 2px 0 0 var(--accent); animation: board-caret-in .6s ease-out; }
 .cm-browse-caret.cm-browse-caret-end { box-shadow: inset -2px 0 0 var(--accent); animation-name: board-caret-in-end; }
+.cm-browse-range { background: var(--selection); color: var(--selection-ink); border-radius: 2px; }
 #editor .cm-line.cm-browse-empty { background-image: linear-gradient(var(--accent), var(--accent)); background-repeat: no-repeat; background-size: 2px 1.2em; background-position: 13px 50%; }
 @keyframes board-caret-in { 0% { box-shadow: inset 2px 0 0 var(--accent), -3px 0 6px color-mix(in srgb, var(--accent) 60%, transparent); } 100% { box-shadow: inset 2px 0 0 var(--accent); } }
 @keyframes board-caret-in-end { 0% { box-shadow: inset -2px 0 0 var(--accent), 3px 0 6px color-mix(in srgb, var(--accent) 60%, transparent); } 100% { box-shadow: inset -2px 0 0 var(--accent); } }

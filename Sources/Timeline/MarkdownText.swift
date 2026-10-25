@@ -9,10 +9,25 @@ enum MarkdownText {
     /// 可折叠标题所在的整段：值是标题的折叠键（`h2:标题#0`，同名标题按出现次序编号，和工作板一致）。
     static let headingFoldKey = NSAttributedString.Key("TimelineMarkdownHeadingFold")
 
+    /// 工作板正文的一段（笔记里的看板内容）怎么折叠：由整块工作板算好（标题的折叠范围可能跨过代码块、延伸到下一段），
+    /// 这里只管画。行号是这一段里的行号，从 1 开始。
+    struct BoardFoldMarks: Equatable {
+        struct Mark: Equatable {
+            let key: String
+            let folded: Bool
+        }
+        /// 可以折叠的标题所在的行。
+        var headings: [Int: Mark] = [:]
+        /// 收起后藏起来的行。
+        var hidden: [ClosedRange<Int>] = []
+    }
+
     /// `folds` 不为 nil 时顶层标题可以折叠：里面是收起的标题键，收起的标题下面到下一个同级或更高级标题为止都不显示。
-    static func render(_ source: String, color: NSColor, fontSize: CGFloat, monospaced: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing, scale: CGFloat = UIScale.factor, document: Document? = nil, interactiveTasks: Bool = false, folds: Set<String>? = nil) -> NSAttributedString {
+    /// `boardFolds` 不为 nil 时按工作板的折叠画（见 `BoardFoldMarks`）。
+    static func render(_ source: String, color: NSColor, fontSize: CGFloat, monospaced: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing, scale: CGFloat = UIScale.factor, document: Document? = nil, interactiveTasks: Bool = false, folds: Set<String>? = nil, boardFolds: BoardFoldMarks? = nil) -> NSAttributedString {
         let renderer = Renderer(color: color, size: fontSize * scale, monospaced: monospaced, lineSpacing: lineSpacing, interactiveTasks: interactiveTasks)
         renderer.folds = folds
+        renderer.boardFolds = boardFolds
         renderer.sourceLines = source.components(separatedBy: "\n")
         renderer.blocks(document ?? Document(parsing: source))
         return renderer.output
@@ -28,6 +43,7 @@ enum MarkdownText {
         let interactiveTasks: Bool
         var sourceLines: [String] = []
         var folds: Set<String>?
+        var boardFolds: BoardFoldMarks?
         init(color: NSColor, size: CGFloat, monospaced: Bool, lineSpacing: CGFloat, interactiveTasks: Bool) {
             self.color = color
             self.size = size
@@ -90,11 +106,17 @@ enum MarkdownText {
         func blocks(_ node: Markup, indent: CGFloat = 0) {
             let children = Array(node.children)
             let foldable = folds != nil && node is Document
+            let marks = node is Document ? boardFolds : nil
             var previousEnd: Int?
             var seen: [String: Int] = [:]
             var index = 0
             while index < children.count {
                 let child = children[index]
+                if let marks, let start = child.range?.lowerBound.line, marks.hidden.contains(where: { $0.contains(start) }) {
+                    previousEnd = child.range?.upperBound.line
+                    index += 1
+                    continue
+                }
                 if let end = previousEnd, let start = child.range?.lowerBound.line, start > end + 1 {
                     let blankCount = sourceLines.dropFirst(end).prefix(start - end - 1)
                         .filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
@@ -102,6 +124,10 @@ enum MarkdownText {
                 }
                 previousEnd = child.range?.upperBound.line
                 index += 1
+                if let marks, let heading = child as? Heading, let line = heading.range?.lowerBound.line, let mark = marks.headings[line] {
+                    renderHeading(heading, indent: indent, fold: (mark.key, mark.folded))
+                    continue
+                }
                 guard foldable, let heading = child as? Heading else { block(child, indent: indent); continue }
                 let name = "h\(heading.level):\(heading.plainText.trimmingCharacters(in: .whitespaces))"
                 let occurrence = seen[name, default: 0]

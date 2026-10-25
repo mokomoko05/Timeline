@@ -21,8 +21,7 @@ final class BoardWindowTests: XCTestCase {
         defer { controller.hide() }
         let panel = try XCTUnwrap(controller.panel)
         panel.contentView?.layoutSubtreeIfNeeded()
-        let editor = try boardWebView(in: XCTUnwrap(panel.contentView))
-        try await waitForBoardEditor(editor)
+        let editor = try await waitForBoardEditor(in: XCTUnwrap(panel.contentView))
         let session = controller.navigation.editorSession(for: try XCTUnwrap(store.board(for: board.owner)), store: store)
         session.configure(fontSize: 13, dark: true)
         panel.makeKey()
@@ -92,8 +91,7 @@ final class BoardWindowTests: XCTestCase {
         panel.contentView?.layoutSubtreeIfNeeded()
         XCTAssertGreaterThan(panel.frame.width, 340)
         XCTAssertLessThan(panel.frame.width, 600)
-        let editor = try boardWebView(in: XCTUnwrap(panel.contentView))
-        try await waitForBoardEditor(editor)
+        let editor = try await waitForBoardEditor(in: XCTUnwrap(panel.contentView))
         let links = try await editor.evaluateJavaScript("[...document.querySelectorAll('[data-url]')].map(e=>e.dataset.url)") as? [String]
         XCTAssertEqual(links, ["https://example.com"])
         let rendered = try await editor.evaluateJavaScript("document.querySelector('.cm-content').textContent") as? String ?? ""
@@ -127,8 +125,7 @@ final class BoardWindowTests: XCTestCase {
         defer { controller.hide() }
         let panel = try XCTUnwrap(controller.panel)
         panel.contentView?.layoutSubtreeIfNeeded()
-        let editor = try boardWebView(in: XCTUnwrap(panel.contentView))
-        try await waitForBoardEditor(editor)
+        let editor = try await waitForBoardEditor(in: XCTUnwrap(panel.contentView))
         let source = "# Meeting\n\nTalking points\n\n[Reference](https://example.com)"
         let encoded = String(decoding: try JSONEncoder().encode(source), as: UTF8.self)
         _ = try await editor.evaluateJavaScript("window.boardEditor.replaceSelection(\(encoded))")
@@ -186,8 +183,7 @@ final class BoardWindowTests: XCTestCase {
         defer { controller.hide() }
         let panel = try XCTUnwrap(controller.panel)
         panel.contentView?.layoutSubtreeIfNeeded()
-        let editor = try boardWebView(in: XCTUnwrap(panel.contentView))
-        try await waitForBoardEditor(editor)
+        let editor = try await waitForBoardEditor(in: XCTUnwrap(panel.contentView))
         _ = try await editor.evaluateJavaScript("window.boardEditor.select(12)")
         XCTAssertEqual(store.boards.first { $0.id == board.id }?.markdown, source)
         controller.navigation.select(other.id)

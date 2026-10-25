@@ -6,6 +6,17 @@ import TimelineCore
 
 @MainActor
 final class MarkdownDisclosureTests: XCTestCase {
+    private var previousFoldDefaults: UserDefaults?
+
+    override func setUp() async throws {
+        previousFoldDefaults = BoardFolds.defaults
+        BoardFolds.defaults = InMemoryDefaults()
+    }
+
+    override func tearDown() async throws {
+        if let previousFoldDefaults { BoardFolds.defaults = previousFoldDefaults }
+    }
+
     func testNestedDetailsPreserveMarkdownAndAbsoluteTaskLines() throws {
         let source = "开头\n\n<details>\n<summary>Outer &amp; 中文</summary>\n\n- [ ] First\n\n<details open><summary>Nested</summary>\n\n- [x] Second\n\n</details>\n\n</details>\n\n结尾"
         let nodes = MarkdownDisclosures.parse(source)

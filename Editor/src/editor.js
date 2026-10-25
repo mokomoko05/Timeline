@@ -25,6 +25,8 @@ let copyRequest = 0;
 // 浏览时拖选的范围（不写进编辑器状态，免得打断系统原生选区）；进入编辑时变成编辑器的选区。
 let browseRange = null;
 let pointerDown = null;
+// 浏览时这一次按键交给方向键命令移动光标（见 browseKeydown / browseSelectionFilter）。
+let browseKeyPending = false;
 const pendingCopies = new Map();
 
 function editability(readOnly) {
@@ -188,17 +190,25 @@ function setFold(key, folded) {
 const browseCaret = StateField.define({
   create() { return null; },
   update(value, transaction) {
-    for (const effect of transaction.effects) if (effect.is(setBrowseCaret)) value = effect.value;
+    let explicit = false;
+    for (const effect of transaction.effects) if (effect.is(setBrowseCaret)) { value = effect.value; explicit = true; }
+    // 浏览时用方向键（以及 Home / End / 翻页）移动光标：光标跟着编辑器的选区走。
+    if (!explicit && transaction.state.readOnly && transaction.isUserEvent("select")) value = transaction.state.selection.main.head;
     if (value != null && transaction.docChanged) value = transaction.changes.mapPos(value);
     if (value != null && !transaction.state.readOnly) value = null;
     return value;
   },
   // 光标用标记画在字的左边缘（行尾画在前一个字的右边缘，空行画在行首），不插进额外的元素，双击选词不受影响。
-  provide: field => EditorView.decorations.compute([field], state => {
+  // 按住 Shift 用方向键选出的范围也铺上选区的颜色。
+  provide: field => EditorView.decorations.compute([field, "selection"], state => {
     const position = state.field(field);
     if (position == null) return Decoration.none;
     const line = state.doc.lineAt(position);
     const ranges = [];
+    const selection = state.selection.main;
+    if (state.readOnly && !selection.empty && selection.head === position) {
+      ranges.push(Decoration.mark({class: "cm-browse-range"}).range(selection.from, selection.to));
+    }
     if (position < line.to) ranges.push(Decoration.mark({class: "cm-browse-caret"}).range(position, position + 1));
     else if (position > line.from) ranges.push(Decoration.mark({class: "cm-browse-caret cm-browse-caret-end"}).range(position - 1, position));
     ranges.unshift(Decoration.line({class: "cm-browse-line" + (line.length ? "" : " cm-browse-empty")}).range(line.from));
@@ -248,6 +258,36 @@ function browsePointerUp(event) {
   view.dispatch({effects, selection: {anchor: position}});
 }
 
+// 浏览时按方向键：还没有光标就先放在屏幕最上面那一行；有拖选的范围就从光标处重新开始，不接着旧的选区走。
+function browseKeydown(event, view) {
+  if (!view.state.readOnly || event.metaKey || event.ctrlKey || event.isComposing) return false;
+  if (!/^(Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown)$/.test(event.key)) return false;
+  const caret = view.state.field(browseCaret);
+  if (browseRange || window.getSelection()?.isCollapsed === false) {
+    browseRange = null;
+    window.getSelection()?.removeAllRanges();
+  }
+  if (caret == null) {
+    const box = view.scrollDOM.getBoundingClientRect();
+    const top = view.lineBlockAtHeight(Math.max(0, box.top - view.documentTop + 2)).from;
+    view.dispatch({selection: {anchor: top}, effects: setBrowseCaret.of(top), scrollIntoView: true});
+    event.preventDefault();
+    return true;
+  }
+  const selection = view.state.selection.main;
+  if (selection.head !== caret) view.dispatch({selection: {anchor: caret}});
+  browseKeyPending = true;
+  queueMicrotask(() => { browseKeyPending = false; });
+  return false;
+}
+
+// 浏览时编辑器的选区只听方向键和点击：系统原生选区（拖选、重画后浏览器自己放的选区）不改动它，
+// 否则收起 / 展开标题重画时光标会被浏览器的选区带到开头去。
+const browseSelectionFilter = EditorState.transactionFilter.of(transaction => {
+  if (!transaction.startState.readOnly || !transaction.selection || browseKeyPending || !transaction.isUserEvent("select")) return transaction;
+  return transaction.docChanged || transaction.effects.length ? transaction : [];
+});
+
 // 切换浏览 / 编辑 / 源码时，光标（或屏幕最上面那一行）留在屏幕上原来的高度，不会跳到别处去找不着。
 function captureAnchor(position) {
   const box = view.scrollDOM.getBoundingClientRect();
@@ -260,7 +300,9 @@ function captureAnchor(position) {
 
 function restoreAnchor(anchor) {
   view.requestMeasure({
-    read: () => ({coords: view.coordsAtPos(anchor.position), box: view.scrollDOM.getBoundingClientRect()}),
+    // 位置不在已经排好的那一段里时 coordsAtPos 拿不到坐标，改用行块的高度算。
+    read: () => ({coords: view.coordsAtPos(anchor.position) ?? {top: view.documentTop + view.lineBlockAt(anchor.position).top},
+                  box: view.scrollDOM.getBoundingClientRect()}),
     write: ({coords, box}) => { if (coords) view.scrollDOM.scrollTop += coords.top - box.top - anchor.offset; }
   });
 }
@@ -331,8 +373,9 @@ function decorations(state, details, expanded, headings, flash) {
   const overlapsSelection = (from, to) => selection.from <= to && selection.to >= from;
   const add = (from, to, decoration) => { if (from < to) ranges.push(decoration.range(from, to)); };
   const replace = (from, to, widget, block = false) => add(from, to, Decoration.replace({widget, block, atomic: true}));
-  // 标题和折叠块按位置依次处理：外层收起了，里面的就不再处理。标题只在浏览时可以折叠。
-  const foldables = [...details.map(item => ({item})), ...(state.readOnly ? headings : []).map(heading => ({heading}))]
+  // 标题和折叠块按位置依次处理：外层收起了，里面的就不再处理。标题在浏览和编辑时一样收起，
+  // 切换时版面不变，光标留在屏幕上原来的地方。
+  const foldables = [...details.map(item => ({item})), ...headings.map(heading => ({heading}))]
     .sort((left, right) => (left.item ?? left.heading).from - (right.item ?? right.heading).from);
   for (const {item, heading} of foldables) {
     if (heading) {
@@ -492,6 +535,16 @@ const live = StateField.define({
     if (!changed && !transaction.selection && !effectsChanged && !parsed && !modeChanged) return value;
     const details = changed || parsed ? parseDetails(transaction.state.doc, tree) : value.details;
     const headings = changed || parsed ? parseHeadings(transaction.state.doc, tree, details) : value.headings;
+    if ((transaction.selection || changed) && !transaction.state.readOnly) {
+      // 编辑时光标进了收起的标题下面（比如在收起的标题末尾回车）：展开这一节，不在看不见的地方打字。
+      const head = transaction.state.selection.main.head;
+      for (const heading of headings) {
+        if (head > heading.lineTo && head <= heading.end && folds.get(heading.key) === true) {
+          folds.set(heading.key, false);
+          post({kind: "fold", key: heading.key, value: false});
+        }
+      }
+    }
     if (transaction.selection && !effectsChanged && !transaction.state.readOnly) {
       const head = transaction.state.selection.main.head;
       for (const item of details) {
@@ -540,7 +593,7 @@ function snapshot() {
 function editorExtensions(config) {
   return [history(), drawSelection({cursorBlinkRate: 0}), rectangularSelection(), EditorView.lineWrapping,
           indentOnInput(), bracketMatching(), markdown({base: markdownLanguage}), syntaxHighlighting(highlighting),
-          livePreview.of(config.sourceMode ? [] : live), browseCaret,
+          livePreview.of(config.sourceMode ? [] : live), browseCaret, browseSelectionFilter,
           EditorView.atomicRanges.of(view => view.state.field(live, false)?.decorations.update({filter: (_from, _to, decoration) => decoration.spec.atomic === true}) ?? Decoration.none),
           editable.of(editability(config.readOnly || config.previewOnly)),
           // 撤销 / 重做在浏览和编辑时都可用；没有可撤销的也吞掉按键，不落到应用别处的撤销上。
@@ -556,6 +609,7 @@ function editorExtensions(config) {
             post({kind: "preview"});
             return true;
           }}])),
+          Prec.highest(EditorView.domEventHandlers({keydown: browseKeydown})),
           keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
           Prec.lowest(EditorView.domEventHandlers({keydown(event) {
             if (event.key !== "Escape" || event.isComposing || composing || view.composing) return false;
@@ -608,6 +662,15 @@ function loadFolds(entries) {
   if (entries) for (const [key, value] of Object.entries(entries)) folds.set(key, value);
 }
 
+// 原生层传来的折叠记忆和这里的是否一样（标题没记就是展开）。在别处（笔记里的看板内容）改了折叠时不一样。
+function sameFolds(entries) {
+  const normalized = (key, value) => key.startsWith("h") ? value === true : value;
+  for (const key of new Set([...folds.keys(), ...Object.keys(entries)])) {
+    if (normalized(key, folds.get(key)) !== normalized(key, entries[key])) return false;
+  }
+  return true;
+}
+
 // 所有工作板共用一个编辑器（一份网页进程）。换工作板时把当前这块的编辑器状态（正文、光标、撤销历史、
 // 折叠块的展开、浏览光标）和滚动位置存起来，换回来时原样恢复。只留最近用过的几块。
 const savedBoards = new Map();
@@ -657,6 +720,10 @@ window.boardEditor = {
       view.dom.addEventListener("mouseup", browsePointerUp);
     } else {
       if (config.key != null && config.key !== currentKey) switchBoard(config);
+      else if (config.folds && !sameFolds(config.folds)) {
+        loadFolds(config.folds);
+        view.dispatch({effects: refold.of(null)});
+      }
       if (typeof config.source === "string" && config.source !== view.state.doc.toString() && !view.composing && !composing) {
         const old = view.state.selection.main;
         view.dispatch({changes: {from: 0, to: view.state.doc.length, insert: config.source},
@@ -671,8 +738,10 @@ window.boardEditor = {
         const caret = view.state.field(browseCaret);
         const transaction = {effects};
         if (wasBrowsing && !browsing) {
-          // 进入编辑：浏览时点下的位置或拖选的范围变成编辑器的光标 / 选区。
-          transaction.selection = browseRange ?? {anchor: caret ?? view.state.selection.main.head};
+          // 进入编辑：浏览时点下的位置或拖选（按 Shift 用方向键选）的范围变成编辑器的光标 / 选区。
+          const selection = view.state.selection.main;
+          const keyboardRange = caret != null && !selection.empty && selection.head === caret ? {anchor: selection.anchor, head: selection.head} : null;
+          transaction.selection = browseRange ?? keyboardRange ?? {anchor: caret ?? selection.head};
         } else if (!wasBrowsing && browsing) {
           // 回到浏览：在刚才编辑的地方留一根光标。
           effects.push(setBrowseCaret.of(view.state.selection.main.head));

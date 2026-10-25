@@ -1,4 +1,6 @@
 import AppKit
+import SwiftUI
+import TimelineCore
 import XCTest
 @testable import Timeline
 
@@ -66,5 +68,66 @@ final class MarkdownHeadingFoldTests: XCTestCase {
         XCTAssertTrue(HeadingFolds.folded(in: "log.2").isEmpty, "按笔记分别记住")
         view.onToggleHeading?("h1:A#0")
         XCTAssertNil(defaults.object(forKey: HeadingFolds.key("log.1")), "展开后不再记录")
+    }
+
+    /// 工作板正文的折叠范围和键与编辑器一致：到下一个同级或更高级标题为止，不越过折叠块，末尾空行不算。
+    func testBoardFoldLayoutMatchesTheEditor() {
+        let board = "# A\n\nalpha\n\n## A1\n\ninside\n\n# B\n\nbeta\n\n<details>\n<summary>D</summary>\n\n## In details\n\nhidden body\n\n</details>\n\n```\n# not a heading\n```\n# **Bold** title ##\n"
+        let layout = BoardFoldLayout(board)
+        XCTAssertEqual(layout.headings.map(\.key), ["h1:A#0", "h2:A1#0", "h1:B#0", "h2:In details#0"])
+        XCTAssertEqual(layout.headings.map(\.lastLine), [6, 6, 23, 17])
+        XCTAssertEqual(layout.disclosureKeys, [12: "d:D#0"])
+        XCTAssertEqual(layout.hiddenRanges(["h1:A#0": true, "h2:A1#0": false]), [1...6])
+        XCTAssertEqual(BoardFoldLayout("# **Bold** title ##\nbody").headings.map(\.key), ["h1:**Bold** title#0"], "标题文字取原文，和编辑器一样")
+    }
+
+    /// 笔记里的看板内容和工作板共用折叠记忆：工作板里收起的标题在这里也收起，这里点标题，工作板那边也跟着变。
+    func testBoardPreviewInNotesFollowsTheBoardsFolds() async throws {
+        let defaults = InMemoryDefaults()
+        let previous = BoardFolds.defaults
+        BoardFolds.defaults = defaults
+        defer { BoardFolds.defaults = previous }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let board = try XCTUnwrap(store.ensureBoard(for: .tag("Folds")))
+        store.setBoardMarkdown("# A\n\nalpha\n\n```\ncode under A\n```\n\nafter code\n\n# B\n\nbeta\n\n<details>\n<summary>D</summary>\n\nhidden body\n\n</details>\n", for: board.id)
+        BoardFolds.set("h1:A#0", true, board: board.id)
+        BoardFolds.set("d:D#0", true, board: board.id)
+        let host = NSHostingView(rootView: BoardMarkdownPreview(store: store, board: try XCTUnwrap(store.boards.first)).frame(width: 380).padding(12))
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 500), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        window.orderFront(nil)
+        func visibleText() async throws -> String {
+            try await Task.sleep(for: .milliseconds(150))
+            host.layoutSubtreeIfNeeded()
+            func texts(_ view: NSView) -> [InteractiveTaskText] {
+                (view as? InteractiveTaskText).map { [$0] } ?? view.subviews.flatMap(texts)
+            }
+            return texts(host).filter { !$0.isHiddenOrHasHiddenAncestor && $0.frame.height > 1 }.map(\.string).joined(separator: "\n")
+        }
+        var text = try await visibleText()
+        XCTAssertFalse(text.contains("alpha") || text.contains("after code"), "工作板里收起的 A 在这里也收起（跨过代码块）")
+        XCTAssertTrue(text.contains("⋯") && text.contains("beta"))
+        XCTAssertTrue(text.contains("hidden body"), "工作板里展开的折叠块在这里也展开")
+
+        // 工作板那边展开 A：这里跟着展开。
+        BoardFolds.set("h1:A#0", false, board: board.id)
+        text = try await visibleText()
+        XCTAssertTrue(text.contains("alpha") && text.contains("after code"))
+
+        // 这里收起 B：存进工作板的折叠记忆。
+        let notified = expectation(forNotification: .boardFoldsChanged, object: nil)
+        let view = try XCTUnwrap({ () -> InteractiveTaskText? in
+            func texts(_ view: NSView) -> [InteractiveTaskText] { (view as? InteractiveTaskText).map { [$0] } ?? view.subviews.flatMap(texts) }
+            return texts(host).first { $0.string.contains("beta") }
+        }())
+        view.onToggleHeading?("h1:B#0")
+        await fulfillment(of: [notified], timeout: 1)
+        XCTAssertEqual(BoardFolds.load(board.id), ["d:D#0": true, "h1:B#0": true])
+        text = try await visibleText()
+        XCTAssertFalse(text.contains("beta") || text.contains("hidden body"))
     }
 }

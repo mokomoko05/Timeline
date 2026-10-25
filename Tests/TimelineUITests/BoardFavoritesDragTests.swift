@@ -174,8 +174,7 @@ final class BoardFavoritesDragTests: XCTestCase {
         func bars(_ view: NSView) -> [BoardFavoritesScrollView] {
             (view as? BoardFavoritesScrollView).map { [$0] } ?? view.subviews.flatMap(bars)
         }
-        let editor = try boardWebView(in: content)
-        try await waitForBoardEditor(editor)
+        let editor = try await waitForBoardEditor(in: content)
         _ = try await editor.evaluateJavaScript("window.boardEditor.focus();window.boardEditor.replaceSelection('Unsaved meeting notes')")
         try await Task.sleep(for: .milliseconds(30))
         XCTAssertEqual(store.board(for: first.owner)?.markdown, "")

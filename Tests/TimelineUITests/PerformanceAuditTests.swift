@@ -227,6 +227,8 @@ final class PerformanceAuditTests: XCTestCase {
     }
 
     func testBoardCacheEvictionAndOwnerReleaseFreeSessionsAndWebViews() async throws {
+        // 从一个新的共用编辑器开始：前面的测试留下的编辑器不算在这里。
+        autoreleasepool { BoardLiveEditorSession.releaseSharedEditor() }
         let store = store()
         var nav: BoardNavigation? = BoardNavigation(defaults: defaults())
         weak var firstSession: BoardLiveEditorSession?
