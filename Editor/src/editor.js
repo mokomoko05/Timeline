@@ -159,10 +159,15 @@ class HeadingFoldWidget extends WidgetType {
     button.setAttribute("aria-label", this.folded ? (labels.expand || "展开") : (labels.collapse || "收起"));
     button.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>';
     button.addEventListener("mousedown", event => event.preventDefault());
-    button.addEventListener("click", () => setFold(this.key, !this.folded));
+    button.addEventListener("click", () => setFold(this.key, !this.folded, lineStart(button)));
     return button;
   }
   ignoreEvent() { return true; }
+}
+
+// 小部件所在那一行的开头。
+function lineStart(element) {
+  try { return view.state.doc.lineAt(view.posAtDOM(element)).from; } catch { return null; }
 }
 
 class FoldedMoreWidget extends WidgetType {
@@ -175,16 +180,52 @@ class FoldedMoreWidget extends WidgetType {
     button.textContent = "⋯";
     button.setAttribute("aria-label", labels.expand || "展开");
     button.addEventListener("mousedown", event => event.preventDefault());
-    button.addEventListener("click", () => setFold(this.key, false));
+    button.addEventListener("click", () => setFold(this.key, false, lineStart(button)));
     return button;
   }
   ignoreEvent() { return true; }
 }
 
-function setFold(key, folded) {
+function setFold(key, folded, lineFrom) {
   folds.set(key, folded);
   post({kind: "fold", key, value: folded});
-  view.dispatch({effects: refold.of(null)});
+  keepInPlace(lineFrom, {effects: [refold.of(null)]});
+}
+
+// 收起 / 展开时被点的那一行（标题、折叠块）留在屏幕上原来的位置，内容在它下面展开、收起。
+// CodeMirror 自己滚到底时会让底部不动，展开就把标题往上顶；这里明确以这一行为准。
+// 收起后剩下的内容不够撑住原来的滚动位置时，底部临时留出空白（往上滚就收回去）。
+const basePaddingBottom = 24;
+let bottomSlack = 0;
+
+function setBottomSlack(value) {
+  bottomSlack = Math.max(0, value);
+  view.contentDOM.style.paddingBottom = bottomSlack ? `${basePaddingBottom + bottomSlack}px` : "";
+}
+
+function trimBottomSlack() {
+  if (!bottomSlack || !view) return;
+  const scroller = view.scrollDOM;
+  const overflow = scroller.scrollTop + scroller.clientHeight - (scroller.scrollHeight - bottomSlack);
+  if (overflow < bottomSlack) setBottomSlack(overflow);
+}
+
+function keepInPlace(lineFrom, spec) {
+  const box = view.scrollDOM.getBoundingClientRect();
+  const coords = lineFrom == null ? null : view.coordsAtPos(lineFrom, 1);
+  if (!coords || coords.bottom < box.top || coords.top > box.bottom) { view.dispatch(spec); return; }
+  const offset = coords.top - box.top;
+  view.dispatch({...spec, effects: [...(spec.effects ?? []), EditorView.scrollIntoView(lineFrom, {y: "start", yMargin: offset})]});
+  view.requestMeasure({
+    read: () => ({coords: view.coordsAtPos(lineFrom, 1), box: view.scrollDOM.getBoundingClientRect()}),
+    write: ({coords, box}) => {
+      if (!coords) return;
+      const drift = coords.top - box.top - offset;
+      if (drift <= 1) return;
+      setBottomSlack(bottomSlack + drift);
+      view.scrollDOM.scrollTop += drift;
+    }
+  });
 }
 
 const browseCaret = StateField.define({
@@ -244,6 +285,7 @@ function browsePointerUp(event) {
   }
   const effects = [setBrowseCaret.of(position)];
   const lineElement = event.target.closest?.(".cm-line.cm-foldable");
+  let toggledLine = null;
   if (lineElement) {
     // 收起的标题右边点下去，位置会落在被隐藏的那一节里：按点中的那一行找标题。
     const lineFrom = view.state.doc.lineAt(view.posAtDOM(lineElement, 0)).from;
@@ -253,9 +295,11 @@ function browsePointerUp(event) {
       folds.set(heading.key, !folded);
       post({kind: "fold", key: heading.key, value: !folded});
       effects.push(refold.of(null));
+      toggledLine = heading.from;
     }
   }
-  view.dispatch({effects, selection: {anchor: position}});
+  if (toggledLine != null) keepInPlace(toggledLine, {effects, selection: {anchor: position}});
+  else view.dispatch({effects, selection: {anchor: position}});
 }
 
 // 浏览时按方向键：还没有光标就先放在屏幕最上面那一行；有拖选的范围就从光标处重新开始，不接着旧的选区走。
@@ -347,12 +391,12 @@ class DetailsWidget extends WidgetType {
     button.append(arrow, title);
     button.addEventListener("mousedown", event => event.preventDefault());
     button.addEventListener("click", () => {
-      const transaction = {effects: toggleDetails.of({from: this.item.from, open: !this.open})};
+      const transaction = {effects: [toggleDetails.of({from: this.item.from, open: !this.open})]};
       const head = view.state.selection.main.head;
       if (this.open && head >= this.item.from && head <= this.item.to) {
         transaction.selection = {anchor: this.item.to < view.state.doc.length ? this.item.to + 1 : Math.max(0, this.item.from - 1)};
       }
-      view.dispatch(transaction);
+      keepInPlace(this.item.from, transaction);
     });
     button.addEventListener("dblclick", () => {
       if (view.state.readOnly) return;
@@ -683,6 +727,7 @@ function switchBoard(config) {
     savedBoards.set(currentKey, {state: view.state, scroll: view.scrollDOM.scrollTop, browseRange});
     while (savedBoards.size > savedBoardLimit) savedBoards.delete(savedBoards.keys().next().value);
   }
+  setBottomSlack(0);
   const saved = savedBoards.get(config.key);
   savedBoards.delete(config.key);
   currentKey = config.key;
@@ -718,6 +763,7 @@ window.boardEditor = {
         event.stopPropagation();
       }, true);
       view.dom.addEventListener("mouseup", browsePointerUp);
+      view.scrollDOM.addEventListener("scroll", trimBottomSlack, {passive: true});
     } else {
       if (config.key != null && config.key !== currentKey) switchBoard(config);
       else if (config.folds && !sameFolds(config.folds)) {

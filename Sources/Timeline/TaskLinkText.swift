@@ -343,6 +343,15 @@ final class InteractiveTaskText: NSTextView {
         headingRegions().first { $0.rect.contains(point) }?.key
     }
 
+    /// 收起 / 展开标题：标题留在滚动区域里原来的位置，内容在它下面展开、收起（滚到底时收起也不往下跳）。
+    func toggleHeading(_ key: String) {
+        if let scroll = enclosingScrollView {
+            let folding = foldedHeadings?.contains(key) != true && boardFolds?.headings.values.first { $0.key == key }?.folded != true
+            if folding { BottomSlack.reserve(in: scroll) } else { BottomSlack.trimAfterLayout(scroll) }
+        }
+        onToggleHeading?(key)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         for region in linkRegions() where region.rect.intersects(dirtyRect) {
             NativePalette.accent.withAlphaComponent(hoveredURL == region.url ? 0.18 : 0.09).setFill()
@@ -415,7 +424,7 @@ final class InteractiveTaskText: NSTextView {
             onClick?()
             super.mouseDown(with: event)
             // 系统的选择跟踪在松开鼠标后才返回：点了标题、没有拖选文字，就收起 / 展开它。
-            if let heading, selectedRange().length == 0 { onToggleHeading?(heading) }
+            if let heading, selectedRange().length == 0 { toggleHeading(heading) }
             return
         }
         mouseDownEvent = event
@@ -468,5 +477,59 @@ enum HeadingFolds {
         var folded = folded(in: id)
         if folded.remove(heading) == nil { folded.insert(heading) }
         if folded.isEmpty { defaults.removeObject(forKey: key(id)) } else { defaults.set(folded.sorted(), forKey: key(id)) }
+    }
+}
+
+/// 滚动区域底部临时多出的空白。收起标题时内容变短，已经滚到底的话系统会把内容往下拉，标题跟着往下跳；
+/// 收起前先在底部留出空白撑住滚动位置，排版后只留下看得见的那部分，往上滚就逐渐收回。
+@MainActor
+enum BottomSlack {
+    private static var slack: [ObjectIdentifier: (amount: CGFloat, observer: NSObjectProtocol)] = [:]
+
+    static func amount(in scroll: NSScrollView) -> CGFloat { slack[ObjectIdentifier(scroll)]?.amount ?? 0 }
+
+    /// 内容要变短之前调用：先留出一屏高的空白，排版完成后收到只剩看得见的部分。
+    static func reserve(in scroll: NSScrollView) {
+        guard scroll.documentView?.isFlipped == true else { return }
+        let id = ObjectIdentifier(scroll)
+        let observer = slack[id]?.observer ?? NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: nil) { [weak scroll] _ in
+            MainActor.assumeIsolated { if let scroll { trim(scroll) } }
+        }
+        scroll.contentView.postsBoundsChangedNotifications = true
+        set(max(amount(in: scroll), scroll.contentView.bounds.height), observer: observer, on: scroll)
+        trimAfterLayout(scroll)
+    }
+
+    /// 内容变了（比如展开）：排版完成后把看不到的空白收掉。
+    static func trimAfterLayout(_ scroll: NSScrollView) {
+        guard slack[ObjectIdentifier(scroll)] != nil else { return }
+        Task { @MainActor [weak scroll] in
+            // SwiftUI 在下一轮界面更新里才排版，两轮之后再量。
+            for _ in 0..<2 { await Task.yield(); try? await Task.sleep(for: .milliseconds(16)) }
+            if let scroll { scroll.documentView?.superview?.layoutSubtreeIfNeeded(); trim(scroll) }
+        }
+    }
+
+    private static func trim(_ scroll: NSScrollView) {
+        let id = ObjectIdentifier(scroll)
+        guard let entry = slack[id], let documentView = scroll.documentView else { return }
+        let visible = scroll.contentView.bounds.maxY - documentView.frame.height
+        if visible < entry.amount - 0.5 { set(max(0, visible), observer: entry.observer, on: scroll) }
+    }
+
+    private static func set(_ amount: CGFloat, observer: NSObjectProtocol, on scroll: NSScrollView) {
+        let id = ObjectIdentifier(scroll)
+        let clip = scroll.contentView
+        var insets = clip.contentInsets
+        insets.bottom = max(0, insets.bottom + amount - (slack[id]?.amount ?? 0))
+        if amount <= 0 {
+            NotificationCenter.default.removeObserver(observer)
+            slack[id] = nil
+        } else {
+            slack[id] = (amount, observer)
+        }
+        clip.automaticallyAdjustsContentInsets = false
+        clip.contentInsets = insets
     }
 }

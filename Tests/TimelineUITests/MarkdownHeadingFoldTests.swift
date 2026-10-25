@@ -130,4 +130,51 @@ final class MarkdownHeadingFoldTests: XCTestCase {
         text = try await visibleText()
         XCTAssertFalse(text.contains("beta") || text.contains("hidden body"))
     }
+
+    /// 笔记、日记里的标题收起 / 展开时也留在原来的位置；滚到底时收起，底部临时留白撑住，不往下跳。
+    func testNativeHeadingStaysInPlaceWhenFoldingAtTheBottom() async throws {
+        let defaults = InMemoryDefaults()
+        let previous = HeadingFolds.defaults
+        HeadingFolds.defaults = defaults
+        defer { HeadingFolds.defaults = previous }
+        let body = (1...12).map { "Line \($0)" }.joined(separator: "\n\n")
+        let text = "# One\n\n\(body)\n\n# Last\n\n\((1...6).map { "Tail \($0)" }.joined(separator: "\n\n"))"
+        let host = NSHostingView(rootView: ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(0..<8, id: \.self) { Text("Filler \($0)").frame(height: 30) }
+                TaskLinkText(source: text, completed: false, color: Palette.ink, fontSize: 13, edit: {}, open: { _ in },
+                             maxLines: 0, markdown: true, compactLines: true, foldID: "fold.bottom")
+            }
+        })
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 500), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        window.orderFront(nil)
+        try await Task.sleep(for: .milliseconds(200))
+        host.layoutSubtreeIfNeeded()
+        func find<T: NSView>(_ view: NSView, _ type: T.Type) -> T? { (view as? T) ?? view.subviews.lazy.compactMap { find($0, type) }.first }
+        let scroll = try XCTUnwrap(find(host, NSScrollView.self))
+        let view = try XCTUnwrap(find(host, InteractiveTaskText.self))
+        let clip = scroll.contentView
+        clip.scroll(to: NSPoint(x: 0, y: try XCTUnwrap(scroll.documentView).frame.height - clip.bounds.height))
+        scroll.reflectScrolledClipView(clip)
+        func top() -> CGFloat {
+            guard let rect = view.headingRegions().first(where: { $0.key == "h1:Last#0" })?.rect else { return .nan }
+            return view.convert(rect, to: clip).minY - clip.bounds.minY
+        }
+        let start = top()
+        view.toggleHeading("h1:Last#0")
+        try await Task.sleep(for: .milliseconds(250))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(view.string.contains("Tail 3"), "收起了")
+        XCTAssertEqual(top(), start, accuracy: 1, "滚到底收起时标题不往下跳")
+        XCTAssertGreaterThan(clip.contentInsets.bottom, 0, "底部临时留白")
+        view.toggleHeading("h1:Last#0")
+        try await Task.sleep(for: .milliseconds(250))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(view.string.contains("Tail 3"))
+        XCTAssertEqual(top(), start, accuracy: 1, "展开时标题不动，内容往下展开")
+        XCTAssertEqual(clip.contentInsets.bottom, 0, "展开后看不到的留白收回")
+    }
 }

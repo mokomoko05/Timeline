@@ -634,6 +634,61 @@ final class BoardLiveEditorTests: XCTestCase {
         XCTAssertTrue(fixture.session.ready)
     }
 
+    /// WebKit 收到了加载请求却一直不来问导航策略（冷启动时偶尔这样）：不用等满 `loadTimeout`，很快就重建。
+    func testEditorStuckBeforeNavigationIsRebuiltQuickly() async throws {
+        autoreleasepool { BoardLiveEditorSession.releaseSharedEditor() }
+        let previous = BoardLiveEditorSession.navigationTimeout
+        BoardLiveEditorSession.navigationTimeout = .milliseconds(1)
+        let fixture = try LiveFixture(source: "Quick body")
+        BoardLiveEditorSession.navigationTimeout = previous
+        defer { fixture.close() }
+        let original = try XCTUnwrap(fixture.session.webView)
+        for _ in 0..<50 where fixture.session.webView === original { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(fixture.session.webView === original, "还没开始导航的编辑器很快被换掉")
+        try await waitForBoardEditor(fixture.webView)
+        let snapshot = try await fixture.snapshot()
+        XCTAssertEqual(snapshot["source"] as? String, "Quick body")
+    }
+
+    /// 收起 / 展开时被点的标题留在屏幕上原来的位置，内容在它下面展开、收起；滚到底时也一样（底部临时留白，往上滚就收回）。
+    func testFoldingKeepsTheHeadingInPlaceEvenAtTheBottom() async throws {
+        let body = (1...15).map { "Line \($0)" }.joined(separator: "\n\n")
+        let source = "# One\n\n\(body)\n\n# Two\n\n\(body)\n\n# Last\n\n\((1...6).map { "Tail \($0)" }.joined(separator: "\n\n"))\n"
+        let fixture = try LiveFixture(source: source)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        try await browse(fixture.session, fixture.webView)
+        let script = """
+        const s=document.querySelector('.cm-scroller');
+        // 隐藏的测试窗口里网页几乎不出帧、计时器也被放慢：每一步之后手动测量一次、发一次滚动事件，相当于过了一帧。
+        const settle=()=>{ for (let i=0;i<2;i++){ window.boardEditor.view().measure(); s.dispatchEvent(new Event('scroll')); } };
+        const heading=name=>[...document.querySelectorAll('.cm-line')].find(l=>l.classList.contains('cm-foldable')&&l.textContent.includes(name));
+        const top=name=>Math.round(heading(name).getBoundingClientRect().top);
+        const click=el=>{const r=el.getBoundingClientRect();const o={bubbles:true,cancelable:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2,button:0,detail:1};el.dispatchEvent(new MouseEvent('mousedown',o));el.dispatchEvent(new MouseEvent('mouseup',o));};
+        const out={};
+        for (let i=0;i<4;i++){ s.scrollTop += heading('Two').getBoundingClientRect().top - s.getBoundingClientRect().top - 100; settle(); }
+        out.middle=[top('Two')];
+        heading('Two').querySelector('.board-heading-fold').click(); settle(); out.middle.push(top('Two'));
+        click(heading('Two')); settle(); out.middle.push(top('Two'));
+        for (let i=0;i<4;i++){ s.scrollTop=s.scrollHeight; settle(); } out.bottom=[top('Last')];
+        heading('Last').querySelector('.board-heading-fold').click(); settle(); out.bottom.push(top('Last'));
+        click(heading('Last')); settle(); out.bottom.push(top('Last'));
+        heading('Last').querySelector('.board-heading-fold').click(); settle();
+        out.slack=document.querySelector('.cm-content').style.paddingBottom;
+        s.scrollTop -= 400; settle();
+        out.trimmed=document.querySelector('.cm-content').style.paddingBottom;
+        return out;
+        """
+        let raw = try await fixture.webView.callAsyncJavaScript(script, contentWorld: .page)
+        let result = try XCTUnwrap(raw as? [String: Any])
+        let middle = try XCTUnwrap(result["middle"] as? [Int]), bottom = try XCTUnwrap(result["bottom"] as? [Int])
+        XCTAssertEqual(Set(middle).count, 1, "页面中间收起 / 展开（点箭头或标题）标题不动：\(middle)")
+        XCTAssertEqual(Set(bottom).count, 1, "滚到底时收起 / 展开标题也不动：\(bottom)")
+        XCTAssertNotEqual(result["slack"] as? String, "", "滚到底收起时底部临时留白")
+        XCTAssertEqual(result["trimmed"] as? String, "", "往上滚后留白收回")
+        XCTAssertEqual(fixture.store.boards[0].markdown, source)
+    }
+
     /// 默认的编辑是所见即所得：正文照样渲染，只有光标所在的那一行露出 Markdown 标记。
     func testLiveEditingShowsMarkupOnlyOnTheCaretLine() async throws {
         let fixture = try LiveFixture(source: "# Title\n\n**Strong**\n\nAfter")

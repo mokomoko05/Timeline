@@ -65,6 +65,11 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     private var loadWatch: Task<Void, Never>?
     /// 编辑器网页多久还没就绪就重建（测试里改短）。
     static var loadTimeout: Duration = .seconds(6)
+    /// 网页多久还没走到导航决策就算卡住。本地文件正常几十毫秒就到；卡住时 WebKit 收到了加载请求，
+    /// 却一直不来问导航策略（多见于刚编译 / 刚拷贝的程序第一次启动），重建后就好。
+    static var navigationTimeout: Duration = .milliseconds(1500)
+    /// 连续因为导航卡住重建了几次：WebKit 一直起不来时退回 `loadTimeout`，不反复重建。
+    private static var quickRebuilds = 0
 
     var handlesTextCommands: Bool {
         webView?.window === NSApp.keyWindow && hasTextFocus
@@ -158,10 +163,16 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     /// 不然这块和之后打开的工作板都是空白。界面跟着 `objectWillChange` 把新的编辑器放进来。
     private func watchLoading() {
         loadWatch?.cancel()
-        let timeout = Self.loadTimeout
+        let timeout = Self.loadTimeout, quick = min(Self.navigationTimeout, timeout)
         loadWatch = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: timeout)
+            try? await Task.sleep(for: quick)
             guard !Task.isCancelled, let self, Self.owner === self, !self.ready else { return }
+            if Self.quickRebuilds < 3, Self.shared?.handler.navigationStarted == false {
+                Self.quickRebuilds += 1
+            } else {
+                try? await Task.sleep(for: timeout - quick)
+                guard !Task.isCancelled, Self.owner === self, !self.ready else { return }
+            }
             Self.shared?.handler.session = nil
             Self.shared?.view.removeFromSuperview()
             Self.shared = nil
@@ -241,6 +252,12 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     }
 
     static var hasSharedEditor: Bool { shared != nil }
+
+    fileprivate static func editorBecameReady() { quickRebuilds = 0 }
+
+    fileprivate static func navigationStarted(in view: WKWebView) {
+        if shared?.view === view { shared?.handler.navigationStarted = true }
+    }
 
     fileprivate static func discardShared(_ view: WKWebView) {
         if shared?.view === view, owner == nil { shared = nil }
@@ -384,6 +401,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        Self.navigationStarted(in: webView)
         if navigationAction.navigationType == .linkActivated {
             if let url = navigationAction.request.url.flatMap({ TaskText.linkURL($0.absoluteString) }) { SafariLinks.open(url) }
             decisionHandler(.cancel)
@@ -392,7 +410,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         flush()
-        Self.shared.map { $0.handler.pageReady = false }
+        Self.shared.map { $0.handler.pageReady = false; $0.handler.navigationStarted = false }
         ready = false
         lastConfiguration = nil
         sourceNeedsSynchronization = true
@@ -406,8 +424,13 @@ final class WeakBoardScriptHandler: NSObject, WKScriptMessageHandler {
     weak var session: BoardLiveEditorSession?
     /// 网页已经加载好（之后换工作板不用再等）。网页进程重启后重新加载，再次就绪前为 false。
     var pageReady = false
+    /// WebKit 已经来问过导航策略（加载真的开始了）。
+    var navigationStarted = false
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        if (message.body as? [String: Any])?["kind"] as? String == "ready" { pageReady = true }
+        if (message.body as? [String: Any])?["kind"] as? String == "ready" {
+            pageReady = true
+            BoardLiveEditorSession.editorBecameReady()
+        }
         session?.userContentController(userContentController, didReceive: message)
     }
 }
@@ -419,6 +442,7 @@ private final class SharedEditorWatcher: NSObject, WKNavigationDelegate {
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        MainActor.assumeIsolated { BoardLiveEditorSession.navigationStarted(in: webView) }
         decisionHandler(navigationAction.request.url?.isFileURL == true ? .allow : .cancel)
     }
 }
