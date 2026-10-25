@@ -224,7 +224,7 @@ struct UnifiedNotesView: View {
 
 }
 
-/// 笔记窗口里的日记模式：沿用笔记的侧栏、卡片和编辑器，不再嵌入带复盘区的 DayLogView。
+/// 笔记窗口里的日记模式：沿用笔记的侧栏、卡片和编辑器。
 struct UnifiedJournalView: View {
     @Environment(\.locale) private var locale
     @Environment(\.typography) private var typography

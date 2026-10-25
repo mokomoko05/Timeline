@@ -105,7 +105,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 self?.window?.title = "Timeline"
             }
         }
-        NotesWindowController.shared.handoffWindow = { [unowned self] in otherWindowForHandoff(excluding: NotesWindowController.shared.window) }
         AppRouter.presentMain = { [unowned self] in if !(window.isVisible && !window.isMiniaturized) || NSApp.keyWindow !== window { showMainWindowSoftly() } }
         AppRouter.mainIsKey = { [unowned self] in NSApp.keyWindow === window }
         AppRouter.showSettings = { [unowned self] in settings.show() }
@@ -381,7 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func installKeyboardNavigation() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
-            return MainActor.assumeIsolated { self.handleKey(event) ? nil : event }
+            return MainActor.assumeIsolated { self.handleKey(event) } ? nil : event
         }
     }
 

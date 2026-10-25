@@ -171,85 +171,16 @@ private struct TagPopoverTestHost: View {
 }
 
 @MainActor
-final class DayLogWindowTests: XCTestCase {
-    private static var keepAlive: [AnyObject] = []
-
-    private func makeStore() -> JournalStore {
+final class DayLogOrderTests: XCTestCase {
+    func testDaysLogsAreShownInTimeOrder() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
-        return JournalStore(directory: directory)
-    }
-
-    private func controller(_ name: String) -> DayLogWindowController {
-        let controller = DayLogWindowController(frameName: name)
-        addTeardownBlock {
-            UserDefaults.standard.removeObject(forKey: "NSWindow Frame \(name)")
-            UserDefaults.standard.synchronize()
-        }
-        Self.keepAlive.append(controller)
-        return controller
-    }
-
-    func testViewListsTheDaysLogsInTimeOrder() throws {
-        let store = makeStore()
+        let store = JournalStore(directory: directory)
         let day = JournalDates.calendar.startOfDay(for: Date())
         _ = try store.quickLog("晚", on: day, now: day.addingTimeInterval(3 * 3600))
         _ = try store.quickLog("早", on: day, now: day.addingTimeInterval(3600))
         _ = try store.quickLog("中", on: day, now: day.addingTimeInterval(2 * 3600))
         XCTAssertEqual(store.entry(for: day).logs.map(\.text), ["晚", "早", "中"], "存储顺序是追加顺序")
         XCTAssertEqual(store.entry(for: day).logsInTimeOrder.map(\.text), ["早", "中", "晚"], "显示按时间顺序")
-    }
-
-    func testIsAnIndependentResizableWindowThatTogglesAndIgnoresTheMainWindow() throws {
-        let store = makeStore()
-        let main = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
-        main.isReleasedWhenClosed = false
-        main.orderFront(nil)
-        let log = controller("DayLogTest-\(UUID().uuidString)")
-        Self.keepAlive.append(main)
-
-        log.toggle(store: store, date: Date())
-        let window = try XCTUnwrap(log.window)
-        XCTAssertTrue(window.isVisible)
-        XCTAssertTrue(window.styleMask.contains(.resizable), "可以拖边缘调整大小")
-        XCTAssertFalse(window.styleMask.contains(.closable), "和笔记一样没有红绿灯")
-        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            XCTAssertTrue(window.standardWindowButton(button)?.isHidden ?? true, "红绿灯都隐藏")
-        }
-        XCTAssertNil(window.parent, "独立窗口，不是主窗口的 sheet 或子窗口")
-        XCTAssertNil(main.attachedSheet)
-        XCTAssertEqual(window.minSize, DayLogWindowController.minSize)
-
-        main.orderOut(nil)
-        XCTAssertTrue(window.isVisible, "收起主窗口不影响日志窗口")
-        log.toggle(store: store, date: Date())
-        XCTAssertFalse(window.isVisible, "再次切换关闭")
-        log.show(store: store, date: Date())
-        XCTAssertTrue(log.window === window, "复用同一个窗口")
-        window.cancelOperation(nil)
-        XCTAssertFalse(window.isVisible, "Esc 关闭")
-    }
-
-    func testSizeIsRememberedAcrossCloseAndAcrossControllers() throws {
-        let store = makeStore()
-        let name = "DayLogTest-\(UUID().uuidString)"
-        let first = controller(name)
-        first.show(store: store, date: Date())
-        let window = try XCTUnwrap(first.window)
-        window.setContentSize(NSSize(width: 1234, height: 765))
-        window.setFrameOrigin(NSPoint(x: 140, y: 160))
-        let size = window.frame.size
-        first.close()
-        first.show(store: store, date: Date())
-        XCTAssertEqual(first.window?.frame.size, size, "关闭再打开，大小不变")
-        first.close()
-
-        // 模拟重新启动应用：新的控制器从偏好里恢复。
-        window.saveFrame(usingName: name)
-        let second = controller(name)
-        second.show(store: store, date: Date())
-        XCTAssertEqual(try XCTUnwrap(second.window).frame.size.width, size.width, accuracy: 1)
-        XCTAssertEqual(try XCTUnwrap(second.window).frame.size.height, size.height, accuracy: 1)
-        second.close()
     }
 }
