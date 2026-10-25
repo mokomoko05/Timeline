@@ -682,7 +682,7 @@ struct TimelineDayDrop: DropDelegate {
         var ids = rows().map(\.0)
         ids.insert(id, at: min(index(at: info.location.y), ids.count))
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
-        withAnimation(Motion.quick) { store.moveTask(id, to: destination, order: ids) }
+        TaskLanding.shared.land(id) { store.moveTask(id, to: destination, order: ids) }
         TaskDragSession.shared.end()
         return true
     }

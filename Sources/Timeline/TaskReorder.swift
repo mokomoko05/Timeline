@@ -75,6 +75,8 @@ final class TaskReorderModel: ObservableObject {
     var commit: ([UUID]) -> Void = { _ in }
 
     @Published private(set) var activeID: UUID?
+    /// 松手后正在滑进新位置的那一行。
+    @Published private(set) var settlingID: UUID?
     @Published private(set) var target = 0
     private(set) var dragOffset: CGFloat = 0
     let drag = DragOffset()
@@ -88,6 +90,7 @@ final class TaskReorderModel: ObservableObject {
     @discardableResult
     func begin(_ id: UUID) -> Bool {
         guard activeID == nil else { return false }
+        settlingID = nil
         let ids = groupProvider(id)
         let rects = ids.compactMap { frames[$0] }
         guard ids.count > 1, rects.count == ids.count, let index = ids.firstIndex(of: id) else { return false }
@@ -129,26 +132,44 @@ final class TaskReorderModel: ObservableObject {
         return ReorderMath.shift(frames: groupFrames, active: activeIndex, target: target, index: index, spacing: Self.spacing)
     }
 
-    /// 松手立即提交并复位，不等待落位动画。
+    /// 松手立即提交顺序；被拖的行从松手处滑进新位置。
     func finish() {
-        guard activeID != nil else { return }
-        complete(order: ReorderMath.moved(group, from: activeIndex, to: target), changed: target != activeIndex)
+        guard let id = activeID else { return }
+        // 提交后这一行已排在新位置，先补上它和松手处的差距，再把差距动画归零：只有这一行在动，其他行和数据都已就位。
+        let residual = dragOffset - ReorderMath.slotOffset(frames: groupFrames, active: activeIndex, target: target)
+        let settles = !Motion.reduced && abs(residual) > 0.5
+        complete(order: ReorderMath.moved(group, from: activeIndex, to: target), changed: target != activeIndex,
+                 settling: settles ? (id, residual) : nil)
+        guard settles else { return }
+        // 等补偿后的位置先画出一帧再归零；同一轮里改回去会和提交合并，动画从错的位置开始。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
+            guard let self, self.settlingID == id else { return }
+            self.drag.value = 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDuration) { [weak self] in
+                guard let self, self.settlingID == id else { return }
+                withAnimation(Motion.quick) { self.settlingID = nil }
+            }
+        }
     }
+
+    nonisolated static let settleDuration = 0.24
+    static var settleAnimation: Animation { .spring(response: settleDuration, dampingFraction: 0.86) }
 
     func cancel() {
         guard activeID != nil else { return }
-        complete(order: group, changed: false)
+        complete(order: group, changed: false, settling: nil)
     }
 
-    private func complete(order: [UUID], changed: Bool) {
+    private func complete(order: [UUID], changed: Bool, settling: (id: UUID, offset: CGFloat)?) {
         // 顺序和位移在同一刻一起复位，行已经在新位置上，所以看不到跳动。
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             if changed { commit(order) }
             activeID = nil
+            settlingID = settling?.id
             dragOffset = 0
-            drag.value = 0
+            drag.value = settling?.offset ?? 0
             group = []
             groupFrames = []
         }
@@ -190,10 +211,11 @@ private struct TaskReorderShift: ViewModifier {
 
     func body(content: Content) -> some View {
         let active = model.activeID == id
+        let settling = model.settlingID == id
         content
             .background {
                 // 阴影画在行的背后，而不是给整行（里面有原生文本控件）加 .shadow，否则每帧都要把整行离屏渲染一遍。
-                if active {
+                if active || settling {
                     // 被拖的行浮起：卡片底色加一道细边和固定的轻阴影，合成成一张图层跟手移动。
                     RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Palette.card)
                         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Palette.accent.opacity(0.35), lineWidth: Metrics.hairline))
@@ -203,25 +225,31 @@ private struct TaskReorderShift: ViewModifier {
             }
             // 让位的距离必须作为参数传下去：SwiftUI 发现下层修饰器的输入没变就会跳过重算，
             // 如果只在里面读模型，其他行就不会动。
-            .modifier(DragFollow(active: active, reordering: model.isActive, shift: model.offset(for: id),
-                                 drag: active ? model.drag : DragOffset.idle))
-            .zIndex(active ? 10 : 0)
+            .modifier(DragFollow(active: active, settling: settling, reordering: model.isActive, shift: model.offset(for: id),
+                                 drag: active || settling ? model.drag : DragOffset.idle))
+            .zIndex(active || settling ? 10 : 0)
     }
 }
 
-/// 被拖行紧跟指针，拖动时相邻行平滑让位；松手立即复位。
+/// 被拖行紧跟指针，拖动时相邻行平滑让位；松手后被拖行滑进新位置。
 private struct DragFollow: ViewModifier {
     let active: Bool
+    let settling: Bool
     let reordering: Bool
     /// 非跟手状态下的位移：别的行的让位距离，或松手后被拖行落位的距离。
     let shift: CGFloat
     @ObservedObject var drag: DragOffset
 
     func body(content: Content) -> some View {
-        let following = active
-        let offset = following ? drag.value : shift
+        let offset = active || settling ? drag.value : shift
         content
             .offset(y: offset)
-            .animation(following || !reordering ? nil : (Motion.reduced ? nil : .spring(response: 0.28, dampingFraction: 0.82)), value: offset)
+            .animation(animation, value: offset)
+    }
+
+    private var animation: Animation? {
+        if Motion.reduced || active { return nil }
+        if settling { return TaskReorderModel.settleAnimation }
+        return reordering ? .spring(response: 0.28, dampingFraction: 0.82) : nil
     }
 }

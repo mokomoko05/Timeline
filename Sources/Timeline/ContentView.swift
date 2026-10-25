@@ -220,7 +220,7 @@ struct ContentView: View {
             // 逾期的任务往后推时从今天起算：推一次就到明天，不是从原来的截止日再加一天。
             let start = days > 0 ? max(base, calendar.startOfDay(for: Date())) : base
             guard let target = calendar.date(byAdding: .day, value: days, to: start) else { return }
-            withAnimation(Motion.quick) { store.setDeadline(task.id, to: target) }
+            TaskLanding.shared.land(task.id) { store.setDeadline(task.id, to: target) }
             toast.show(AppLocalizedFormat("已改到 %@", target.relativeLabel), actionTitle: "撤销") { store.undo() }
         case .newTodo:
             tasksVisible = true

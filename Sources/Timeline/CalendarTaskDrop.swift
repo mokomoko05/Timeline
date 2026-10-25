@@ -25,6 +25,56 @@ final class TaskDragSession: ObservableObject {
     }
 }
 
+/// 任务放下（或用快捷键改日期）后，在落点那一行闪一下。
+/// 数据本身一次到位、不进动画事务：整窗重排时日历格子和每一行的原生文本都会跟着插值，帧率很低。
+@MainActor
+final class TaskLanding: ObservableObject {
+    struct Mark: Equatable {
+        let id: UUID
+        let time: Date
+    }
+
+    static let shared = TaskLanding()
+    @Published private(set) var mark: Mark?
+
+    func land(_ id: UUID, _ change: () -> Void) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction, change)
+        mark = Mark(id: id, time: Date())
+    }
+
+    /// 跨日期移动时这一行会在新的分组里重新创建，出现时看一下是不是刚落下的那一项。
+    func isFresh(_ id: UUID) -> Bool {
+        guard let mark, mark.id == id else { return false }
+        return Date().timeIntervalSince(mark.time) < 0.5
+    }
+}
+
+/// 落点高亮：只是一层底色和细边的透明度变化，不牵动布局。
+struct TaskLandingFlash: View {
+    let id: UUID
+    @ObservedObject private var landing = TaskLanding.shared
+    @State private var glow = 0.0
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Palette.accent.opacity(0.14 * glow))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Palette.accent.opacity(0.55 * glow), lineWidth: Metrics.hairline))
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onAppear { if landing.isFresh(id) { flash() } }
+            .onChange(of: landing.mark) { mark in if mark?.id == id { flash() } }
+    }
+
+    private func flash() {
+        guard !Motion.reduced else { return }
+        withAnimation(.easeOut(duration: 0.12)) { glow = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { withAnimation(.easeOut(duration: 0.7)) { glow = 0 } }
+    }
+}
+
 @MainActor
 enum TaskDragDrop {
     static func receive(_ providers: [NSItemProvider], store: JournalStore, destination: Date?) -> Bool {
@@ -48,7 +98,7 @@ enum TaskDragDrop {
         guard let task = store.locate(id) else { return }
         if let due = task.task.dueDate, let destination, JournalDates.calendar.isDate(due, inSameDayAs: destination) { return }
         if task.task.dueDate == nil && destination == nil { return }
-        withAnimation(Motion.quick) { store.setDeadline(id, to: destination) }
+        TaskLanding.shared.land(id) { store.setDeadline(id, to: destination) }
     }
 }
 

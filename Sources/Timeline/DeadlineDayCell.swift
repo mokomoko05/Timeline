@@ -32,9 +32,9 @@ struct DeadlineDayCell: View, Equatable {
     /// 日志按钮在 preference 里的固定标识：和勾选框一样，点它只打开日志，不触发「选中日期」。
     static let logButtonID = UUID(uuidString: "00000000-0000-0000-0000-00000000106E")!
 
-    /// 日历只在任务的截止日期那天显示它。
+    /// 日历只在任务的截止日期那天显示它，顺序与时间轴里这一天的顺序一致（含手动排序）。
     static func previewItems(dueItems: [ScheduledTask], hideCompleted: Bool) -> [ScheduledTask] {
-        dueItems.sorted(by: TaskSortMode.deadline.precedes)
+        dueItems.sorted(by: ScheduledTask.listOrder)
             .filter { !hideCompleted || !$0.task.completed }
     }
     private static let space = "dayCell"

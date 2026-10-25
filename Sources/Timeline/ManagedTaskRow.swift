@@ -199,6 +199,7 @@ struct ManagedTaskRow: View {
         // 常驻一道很淡的细边（有质感但不花），悬停时浮起来：边变清晰、下面有一点阴影。
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line.opacity(timeline ? 0 : (hovered ? 0.9 : 0.35)), lineWidth: 0.75)
             .animation(decorationAnimation, value: hovered).allowsHitTesting(false))
+        .overlay { TaskLandingFlash(id: task.id) }
         .overlay(alignment: .leading) {
             if emphasized && !timeline { Capsule().fill(Palette.accent).frame(width: 3).padding(.vertical, 6).allowsHitTesting(false) }
         }
