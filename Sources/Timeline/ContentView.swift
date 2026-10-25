@@ -615,6 +615,11 @@ struct ContentView: View {
                 navigationButton("chevron.left", help: "上个月") { shiftMonth(-1) }
                 navigationButton("chevron.right", help: "下个月") { shiftMonth(1) }
                 optionsMenu
+                Button { AppRouter.hideMain() } label: {
+                    Image(systemName: "xmark").font(.system(size: typography.pt(12), weight: .medium)).frame(width: 18, height: 18)
+                }
+                .buttonStyle(HitAreaButtonStyle()).foregroundStyle(Palette.muted)
+                .help(AppLocalizedFormat("隐藏 · %@", HotKeyStore.binding(for: .main).label)).accessibilityLabel("隐藏")
             }
             GeometryReader { geometry in
                 let metrics = CalendarGridMetrics(size: geometry.size, counts: previews.map(\.count), scale: typography.scale)

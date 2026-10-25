@@ -58,7 +58,7 @@ enum Prefs {
     /// 专注中把面板收成半透明的小伙伴（悬停展开）。
     static let focusCompanion = "focusCompanion"
     /// 浮动计时窗口被拖到哪里：窗口左上角。
-    static let focusPanelTopLeft = "focusPanelTopLeft"
+    static let focusPanelTopLeft = "focusPanelTopLeft.v2"
     static var focusMinLogSeconds: TimeInterval {
         let defaults = UserDefaults.standard
         let minutes = defaults.object(forKey: focusMinLogMinutes) == nil ? defaultFocusMinLogMinutes : defaults.integer(forKey: focusMinLogMinutes)
@@ -219,6 +219,8 @@ enum AppRouter {
     static var togglePanel: (HotKeyAction) -> Void = { _ in }
     /// 打开日记并定位到某条日志。
     static var openLog: (Date, UUID) -> Void = { _, _ in }
+    /// 隐藏主窗口（和全局快捷键再按一次相同）。
+    static var hideMain: () -> Void = {}
 }
 
 @MainActor

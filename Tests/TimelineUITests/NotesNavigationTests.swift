@@ -100,14 +100,18 @@ final class NotesNavigationTests: XCTestCase {
         nav.showOutline = false
         XCTAssertFalse(NotesNavigation(defaults: suite).showOutline, "目录开关会被记住")
 
-        nav.setCollapsed(true, tag: "论文", chapter: "A")
+        // 待办章节默认折叠；直接记录默认展开。
         XCTAssertTrue(nav.isCollapsed(tag: "论文", chapter: "A"))
-        XCTAssertTrue(nav.isCollapsed(tag: "论文", chapter: "A"))
-        XCTAssertFalse(nav.isCollapsed(tag: "论文", chapter: "B"))
-        XCTAssertFalse(nav.isCollapsed(tag: "读书", chapter: "A"), "每个标签各自折叠")
-        XCTAssertTrue(nav.isCollapsed(tag: "论文".uppercased(), chapter: "A"))
+        XCTAssertFalse(nav.isCollapsed(tag: "论文", chapter: NotesNavigation.directChapter))
         nav.setCollapsed(false, tag: "论文", chapter: "A")
         XCTAssertFalse(nav.isCollapsed(tag: "论文", chapter: "A"))
+        XCTAssertTrue(nav.isCollapsed(tag: "论文", chapter: "B"))
+        XCTAssertTrue(nav.isCollapsed(tag: "读书", chapter: "A"), "每个标签各自折叠")
+        XCTAssertFalse(nav.isCollapsed(tag: "论文".uppercased(), chapter: "A"))
+        nav.setCollapsed(true, tag: "论文", chapter: "A")
+        XCTAssertTrue(nav.isCollapsed(tag: "论文", chapter: "A"))
+        nav.setCollapsed(true, tag: "论文", chapter: NotesNavigation.directChapter)
+        XCTAssertTrue(nav.isCollapsed(tag: "论文", chapter: NotesNavigation.directChapter))
     }
 
 }

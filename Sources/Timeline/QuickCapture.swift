@@ -376,9 +376,9 @@ struct QuickCaptureView: View {
                 Spacer()
                 Text("Tab 切换").font(.system(size: typography.pt(11))).foregroundStyle(Palette.muted)
                 Button(action: close) {
-                    Image(systemName: "minus").frame(width: 18, height: 18)
-                }.buttonStyle(.plain).raisedOnHover(radius: 4).help("收起")
-                    .accessibilityLabel("收起")
+                    Image(systemName: "xmark").font(.system(size: 11, weight: .medium)).frame(width: 18, height: 18)
+                }.buttonStyle(.plain).raisedOnHover(radius: 4).foregroundStyle(Palette.muted)
+                    .help("隐藏 · Esc").accessibilityLabel("隐藏")
             }
             HStack(spacing: 8) {
                 if mode == .todo {

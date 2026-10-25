@@ -372,6 +372,9 @@ final class FocusRailWindowProbe: XCTestCase {
         try await Task.sleep(for: .milliseconds(600))
         let panel = try XCTUnwrap(NSApp.windows.first { String(describing: type(of: $0)).contains("FocusPanel") && $0.isVisible })
         print("RAIL PROBE open frame=\(panel.frame)")
+        let visible = (panel.screen ?? NSScreen.main)!.visibleFrame
+        XCTAssertEqual(panel.frame.maxX, visible.maxX - 6, accuracy: 1, "默认靠右边")
+        XCTAssertEqual(panel.frame.minY, visible.minY + 6, accuracy: 1, "默认靠底边")
         XCTAssertGreaterThan(panel.frame.height, 260, "时间轴展开时窗口包含浮层")
         let bottom = panel.frame.minY
         XCTAssertGreaterThanOrEqual(bottom, (panel.screen ?? NSScreen.main)!.visibleFrame.minY)

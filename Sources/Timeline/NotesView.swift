@@ -343,7 +343,7 @@ struct NotesView: View {
                 Divider()
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 4) {
+                        NotesStack(lazy: notes.count > Self.lazyThreshold) {
                             BoardNotesSection(store: store, owner: .task(id)).id("board-start")
                             if notes.isEmpty { NoteThreadEmpty(text: topic.deleted ? "这个任务没有留下笔记" : "还没有笔记 · 在下方写下第一条") }
                             ForEach(Dictionary(grouping: notes, by: \.key).sorted { $0.key < $1.key }, id: \.key) { group in
@@ -449,6 +449,15 @@ struct NotesView: View {
             .buttonStyle(HitAreaButtonStyle(pressedScale: 0.97))
             .foregroundStyle(active ? Palette.accent : Palette.muted)
             .help(LocalizedStringKey(title)).accessibilityLabel(LocalizedStringKey(title))
+    }
+
+    /// 一页里展开显示的笔记不多时整页一次排好：滚动条的长短和位置按真实高度算，不会边滚边变。
+    /// 很长的历史才按需加载。
+    static let lazyThreshold = 400
+
+    private func visibleNoteCount(chapters: [NotebookChapter], notes: [JournalStore.LoggedLog], tag: String) -> Int {
+        guard chapterView else { return notes.count }
+        return chapters.filter { !nav.isCollapsed(tag: tag, chapter: $0.id) }.reduce(0) { $0 + $1.notes.count }
     }
 
     private func openTagPage(_ proxy: ScrollViewProxy, startAtTop: Bool) {
@@ -611,7 +620,7 @@ struct NotesView: View {
                 ScrollViewReader { proxy in
                     HStack(spacing: 0) {
                         ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 4) {
+                            NotesStack(lazy: visibleNoteCount(chapters: chapters, notes: notes, tag: tag) > Self.lazyThreshold) {
                                 Color.clear.frame(height: 1).id("board-start")
                                 BoardNotesSection(store: store, owner: .tag(tag))
                                 if notes.isEmpty && tasks.isEmpty {
@@ -969,3 +978,18 @@ struct CreateNotebookTagView: View {
         }
     }
 }
+
+/// 笔记列表的容器：内容不多时用普通 VStack（滚动条比例准确），很长时才用 LazyVStack。
+private struct NotesStack<Content: View>: View {
+    let lazy: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if lazy {
+            LazyVStack(alignment: .leading, spacing: 4, content: content)
+        } else {
+            VStack(alignment: .leading, spacing: 4, content: content)
+        }
+    }
+}
+

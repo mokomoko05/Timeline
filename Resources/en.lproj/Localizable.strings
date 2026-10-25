@@ -865,3 +865,6 @@
 "在上方的时间轴里选任务" = "Pick a task on the timeline above";
 "专注任务：" = "Focus task: ";
 "选这个任务" = "Choose this task";
+"隐藏" = "Hide";
+"隐藏 · %@" = "Hide · %@";
+"隐藏 · Esc" = "Hide · Esc";

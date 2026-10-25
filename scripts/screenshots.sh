@@ -17,5 +17,7 @@ fit(Image.open(f"{src}/journal-dark.png")).save(f"{dst}/journal.png", optimize=T
 picker = Image.open(f"{src}/picker-dark.png")
 picker.crop((0, int(picker.height * 0.26), picker.width, picker.height)).save(f"{dst}/focus-picker.png", optimize=True)
 Image.open(f"{src}/companion-dark.png").save(f"{dst}/focus.png", optimize=True)
+fit(Image.open(f"{src}/notes-dark.png")).save(f"{dst}/notes.png", optimize=True)
+Image.open(f"{src}/capture-dark.png").save(f"{dst}/capture.png", optimize=True)
 print("Updated docs/screenshots")
 EOF

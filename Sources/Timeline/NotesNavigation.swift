@@ -30,7 +30,9 @@ final class NotesNavigation: ObservableObject {
     /// 标签页右侧的目录（章节列表）显示与否。
     @Published var showOutline: Bool { didSet { if showOutline != oldValue { defaults?.set(showOutline, forKey: prefix + ".outline") } } }
     /// 折叠起来的章节（只在应用运行期间保留）：`标签|章节` 的键。
+    /// 待办章节默认折叠，只记被展开的；「直接记录」章节默认展开，只记被折叠的。（只在应用运行期间保留）
     @Published var collapsed: Set<String> = []
+    @Published var expandedChapters: Set<String> = []
     /// 每个任务、每个标签各有一份没发送的草稿（只在应用运行期间保留）：切到别处、关掉窗口、去别的应用复制东西，回来都还在。
     @Published private(set) var drafts: [String: NoteDraft] = [:]
 
@@ -39,11 +41,21 @@ final class NotesNavigation: ObservableObject {
 
     static func collapseKey(tag: String, chapter: String) -> String { TagText.key(tag) + "|" + chapter }
 
-    func isCollapsed(tag: String, chapter: String) -> Bool { collapsed.contains(Self.collapseKey(tag: tag, chapter: chapter)) }
+    /// 「直接记录」（没有关联待办）的章节 id。
+    static let directChapter = "direct"
+
+    func isCollapsed(tag: String, chapter: String) -> Bool {
+        let key = Self.collapseKey(tag: tag, chapter: chapter)
+        return chapter == Self.directChapter ? collapsed.contains(key) : !expandedChapters.contains(key)
+    }
 
     func setCollapsed(_ value: Bool, tag: String, chapter: String) {
         let key = Self.collapseKey(tag: tag, chapter: chapter)
-        if value { collapsed.insert(key) } else { collapsed.remove(key) }
+        if chapter == Self.directChapter {
+            if value { collapsed.insert(key) } else { collapsed.remove(key) }
+        } else {
+            if value { expandedChapters.remove(key) } else { expandedChapters.insert(key) }
+        }
     }
 
     func draft(_ key: String) -> NoteDraft { drafts[key] ?? NoteDraft() }

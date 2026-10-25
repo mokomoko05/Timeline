@@ -151,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
             quickCapture.installStatusItem()
             AppRouter.togglePanel = { [weak self] action in self?.togglePanel(action) }
+            AppRouter.hideMain = { [weak self] in self?.hideMainWindowSoftly() }
             AppRouter.openLog = { [weak self] date, id in
                 guard let self else { return }
                 PreviousApp.remember()

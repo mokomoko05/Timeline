@@ -601,9 +601,10 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         if !panel.isVisible { panel.orderFrontRegardless() }
     }
 
+    /// 默认贴在屏幕右下角：靠右边、靠底边。
     private func defaultTopLeft(for size: NSSize) -> NSPoint {
         let frame = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
-        return NSPoint(x: frame.maxX - size.width - 18, y: frame.minY + size.height + 18)
+        return NSPoint(x: frame.maxX - size.width - Self.edgeInset, y: frame.minY + size.height + Self.edgeInset)
     }
 
     /// 收起时贴着屏幕边缘的距离。
