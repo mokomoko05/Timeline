@@ -83,7 +83,8 @@ final class MarkdownDisclosureTests: XCTestCase {
         defer { window.contentView = nil; window.close() }
         try await Task.sleep(for: .milliseconds(150))
         host.layoutSubtreeIfNeeded()
-        XCTAssertGreaterThan(host.fittingSize.height, 230)
+        // 代码块的语言和复制按钮浮在右上角，不再单独占一行；长标题完整换行后整体仍明显高于单行。
+        XCTAssertGreaterThan(host.fittingSize.height, 190)
         XCTAssertLessThan(host.fittingSize.height, 500)
         if let path = ProcessInfo.processInfo.environment["TIMELINE_NATIVE_BOARD_SNAPSHOT"],
            let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {

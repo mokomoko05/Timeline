@@ -321,8 +321,9 @@ struct BoardContentView: View {
             Spacer(minLength: 6)
             Group {
                 if !store.isReadOnly {
+                    // 折叠块最常用，单独一个按钮一下就能插入；整页模板收在 + 里。
+                    headerButton("chevron.down.square", "插入折叠内容（details / summary）") { insertTemplate(.disclosure) }
                     Menu {
-                        templateItem("折叠内容", systemImage: "chevron.down.square", template: .disclosure)
                         templateItem("论文阅读", systemImage: "book.closed", template: .paper)
                         templateItem("会议议程", systemImage: "list.bullet", template: .meeting)
                     } label: {
