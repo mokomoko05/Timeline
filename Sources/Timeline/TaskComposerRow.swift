@@ -66,11 +66,19 @@ struct DraftDeadlineButton: View {
 
     var body: some View {
         Button { showing = true } label: {
-            Label(TaskDeadlineButton.label(for: initial), systemImage: initial.dueHasTime ? "clock" : "calendar")
+            // 还没选日期时只放日历图标，不写「设置日期」，减轻输入框旁的视觉重量。
+            Group {
+                if initial.dueDate == nil {
+                    Image(systemName: "calendar")
+                } else {
+                    Label(TaskDeadlineButton.label(for: initial), systemImage: initial.dueHasTime ? "clock" : "calendar")
+                }
+            }
                 .font(.system(size: 10, weight: .medium, design: .monospaced)).lineLimit(1)
                 .padding(.horizontal, 4).padding(.vertical, 2)
         }
         .buttonStyle(.plain).raisedOnHover(radius: 4).help("设置截止日期与时间")
+        .accessibilityLabel(AppLocalized("截止日期与时间") + " " + TaskDeadlineButton.label(for: initial))
         .popover(isPresented: $showing, arrowEdge: .bottom) {
             DraftDeadlineEditor(options: $options, initial: initial, defaultDate: defaultDate)
         }
