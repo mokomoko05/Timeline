@@ -86,20 +86,22 @@ final class HotKeyBindingTests: XCTestCase {
 
     @MainActor
     func testFadeIncludesAttachedSheetsSoTheyDisappearTogether() {
-        let parent = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
-        // sheet 滑入是窗口服务器自己的动画，中途会半透明地画出来、压不住透明度：sheet 做成完全透明的空窗口，画出来也看不见。
-        let sheet = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.borderless], backing: .buffered, defer: false)
-        sheet.isOpaque = false
-        sheet.backgroundColor = .clear
-        sheet.hasShadow = false
+        // 不真的弹 sheet：sheet 滑入是窗口服务器自己的动画，压不住透明度，空窗口也会在屏幕上停一会。
+        // 父窗口直接报告挂着这个 sheet，WindowFade 只看 attachedSheet。
+        let sheet = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled], backing: .buffered, defer: true)
+        let parent = SheetParentWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: true)
+        parent.fakeSheet = sheet
         parent.isReleasedWhenClosed = false
         sheet.isReleasedWhenClosed = false
         Self.keepAlive += [parent, sheet]
-        parent.makeKeyAndOrderFront(nil)
-        parent.beginSheet(sheet)
         XCTAssertTrue(WindowFade.family(of: parent).contains(sheet), "笔记等 sheet 和主窗口一起渐变")
         sheet.alphaValue = 0.3
         WindowFade.reset(parent)
         XCTAssertEqual(sheet.alphaValue, 1)
     }
+}
+
+private final class SheetParentWindow: QuietWindow {
+    var fakeSheet: NSWindow?
+    override var attachedSheet: NSWindow? { fakeSheet }
 }

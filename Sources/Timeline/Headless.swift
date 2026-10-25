@@ -18,7 +18,7 @@ enum Headless {
     /// - 显示（order）前再压一次，浮窗（NSPopover）、sheet 这类系统建的窗口也一样；
     /// - 关掉窗口出现/消失的系统动画、透明度渐变动画（`animator().alphaValue` 在窗口服务器里渐变，绕过上面的设置）
     ///   和浮窗弹出动画（动画中途会以半透明画出来）。
-    /// 压不住的只有 sheet 滑入（窗口服务器自己的动画）：测试里的 sheet 要做成透明的空窗口。
+    /// 压不住的只有 sheet 滑入（窗口服务器自己的动画）：测试里不要真的弹 sheet。
     /// 由 `active` 自动装上，重复调用无害。
     static func silenceWindows() { _ = active }
 
