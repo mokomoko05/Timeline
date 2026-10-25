@@ -9,13 +9,7 @@ final class AutoHideTests: XCTestCase {
     override func setUp() async throws { _ = NSApplication.shared }
 
     private func makeDefaults() -> UserDefaults {
-        let suite = "autohide-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        addTeardownBlock {
-            defaults.removePersistentDomain(forName: suite)
-            try? FileManager.default.removeItem(at: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Preferences/\(suite).plist"))
-        }
-        return defaults
+        InMemoryDefaults()
     }
 
     private func shown(_ count: Int = 1) -> [NSWindow] {

@@ -29,10 +29,8 @@ final class BoardFavoritesDragTests: XCTestCase {
 
     func testNativeMouseDragAnimatesNeighborsAndPersistsWithoutSelecting() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let suite = "board-drag-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = InMemoryDefaults()
         defer {
-            defaults.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: directory)
         }
         let store = JournalStore(directory: directory)
@@ -156,10 +154,8 @@ final class BoardFavoritesDragTests: XCTestCase {
 
     func testSwitchingFavoritesKeepsDraftsAndDoesNotFlushTheJournal() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let suite = "board-switch-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = InMemoryDefaults()
         defer {
-            defaults.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: directory)
         }
         let store = JournalStore(directory: directory)
@@ -206,10 +202,8 @@ final class BoardFavoritesDragTests: XCTestCase {
 
     func testFloatingBoardPanelRoutesMouseEventsAndKeepsTheNewOrderAfterReopening() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let suite = "board-panel-drag-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = InMemoryDefaults()
         defer {
-            defaults.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: directory)
         }
         let store = JournalStore(directory: directory)

@@ -9,13 +9,7 @@ final class NotesNavigationTests: XCTestCase {
     private let day = JournalDates.calendar.date(from: DateComponents(year: 2026, month: 10, day: 7))!
 
     private func defaults() -> UserDefaults {
-        let suite = "notes-nav-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        addTeardownBlock {
-            defaults.removePersistentDomain(forName: suite)
-            try? FileManager.default.removeItem(at: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Preferences/\(suite).plist"))
-        }
-        return defaults
+        InMemoryDefaults()
     }
 
     private func makeStore() throws -> (JournalStore, ScheduledTask, ScheduledTask) {

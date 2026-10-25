@@ -25,9 +25,7 @@ final class BoardResponsivenessProbe: XCTestCase {
                                          to: directory.appendingPathComponent("journal.json"))
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = JournalStore(directory: directory)
-        let suite = "board-probe-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = InMemoryDefaults()
         let navigation = BoardNavigation(defaults: defaults)
         print("PROBE data: tasks \(store.tasks().count) boards \(store.boards.count) tags \(store.allTags().count)")
 

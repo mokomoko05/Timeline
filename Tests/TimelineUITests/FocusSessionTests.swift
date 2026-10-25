@@ -569,13 +569,7 @@ final class FocusPanelStyleTests: XCTestCase {
     }
 
     private func makeDefaults() -> UserDefaults {
-        let suite = "focus-panel-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        addTeardownBlock {
-            defaults.removePersistentDomain(forName: suite)
-            try? FileManager.default.removeItem(at: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Preferences/\(suite).plist"))
-        }
-        return defaults
+        InMemoryDefaults()
     }
 
     private func makeSession() throws -> (FocusSession, ScheduledTask) {

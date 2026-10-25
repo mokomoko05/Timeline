@@ -47,10 +47,7 @@ final class PerformanceAuditTests: XCTestCase {
     }
 
     private func defaults() -> UserDefaults {
-        let suite = "performance-audit-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
-        return defaults
+        InMemoryDefaults()
     }
 
     func testCreateNotebookTagThroughPopoverWithPersistentNavigation() async throws {

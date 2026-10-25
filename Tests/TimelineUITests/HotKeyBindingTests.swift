@@ -5,15 +5,7 @@ import XCTest
 
 final class HotKeyBindingTests: XCTestCase {
     private func defaults() -> UserDefaults {
-        let suite = "timeline-hotkey-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        addTeardownBlock {
-            defaults.removePersistentDomain(forName: suite)
-            // 清掉设置内容后系统仍会留下一个空的 plist 文件，一并删除，避免在 ~/Library/Preferences 里堆积。
-            let file = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Preferences/\(suite).plist")
-            try? FileManager.default.removeItem(at: file)
-        }
-        return defaults
+        InMemoryDefaults()
     }
 
     func testDefaultsAndLabels() {

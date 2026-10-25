@@ -208,9 +208,7 @@ extension DesignPreviewTests {
             narrow.chapterView = false
             try render("notebook-narrow", size: NSSize(width: 760, height: 560), dark: dark,
                        NotesView(store: store, nav: narrow, reveal: { _ in }, openDay: { _ in }))
-            let suite = "design-board-\(UUID().uuidString)"
-            let defaults = UserDefaults(suiteName: suite)!
-            defer { defaults.removePersistentDomain(forName: suite) }
+            let defaults = InMemoryDefaults()
             let navigation = BoardNavigation(defaults: defaults)
             if let task = store.sortedTasks().first, let board = store.ensureBoard(for: .task(task.id)) {
                 navigation.select(board.id)
@@ -320,9 +318,7 @@ final class FocusControllerDockProbe: XCTestCase {
         guard ProcessInfo.processInfo.environment["TIMELINE_DESIGN_PREVIEW"] != nil else { throw XCTSkip("离屏探测，按需运行") }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let suite = "dock-probe-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        let defaults = InMemoryDefaults()
         FocusPanelView.allowCompanionInTests = true
         defer { FocusPanelView.allowCompanionInTests = false }
         let store = JournalStore(directory: directory)
@@ -414,7 +410,7 @@ final class FocusRailWindowProbe: XCTestCase {
         guard ProcessInfo.processInfo.environment["TIMELINE_DESIGN_PREVIEW"] != nil else { throw XCTSkip("离屏探测，按需运行") }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: "rail-probe-\(UUID().uuidString)"))
+        let defaults = InMemoryDefaults()
         let store = JournalStore(directory: directory)
         for title in ["一", "二", "三", "四"] { store.addTodo("任务" + title, on: Date()) }
         let session = FocusSession()

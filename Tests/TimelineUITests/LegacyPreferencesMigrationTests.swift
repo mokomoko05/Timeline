@@ -4,9 +4,7 @@ import XCTest
 
 final class LegacyPreferencesMigrationTests: XCTestCase {
     func testPreferencesAndWindowNamesMigrateOnceAndRespectNewSettings() throws {
-        let domain = "timeline-migration-test-" + UUID().uuidString
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let defaults = InMemoryDefaults()
         defaults.set(1.2, forKey: "uiScale")
         let legacy: [String: Any] = ["uiScale": 1.5, "focusDefaultMinutes": 40,
                                     "NSWindow Frame DayleafNotesWindow": "frame", "appLanguage": "english"]

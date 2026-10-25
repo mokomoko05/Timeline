@@ -9,11 +9,9 @@ import TimelineCore
 final class BoardWindowTests: XCTestCase {
     func testNativeRepeatedEscapeDoesNotHideBoard() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let suite = "timeline-board-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = InMemoryDefaults()
         defer {
             try? FileManager.default.removeItem(at: directory)
-            defaults.removePersistentDomain(forName: suite)
         }
         let store = JournalStore(directory: directory)
         let board = try XCTUnwrap(store.ensureBoard(for: .tag("Keyboard")))
@@ -46,11 +44,9 @@ final class BoardWindowTests: XCTestCase {
     func testPanelStaysVisibleAcrossFocusLossAndRemembersSelectionWhenHidden() throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let suite = "timeline-board-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = InMemoryDefaults()
         defer {
             try? FileManager.default.removeItem(at: directory)
-            defaults.removePersistentDomain(forName: suite)
         }
         let store = JournalStore(directory: directory)
         let board = try XCTUnwrap(store.ensureBoard(for: .tag("Reading")))
@@ -79,11 +75,9 @@ final class BoardWindowTests: XCTestCase {
 
     func testBoardContentFitsCompactPanelAndRendersMarkdownLinks() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let suite = "timeline-board-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = InMemoryDefaults()
         defer {
             try? FileManager.default.removeItem(at: directory)
-            defaults.removePersistentDomain(forName: suite)
         }
         let store = JournalStore(directory: directory)
         let board = try XCTUnwrap(store.ensureBoard(for: .tag("Reading")))
@@ -123,12 +117,10 @@ final class BoardWindowTests: XCTestCase {
 
     func testLiveEditorSavesTextDeletionAndPersistsOnHide() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let suite = "timeline-board-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = InMemoryDefaults()
         let store = JournalStore(directory: directory)
         defer {
             try? FileManager.default.removeItem(at: directory)
-            defaults.removePersistentDomain(forName: suite)
         }
         let controller = BoardWindowController(defaults: defaults)
         controller.show(store: store, owner: .tag("Draft"))
@@ -149,11 +141,9 @@ final class BoardWindowTests: XCTestCase {
     }
 
     func testFavoritesPersistInOrderAndSurviveOwnerRenameAndArchive() throws {
-        let suite = "timeline-board-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = InMemoryDefaults()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer {
-            defaults.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: directory)
         }
         let store = JournalStore(directory: directory)
@@ -182,10 +172,8 @@ final class BoardWindowTests: XCTestCase {
 
     func testOpeningEditorAndSwitchingBoardsPreservesExistingMarkdown() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let suite = "timeline-board-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = InMemoryDefaults()
         defer {
-            defaults.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: directory)
         }
         let store = JournalStore(directory: directory)

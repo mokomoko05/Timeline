@@ -22,9 +22,7 @@ final class TypographyTests: XCTestCase {
     }
 
     func testSliderGestureKeepsChangesLocalAndPersistsOnlyTheFinalValues() throws {
-        let suite = "typography-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = InMemoryDefaults()
         defaults.set(1.0, forKey: Prefs.uiScale)
         defaults.set(2.0, forKey: Prefs.lineSpacing)
         let adjustment = TypographyAdjustment(defaults: defaults)
