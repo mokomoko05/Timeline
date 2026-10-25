@@ -271,7 +271,9 @@ final class FocusControllerDockProbe: XCTestCase {
         session.start(task: try XCTUnwrap(store.tasks().first), url: nil, plannedSeconds: 1500)
         controller.refresh()
         try await Task.sleep(for: .seconds(3.5))
-        let panel = try XCTUnwrap(NSApp.windows.first { String(describing: type(of: $0)).contains("FocusPanel") && $0.isVisible })
+        // 只认最小的那一个（别的测试可能留着完整尺寸的面板）。
+        let panel = try XCTUnwrap(NSApp.windows.filter { String(describing: type(of: $0)).contains("FocusPanel") && $0.isVisible }
+            .min { $0.frame.width < $1.frame.width })
         let screen = (panel.screen ?? NSScreen.main)!.visibleFrame
         print("CONTROLLER DOCK frame=\(panel.frame) screen=\(screen)")
         XCTAssertEqual(panel.frame.maxX, screen.maxX - 6, accuracy: 1, "右半边收起时贴右边")
@@ -363,6 +365,14 @@ final class FocusRailWindowProbe: XCTestCase {
         XCTAssertGreaterThan(panel.frame.height, 260, "时间轴展开时窗口包含浮层")
         let bottom = panel.frame.minY
         XCTAssertGreaterThanOrEqual(bottom, (panel.screen ?? NSScreen.main)!.visibleFrame.minY)
+        // 收起、再展开时间轴：窗口大小和位置一点都不变（不变就不会跳）。
+        let open = panel.frame
+        for _ in 0..<2 {
+            FocusPanelView.probeTogglePicking.send()
+            try await Task.sleep(for: .milliseconds(700))
+            print("RAIL PROBE toggled frame=\(panel.frame)")
+            XCTAssertEqual(panel.frame, open, "切换时间轴不改窗口")
+        }
         panel.orderOut(nil)
     }
 }

@@ -647,7 +647,10 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         frame.origin.y = min(max(panel.frame.minY, screen.minY + Self.edgeInset), screen.maxY - size.height)
         if FocusDock.shared.right != dockedRight { FocusDock.shared.right = dockedRight }
         guard frame.integral != panel.frame.integral else { return }
-        panel.setFrame(frame, display: true)
+        // 窗口变大后、内容重新排版前，画面里的内容会先贴着窗口顶部闪一帧。
+        // 不立即重画，并让屏幕等到这一轮排版完成再刷新，看到的直接是排好的样子。
+        panel.disableScreenUpdatesUntilFlush()
+        panel.setFrame(frame, display: false)
         panel.contentView?.frame = NSRect(origin: .zero, size: frame.size)
     }
 
@@ -908,20 +911,28 @@ struct FocusPanelView: View {
     @State private var picking = true
     /// 设计预览用：一开始就是选好、时间轴收起的样子。
     var previewPicked = false
+    /// 离屏探测用：从外部切换时间轴的展开 / 收起。
+    static let probeTogglePicking = PassthroughSubject<Void, Never>()
 
     private var anchor: Alignment { dock.right ? .bottomTrailing : .bottomLeading }
-    /// 时间轴浮层：没在专注、正在选任务、有可选的待办（或正在搜索）时显示。
-    private var showsRail: Bool { session.active == nil && picking && (!timelineTasks.isEmpty || !query.isEmpty) }
+    /// 选任务阶段（还没开始专注、有未完成的待办）：时间轴的位置一直留着。
+    private var reservesRail: Bool { session.active == nil && !openTasks.isEmpty }
+    /// 时间轴浮层展开着。
+    private var showsRail: Bool { reservesRail && picking }
+    /// 全部未完成的待办（不受搜索影响）：浮层的高度按它算，搜索时高度不变、窗口不跟着缩放。
+    private var openTasks: [ScheduledTask] { store?.tasks().filter { !$0.task.completed } ?? [] }
     /// 浮层高度：内容有多少给多少，最多一屏的一半左右；超过就在里面滚动。
     private var railHeight: CGFloat {
-        let groups = Set(timelineTasks.map { $0.task.dueDate.map { JournalDates.key($0) } ?? "undated" }).count
-        let content = CGFloat(timelineTasks.count * 26 + groups * 20) + 40
+        let all = openTasks
+        let groups = Set(all.map { $0.task.dueDate.map { JournalDates.key($0) } ?? "undated" }).count
+        let content = CGFloat(all.count * 26 + groups * 20) + 40
         return min(max(content, 110), 360)
     }
-    /// 窗口要容纳的总大小：浮层 + 间距 + 玻璃面板。
+    /// 窗口要容纳的总大小。选任务时（还没开始专注）始终给浮层留好位置：展开、收起时间轴都不改窗口大小，
+    /// 面板就不会跳；留出的地方是全透明的，不挡桌面。
     private var windowSize: CGSize {
         let glass = targetSize
-        guard showsRail else { return glass }
+        guard reservesRail else { return glass }
         return CGSize(width: max(glass.width, 340), height: glass.height + railHeight + 8)
     }
 
@@ -940,13 +951,21 @@ struct FocusPanelView: View {
         let radius: CGFloat = showsCompanion ? 23 : Metrics.radiusPanel
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         let rail = showsRail
-        VStack(alignment: dock.right ? .trailing : .leading, spacing: rail ? 8 : 0) {
-            if rail {
+        let reserved = reservesRail
+        VStack(alignment: dock.right ? .trailing : .leading, spacing: reserved ? 8 : 0) {
+            if reserved {
                 // 时间轴不在玻璃里：浮在面板上方，可以上下滚动整条线。
+                // 它的位置一直留着；展开时从面板的上边框向上「抽」出来（遮罩自下而上打开），收起时缩回上边框。
                 FocusTimelineRail(tasks: timelineTasks, selected: selectedTaskID, pinned: store?.pinnedTask?.id,
                                   query: $query, height: railHeight, select: pickTask)
                     .frame(width: 340, height: railHeight)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .opacity(rail ? 1 : 0)
+                    .offset(y: rail ? 0 : 14)
+                    .mask(alignment: .bottom) {
+                        Rectangle().frame(height: rail ? railHeight + 20 : 0)
+                    }
+                    .allowsHitTesting(rail)
+                    .accessibilityHidden(!rail)
             }
         ZStack(alignment: anchor) {
             if showsCompanion, let active = session.active {
@@ -994,6 +1013,9 @@ struct FocusPanelView: View {
             configureMention()
             if selectedTaskID == nil { selectedTaskID = tasks.first?.id }
             if previewPicked { picking = false }
+        }
+        .onReceive(Self.probeTogglePicking) {
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) { picking.toggle() }
         }
         .onChange(of: defaultMinutes) { _ in
             if session.active == nil { minutes = String(Prefs.focusDurationMinutes()) }
