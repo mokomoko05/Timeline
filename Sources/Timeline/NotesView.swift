@@ -611,7 +611,7 @@ struct NotesView: View {
             } else if !log.text.isEmpty {
                 TaskLinkText(source: LogEventStyle.body(log), completed: false, color: Palette.ink, fontSize: 13,
                              edit: { guard !store.isReadOnly else { return }; beginNoteEdit(item) }, open: SafariLinks.open,
-                             maxLines: 0, markdown: true, compactLines: true)
+                             maxLines: 0, markdown: true, compactLines: true, foldID: "log.\(log.id.uuidString)")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if !log.images.isEmpty {

@@ -23,7 +23,10 @@ struct TaskLinkText: NSViewRepresentable {
     var click: (() -> Void)?
     /// 右键菜单里的操作（没有就用系统默认菜单）。
     var menuItems: [TextMenuItem] = []
+    /// Markdown 标题可以折叠（点标题收起 / 展开），折叠状态按这个标识记住（比如某条笔记）。
+    var foldID: String?
     @Environment(\.isEnabled) private var enabled
+    @State private var foldRevision = 0
 
     func makeNSView(context: Context) -> InteractiveTaskText {
         let view = InteractiveTaskText()
@@ -57,10 +60,15 @@ struct TaskLinkText: NSViewRepresentable {
         view.onToggleMarkdownTask = toggleMarkdownTask
         view.menuItems = menuItems
         view.interactionEnabled = enabled
+        let folds = markdown ? foldID.map { _ = foldRevision; return HeadingFolds.folded(in: $0) } : nil
+        view.onToggleHeading = markdown ? foldID.map { id in { key in
+            HeadingFolds.toggle(key, in: id)
+            foldRevision += 1
+        } } : nil
         view.dragTaskID = dragTaskID
         view.textContainerInset = NSSize(width: compactLines ? 2 : 5, height: compactLines ? 0 : 4)
         let foreground = NSColor(completed ? Palette.muted : color)
-        if view.source != source || view.displayName != displayName || view.completed != completed || view.pointSize != fontSize || view.foreground != foreground || view.monospaced != monospaced || view.compactLines != compactLines || view.markdown != markdown || view.interactiveTasks != (toggleMarkdownTask != nil) || view.uiScaleFactor != typography.scale || view.configuredLineSpacing != Double(typography.lineSpacing) {
+        if view.source != source || view.displayName != displayName || view.completed != completed || view.pointSize != fontSize || view.foreground != foreground || view.monospaced != monospaced || view.compactLines != compactLines || view.markdown != markdown || view.interactiveTasks != (toggleMarkdownTask != nil) || view.uiScaleFactor != typography.scale || view.configuredLineSpacing != Double(typography.lineSpacing) || view.foldedHeadings != folds {
             let sourceChanged = view.source != source || view.displayName != displayName || view.markdown != markdown
             let selection = view.selectedRanges
             if sourceChanged {
@@ -78,8 +86,9 @@ struct TaskLinkText: NSViewRepresentable {
             view.interactiveTasks = toggleMarkdownTask != nil
             view.uiScaleFactor = typography.scale
             view.configuredLineSpacing = Double(typography.lineSpacing)
+            view.foldedHeadings = folds
             let styled = markdown
-                ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced, lineSpacing: typography.lineSpacing, scale: typography.scale, document: view.markdownDocument, interactiveTasks: view.interactiveTasks)
+                ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced, lineSpacing: typography.lineSpacing, scale: typography.scale, document: view.markdownDocument, interactiveTasks: view.interactiveTasks, folds: folds)
                 : Self.styledText(source, completed: completed, color: foreground, fontSize: fontSize, displayName: displayName, monospaced: monospaced, compactLines: compactLines, lineSpacing: compactLines ? 0 : typography.lineSpacing, scale: typography.scale, rendered: view.inlineText)
             view.textStorage?.setAttributedString(styled)
             if !sourceChanged { view.selectedRanges = selection }
@@ -234,6 +243,9 @@ final class InteractiveTaskText: NSTextView {
     var compactLines = false
     var uiScaleFactor = 1.0
     var configuredLineSpacing = 2.0
+    /// 收起的 Markdown 标题（nil：标题不能折叠）。
+    var foldedHeadings: Set<String>?
+    var onToggleHeading: ((String) -> Void)?
     private var mouseDownEvent: NSEvent?
     private var dragged = false
     var onEdit: (() -> Void)?
@@ -306,6 +318,26 @@ final class InteractiveTaskText: NSTextView {
         return regions
     }
 
+    /// 可折叠标题占的整行（点这一行的任何地方都能收起 / 展开）。
+    func headingRegions() -> [(key: String, rect: NSRect)] {
+        guard onToggleHeading != nil, let storage = textStorage, let manager = layoutManager, let container = textContainer else { return [] }
+        manager.ensureLayout(for: container)
+        var regions: [(key: String, rect: NSRect)] = []
+        storage.enumerateAttribute(MarkdownText.headingFoldKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard let key = value as? String else { return }
+            let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            manager.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, _, _ in
+                let line = rect.offsetBy(dx: self.textContainerOrigin.x, dy: self.textContainerOrigin.y).intersection(self.bounds)
+                if !line.isEmpty { regions.append((key, line)) }
+            }
+        }
+        return regions
+    }
+
+    func headingKey(at point: NSPoint) -> String? {
+        headingRegions().first { $0.rect.contains(point) }?.key
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         for region in linkRegions() where region.rect.intersects(dirtyRect) {
             NativePalette.accent.withAlphaComponent(hoveredURL == region.url ? 0.18 : 0.09).setFill()
@@ -326,6 +358,7 @@ final class InteractiveTaskText: NSTextView {
         if onToggleMarkdownTask != nil {
             for region in taskRegions() { addCursorRect(region.rect, cursor: .pointingHand) }
         }
+        for region in headingRegions() { addCursorRect(region.rect, cursor: .pointingHand) }
     }
 
     override func updateTrackingAreas() {
@@ -372,9 +405,12 @@ final class InteractiveTaskText: NSTextView {
                 activate(at: point, clickCount: event.clickCount)
                 return
             }
+            let heading = event.clickCount == 1 ? headingKey(at: point) : nil
             onSelect?()
             onClick?()
             super.mouseDown(with: event)
+            // 系统的选择跟踪在松开鼠标后才返回：点了标题、没有拖选文字，就收起 / 展开它。
+            if let heading, selectedRange().length == 0 { onToggleHeading?(heading) }
             return
         }
         mouseDownEvent = event
@@ -412,4 +448,20 @@ final class InteractiveTaskText: NSTextView {
         window?.invalidateCursorRects(for: self)
     }
 
+}
+
+/// Markdown 标题的折叠记忆（笔记等原生渲染的正文）：只记收起的标题，按标识存进偏好。
+@MainActor
+enum HeadingFolds {
+    static var defaults: UserDefaults = .standard
+
+    static func key(_ id: String) -> String { "markdown.folds.\(id)" }
+
+    static func folded(in id: String) -> Set<String> { Set(defaults.stringArray(forKey: key(id)) ?? []) }
+
+    static func toggle(_ heading: String, in id: String) {
+        var folded = folded(in: id)
+        if folded.remove(heading) == nil { folded.insert(heading) }
+        if folded.isEmpty { defaults.removeObject(forKey: key(id)) } else { defaults.set(folded.sorted(), forKey: key(id)) }
+    }
 }

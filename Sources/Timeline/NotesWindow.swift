@@ -500,7 +500,7 @@ struct UnifiedJournalView: View {
                 TaskLinkText(source: LogEventStyle.body(log), completed: false, color: log.isFocusMarker ? Palette.muted : Palette.ink,
                              fontSize: log.isFocusMarker ? 12 : 13,
                              edit: { beginEdit(log) }, open: SafariLinks.open, maxLines: 0,
-                             markdown: true, compactLines: true)
+                             markdown: true, compactLines: true, foldID: "log.\(log.id.uuidString)")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let detail = LogEventStyle.detail(log) {

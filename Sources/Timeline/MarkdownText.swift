@@ -6,9 +6,13 @@ import TimelineCore
 /// 不执行 HTML，不自动请求远程图片。
 enum MarkdownText {
     static let taskLineKey = NSAttributedString.Key("TimelineMarkdownTaskLine")
+    /// 可折叠标题所在的整段：值是标题的折叠键（`h2:标题#0`，同名标题按出现次序编号，和工作板一致）。
+    static let headingFoldKey = NSAttributedString.Key("TimelineMarkdownHeadingFold")
 
-    static func render(_ source: String, color: NSColor, fontSize: CGFloat, monospaced: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing, scale: CGFloat = UIScale.factor, document: Document? = nil, interactiveTasks: Bool = false) -> NSAttributedString {
+    /// `folds` 不为 nil 时顶层标题可以折叠：里面是收起的标题键，收起的标题下面到下一个同级或更高级标题为止都不显示。
+    static func render(_ source: String, color: NSColor, fontSize: CGFloat, monospaced: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing, scale: CGFloat = UIScale.factor, document: Document? = nil, interactiveTasks: Bool = false, folds: Set<String>? = nil) -> NSAttributedString {
         let renderer = Renderer(color: color, size: fontSize * scale, monospaced: monospaced, lineSpacing: lineSpacing, interactiveTasks: interactiveTasks)
+        renderer.folds = folds
         renderer.sourceLines = source.components(separatedBy: "\n")
         renderer.blocks(document ?? Document(parsing: source))
         return renderer.output
@@ -23,6 +27,7 @@ enum MarkdownText {
         let lineSpacing: CGFloat
         let interactiveTasks: Bool
         var sourceLines: [String] = []
+        var folds: Set<String>?
         init(color: NSColor, size: CGFloat, monospaced: Bool, lineSpacing: CGFloat, interactiveTasks: Bool) {
             self.color = color
             self.size = size
@@ -83,27 +88,65 @@ enum MarkdownText {
         }
 
         func blocks(_ node: Markup, indent: CGFloat = 0) {
+            let children = Array(node.children)
+            let foldable = folds != nil && node is Document
             var previousEnd: Int?
-            for child in node.children {
+            var seen: [String: Int] = [:]
+            var index = 0
+            while index < children.count {
+                let child = children[index]
                 if let end = previousEnd, let start = child.range?.lowerBound.line, start > end + 1 {
                     let blankCount = sourceLines.dropFirst(end).prefix(start - end - 1)
                         .filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
                     for _ in 0..<blankCount { paragraph(text(""), style: style(indent: indent)) }
                 }
-                block(child, indent: indent)
                 previousEnd = child.range?.upperBound.line
+                index += 1
+                guard foldable, let heading = child as? Heading else { block(child, indent: indent); continue }
+                let name = "h\(heading.level):\(heading.plainText.trimmingCharacters(in: .whitespaces))"
+                let occurrence = seen[name, default: 0]
+                seen[name] = occurrence + 1
+                let key = "\(name)#\(occurrence)"
+                var sectionEnd = index
+                while sectionEnd < children.count, ((children[sectionEnd] as? Heading)?.level ?? 7) > heading.level { sectionEnd += 1 }
+                let hasBody = sectionEnd > index
+                let folded = hasBody && folds?.contains(key) == true
+                renderHeading(heading, indent: indent, fold: hasBody ? (key, folded) : nil)
+                if folded {
+                    previousEnd = children[sectionEnd - 1].range?.upperBound.line
+                    index = sectionEnd
+                }
             }
+        }
+
+        func renderHeading(_ heading: Heading, indent: CGFloat, fold: (key: String, folded: Bool)? = nil) {
+            let headingFont = NSFont.systemFont(ofSize: size + CGFloat(max(1, 7 - heading.level)) * 1.5, weight: .bold)
+            let paragraphStyle = style(indent: indent)
+            paragraphStyle.paragraphSpacingBefore = 5
+            let content = inline(heading, font: headingFont)
+            content.addAttribute(.foregroundColor, value: MarkdownText.headingColor(heading.level), range: content.fullRange)
+            if let fold {
+                // 和工作板一样：标题前一个箭头（展开朝下、收起朝右），收起后标题后面跟一个「⋯」。
+                let chevron = NSTextAttachment()
+                let side = (size * 0.95).rounded()
+                chevron.image = MarkdownText.chevron(folded: fold.folded, side: side, color: color.withAlphaComponent(0.55))
+                chevron.bounds = NSRect(x: 0, y: (headingFont.capHeight - side) / 2, width: side, height: side)
+                let prefix = NSMutableAttributedString(attachment: chevron)
+                prefix.append(text(" ", font: headingFont))
+                content.insert(prefix, at: 0)
+                if fold.folded {
+                    content.append(text("  ⋯", font: .systemFont(ofSize: size, weight: .bold)))
+                    content.addAttribute(.foregroundColor, value: color.withAlphaComponent(0.55), range: NSRange(location: content.length - 1, length: 1))
+                }
+                content.addAttribute(MarkdownText.headingFoldKey, value: fold.key, range: content.fullRange)
+            }
+            paragraph(content, style: paragraphStyle)
         }
 
         func block(_ node: Markup, indent: CGFloat) {
             switch node {
             case let heading as Heading:
-                let headingFont = NSFont.systemFont(ofSize: size + CGFloat(max(1, 7 - heading.level)) * 1.5, weight: .bold)
-                let paragraphStyle = style(indent: indent)
-                paragraphStyle.paragraphSpacingBefore = 5
-                let content = inline(heading, font: headingFont)
-                content.addAttribute(.foregroundColor, value: MarkdownText.headingColor(heading.level), range: content.fullRange)
-                paragraph(content, style: paragraphStyle)
+                renderHeading(heading, indent: indent)
             case let node as Paragraph:
                 paragraph(inline(node), style: style(indent: indent))
             case let code as CodeBlock:
@@ -221,6 +264,20 @@ enum MarkdownText {
                 }
             }
             paragraph(text(""), style: style(indent: indent))
+        }
+    }
+
+    /// 折叠箭头：固定大小的画布，展开 / 收起两种箭头宽度不同也不会让标题文字左右跳。
+    static func chevron(folded: Bool, side: CGFloat, color: NSColor) -> NSImage {
+        let configuration = NSImage.SymbolConfiguration(pointSize: side * 0.62, weight: .bold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        let symbol = NSImage(systemSymbolName: folded ? "chevron.right" : "chevron.down", accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration)
+        return NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            guard let symbol else { return true }
+            let size = symbol.size
+            symbol.draw(in: NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height))
+            return true
         }
     }
 
