@@ -1506,11 +1506,20 @@ private struct PastedImageToken: View {
 }
 
 /// 截止日期下方的专注入口：播放 / 结束状态和累计时间共用一个按钮。
+/// 每一行都有一个，所以不观察整个计时器（它每秒更新一次）：只订阅「正在专注哪个任务」，
+/// 走动的时间交给只在计时那一行出现的 `FocusRunningClock`。
 struct TaskFocusButton: View {
     @Environment(\.typography) private var typography
-    @ObservedObject var session: FocusSession
+    let session: FocusSession
     let task: ScheduledTask
-    private var running: Bool { session.active?.taskID == task.id }
+    @State private var running: Bool
+
+    init(session: FocusSession, task: ScheduledTask) {
+        self.session = session
+        self.task = task
+        _running = State(initialValue: session.active?.taskID == task.id)
+    }
+
     private var total: TimeInterval { task.task.focusSeconds + (running ? session.elapsed : 0) }
 
     var body: some View {
@@ -1522,12 +1531,14 @@ struct TaskFocusButton: View {
             HStack(spacing: 4) {
                 Image(systemName: running ? "stop.fill" : "play.fill")
                     .font(.system(size: typography.pt(8), weight: .bold))
-                if running || total >= 1 {
-                    Text(running ? FocusSession.clock(total) : FocusSession.brief(total))
-                        .font(.system(size: typography.pt(10), weight: .medium)).monospacedDigit()
-                        .lineLimit(1)
+                if running {
+                    FocusRunningClock(session: session, base: task.task.focusSeconds)
+                } else if total >= 1 {
+                    Text(FocusSession.brief(total))
                 }
             }
+            .font(.system(size: typography.pt(10), weight: .medium)).monospacedDigit()
+            .lineLimit(1)
             .padding(.horizontal, 7)
             .frame(minWidth: typography.pt(24), minHeight: typography.pt(20))
             .background(running ? Palette.danger.opacity(0.12) : Color.clear, in: Capsule())
@@ -1542,7 +1553,18 @@ struct TaskFocusButton: View {
         .accessibilityValue(FocusSession.duration(total))
         .accessibilityIdentifier("task-focus-" + task.id.uuidString)
         .disabled(task.task.completed && !running)
+        .onReceive(session.$active.map { $0?.taskID }.removeDuplicates()) { id in
+            if running != (id == task.id) { running = id == task.id }
+        }
     }
+}
+
+/// 正在计时的那一行里走动的时间：只有它每秒刷新。
+private struct FocusRunningClock: View {
+    @ObservedObject var session: FocusSession
+    let base: TimeInterval
+
+    var body: some View { Text(FocusSession.clock(base + session.elapsed)) }
 }
 
 struct FocusPanelSizeKey: PreferenceKey {
@@ -1559,15 +1581,13 @@ struct FocusCompanion: View {
     @ObservedObject var session: FocusSession
     let title: String
     var expand: () -> Void = {}
-    @State private var breathing = false
 
     private var tint: Color { session.isPaused ? Palette.muted : Palette.accent }
 
     var body: some View {
         HStack(spacing: 9) {
             ZStack {
-                Circle().fill(tint.opacity(breathing ? 0.22 : 0.08)).frame(width: 30, height: 30)
-                    .scaleEffect(breathing ? 1.08 : 0.92)
+                FocusBreathingHalo(paused: session.isPaused).frame(width: 30, height: 30)
                 Circle().stroke(Palette.muted.opacity(0.2), lineWidth: 2).frame(width: 22, height: 22)
                 Circle().trim(from: 1 - session.remainingFraction, to: 1)
                     .stroke(tint, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
@@ -1594,18 +1614,87 @@ struct FocusCompanion: View {
         .padding(.leading, 8).padding(.trailing, 8).padding(.vertical, 7)
         .contentShape(Capsule())
         .onTapGesture(perform: expand)
-        .onAppear {
-            guard !Motion.reduced, !session.isPaused else { return }
-            withAnimation(.easeInOut(duration: 2.4).repeatForever(autoreverses: true)) { breathing = true }
-        }
-        .onChange(of: session.isPaused) { paused in
-            if paused { withAnimation(.easeOut(duration: 0.3)) { breathing = false } }
-            else if !Motion.reduced { withAnimation(.easeInOut(duration: 2.4).repeatForever(autoreverses: true)) { breathing = true } }
-        }
         .help(AppLocalized("悬停展开专注面板"))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(AppLocalizedFormat("专注中，剩余 %@", FocusSession.clock(session.remainingSeconds)))
         .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// 小伙伴的呼吸光晕：用 Core Animation 循环。动画在系统合成器里跑，专注的几个小时里不用每帧重算 SwiftUI。
+private struct FocusBreathingHalo: NSViewRepresentable {
+    let paused: Bool
+
+    func makeNSView(context: Context) -> FocusBreathingHaloView { FocusBreathingHaloView() }
+    func updateNSView(_ view: FocusBreathingHaloView, context: Context) { view.paused = paused }
+}
+
+final class FocusBreathingHaloView: NSView {
+    static let animationKey = "breathing"
+    /// 离屏探测用：测试环境默认减少动态效果，这里让动画照常挂上。
+    static var animatesInTests = false
+    let halo = CALayer()
+    var paused = false { didSet { if paused != oldValue { refresh() } } }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.addSublayer(halo)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        halo.bounds = bounds
+        halo.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        halo.cornerRadius = min(bounds.width, bounds.height) / 2
+        CATransaction.commit()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refresh()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refresh()
+    }
+
+    private func refresh() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            halo.backgroundColor = (paused ? NativePalette.muted : NativePalette.accent).cgColor
+        }
+        let breathing = !paused && (!Motion.reduced || Self.animatesInTests) && window != nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        // 静止时停在「呼气」的样子：浅、略小。
+        halo.opacity = 0.08
+        halo.transform = CATransform3DMakeScale(0.92, 0.92, 1)
+        CATransaction.commit()
+        guard breathing else {
+            halo.removeAnimation(forKey: Self.animationKey)
+            return
+        }
+        guard halo.animation(forKey: Self.animationKey) == nil else { return }
+        let opacity = CABasicAnimation(keyPath: "opacity")
+        opacity.fromValue = 0.08
+        opacity.toValue = 0.22
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 0.92
+        scale.toValue = 1.08
+        let group = CAAnimationGroup()
+        group.animations = [opacity, scale]
+        group.duration = 2.4
+        group.autoreverses = true
+        group.repeatCount = .infinity
+        group.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        halo.add(group, forKey: Self.animationKey)
     }
 }
 
