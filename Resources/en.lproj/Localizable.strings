@@ -738,6 +738,7 @@
 "显示 / 隐藏工作板" = "Show / hide board";
 "工作板（开 / 关）" = "Board (toggle)";
 "打开工作板" = "Open board";
+"打开这个任务的工作板" = "Open this task’s board";
 "切换" = "Switch";
 "取消置顶" = "Stop keeping on top";
 "窗口置顶" = "Keep on top";

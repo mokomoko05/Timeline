@@ -1260,6 +1260,15 @@ struct FocusPanelView: View {
                         .font(.system(size: 18, weight: .semibold, design: .monospaced)).monospacedDigit()
                 }
                 .fixedSize()
+                // 专注时手边的资料：这个任务的工作板（还没有就新建一页）。
+                if let store = session.store {
+                    Button { BoardWindowController.shared.show(store: store, owner: .task(active.taskID)) } label: {
+                        Image(systemName: "list.bullet.rectangle")
+                    }
+                    .buttonStyle(HitAreaButtonStyle(compact: true))
+                    .foregroundStyle(Palette.muted)
+                    .help("打开这个任务的工作板").accessibilityLabel("打开这个任务的工作板")
+                }
                 if companionEnabled {
                     Button(action: manualCollapse) { Image(systemName: "arrow.down.right.and.arrow.up.left") }
                         .buttonStyle(HitAreaButtonStyle(compact: true))
