@@ -87,7 +87,11 @@ final class HotKeyBindingTests: XCTestCase {
     @MainActor
     func testFadeIncludesAttachedSheetsSoTheyDisappearTogether() {
         let parent = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
-        let sheet = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
+        // sheet 滑入是窗口服务器自己的动画，中途会半透明地画出来、压不住透明度：sheet 做成完全透明的空窗口，画出来也看不见。
+        let sheet = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.borderless], backing: .buffered, defer: false)
+        sheet.isOpaque = false
+        sheet.backgroundColor = .clear
+        sheet.hasShadow = false
         parent.isReleasedWhenClosed = false
         sheet.isReleasedWhenClosed = false
         Self.keepAlive += [parent, sheet]

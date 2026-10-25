@@ -7,12 +7,13 @@ import XCTest
 @MainActor
 final class ZZNoVisibleWindowsTests: XCTestCase {
     func testNoWindowCreatedByTheTestsIsActuallyDrawn() {
-        let drawn = NSApplication.shared.windows.filter { window in
-            guard window.isVisible else { return false }
-            let alpha = (window as? QuietWindow)?.actualAlpha ?? window.alphaValue
-            return alpha > 0
-        }
+        let drawn = Headless.drawnWindows()
         XCTAssertTrue(drawn.isEmpty, "这些窗口会真的出现在屏幕上：\(drawn.map { "\(type(of: $0)) \"\($0.title)\"" })")
+    }
+
+    /// 每个用例结束时都没有窗口真的画在屏幕上（`AAAWindowWatchTests` 装的检查）。
+    func testNoWindowWasDrawnAfterAnyTestCase() {
+        XCTAssertTrue(Headless.visibleOrders.isEmpty, "这些窗口在用例结束时真的画在屏幕上：\(Headless.visibleOrders)")
     }
 
     /// 测试进程从没被调到前台：用户正在用的应用不会丢焦点。
