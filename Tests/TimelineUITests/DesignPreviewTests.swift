@@ -132,11 +132,12 @@ final class DesignPreviewTests: XCTestCase {
             companion.previewCompanion = true
             let picker = FocusSession()
             picker.store = store
-            try render("picker", size: NSSize(width: 380, height: 420), dark: dark, ZStack {
-                LinearGradient(colors: [Color(red: 0.35, green: 0.45, blue: 0.75), Color(red: 0.85, green: 0.55, blue: 0.45)],
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
-                FocusPanelView(session: picker)
-            })
+            let backdrop = LinearGradient(colors: [Color(red: 0.35, green: 0.45, blue: 0.75), Color(red: 0.85, green: 0.55, blue: 0.45)],
+                                          startPoint: .topLeading, endPoint: .bottomTrailing)
+            try render("picker", size: NSSize(width: 380, height: 700), dark: dark, ZStack { backdrop; FocusPanelView(session: picker) })
+            var picked = FocusPanelView(session: picker)
+            picked.previewPicked = true
+            try render("picked", size: NSSize(width: 380, height: 300), dark: dark, ZStack { backdrop; picked })
             try render("companion", size: NSSize(width: 340, height: 220), dark: dark, ZStack {
                 LinearGradient(colors: [Color(red: 0.35, green: 0.45, blue: 0.75), Color(red: 0.85, green: 0.55, blue: 0.45)],
                                startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -340,5 +341,28 @@ final class FocusMorphFrames: XCTestCase {
             try await Task.sleep(for: .milliseconds(delay - (index == 0 ? 0 : [60, 120, 200, 450][index - 1])))
             try snap("\(index + 1)-\(delay)ms")
         }
+    }
+}
+
+@MainActor
+final class FocusRailWindowProbe: XCTestCase {
+    func testRailGrowsTheWindowUpwardKeepingTheBottom() async throws {
+        guard ProcessInfo.processInfo.environment["TIMELINE_DESIGN_PREVIEW"] != nil else { throw XCTSkip("离屏探测，按需运行") }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "rail-probe-\(UUID().uuidString)"))
+        let store = JournalStore(directory: directory)
+        for title in ["一", "二", "三", "四"] { store.addTodo("任务" + title, on: Date()) }
+        let session = FocusSession()
+        session.store = store
+        let controller = FocusPanelController(session: session, defaults: defaults)
+        controller.toggleWorkspace()
+        try await Task.sleep(for: .milliseconds(600))
+        let panel = try XCTUnwrap(NSApp.windows.first { String(describing: type(of: $0)).contains("FocusPanel") && $0.isVisible })
+        print("RAIL PROBE open frame=\(panel.frame)")
+        XCTAssertGreaterThan(panel.frame.height, 260, "时间轴展开时窗口包含浮层")
+        let bottom = panel.frame.minY
+        XCTAssertGreaterThanOrEqual(bottom, (panel.screen ?? NSScreen.main)!.visibleFrame.minY)
+        panel.orderOut(nil)
     }
 }

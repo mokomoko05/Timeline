@@ -616,8 +616,8 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
     private func resize(to size: CGSize) {
         shrinkTask?.cancel()
         guard let panel else { return }
-        let narrower = size.width < panel.frame.width - 0.5
-        if narrower && !Headless.active {
+        let smaller = size.width < panel.frame.width - 0.5 || size.height < panel.frame.height - 40
+        if smaller && !Headless.active {
             shrinkTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(420))
                 guard !Task.isCancelled else { return }
@@ -864,7 +864,6 @@ struct FocusPanelView: View {
     @State private var minutes: String
     @State private var goal = ""
     @State private var query = ""
-    @State private var showingTaskPicker = false
     @State private var focused = true
     @State private var showingSaveError = false
     @StateObject private var draft = FocusNoteDraft()
@@ -905,8 +904,34 @@ struct FocusPanelView: View {
     /// 手动展开后不因鼠标离开而收起；手动收起后，鼠标离开再回来之前不因悬停而展开。
     @State private var pinnedOpen = false
     @State private var hoverSuppressed = false
+    /// 选任务时，时间轴在玻璃面板上方展开；选好后收起，任务放进面板里的槽。
+    @State private var picking = true
+    /// 设计预览用：一开始就是选好、时间轴收起的样子。
+    var previewPicked = false
 
     private var anchor: Alignment { dock.right ? .bottomTrailing : .bottomLeading }
+    /// 时间轴浮层：没在专注、正在选任务、有可选的待办（或正在搜索）时显示。
+    private var showsRail: Bool { session.active == nil && picking && (!timelineTasks.isEmpty || !query.isEmpty) }
+    /// 浮层高度：内容有多少给多少，最多一屏的一半左右；超过就在里面滚动。
+    private var railHeight: CGFloat {
+        let groups = Set(timelineTasks.map { $0.task.dueDate.map { JournalDates.key($0) } ?? "undated" }).count
+        let content = CGFloat(timelineTasks.count * 26 + groups * 20) + 40
+        return min(max(content, 110), 360)
+    }
+    /// 窗口要容纳的总大小：浮层 + 间距 + 玻璃面板。
+    private var windowSize: CGSize {
+        let glass = targetSize
+        guard showsRail else { return glass }
+        return CGSize(width: max(glass.width, 340), height: glass.height + railHeight + 8)
+    }
+
+    private func pickTask(_ id: UUID) {
+        selectedTaskID = id
+        // 先让选中的底色出现一下，再收起时间轴，选择有被看到的反馈。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+            withAnimation(Motion.reduced ? nil : .spring(response: 0.34, dampingFraction: 0.88)) { picking = false }
+        }
+    }
     private var unitAnchor: UnitPoint { dock.right ? .bottomTrailing : .bottomLeading }
     private var targetSize: CGSize { showsCompanion ? Self.companionSize : CGSize(width: 340, height: panelHeight) }
 
@@ -914,6 +939,15 @@ struct FocusPanelView: View {
         let size = targetSize
         let radius: CGFloat = showsCompanion ? 23 : Metrics.radiusPanel
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        let rail = showsRail
+        VStack(alignment: dock.right ? .trailing : .leading, spacing: rail ? 8 : 0) {
+            if rail {
+                // 时间轴不在玻璃里：浮在面板上方，可以上下滚动整条线。
+                FocusTimelineRail(tasks: timelineTasks, selected: selectedTaskID, pinned: store?.pinnedTask?.id,
+                                  query: $query, height: railHeight, select: pickTask)
+                    .frame(width: 340, height: railHeight)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
         ZStack(alignment: anchor) {
             if showsCompanion, let active = session.active {
                 FocusCompanion(session: session, title: active.title, expand: manualExpand)
@@ -934,11 +968,13 @@ struct FocusPanelView: View {
         .clipShape(shape)
         .overlay(FocusGlassEdge(radius: radius))
         .contentShape(shape)
+        }
         .foregroundStyle(Palette.ink)
         .tint(Palette.accent)
         .onPreferenceChange(FocusPanelSizeKey.self) { if $0.height > 30 { panelHeight = $0.height } }
-        .onChange(of: size) { resize($0) }
-        .onAppear { resize(size) }
+        .onChange(of: windowSize) { resize($0) }
+        .onAppear { resize(windowSize) }
+        .animation(Motion.reduced ? nil : .spring(response: 0.34, dampingFraction: 0.88), value: rail)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: anchor)
         .onHover { inside in
             if inside {
@@ -952,10 +988,12 @@ struct FocusPanelView: View {
         .onChange(of: session.active?.taskID) { id in
             // 刚开始专注时先完整显示一会儿，再收成小伙伴。
             if id != nil { pinnedOpen = false; expand(); scheduleCollapse(after: 2.5) }
+            else { picking = true }
         }
         .onAppear {
             configureMention()
             if selectedTaskID == nil { selectedTaskID = tasks.first?.id }
+            if previewPicked { picking = false }
         }
         .onChange(of: defaultMinutes) { _ in
             if session.active == nil { minutes = String(Prefs.focusDurationMinutes()) }
@@ -1025,8 +1063,7 @@ struct FocusPanelView: View {
                     .buttonStyle(HitAreaButtonStyle(compact: true))
                     .foregroundStyle(Palette.muted)
             }
-            FocusMiniTimeline(tasks: timelineTasks, selected: selectedTaskID, pinned: store?.pinnedTask?.id,
-                              query: $query, select: { selectedTaskID = $0 }, start: { selectedTaskID = $0; startFocus() })
+            taskSlot
             HStack(spacing: 6) {
                 Image(systemName: "flag").font(.system(size: 11)).foregroundStyle(Palette.accent)
                 TextField("本轮目标（可选）", text: $goal).textFieldStyle(.plain).font(.system(size: 12))
@@ -1054,6 +1091,46 @@ struct FocusPanelView: View {
         }
     }
 
+    /// 面板里的任务槽：显示选好的任务；点它在上方展开时间轴重新选。
+    private var taskSlot: some View {
+        Button {
+            withAnimation(Motion.reduced ? nil : .spring(response: 0.34, dampingFraction: 0.88)) { picking.toggle() }
+        } label: {
+            HStack(spacing: 9) {
+                if let task = selectedTask {
+                    let color = PriorityMark(priority: task.task.priority).color
+                    ZStack {
+                        Circle().fill(color.opacity(0.22)).frame(width: 12, height: 12)
+                        Circle().strokeBorder(color.opacity(0.85), lineWidth: 1.1).frame(width: 12, height: 12)
+                        Circle().fill(color).frame(width: 5, height: 5)
+                    }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(String(TaskText.rendered(task.task.title).characters)).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                        HStack(spacing: 6) {
+                            if let number = task.task.number { Text("#\(number)") }
+                            Text(task.task.dueDate.map { $0.relativeLabel } ?? AppLocalized("未设日期"))
+                            if task.task.focusSeconds >= 60 { Text(AppLocalizedFormat("已专注 %@", FocusSession.brief(task.task.focusSeconds))) }
+                        }
+                        .font(.system(size: 10)).monospacedDigit().foregroundStyle(Palette.muted)
+                    }
+                } else {
+                    Image(systemName: "circle.dashed").foregroundStyle(Palette.muted)
+                    Text(timelineTasks.isEmpty && query.isEmpty ? "没有未完成的待办" : "在时间轴上选一个任务")
+                        .font(.system(size: 12)).foregroundStyle(Palette.muted)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.up").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.muted)
+                    .rotationEffect(.degrees(picking ? 180 : 0))
+            }
+            .padding(.horizontal, 10).frame(height: 40)
+            .inputFieldSurface(focused: picking, fill: Palette.background.opacity(0.14))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(picking ? "收起时间轴" : "在上方的时间轴里选任务")
+        .accessibilityLabel(selectedTask.map { AppLocalized("专注任务：") + String(TaskText.rendered($0.task.title).characters) } ?? AppLocalized("选择专注任务"))
+    }
+
     /// 小时间轴的顺序和主界面一致：按日期，同一天按手动顺序；未完成的才列出。
     private var timelineTasks: [ScheduledTask] {
         tasks.sorted(by: TaskTimelineSection.precedes)
@@ -1062,53 +1139,6 @@ struct FocusPanelView: View {
     private var selectedTask: ScheduledTask? {
         guard let selectedTaskID else { return nil }
         return store?.locate(selectedTaskID)
-    }
-
-    private var taskPicker: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: "checklist").foregroundStyle(Palette.accent)
-                Text("选择专注任务").font(.headline)
-                Spacer()
-            }
-            TextField("搜索标题或编号…", text: $query)
-                .textFieldStyle(.roundedBorder)
-            if tasks.isEmpty {
-                Text(query.isEmpty ? "没有未完成的待办" : "没有匹配的任务")
-                    .font(.caption).foregroundStyle(Palette.muted)
-                    .frame(maxWidth: .infinity, minHeight: 60)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(tasks) { item in taskButton(item) }
-                    }
-                }
-                .frame(height: min(CGFloat(tasks.count) * 34 + 4, 260))
-            }
-        }
-        .padding(14)
-        .frame(width: 360)
-    }
-
-    private func taskButton(_ item: ScheduledTask) -> some View {
-        Button {
-            selectedTaskID = selectedTaskID == item.id ? nil : item.id
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: selectedTaskID == item.id ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selectedTaskID == item.id ? Palette.success : Palette.muted)
-                Text("#\(item.task.number ?? 0)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
-                PriorityMark(priority: item.task.priority)
-                Text(String(TaskText.rendered(item.task.title).characters)).lineLimit(1)
-                Spacer(minLength: 0)
-                dueText(for: item)
-                if item.id == store?.pinnedTask?.id { Image(systemName: "pin.fill").font(.system(size: 10)).foregroundStyle(Palette.accent) }
-            }
-            .padding(.horizontal, 7).padding(.vertical, 4)
-            .background(selectedTaskID == item.id ? Palette.soft : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .raisedOnHover(radius: 8)
     }
 
     @ViewBuilder
@@ -1483,20 +1513,18 @@ struct FocusCompanion: View {
     }
 }
 
-/// 专注面板里的小时间轴：一根线串起未完成的待办，日期是线上的结，待办是珠子。
-/// 单击选中，双击直接开始；顶部的搜索框按标题或编号过滤。
-struct FocusMiniTimeline: View {
+/// 专注面板上方的时间轴浮层：没有玻璃底，一根线串起所有未完成的待办，可以一直往上滚到更早的日期；
+/// 最下面是搜索框，紧挨着面板里的任务槽。单击选中并收起。
+struct FocusTimelineRail: View {
     let tasks: [ScheduledTask]
     let selected: UUID?
     let pinned: UUID?
     @Binding var query: String
+    let height: CGFloat
     let select: (UUID) -> Void
-    let start: (UUID) -> Void
     @State private var hovered: UUID?
-    /// 上一次点击：同一项在系统双击间隔内再点一次就开始专注。自己判断双击，单击才能立即生效
-    /// （同时挂单击和双击手势时，SwiftUI 要等双击超时才认单击，选中会慢半拍）。
-    @State private var lastTap: (id: UUID, time: Date)?
     @Namespace private var highlight
+    @FocusState private var searchFocused: Bool
 
     private struct Group: Identifiable {
         let day: Date?
@@ -1518,48 +1546,61 @@ struct FocusMiniTimeline: View {
         return result
     }
 
+    /// 打开时停在选中的那一项；没选就停在今天（或最近的日期）。
+    private var initialTarget: AnyHashable? {
+        if let selected { return selected }
+        let today = JournalDates.calendar.startOfDay(for: Date())
+        return groups.first { ($0.day ?? .distantFuture) >= today }?.id ?? groups.last?.id
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").font(.system(size: 10)).foregroundStyle(Palette.muted)
-                TextField("搜索标题或编号…", text: $query).textFieldStyle(.plain).font(.system(size: 11))
-            }
-            .padding(.horizontal, 8).frame(height: 22)
-            .background(Palette.background.opacity(0.14), in: Capsule())
-            .overlay(Capsule().strokeBorder(Palette.line.opacity(0.4), lineWidth: Metrics.hairline))
+        VStack(alignment: .leading, spacing: 6) {
             if tasks.isEmpty {
-                Text(query.isEmpty ? "没有未完成的待办" : "没有匹配的任务")
-                    .font(.system(size: 11)).foregroundStyle(Palette.muted)
-                    .frame(maxWidth: .infinity, minHeight: 50)
+                Spacer(minLength: 0)
+                Text("没有匹配的任务").font(.system(size: 11)).foregroundStyle(Palette.muted)
+                    .frame(maxWidth: .infinity)
+                Spacer(minLength: 0)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView(showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 0) {
                             ForEach(groups) { group in
-                                knot(group.day)
+                                knot(group.day).id(group.id)
                                 ForEach(group.tasks) { item in row(item) }
                             }
                         }
+                        .padding(.vertical, 6)
                         .background(alignment: .leading) {
-                            Rectangle().fill(Palette.line.opacity(0.7)).frame(width: 1).padding(.leading, 9.5).padding(.vertical, 8)
+                            Rectangle().fill(Palette.line.opacity(0.8)).frame(width: 1.2).padding(.leading, 9.4).padding(.vertical, 12)
                         }
                     }
-                    .frame(height: min(CGFloat(tasks.count * 26 + groups.count * 20) + 4, 196))
-                    .onAppear { if let selected { proxy.scrollTo(selected, anchor: .center) } }
+                    // 上下两端淡出：线像是从屏幕上延伸过来的，不是被框截断。
+                    .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.1),
+                                                 .init(color: .black, location: 0.92), .init(color: .clear, location: 1)],
+                                         startPoint: .top, endPoint: .bottom))
+                    .onAppear { if let target = initialTarget { proxy.scrollTo(target, anchor: .center) } }
+                    .onChange(of: query) { _ in if let first = tasks.first { proxy.scrollTo(first.id, anchor: .top) } }
                 }
             }
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").font(.system(size: 10)).foregroundStyle(Palette.muted)
+                TextField("搜索标题或编号…", text: $query).textFieldStyle(.plain).font(.system(size: 11))
+                    .focused($searchFocused)
+                    .onSubmit { if let first = tasks.first { select(first.id) } }
+                if !query.isEmpty {
+                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 10)) }
+                        .buttonStyle(.plain).foregroundStyle(Palette.muted)
+                }
+            }
+            .padding(.horizontal, 10).frame(height: 24)
+            .background(Palette.background.opacity(0.28), in: Capsule())
+            .overlay(Capsule().strokeBorder(Palette.line.opacity(0.5), lineWidth: Metrics.hairline))
         }
-    }
-
-    private func tap(_ id: UUID) {
-        let now = Date()
-        if let lastTap, lastTap.id == id, now.timeIntervalSince(lastTap.time) < NSEvent.doubleClickInterval {
-            self.lastTap = nil
-            start(id)
-            return
-        }
-        lastTap = (id, now)
-        withAnimation(Motion.reduced ? nil : .spring(response: 0.2, dampingFraction: 0.9)) { select(id) }
+        .padding(.horizontal, 8)
+        .modifier(RailLegibility())
+        // 透明区域也要接住点击和滚动。
+        .background(Color.black.opacity(0.001))
+        .contentShape(Rectangle())
     }
 
     private func knot(_ day: Date?) -> some View {
@@ -1619,14 +1660,15 @@ struct FocusMiniTimeline: View {
             .padding(.leading, 16)
         }
         .contentShape(Rectangle())
-        .onTapGesture { tap(item.id) }
+        .onTapGesture {
+            withAnimation(Motion.reduced ? nil : .spring(response: 0.2, dampingFraction: 0.9)) { select(item.id) }
+        }
         .onHover { inside in if inside { hovered = item.id } else if hovered == item.id { hovered = nil } }
-        .help("单击选中 · 双击开始专注")
+        .help("选这个任务")
         .id(item.id)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
         .accessibilityAction { select(item.id) }
-        .accessibilityAction(named: "开始专注") { start(item.id) }
     }
 }
 
@@ -1678,6 +1720,15 @@ private struct LegibilityShadow: ViewModifier {
     @Environment(\.colorScheme) private var scheme
     func body(content: Content) -> some View {
         content.shadow(color: (scheme == .dark ? Color.black : Color.white).opacity(scheme == .dark ? 0.75 : 0.6), radius: 1.6, y: 0.5)
+    }
+}
+
+/// 浮在桌面上的时间轴没有底板：文字加一层较明显的描影，深浅壁纸上都看得清。
+private struct RailLegibility: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    func body(content: Content) -> some View {
+        let halo = scheme == .dark ? Color.black : Color.white
+        content.shadow(color: halo.opacity(0.85), radius: 2, y: 0).shadow(color: halo.opacity(0.5), radius: 5, y: 0)
     }
 }
 

@@ -860,3 +860,8 @@
 "单击选中 · 双击开始专注" = "Click to select · double-click to start";
 "收成小伙伴" = "Shrink to companion";
 "展开专注面板" = "Expand focus panel";
+"在时间轴上选一个任务" = "Pick a task on the timeline";
+"收起时间轴" = "Hide the timeline";
+"在上方的时间轴里选任务" = "Pick a task on the timeline above";
+"专注任务：" = "Focus task: ";
+"选这个任务" = "Choose this task";
