@@ -388,7 +388,6 @@ struct ContentView: View {
                 Text(format(selectedDate, "yyyy年 · EEEE"))
                     .font(.system(size: typography.pt(12))).foregroundStyle(Palette.muted)
                     .lineLimit(1).fixedSize()
-                overviewChip
             }
             Spacer()
             HStack(spacing: 12) {
@@ -399,25 +398,6 @@ struct ContentView: View {
             }
         }
         .padding(.vertical, 2)
-    }
-
-    /// 逾期事项的入口：查看，或一键把它们的截止日期改到今天。
-    @ViewBuilder
-    private var overviewChip: some View {
-        if overdueCount > 0 {
-            Menu {
-                Button("查看已逾期事项（\(overdueCount)）…") { agenda = .overdue }
-                Button("把 \(overdueCount) 项逾期事项的截止日期改到今天") { rolloverToday() }
-            } label: {
-                Label("逾期 \(overdueCount)", systemImage: "exclamationmark.circle.fill")
-                    .font(.system(size: typography.pt(11), weight: .medium))
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(Palette.deadline.opacity(0.14), in: Capsule())
-                    .foregroundStyle(Palette.deadline)
-            }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            .help("查看逾期事项")
-        }
     }
 
     /// 清单顶部的数量可直接定位到对应任务，时间线不按日期分段。
@@ -463,6 +443,13 @@ struct ContentView: View {
             .raisedOnHover(radius: 10, enabled: group != nil)
             .disabled(group == nil)
             .help(group == nil ? AppLocalizedFormat("%lld 项未完成", count) : AppLocalizedFormat("跳到%@的任务", AppLocalized(title)))
+            // 逾期的处理放在这里（右键）；标题区不再重复显示一个逾期标记。
+            .contextMenu {
+                if group == "overdue", count > 0 {
+                    Button("查看已逾期事项（\(count)）…") { agenda = .overdue }
+                    Button("把 \(count) 项逾期事项的截止日期改到今天") { rolloverToday() }
+                }
+            }
             .accessibilityLabel(AppLocalizedFormat("%lld 项%@", count, AppLocalized(title)))
         }
     }
