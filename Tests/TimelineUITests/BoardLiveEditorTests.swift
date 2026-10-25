@@ -657,15 +657,20 @@ final class BoardLiveEditorTests: XCTestCase {
         let fixture = try LiveFixture(source: source)
         defer { fixture.close() }
         try await waitForBoardEditor(fixture.webView)
+        // 编辑器是共用的：等它换成这块工作板的内容再量。
+        for _ in 0..<100 where (try? await fixture.snapshot()["source"] as? String) != source { try await Task.sleep(for: .milliseconds(20)) }
         try await browse(fixture.session, fixture.webView)
         let script = """
-        const s=document.querySelector('.cm-scroller');
+        const s=document.querySelector('.cm-scroller'), view=window.boardEditor.view();
         // 隐藏的测试窗口里网页几乎不出帧、计时器也被放慢：每一步之后手动测量一次、发一次滚动事件，相当于过了一帧。
         const settle=()=>{ for (let i=0;i<2;i++){ window.boardEditor.view().measure(); s.dispatchEvent(new Event('scroll')); } };
         const heading=name=>[...document.querySelectorAll('.cm-line')].find(l=>l.classList.contains('cm-foldable')&&l.textContent.includes(name));
         const top=name=>Math.round(heading(name).getBoundingClientRect().top);
         const click=el=>{const r=el.getBoundingClientRect();const o={bubbles:true,cancelable:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2,button:0,detail:1};el.dispatchEvent(new MouseEvent('mousedown',o));el.dispatchEvent(new MouseEvent('mouseup',o));};
         const out={};
+        // 换工作板时排着的滚动（滚到光标）先让它生效；再按文档位置滚过去（标题可能还在视口外、没画出来），最后按画出来的位置对齐。
+        settle();
+        s.scrollTop = view.lineBlockAt(view.state.doc.toString().indexOf('# Two')).top - 100; settle();
         for (let i=0;i<4;i++){ s.scrollTop += heading('Two').getBoundingClientRect().top - s.getBoundingClientRect().top - 100; settle(); }
         out.middle=[top('Two')];
         heading('Two').querySelector('.board-heading-fold').click(); settle(); out.middle.push(top('Two'));
