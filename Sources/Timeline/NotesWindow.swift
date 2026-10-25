@@ -200,16 +200,15 @@ struct UnifiedNotesView: View {
 
     private var modeBar: some View {
         HStack(spacing: 8) {
-            Image(systemName: workspace.mode == .notes ? "note.text" : "book.pages").foregroundStyle(Palette.accent)
-            Picker("", selection: Binding(get: { workspace.mode == .notes ? 0 : 1 }, set: {
+            PillSegmentedControl(selection: Binding(get: { workspace.mode }, set: { mode in
                 NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
                 NSApp.keyWindow?.makeFirstResponder(nil)
-                workspace.mode = $0 == 0 ? .notes : .journal
-            })) {
-                Text("笔记").tag(0)
-                Text("日记").tag(1)
-            }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 126)
+                workspace.mode = mode
+            }), segments: [.init(value: UnifiedNotesMode.notes, title: "笔记", symbol: "note.text"),
+                           .init(value: .journal, title: "日记", symbol: "book.pages")],
+            height: 28, fontSize: 12)
+            .fixedSize()
+            .accessibilityLabel("笔记或日记")
             Spacer()
             Button(action: close) { Image(systemName: "xmark") }
                 .buttonStyle(HitAreaButtonStyle(compact: true)).foregroundStyle(Palette.muted)

@@ -62,11 +62,10 @@ struct NotesOutlinePanel<Chapters: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 if let chapterCount {
-                    Picker("", selection: $mode) {
-                        Text("章节 \(chapterCount)").tag(NotesOutlineMode.chapters)
-                        Text("时间").tag(NotesOutlineMode.timeline)
-                    }
-                    .pickerStyle(.segmented).labelsHidden().controlSize(.small)
+                    PillSegmentedControl(selection: $mode, segments: [
+                        .init(value: NotesOutlineMode.chapters, title: "章节", count: chapterCount),
+                        .init(value: .timeline, title: "时间"),
+                    ], fillsWidth: true, height: 24, fontSize: 11)
                 } else {
                     Text("时间线").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)
                     Text("\(months.reduce(0) { $0 + $1.days.count }) 天").font(.system(size: 11)).monospacedDigit()

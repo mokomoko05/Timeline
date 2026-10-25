@@ -880,10 +880,11 @@ struct NotesView: View {
             Text("\(tasks.count) 个待办（\(tasks.filter { !$0.task.completed }.count) 个未完成） · \(notes.count) 条笔记")
                 .font(.system(size: 12)).monospacedDigit().foregroundStyle(Palette.muted).lineLimit(1)
             HStack(spacing: 4) {
-                Picker("", selection: $nav.chapterView) {
-                    Text("按待办").tag(true)
-                    Text("按日期").tag(false)
-                }.pickerStyle(.segmented).labelsHidden().frame(width: 140)
+                PillSegmentedControl(selection: $nav.chapterView, segments: [
+                    .init(value: true, title: "按待办", symbol: "checklist"),
+                    .init(value: false, title: "按日期", symbol: "calendar"),
+                ], height: 26, fontSize: 11.5)
+                .fixedSize()
                 Spacer().frame(width: 6)
                 iconAction("list.bullet.rectangle", "打开工作板") { BoardWindowController.shared.show(store: store, owner: .tag(tag)) }
                 outlineToggle

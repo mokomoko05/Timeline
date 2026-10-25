@@ -144,9 +144,9 @@ struct AgendaView: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 8))
-            Picker("范围", selection: $filter) {
-                ForEach(AgendaFilter.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
-            }.pickerStyle(.segmented)
+            PillSegmentedControl(selection: $filter, segments: AgendaFilter.allCases.map { .init(value: $0, title: $0.title) },
+                                 fillsWidth: true, height: 28)
+                .accessibilityLabel("范围")
             HStack {
                 Text(hits.isEmpty ? " " : AppLocalizedFormat("%lld 条结果", hits.count)).font(.caption).foregroundStyle(Palette.muted)
                 Spacer()

@@ -801,10 +801,11 @@ private struct ReviewDraftView: View {
             Text("复盘草稿").font(.headline)
             SummaryEditor(text: $text, readOnly: store.isReadOnly, startsEditing: true)
             if !store.entry(for: date).summary.isEmpty {
-                Picker("保存方式", selection: $append) {
-                    Text("追加到已有总结").tag(true)
-                    Text("替换已有总结").tag(false)
-                }.pickerStyle(.segmented)
+                PillSegmentedControl(selection: $append, segments: [
+                    .init(value: true, title: "追加到已有总结", symbol: "text.append"),
+                    .init(value: false, title: "替换已有总结", symbol: "arrow.triangle.2.circlepath"),
+                ], fillsWidth: true)
+                .accessibilityLabel("保存方式")
             }
             HStack {
                 Spacer()
