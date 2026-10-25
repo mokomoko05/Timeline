@@ -21,9 +21,19 @@ final class DesignPreviewTests: XCTestCase {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Self.sampleJournal().write(to: directory.appendingPathComponent("journal.json"))
+        // README 截图用中文界面渲染。
+        if let language = ProcessInfo.processInfo.environment["TIMELINE_PREVIEW_LANGUAGE"] {
+            previousLanguage = UserDefaults.standard.string(forKey: Prefs.language)
+            UserDefaults.standard.set(language, forKey: Prefs.language)
+        }
     }
 
+    private var previousLanguage: String?
+
     override func tearDown() {
+        if ProcessInfo.processInfo.environment["TIMELINE_PREVIEW_LANGUAGE"] != nil {
+            UserDefaults.standard.set(previousLanguage, forKey: Prefs.language)
+        }
         if let directory { try? FileManager.default.removeItem(at: directory) }
         super.tearDown()
     }
