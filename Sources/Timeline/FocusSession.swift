@@ -469,8 +469,67 @@ enum FocusPanelStyle: String, CaseIterable, Identifiable {
     }
 }
 
-private final class FocusPanel: NSPanel {
+private extension NSRect {
+    var area: CGFloat { isNull ? 0 : width * height }
+}
+
+final class FocusPanel: NSPanel {
     override var canBecomeKey: Bool { true }
+
+    /// 系统的背景拖动由窗口服务器执行，拖动中改不了位置；自己跟着鼠标移动，才能让窗口始终留在屏幕里。
+    private var drag: (mouse: NSPoint, origin: NSPoint, moving: Bool)?
+
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown:
+            drag = nil
+            if let content = contentView,
+               let hit = content.hitTest(content.convert(event.locationInWindow, from: nil)),
+               hit.mouseDownCanMoveWindow {
+                drag = (NSEvent.mouseLocation, frame.origin, false)
+            }
+        case .leftMouseDragged:
+            if var current = drag {
+                let mouse = NSEvent.mouseLocation
+                let dx = mouse.x - current.mouse.x, dy = mouse.y - current.mouse.y
+                if !current.moving && hypot(dx, dy) < 3 { break }
+                current.moving = true
+                drag = current
+                var target = frame
+                target.origin = NSPoint(x: current.origin.x + dx, y: current.origin.y + dy)
+                let visible = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }?.visibleFrame
+                    ?? screen?.visibleFrame
+                if let visible { target = Self.clamp(target, to: visible) }
+                if target.origin != frame.origin { setFrameOrigin(target.origin) }
+                return
+            }
+        case .leftMouseUp:
+            if let current = drag {
+                drag = nil
+                // 拖动过就不让按下处的按钮被当成点击：把松手位置挪到窗口外。
+                if current.moving,
+                   let cancel = NSEvent.mouseEvent(with: .leftMouseUp, location: NSPoint(x: -10_000, y: -10_000),
+                                                   modifierFlags: event.modifierFlags, timestamp: event.timestamp,
+                                                   windowNumber: event.windowNumber, context: nil,
+                                                   eventNumber: event.eventNumber, clickCount: event.clickCount,
+                                                   pressure: event.pressure) {
+                    super.sendEvent(cancel)
+                    return
+                }
+            }
+        default:
+            break
+        }
+        super.sendEvent(event)
+    }
+
+    /// 把窗口整个放进屏幕可见区域；窗口比屏幕还大时贴住左上角。
+    static func clamp(_ frame: NSRect, to visible: NSRect) -> NSRect {
+        var frame = frame
+        frame.origin.x = max(min(frame.origin.x, visible.maxX - frame.width), visible.minX)
+        frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - frame.height)
+        return frame
+    }
 }
 
 @MainActor
@@ -582,7 +641,8 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
             panel.level = .floating
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
-            panel.isMovableByWindowBackground = true
+            // 拖动由 FocusPanel 自己处理，好把窗口限制在屏幕内。
+            panel.isMovableByWindowBackground = false
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             panel.delegate = self
             self.panel = panel
@@ -595,7 +655,10 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         } else {
             topLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
         }
-        let frame = NSRect(x: topLeft.x, y: topLeft.y - size.height, width: size.width, height: size.height)
+        var frame = NSRect(x: topLeft.x, y: topLeft.y - size.height, width: size.width, height: size.height)
+        // 保存的位置可能只有一部分还在屏幕上（换了显示器、分辨率变了），整个挪回屏幕里。
+        let screen = NSScreen.screens.max { $0.visibleFrame.intersection(frame).area < $1.visibleFrame.intersection(frame).area }
+        if let visible = (screen ?? NSScreen.main)?.visibleFrame { frame = FocusPanel.clamp(frame, to: visible) }
         if panel.frame != frame { panel.setFrame(frame, display: true) }
         if Headless.active { panel.alphaValue = 0; panel.ignoresMouseEvents = true }
         if !panel.isVisible { panel.orderFrontRegardless() }
@@ -646,6 +709,7 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
             frame.origin.x = min(max(frame.origin.x, screen.minX + Self.edgeInset), screen.maxX - size.width - Self.edgeInset)
         }
         frame.origin.y = min(max(panel.frame.minY, screen.minY + Self.edgeInset), screen.maxY - size.height)
+        frame = FocusPanel.clamp(frame, to: screen)
         if FocusDock.shared.right != dockedRight { FocusDock.shared.right = dockedRight }
         guard frame.integral != panel.frame.integral else { return }
         // 窗口变大后、内容重新排版前，画面里的内容会先贴着窗口顶部闪一帧。
