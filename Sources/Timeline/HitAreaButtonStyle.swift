@@ -20,8 +20,8 @@ struct ItemActionButton: View {
         }
         .buttonStyle(HitAreaButtonStyle(compact: compact))
         .foregroundStyle(destructive ? Palette.deadline : (active ? Palette.accent : Palette.muted))
-        .help(title)
-        .accessibilityLabel(title)
+        .help(LocalizedStringKey(title))
+        .accessibilityLabel(LocalizedStringKey(title))
     }
 }
 

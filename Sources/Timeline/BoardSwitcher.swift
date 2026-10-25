@@ -169,7 +169,7 @@ struct BoardSwitcher: View {
         .onTapGesture { open(item) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(item.title)
+        .accessibilityLabel(Text(verbatim: item.title))
     }
 
     private func open(_ item: BoardSwitcherItem) {

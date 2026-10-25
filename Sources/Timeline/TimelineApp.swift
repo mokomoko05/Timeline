@@ -138,7 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.setFrameAutosaveName("TimelineMainWindow")
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        reminders.onComplete = { [weak self] in self?.toast.show("已从通知完成「\($0)」") }
+        reminders.onComplete = { [weak self] in self?.toast.show(AppLocalizedFormat("已从通知完成「%@」", $0)) }
         // 专注期间允许自由切换网页和应用；任务链接只用于开始时打开，不再需要 Safari 自动化权限。
         if CommandLine.arguments.contains("--enable-login") { loginItem.setEnabled(true) }
         if !snapshotRun {
@@ -477,13 +477,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             if item.action == #selector(undoAction(_:)) {
                 let typing = isEditingText
                 let name = store.undoManager.undoActionName
-                item.title = typing || name.isEmpty ? "撤销" : "撤销\(name)"
+                item.title = typing || name.isEmpty ? AppLocalized("撤销") : AppLocalizedFormat("撤销%@", AppLocalized(name))
                 return typing || store.undoManager.canUndo
             }
             if item.action == #selector(redoAction(_:)) {
                 let typing = isEditingText
                 let name = store.undoManager.redoActionName
-                item.title = typing || name.isEmpty ? "重做" : "重做\(name)"
+                item.title = typing || name.isEmpty ? AppLocalized("重做") : AppLocalizedFormat("重做%@", AppLocalized(name))
                 return typing || store.undoManager.canRedo
             }
             return true

@@ -26,7 +26,7 @@ enum LogTaskLabel {
         if let id = log.taskID, let task = store.locate(id) { return current(task, store: store, logDate: logDate) }
         guard let title = log.taskTitle else { return nil }
         let number = log.taskNumber.map { "#\($0) " } ?? ""
-        return "\(number)\(title)（已删除）"
+        return number + AppLocalizedFormat("%@（已删除）", title)
     }
 }
 
@@ -275,7 +275,7 @@ struct DailyLogView: View {
 
     private func copyLogs(_ ids: Set<UUID>) {
         let copied = LogClipboard.copy(store: store, ids: ids)
-        toast.show(copied == 0 ? "没有可复制的文字（只有图片）" : (copied == 1 ? "已复制 1 条日志" : "已复制 \(copied) 条日志"))
+        toast.show(copied == 0 ? "没有可复制的文字（只有图片）" : AppLocalizedFormat("已复制 %lld 条日志", copied))
     }
 
     /// 批量删除：一次操作，⌘Z 整批恢复；删完清掉选择。
@@ -284,7 +284,7 @@ struct DailyLogView: View {
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
         let count = store.deleteLogs(ids)
         selectedLogs = []
-        if count > 0 { toast.show("已删除 \(count) 条日志", actionTitle: "撤销") { store.undo() } }
+        if count > 0 { toast.show(AppLocalizedFormat("已删除 %lld 条日志", count), actionTitle: "撤销") { store.undo() } }
     }
 
     private func selectionState(_ id: UUID) -> LogSelection {
@@ -345,7 +345,7 @@ struct DailyLogView: View {
                             .padding(.horizontal, 7).frame(height: 22)
                             .background(TerminalPalette.blue.opacity(0.16), in: Capsule())
                         }
-                        .buttonStyle(.plain).help("移除这个筛选条件").accessibilityLabel("移除筛选：\(task.title)")
+                        .buttonStyle(.plain).help("移除这个筛选条件").accessibilityLabel(AppLocalizedFormat("移除筛选：%@", task.title))
                     }
                 }
             }
@@ -649,7 +649,7 @@ private struct DailyLogRow: View {
                 }
                 .buttonStyle(.plain).foregroundStyle(TerminalPalette.blue)
                 .frame(maxWidth: 220, alignment: .leading).fixedSize(horizontal: true, vertical: false)
-                .help(label).accessibilityLabel("关联任务：\(label)")
+                .help(label).accessibilityLabel(AppLocalizedFormat("关联任务：%@", label))
                 .disabled(log.taskID.flatMap { store.locate($0) } == nil)
             }
             VStack(alignment: .leading, spacing: 4) {
@@ -678,8 +678,8 @@ private struct DailyLogRow: View {
                         .padding(.horizontal, 5).frame(height: 22).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).foregroundStyle(TerminalPalette.blue)
-                .help(expanded ? "收起图片" : "点击查看 \(log.images.count) 张图片")
-                .accessibilityLabel(expanded ? "收起图片" : "查看 \(log.images.count) 张图片")
+                .help(expanded ? AppLocalized("收起图片") : AppLocalizedFormat("点击查看 %lld 张图片", log.images.count))
+                .accessibilityLabel(expanded ? AppLocalized("收起图片") : AppLocalizedFormat("查看 %lld 张图片", log.images.count))
             }
             if log.showsTimelineTags, !log.tags.isEmpty { TaskTagLine(tags: log.tags).padding(.top, 2) }
         }
@@ -728,7 +728,7 @@ private struct DailyLogRow: View {
             TextMenuItem(title: "编辑", symbol: "pencil", action: { edit(log, date) }),
             TextMenuItem(title: log.tags.isEmpty ? "加标签…" : "标签…", symbol: "tag", action: { editingTags = true }),
         ] + (log.taskID.flatMap { store.locate($0) }.map { task in
-            [TextMenuItem(title: "打开「\(FocusHint.label(task))」的笔记", symbol: "note.text", action: { AppRouter.openNotes(task.id) })]
+            [TextMenuItem(title: AppLocalizedFormat("打开「%@」的笔记", FocusHint.label(task)), symbol: "note.text", action: { AppRouter.openNotes(task.id) })]
         } ?? []) + [
             TextMenuItem(title: selection.selected ? "取消选中" : "选中这条日志", symbol: selection.selected ? "checkmark.circle" : "circle", action: selection.toggle),
             .divider,

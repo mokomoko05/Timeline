@@ -80,7 +80,7 @@ struct HotKeyBinding: Equatable, Codable {
         kVK_ANSI_5: "5", kVK_ANSI_6: "6", kVK_ANSI_7: "7", kVK_ANSI_8: "8", kVK_ANSI_9: "9",
     ]
 
-    static func keyName(_ code: Int) -> String { names[code] ?? "键码\(code)" }
+    static func keyName(_ code: Int) -> String { names[code] ?? AppLocalizedFormat("键码%lld", code) }
 
     private static let functionKeys: [Int: Int] = [
         kVK_F1: 0, kVK_F2: 1, kVK_F3: 2, kVK_F4: 3, kVK_F5: 4, kVK_F6: 5,
@@ -177,9 +177,9 @@ struct HotKeyRecorder: View {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.keyCode == UInt16(kVK_Escape) { stop(); return nil }
             let candidate = HotKeyBinding(keyCode: Int(event.keyCode), modifiers: HotKeyBinding.carbonModifiers(event.modifierFlags))
-            guard HotKeyBinding.isSupportedKey(candidate.keyCode) else { message = "这个键不能用作快捷键"; return nil }
-            guard candidate.isValid else { message = "需要至少一个修饰键（⌃ ⌥ ⌘），否则会影响正常打字"; return nil }
-            if let other = HotKeyStore.conflict(of: candidate, excluding: action) { message = "已被「\(other.title)」使用"; return nil }
+            guard HotKeyBinding.isSupportedKey(candidate.keyCode) else { message = AppLocalized("这个键不能用作快捷键"); return nil }
+            guard candidate.isValid else { message = AppLocalized("需要至少一个修饰键（⌃ ⌥ ⌘），否则会影响正常打字"); return nil }
+            if let other = HotKeyStore.conflict(of: candidate, excluding: action) { message = AppLocalizedFormat("已被「%@」使用", AppLocalized(other.title)); return nil }
             apply(candidate)
             return nil
         }
@@ -194,7 +194,7 @@ struct HotKeyRecorder: View {
 
     private func reset() {
         message = nil
-        if let other = HotKeyStore.conflict(of: action.defaultBinding, excluding: action) { message = "默认组合已被「\(other.title)」使用，请先改那一个"; return }
+        if let other = HotKeyStore.conflict(of: action.defaultBinding, excluding: action) { message = AppLocalizedFormat("默认组合已被「%@」使用，请先改那一个", AppLocalized(other.title)); return }
         apply(action.defaultBinding)
     }
 

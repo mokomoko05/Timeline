@@ -180,7 +180,7 @@ extension NSMenu {
         for item in items {
             if item.separator { menu.addItem(.separator()); continue }
             let target = MenuActionTarget(item.action)
-            let entry = NSMenuItem(title: item.title, action: #selector(MenuActionTarget.fire), keyEquivalent: "")
+            let entry = NSMenuItem(title: AppLocalized(item.title), action: #selector(MenuActionTarget.fire), keyEquivalent: "")
             entry.target = target
             entry.representedObject = target
             if let symbol = item.symbol { entry.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }

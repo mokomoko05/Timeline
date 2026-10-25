@@ -553,10 +553,10 @@ struct ParsedChips: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            if let day = parsed.day { chip("calendar", (dayIsDeadline ? "截止 " : "") + day.relativeLabel) }
+            if let day = parsed.day { chip("calendar", (dayIsDeadline ? AppLocalized("截止 ") : "") + day.relativeLabel) }
             if let hour = parsed.hour { chip("clock", String(format: "%02d:%02d", hour, parsed.minute)) }
-            if let reminder = parsed.reminderMinutes { chip("bell", reminder == 0 ? "准时提醒" : "提前 \(Self.duration(reminder))") }
-            if parsed.repeatRule != .none { chip("repeat", parsed.repeatRule.title) }
+            if let reminder = parsed.reminderMinutes { chip("bell", reminder == 0 ? AppLocalized("准时提醒") : AppLocalizedFormat("提前 %@", Self.duration(reminder))) }
+            if parsed.repeatRule != .none { chip("repeat", AppLocalized(parsed.repeatRule.title)) }
             ForEach(parsed.tags, id: \.self) { chip("tag", $0) }
             Spacer(minLength: 0)
         }

@@ -14,6 +14,11 @@ func AppLocalizedFormat(_ key: String, _ arguments: CVarArg...) -> String {
     String(format: AppLocalized(key), locale: AppLanguage.current.locale, arguments: arguments)
 }
 
+/// 数据层的错误提示：第一行是固定文案，后面是系统给出的原因（已本地化），逐行查表。
+func AppLocalizedLines(_ text: String) -> String {
+    text.components(separatedBy: "\n").map { AppLocalized($0) }.joined(separator: "\n")
+}
+
 func AppErrorDescription(_ error: Error) -> String {
     guard let error = error as? LogInputError else { return AppLocalized(error.localizedDescription) }
     switch error {

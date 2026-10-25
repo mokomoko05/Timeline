@@ -81,7 +81,7 @@ enum SafariLinks {
     static func open(_ url: URL) {
         guard let url = TaskText.linkURL(url.absoluteString) else { return }
         if !usesSafari(url) {
-            if !NSWorkspace.shared.open(url) { showError("无法打开本地文件：\(url.path)") }
+            if !NSWorkspace.shared.open(url) { showError(AppLocalizedFormat("无法打开本地文件：%@", url.path)) }
             return
         }
         // 先找已经开着的标签页，找不到（或没运行、没授权）才新打开。

@@ -122,8 +122,16 @@ final class BoardLiveEditorTests: XCTestCase {
         try await waitForBoardEditor(fixture.webView)
         let buttons = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.board-copy-code').length") as? Int
         XCTAssertEqual(buttons, 3)
-        let rightAligned = try await fixture.webView.evaluateJavaScript("getComputedStyle(document.querySelector('.board-copy-code')).float === 'right'") as? Bool
-        XCTAssertEqual(rightAligned, true)
+        // 预览时复制按钮浮在代码块右上角，不单独占一行；空代码块只剩这一行。
+        let corner = try await fixture.webView.evaluateJavaScript("""
+        (()=>{const header=document.querySelector('.cm-code-header-concealed');
+          return {position:getComputedStyle(header.querySelector('.board-copy-code')).position,
+            height:header.getBoundingClientRect().height,
+            concealed:document.querySelectorAll('.cm-code-header-concealed').length};})()
+        """) as? [String: Any]
+        XCTAssertEqual(corner?["position"] as? String, "absolute")
+        XCTAssertLessThanOrEqual((corner?["height"] as? NSNumber)?.doubleValue ?? 99, 8)
+        XCTAssertEqual(corner?["concealed"] as? Int, 1, "光标所在的第一块显示源码，空代码块保留按钮所在的那一行，只有最后一块收起")
         _ = try await fixture.webView.evaluateJavaScript("(()=>{const editor=window.boardEditor;const start=editor.snapshot().source.indexOf('1');editor.select(start,start+1);editor.replaceSelection('42')})()")
         let before = try await fixture.snapshot()
         _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-copy-code').click()")

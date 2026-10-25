@@ -115,7 +115,7 @@ struct NotesView: View {
         .frame(minWidth: 640, minHeight: 420)
         .background(Palette.background)
         .foregroundStyle(Palette.ink)
-        .alert("删除标签 #\(deletingTag ?? "")？", isPresented: Binding(get: { deletingTag != nil }, set: { if !$0 { deletingTag = nil } })) {
+        .alert(AppLocalizedFormat("删除标签 #%@？", deletingTag ?? ""), isPresented: Binding(get: { deletingTag != nil }, set: { if !$0 { deletingTag = nil } })) {
             Button("删除", role: .destructive) {
                 guard let name = deletingTag else { return }
                 let count = store.deleteTag(name)
@@ -334,7 +334,7 @@ struct NotesView: View {
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(topic.number.map { "#\($0) " } ?? "")\(topic.title)，\(topic.count) 条笔记")
+        .accessibilityLabel((topic.number.map { "#\($0) " } ?? "") + AppLocalizedFormat("%@，%lld 条笔记", topic.title, topic.count))
     }
 
     // MARK: - 右侧：这个任务名下的笔记
@@ -734,6 +734,11 @@ struct NotesView: View {
 
     static func chapterAnchor(_ chapter: NotebookChapter) -> String { "chapter-" + chapter.id }
 
+    /// 「直接记录」「（任务已删除）」是程序给的章节名，要翻译；待办标题原样显示。
+    private func chapterTitle(_ chapter: NotebookChapter) -> String {
+        chapter.taskID == nil || chapter.title == "（任务已删除）" ? AppLocalized(chapter.title) : chapter.title
+    }
+
     /// 标签页的目录：按待办分章时可以列章节（点一项跳到那一章，折叠着就先展开），也可以列时间线；
     /// 没有待办的笔记本、按日期看时只有时间线。
     private func outline(_ tag: String, _ chapters: [NotebookChapter], months: [NotesTimelineIndex.Month],
@@ -782,7 +787,7 @@ struct NotesView: View {
                 if let number = chapter.number {
                     Text("#\(number)").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.muted)
                 }
-                Text(chapter.title).font(.system(size: 12)).lineLimit(2).multilineTextAlignment(.leading)
+                Text(chapterTitle(chapter)).font(.system(size: 12)).lineLimit(2).multilineTextAlignment(.leading)
                     .foregroundStyle(folded ? Palette.muted : Palette.ink)
                 Spacer(minLength: 2)
                 Text("\(chapter.notes.count)").font(.system(size: 10)).monospacedDigit().foregroundStyle(Palette.muted)
@@ -793,7 +798,7 @@ struct NotesView: View {
         }
         .buttonStyle(.plain).raisedOnHover(radius: 5)
         .help("跳到这一章")
-        .accessibilityLabel("\(chapter.number.map { "#\($0) " } ?? "")\(chapter.title)，\(chapter.notes.count) 条笔记")
+        .accessibilityLabel((chapter.number.map { "#\($0) " } ?? "") + AppLocalizedFormat("%@，%lld 条笔记", chapterTitle(chapter), chapter.notes.count))
     }
 
     /// 按待办（章节）：标签是笔记本，每个待办是里面的一章。
@@ -828,7 +833,7 @@ struct NotesView: View {
                     if let number = chapter.number {
                         Text("#\(number)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
                     }
-                    Text(chapter.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text(chapterTitle(chapter)).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                     Text("\(chapter.notes.count) 条").font(.system(size: 11)).foregroundStyle(Palette.muted)
                 }
             }

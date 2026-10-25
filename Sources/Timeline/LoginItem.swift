@@ -57,7 +57,7 @@ final class LoginItem: ObservableObject {
                 _ = try launchctl(["bootout", "gui/\(getuid())/\(label)"])
                 let result = try launchctl(["bootstrap", "gui/\(getuid())", agentURL.path])
                 guard result == 0 else {
-                    throw NSError(domain: label, code: Int(result), userInfo: [NSLocalizedDescriptionKey: "已保存登录启动配置，但系统暂未加载（\(result)）。下次登录将重试。"])
+                    throw NSError(domain: label, code: Int(result), userInfo: [NSLocalizedDescriptionKey: AppLocalizedFormat("已保存登录启动配置，但系统暂未加载（%@）。下次登录将重试。", String(describing: result))])
                 }
             } else {
                 if FileManager.default.fileExists(atPath: agentURL.path) {
@@ -90,7 +90,7 @@ final class LoginItem: ObservableObject {
                 kill(process.processIdentifier, SIGKILL)
             }
             throw NSError(domain: "local.timeline.app", code: 2,
-                          userInfo: [NSLocalizedDescriptionKey: "登录启动配置超时，请稍后重试。"])
+                          userInfo: [NSLocalizedDescriptionKey: AppLocalized("登录启动配置超时，请稍后重试。")])
         }
         return process.terminationStatus
     }

@@ -65,7 +65,7 @@ struct SettingsView: View {
                 if globalHotKey {
                     ForEach(HotKeyAction.allCases) { HotKeyRecorder(action: $0) }
                     if let failed = failedHotKeys(), !failed.isEmpty {
-                        Text("「\(failed.map { AppLocalized($0.title) }.joined(separator: ", "))」的组合已被其他应用占用，请换一个。")
+                        Text(AppLocalizedFormat("「%@」的组合已被其他应用占用，请换一个。", failed.map { AppLocalized($0.title) }.joined(separator: ", ")))
                             .font(.caption).foregroundStyle(Palette.deadline)
                     }
                     Text("点击录入快捷键，需包含 ⌃、⌥ 或 ⌘。")
@@ -232,7 +232,7 @@ struct FocusStylePicker: View {
                     Button { selection = style.rawValue } label: {
                         VStack(spacing: 6) {
                             FocusStyleSample(style: style).frame(height: 34)
-                            Text(style.title).font(.system(size: 11, weight: chosen ? .semibold : .regular))
+                            Text(LocalizedStringKey(style.title)).font(.system(size: 11, weight: chosen ? .semibold : .regular))
                         }
                         .padding(.vertical, 8).frame(maxWidth: .infinity)
                         .background(chosen ? Palette.soft : Color.clear, in: RoundedRectangle(cornerRadius: 8))
@@ -240,7 +240,7 @@ struct FocusStylePicker: View {
                         .contentShape(RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("样式 \(style.title)：\(style.detail)")
+                    .accessibilityLabel(AppLocalizedFormat("样式 %@：%@", AppLocalized(style.title), AppLocalized(style.detail)))
                     .accessibilityAddTraits(chosen ? [.isButton, .isSelected] : .isButton)
                 }
             }

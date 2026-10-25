@@ -214,6 +214,13 @@ function decorations(state, details, expanded) {
         ranges.push(Decoration.widget({widget: new CopyCodeWidget(firstBody, Math.max(firstBody, end)), side: -1}).range(line.from));
         if (state.readOnly || !editing) {
           // Keep the header for the copy action, but never expose fences or HTML examples as markup.
+          // The hidden fence line shrinks to the block's top edge; the copy button floats in the corner.
+          // An empty block keeps the row: the button is all there is to show.
+          const closingLine = lastChild?.name === "CodeMark" && lastChild.from > line.from ? state.doc.lineAt(lastChild.from).number : lastLine + 1;
+          if (closingLine - line.number - 1 > 0) {
+            ranges.push(Decoration.line({class: "cm-code-header-concealed"}).range(line.from));
+            ranges.push(Decoration.line({class: "cm-code-first"}).range(state.doc.line(line.number + 1).from));
+          }
           replace(line.from, line.to, undefined);
           if (lastChild?.name === "CodeMark" && lastChild.from > line.from) {
             const closing = state.doc.lineAt(lastChild.from);

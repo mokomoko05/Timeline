@@ -48,8 +48,8 @@ struct DeadlineDayCell: View, Equatable {
     private var accessibilityDescription: String {
         let formatter = Self.accessibilityFormatter
         let due = dueToday
-        let summary = due.isEmpty ? "没有截止事项" : "\(due.count) 项截止，已完成 \(due.filter(\.task.isDone).count) 项"
-        return "\(formatter.string(from: date))，\(summary)\(today ? "，今天" : "")"
+        let summary = due.isEmpty ? AppLocalized("没有截止事项") : AppLocalizedFormat("%lld 项截止，已完成 %lld 项", due.count, due.filter(\.task.isDone).count)
+        return formatter.string(from: date) + AppLocalized("，") + summary + (today ? AppLocalized("，今天") : "")
     }
     private var selected: Bool { JournalDates.calendar.isDate(date, inSameDayAs: selectedDate) }
     private var inMonth: Bool { JournalDates.calendar.isDate(date, equalTo: displayedMonth, toGranularity: .month) }
@@ -71,7 +71,7 @@ struct DeadlineDayCell: View, Equatable {
         .background(GeometryReader { proxy in
             Color.clear.preference(key: CheckboxFramesKey.self, value: [Self.logButtonID.uuidString: proxy.frame(in: .named(Self.space))])
         })
-        .help(logCount > 0 ? "打开这一天的日志（\(logCount) 条）· ⌘J" : "打开这一天的日志 · ⌘J")
+        .help(logCount > 0 ? AppLocalizedFormat("打开这一天的日志（%lld 条）· ⌘J", logCount) : AppLocalized("打开这一天的日志 · ⌘J"))
         .accessibilityLabel("打开这一天的日志")
     }
 

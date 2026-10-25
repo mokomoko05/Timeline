@@ -295,7 +295,7 @@ struct ShellToolbar: View {
             button("xmark", "关闭", "⌘W", close)
             Spacer(minLength: 8)
             ViewThatFits(in: .horizontal) {
-                hints("⌘[ ⌘] 切换窗格  ·  ⌥⌘W 关窗格  ·  ⌘⇧[ ⌘⇧] 切换标签页  ·  ⌘K 清屏  ·  \(GlobalHotKey.shellLabel) 隐藏")
+                hints(AppLocalizedFormat("⌘[ ⌘] 切换窗格  ·  ⌥⌘W 关窗格  ·  ⌘⇧[ ⌘⇧] 切换标签页  ·  ⌘K 清屏  ·  %@ 隐藏", GlobalHotKey.shellLabel))
                 hints("⌘[ ⌘] 切换窗格  ·  ⌥⌘W 关窗格")
                 hints("⌘[ ⌘] 切换窗格")
                 Color.clear.frame(width: 0)
@@ -311,7 +311,7 @@ struct ShellToolbar: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
-                Text(title).font(.system(size: 11))
+                Text(LocalizedStringKey(title)).font(.system(size: 11))
                 Text(key).font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.muted)
             }
             .padding(.horizontal, 7).frame(height: 20)
@@ -319,12 +319,12 @@ struct ShellToolbar: View {
         }
         .buttonStyle(.plain)
         .raisedOnHover(radius: 5)
-        .help("\(title)  \(key)")
-        .accessibilityLabel("\(title)，快捷键 \(key)")
+        .help(AppLocalized(title) + "  " + key)
+        .accessibilityLabel(AppLocalizedFormat("%@，快捷键 %@", AppLocalized(title), key))
     }
 
     private func hints(_ text: String) -> some View {
-        Text(text).font(.system(size: 10.5)).foregroundStyle(Palette.muted).lineLimit(1).fixedSize()
+        Text(LocalizedStringKey(text)).font(.system(size: 10.5)).foregroundStyle(Palette.muted).lineLimit(1).fixedSize()
     }
 }
 

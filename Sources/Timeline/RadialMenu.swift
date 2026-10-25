@@ -173,7 +173,7 @@ struct RadialMenuView: View {
         .scaleEffect(appeared ? 1 : 0.3, anchor: .center)
         .opacity(appeared ? 1 : 0)
         .animation(Motion.reduced ? nil : (appeared ? RadialMotion.expand.delay(Double(index) * 0.012) : RadialMotion.collapse), value: appeared)
-        .accessibilityLabel(item.title)
+        .accessibilityLabel(AppLocalized(item.title))
         .accessibilityAddTraits(item.active ? .isSelected : [])
     }
 }
@@ -333,7 +333,7 @@ struct RadialMenuButton: View {
         .onHover { inside in
             if inside { RadialMenuController.shared.scheduleOpen(items: items, anchor: anchor.view) } else { RadialMenuController.shared.cancelOpen() }
         }
-        .help(help).accessibilityLabel(help)
+        .help(LocalizedStringKey(help)).accessibilityLabel(LocalizedStringKey(help))
         .accessibilityActions {
             ForEach(items()) { item in Button(item.title, action: item.action) }
         }

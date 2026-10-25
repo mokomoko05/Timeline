@@ -228,7 +228,7 @@ struct LogChipsBar: View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: typography.pt(size))).frame(width: 20, height: 20).contentShape(Rectangle())
         }
-        .buttonStyle(.plain).foregroundStyle(tint).help(help).accessibilityLabel(help)
+        .buttonStyle(.plain).foregroundStyle(tint).help(LocalizedStringKey(help)).accessibilityLabel(LocalizedStringKey(help))
     }
 }
 

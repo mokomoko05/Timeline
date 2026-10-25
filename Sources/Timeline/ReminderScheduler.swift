@@ -46,7 +46,7 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
             status = granted ? "" : "通知未开启，可在系统设置中允许 Timeline 通知。"
             return granted
         } catch {
-            status = "无法启用通知：\(error.localizedDescription)"
+            status = AppLocalizedFormat("无法启用通知：%@", error.localizedDescription)
             return false
         }
     }
@@ -80,7 +80,7 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
                     if let request = existing.first(where: { $0.identifier == plan.id }),
                        Self.matches(request, plan: plan) { continue }
                     let content = UNMutableNotificationContent()
-                    content.title = "事项提醒"
+                    content.title = AppLocalized("事项提醒")
                     content.body = plan.title
                     content.sound = .default
                     content.categoryIdentifier = Self.category
@@ -91,7 +91,7 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
                     try await center.add(request)
                 }
                 status = ""
-            } catch { status = "提醒未能保存：\(error.localizedDescription)" }
+            } catch { status = AppLocalizedFormat("提醒未能保存：%@", error.localizedDescription) }
         }
     }
 

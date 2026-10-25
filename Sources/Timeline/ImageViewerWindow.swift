@@ -183,7 +183,7 @@ final class ImageViewerController: NSObject, NSWindowDelegate {
 
     private func makeWindow(store: JournalStore) -> NSWindow {
         let window = ImageViewerWindow(contentViewController: makeContent(store: store))
-        window.title = "图片"
+        window.title = AppLocalized("图片")
         window.styleMask = [.titled, .closable, .resizable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
@@ -257,7 +257,7 @@ struct ImageViewerView: View {
         .buttonStyle(.plain).foregroundStyle(Palette.ink)
         .opacity(enabled ? (hovering ? 1 : 0.55) : 0)
         .disabled(!enabled)
-        .help(help).accessibilityLabel(help)
+        .help(LocalizedStringKey(help)).accessibilityLabel(LocalizedStringKey(help))
     }
 
     private func toolbar(_ item: ImageViewerModel.Item, url: URL) -> some View {

@@ -462,8 +462,8 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .raisedOnHover(radius: 10, enabled: group != nil)
             .disabled(group == nil)
-            .help(group == nil ? "\(count) 项未完成" : "跳到\(title)的任务")
-            .accessibilityLabel("\(count) 项\(title)")
+            .help(group == nil ? AppLocalizedFormat("%lld 项未完成", count) : AppLocalizedFormat("跳到%@的任务", AppLocalized(title)))
+            .accessibilityLabel(AppLocalizedFormat("%lld 项%@", count, AppLocalized(title)))
         }
     }
 
@@ -596,7 +596,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(HitAreaButtonStyle(compact: true))
                 .help("选择月份")
-                .accessibilityLabel("选择月份，当前\(format(displayedMonth, "yyyy年M月"))")
+                .accessibilityLabel(AppLocalizedFormat("选择月份，当前%@", format(displayedMonth, "yyyy年M月")))
                 .popover(isPresented: $showingMonthJumper, arrowEdge: .bottom) {
                     MonthJumper(current: displayedMonth) { date in
                         displayedMonth = JournalDates.monthStart(date)
@@ -676,7 +676,7 @@ struct ContentView: View {
             .foregroundStyle(Palette.accent)
         }
         .buttonStyle(.plain)
-        .help("所选日期，点击展开待办清单").accessibilityLabel("所选日期 \(format(selectedDate, "M月d日"))，展开待办清单")
+        .help("所选日期，点击展开待办清单").accessibilityLabel(AppLocalizedFormat("所选日期 %@，展开待办清单", format(selectedDate, "M月d日")))
     }
 
     private func selectFromCalendar(_ date: Date, forceExpand: Bool = false) {
@@ -694,7 +694,7 @@ struct ContentView: View {
             HStack(spacing: 6) {
                 if let error = store.errorMessage {
                     Image(systemName: "exclamationmark.triangle")
-                    Text(error).lineLimit(2).help(error)
+                    Text(AppLocalizedLines(error)).lineLimit(2).help(AppLocalizedLines(error))
                     if !store.isReadOnly { Button("重试保存", action: store.save).buttonStyle(HitAreaButtonStyle()) }
                     Button("打开数据文件夹") { NSWorkspace.shared.open(store.directory) }.buttonStyle(HitAreaButtonStyle())
                 } else {
@@ -768,14 +768,14 @@ struct ContentView: View {
     /// 导出为文件夹：journal.json 加上日志里用到的全部图片。
     private func exportJournal() {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "Timeline 备份-\(JournalDates.key(Date()))"
+        panel.nameFieldStringValue = AppLocalizedFormat("Timeline 备份-%@", JournalDates.key(Date()))
         panel.canCreateDirectories = true
         panel.message = AppLocalized("将导出为一个文件夹，包含 journal.json 和日志图片（Images）。")
         panel.prompt = AppLocalized("导出")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try store.exportFolder(to: url)
-            toast.show("已导出到「\(url.lastPathComponent)」", actionTitle: "显示") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            toast.show(AppLocalizedFormat("已导出到「%@」", url.lastPathComponent), actionTitle: "显示") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
         } catch { actionError = error.localizedDescription }
     }
 }

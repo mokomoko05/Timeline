@@ -191,7 +191,7 @@ struct BoardWorkspaceView: View {
             }
             if let error = store.errorMessage {
                 HStack {
-                    Text(error).font(.caption).foregroundStyle(Palette.deadline).textSelection(.enabled)
+                    Text(AppLocalizedLines(error)).font(.caption).foregroundStyle(Palette.deadline).textSelection(.enabled)
                     Button("重试保存") { store.save() }
                 }.padding(10)
             }

@@ -108,7 +108,7 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
     private func makeWindow() -> NSWindow {
         let host = NSHostingController(rootView: AnyView(LocalizedRoot { EmptyView() }))
         let window = NotesWindow(contentViewController: host)
-        window.title = "笔记 / 日记"
+        window.title = AppLocalized("笔记 / 日记")
         // 没有红绿灯：用 Esc 或快捷键关闭。标题栏透明，整个窗口背景都可以拖动。
         window.styleMask = [.titled, .resizable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
@@ -348,7 +348,7 @@ struct UnifiedJournalView: View {
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(item.formatted(.dateTime.year().month().day()))，\(logs.count) 条日志")
+        .accessibilityLabel(AppLocalizedFormat("%@，%lld 条日志", item.formatted(.dateTime.year().month().day()), logs.count))
     }
 
     private var detail: some View {

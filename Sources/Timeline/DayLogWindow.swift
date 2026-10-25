@@ -81,7 +81,7 @@ final class DayLogWindowController: NSObject, NSWindowDelegate {
     private func makeWindow() -> NSWindow {
         let host = NSHostingController(rootView: AnyView(LocalizedRoot { EmptyView() }))
         let window = DayLogWindow(contentViewController: host)
-        window.title = "当天日志"
+        window.title = AppLocalized("当天日志")
         // 和笔记窗口一样没有红绿灯：用 Esc、⌘J 或「完成」关闭；标题栏透明，空白处可以拖动窗口。
         window.styleMask = [.titled, .resizable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true

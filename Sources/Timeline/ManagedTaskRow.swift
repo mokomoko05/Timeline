@@ -265,7 +265,7 @@ struct ManagedTaskRow: View {
                 BoardWindowController.shared.show(store: store, owner: .task(task.id))
             }),
             RadialItem(id: "notes", symbol: noteCount > 0 ? "note.text" : "square.and.pencil",
-                       title: noteCount > 0 ? "打开笔记（\(noteCount) 条）" : "写笔记", active: noteCount > 0, action: {
+                       title: noteCount > 0 ? AppLocalizedFormat("打开笔记（%lld 条）", noteCount) : "写笔记", active: noteCount > 0, action: {
                 selectTask()
                 NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
                 commands?.send(.notesForTask(task.id))

@@ -67,7 +67,7 @@ struct TaskTagLine: View {
                         .background(Palette.soft, in: RoundedRectangle(cornerRadius: 4))
                 }
                 .buttonStyle(.plain).foregroundStyle(Palette.accent)
-                .help("查看 #\(tag) 名下的笔记")
+                .help(AppLocalizedFormat("查看 #%@ 名下的笔记", tag))
             }
         }
     }
