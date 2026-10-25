@@ -281,7 +281,64 @@ final class FocusControllerDockProbe: XCTestCase {
         print("CONTROLLER DOCK left frame=\(panel.frame)")
         XCTAssertEqual(panel.frame.minX, screen.minX + 6, accuracy: 1, "左半边松手后贴左边")
         XCTAssertGreaterThan(panel.frame.minY, screen.minY + 100, "保留拖到的高度")
+        XCTAssertFalse(FocusDock.shared.right, "贴左边后以左下角为锚点")
+        // 从左边展开：窗口先变大，左边缘和底边不动。
+        let collapsed = panel.frame
+        FocusPanelView.allowCompanionInTests = false
+        session.objectWillChange.send()
+        try await Task.sleep(for: .milliseconds(300))
+        print("CONTROLLER DOCK expanded frame=\(panel.frame)")
+        XCTAssertEqual(panel.frame.minX, collapsed.minX, accuracy: 1, "从贴着的那条边向内展开")
+        XCTAssertEqual(panel.frame.minY, collapsed.minY, accuracy: 1, "底边不动")
+        XCTAssertGreaterThan(panel.frame.width, 300)
         session.stop(reason: "探测结束")
         panel.orderOut(nil)
+    }
+}
+
+/// 离屏渲染变形过程的几帧：小伙伴展开成面板，检查是不是从贴边的角连续长出来。
+@MainActor
+final class FocusMorphFrames: XCTestCase {
+    func testRenderMorphKeyframes() async throws {
+        guard let path = ProcessInfo.processInfo.environment["TIMELINE_DESIGN_PREVIEW"] else { throw XCTSkip("离屏渲染，按需运行") }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        store.addTodo("读一篇论文，整理方法与问题", on: Date())
+        let session = FocusSession()
+        session.store = store
+        session.start(task: try XCTUnwrap(store.tasks().first), url: nil, plannedSeconds: 1500, goal: "读完方法部分")
+        defer { session.stop(reason: "预览结束") }
+        FocusPanelView.allowCompanionInTests = true
+        defer { FocusPanelView.allowCompanionInTests = false }
+        FocusDock.shared.right = true
+        let size = NSSize(width: 380, height: 200)
+        let host = NSHostingView(rootView: LocalizedRoot {
+            ZStack {
+                LinearGradient(colors: [Color(red: 0.35, green: 0.45, blue: 0.75), Color(red: 0.85, green: 0.55, blue: 0.45)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                FocusPanelView(session: session).padding(10)
+            }
+        })
+        host.appearance = NSAppearance(named: .darkAqua)
+        let window = QuietWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.contentView = nil; window.orderOut(nil) }
+        try await Task.sleep(for: .seconds(3.2))
+        func snap(_ name: String) throws {
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: path).appendingPathComponent("morph-\(name).png"))
+        }
+        try snap("0-collapsed")
+        FocusPanelView.allowCompanionInTests = false
+        session.objectWillChange.send()
+        for (index, delay) in [60, 120, 200, 450].enumerated() {
+            try await Task.sleep(for: .milliseconds(delay - (index == 0 ? 0 : [60, 120, 200, 450][index - 1])))
+            try snap("\(index + 1)-\(delay)ms")
+        }
     }
 }

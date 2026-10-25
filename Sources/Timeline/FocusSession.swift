@@ -609,8 +609,27 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
     /// 收起时贴着屏幕边缘的距离。
     private static let edgeInset: CGFloat = 6
 
-    /// 内容大小变了。收成小伙伴时贴到离得近的那条屏幕左 / 右边缘；展开时从那条边向内展开，底边不动。
+    private var shrinkTask: Task<Void, Never>?
+
+    /// 内容大小变了。变大时窗口先一步变大，内容在里面从角上展开；变小时等收起动画放完再缩窗口，
+    /// 这样窗口的突变永远发生在看不见的透明区域，衔接是连续的。
     private func resize(to size: CGSize) {
+        shrinkTask?.cancel()
+        guard let panel else { return }
+        let narrower = size.width < panel.frame.width - 0.5
+        if narrower && !Headless.active {
+            shrinkTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(420))
+                guard !Task.isCancelled else { return }
+                self?.applyFrame(size)
+            }
+        } else {
+            applyFrame(size)
+        }
+    }
+
+    /// 收起时贴到离得近的那条屏幕左 / 右边缘；展开时从那条边向内展开，底边不动。
+    private func applyFrame(_ size: CGSize) {
         guard let panel, size.width > 40, size.height > 30 else { return }
         let screen = (panel.screen ?? NSScreen.main)?.visibleFrame ?? panel.frame
         let compact = size.width < Self.workspaceSize.width - 20
@@ -626,10 +645,10 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
             frame.origin.x = min(max(frame.origin.x, screen.minX + Self.edgeInset), screen.maxX - size.width - Self.edgeInset)
         }
         frame.origin.y = min(max(panel.frame.minY, screen.minY + Self.edgeInset), screen.maxY - size.height)
+        if FocusDock.shared.right != dockedRight { FocusDock.shared.right = dockedRight }
         guard frame.integral != panel.frame.integral else { return }
         panel.setFrame(frame, display: true)
         panel.contentView?.frame = NSRect(origin: .zero, size: frame.size)
-        panel.invalidateShadow()
     }
 
     private func savedTopLeft(for size: NSSize) -> NSPoint? {
@@ -664,7 +683,9 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
               NSEvent.pressedMouseButtons == 0 else { return }
         let screen = (panel.screen ?? NSScreen.main)?.visibleFrame ?? panel.frame
         var frame = panel.frame
-        frame.origin.x = frame.midX >= screen.midX ? screen.maxX - frame.width - Self.edgeInset : screen.minX + Self.edgeInset
+        let right = frame.midX >= screen.midX
+        frame.origin.x = right ? screen.maxX - frame.width - Self.edgeInset : screen.minX + Self.edgeInset
+        if FocusDock.shared.right != right { FocusDock.shared.right = right }
         frame.origin.y = min(max(frame.minY, screen.minY + Self.edgeInset), screen.maxY - frame.height)
         guard abs(frame.minX - panel.frame.minX) > 0.5 || abs(frame.minY - panel.frame.minY) > 0.5 else { return }
         snapping = true
@@ -876,30 +897,61 @@ struct FocusPanelView: View {
         return draft.text.isEmpty && draft.images.isEmpty
     }
 
+    /// 面板贴在屏幕哪一边：变形时以那一边的下角为锚点，胶囊和完整面板都从同一个角长出来 / 收回去。
+    @ObservedObject private var dock = FocusDock.shared
+    /// 小伙伴是固定的形状；完整面板宽度固定，只量高度（输入变高时会变）。
+    static let companionSize = CGSize(width: 214, height: 46)
+    @State private var panelHeight: CGFloat = 158
+    /// 手动展开后不因鼠标离开而收起；手动收起后，鼠标离开再回来之前不因悬停而展开。
+    @State private var pinnedOpen = false
+    @State private var hoverSuppressed = false
+
+    private var anchor: Alignment { dock.right ? .bottomTrailing : .bottomLeading }
+    private var unitAnchor: UnitPoint { dock.right ? .bottomTrailing : .bottomLeading }
+    private var targetSize: CGSize { showsCompanion ? Self.companionSize : CGSize(width: 340, height: panelHeight) }
+
     var body: some View {
-        Group {
+        let size = targetSize
+        let radius: CGFloat = showsCompanion ? 23 : Metrics.radiusPanel
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        ZStack(alignment: anchor) {
             if showsCompanion, let active = session.active {
-                FocusCompanion(session: session, title: active.title)
-                    .onTapGesture { expand() }
-                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .bottomTrailing)))
+                FocusCompanion(session: session, title: active.title, expand: manualExpand)
+                    .modifier(LegibilityShadow())
+                    .frame(width: Self.companionSize.width, height: Self.companionSize.height)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: unitAnchor)))
             } else {
-                fullPanel.transition(.opacity)
+                fullPanel
+                    .modifier(LegibilityShadow())
+                    .fixedSize()
+                    .background(GeometryReader { Color.clear.preference(key: FocusPanelSizeKey.self, value: $0.size) })
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: unitAnchor)))
             }
         }
+        // 同一块玻璃在两种大小之间连续变形；内容按它裁切，看起来是从贴边的那个角展开、收回。
+        .frame(width: size.width, height: size.height, alignment: anchor)
+        .background(FocusClearGlass(radius: radius))
+        .clipShape(shape)
+        .overlay(FocusGlassEdge(radius: radius))
+        .contentShape(shape)
         .foregroundStyle(Palette.ink)
         .tint(Palette.accent)
-        // 按内容的自然大小量（不被窗口当前的大小撑开），窗口据此缩成小胶囊或展开。
-        .fixedSize()
-        .overlay(GeometryReader { proxy in Color.clear.preference(key: FocusPanelSizeKey.self, value: proxy.size) })
-        .onPreferenceChange(FocusPanelSizeKey.self, perform: resize)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        .onPreferenceChange(FocusPanelSizeKey.self) { if $0.height > 30 { panelHeight = $0.height } }
+        .onChange(of: size) { resize($0) }
+        .onAppear { resize(size) }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: anchor)
         .onHover { inside in
-            if inside { expand() } else { scheduleCollapse() }
+            if inside {
+                if !hoverSuppressed { expand() }
+            } else {
+                hoverSuppressed = false
+                if !pinnedOpen { scheduleCollapse() }
+            }
         }
-        .animation(Motion.reduced ? nil : Motion.spring, value: showsCompanion)
+        .animation(Motion.reduced ? nil : .spring(response: 0.36, dampingFraction: 0.86), value: showsCompanion)
         .onChange(of: session.active?.taskID) { id in
             // 刚开始专注时先完整显示一会儿，再收成小伙伴。
-            if id != nil { expand(); scheduleCollapse(after: 2.5) }
+            if id != nil { pinnedOpen = false; expand(); scheduleCollapse(after: 2.5) }
         }
         .onAppear {
             configureMention()
@@ -928,7 +980,21 @@ struct FocusPanelView: View {
         .frame(width: 340, alignment: .leading)
         .frame(minHeight: 158, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
-        .glassPanelSurface(clear: true)
+    }
+
+    /// 手动收起：立刻收成小伙伴，鼠标还在上面也不弹回来。
+    private func manualCollapse() {
+        collapseTask?.cancel()
+        pinnedOpen = false
+        hoverSuppressed = true
+        expanded = false
+    }
+
+    /// 手动展开：展开并保持，直到再手动收起。
+    private func manualExpand() {
+        pinnedOpen = true
+        hoverSuppressed = false
+        expand()
     }
 
     private func expand() {
@@ -1072,6 +1138,12 @@ struct FocusPanelView: View {
                         .font(.system(size: 18, weight: .semibold, design: .monospaced)).monospacedDigit()
                 }
                 .fixedSize()
+                if companionEnabled {
+                    Button(action: manualCollapse) { Image(systemName: "arrow.down.right.and.arrow.up.left") }
+                        .buttonStyle(HitAreaButtonStyle(compact: true))
+                        .foregroundStyle(Palette.muted)
+                        .help("收成小伙伴").accessibilityLabel("收成小伙伴")
+                }
                 Button(action: close) { Image(systemName: "xmark") }
                     .buttonStyle(HitAreaButtonStyle(compact: true))
                     .foregroundStyle(Palette.muted)
@@ -1360,6 +1432,7 @@ struct FocusPanelSizeKey: PreferenceKey {
 struct FocusCompanion: View {
     @ObservedObject var session: FocusSession
     let title: String
+    var expand: () -> Void = {}
     @State private var breathing = false
 
     private var tint: Color { session.isPaused ? Palette.muted : Palette.accent }
@@ -1383,11 +1456,18 @@ struct FocusCompanion: View {
                 Text(session.isPaused ? AppLocalized("已暂停") : title)
                     .font(.system(size: 10)).foregroundStyle(Palette.muted).lineLimit(1)
             }
-            .frame(width: 150, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: expand) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 10, weight: .semibold))
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
+            }
+            .buttonStyle(HitAreaButtonStyle(compact: true))
+            .foregroundStyle(Palette.muted)
+            .help("展开专注面板").accessibilityLabel("展开专注面板")
         }
-        .padding(.leading, 8).padding(.trailing, 14).padding(.vertical, 7)
-        .glassPanelSurface(radius: 26, clear: true)
+        .padding(.leading, 8).padding(.trailing, 8).padding(.vertical, 7)
         .contentShape(Capsule())
+        .onTapGesture(perform: expand)
         .onAppear {
             guard !Motion.reduced, !session.isPaused else { return }
             withAnimation(.easeInOut(duration: 2.4).repeatForever(autoreverses: true)) { breathing = true }
@@ -1547,6 +1627,57 @@ struct FocusMiniTimeline: View {
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
         .accessibilityAction { select(item.id) }
         .accessibilityAction(named: "开始专注") { start(item.id) }
+    }
+}
+
+/// 专注面板贴在屏幕哪一边（控制器在每次定位后更新）。
+@MainActor
+final class FocusDock: ObservableObject {
+    static let shared = FocusDock()
+    @Published var right = true
+}
+
+struct FocusCompanionSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+}
+
+private struct SizeReader<Key: PreferenceKey>: View where Key.Value == CGSize {
+    let key: Key.Type
+    var body: some View { GeometryReader { Color.clear.preference(key: Key.self, value: $0.size) } }
+}
+
+/// 近乎透明的玻璃底：一层极淡的色调和顶部的微光。圆角可以动画，跟着变形。
+private struct FocusClearGlass: View {
+    var radius: CGFloat
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        shape.fill(Palette.background.opacity(scheme == .dark ? 0.08 : 0.1))
+            .overlay(shape.fill(LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.05 : 0.18), .clear],
+                                               startPoint: .top, endPoint: .center)))
+    }
+}
+
+/// 玻璃的细边。
+private struct FocusGlassEdge: View {
+    var radius: CGFloat
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .strokeBorder(LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.28 : 0.85), Palette.line.opacity(0.35)],
+                                         startPoint: .top, endPoint: .bottom), lineWidth: Metrics.hairline)
+            .allowsHitTesting(false)
+    }
+}
+
+/// 近乎透明的面板上，文字加一层很淡的描影，放在任何壁纸上都看得清。
+private struct LegibilityShadow: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    func body(content: Content) -> some View {
+        content.shadow(color: (scheme == .dark ? Color.black : Color.white).opacity(scheme == .dark ? 0.75 : 0.6), radius: 1.6, y: 0.5)
     }
 }
 
