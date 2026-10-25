@@ -53,7 +53,9 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 .board-check[aria-checked="true"] { border-color: var(--success); background: var(--success); }
 .board-check svg { width: 80%; height: 80%; stroke: white; stroke-width: 2; fill: none; }
 .board-details { display: inline-flex; align-items: flex-start; gap: 7px; width: 100%; min-height: 1.65em; padding: 0; border: 0; background: transparent; color: var(--ink); text-align: left; font: inherit; font-weight: 550; cursor: pointer; }
-.board-details .arrow { flex: 0 0 12px; color: var(--muted); font-size: 10px; line-height: 2.145; }
+.board-details .arrow { flex: 0 0 12px; display: flex; align-items: center; justify-content: center; height: 1.65em; color: var(--muted); }
+.board-details .arrow svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform .16s ease; }
+.board-details .arrow[data-open="true"] svg { transform: rotate(90deg); }
 .board-details .title { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .board-details:hover { color: var(--accent); }
 .cm-details-body { border-left: 1px solid var(--line); margin-left: 18px; padding-left: 12px; }
@@ -67,3 +69,17 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 #editor .cm-code-header-concealed .board-copy-code[data-copied="true"]::after { content: attr(data-label); }
 #editor .cm-code-header-concealed .board-copy-code:hover { color: var(--accent); border-color: var(--line); }
 #editor .cm-line.cm-code-first { padding-right: 40px; }
+/* 标题折叠：箭头在标题左边的留白里，悬停这一行时出现；收起后一直显示，标题后面跟一个「…」，点它也能展开。 */
+#editor .cm-line.cm-foldable { position: relative; }
+.board-heading-fold { position: absolute; left: 0; top: 0; bottom: 0; width: 14px; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; background: transparent; color: var(--muted); opacity: 0; cursor: pointer; transition: opacity .12s ease, color .12s ease; }
+.board-heading-fold svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transform: rotate(90deg); transition: transform .16s ease; }
+.board-heading-fold[data-folded="true"] svg { transform: rotate(0deg); }
+#editor .cm-line.cm-foldable:hover .board-heading-fold, .board-heading-fold[data-folded="true"], .board-heading-fold:focus-visible { opacity: .85; }
+.board-heading-fold:hover { color: var(--accent); opacity: 1 !important; }
+.board-fold-more { display: inline-flex; align-items: center; justify-content: center; height: 16px; margin-left: .5em; padding: 0 7px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--soft) 70%, var(--background)); color: var(--muted); font: 700 12px/16px -apple-system, sans-serif; vertical-align: middle; cursor: pointer; }
+.board-fold-more:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+@media (prefers-reduced-motion: reduce) { .board-heading-fold, .board-heading-fold svg { transition: none; } }
+/* 搜索跳转：命中的那一行淡淡铺一层强调色，命中的文字高亮，两秒多后淡去。 */
+#editor .cm-line.cm-search-line { background: color-mix(in srgb, var(--accent) 12%, transparent); animation: board-search-fade 2.4s ease-out forwards; }
+.cm-search-hit { background: color-mix(in srgb, var(--accent) 38%, transparent); border-radius: 3px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 38%, transparent); }
+@keyframes board-search-fade { 0%, 60% { background: color-mix(in srgb, var(--accent) 16%, transparent); } 100% { background: transparent; } }

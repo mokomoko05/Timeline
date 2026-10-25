@@ -1011,3 +1011,5 @@
 "编辑 Markdown 源码 · ⌘↩" = "Edit Markdown source · ⌘↩";
 "展开这个月" = "Expand month";
 "收起这个月" = "Collapse month";
+"展开标题下的内容" = "Expand section";
+"收起标题下的内容" = "Collapse section";

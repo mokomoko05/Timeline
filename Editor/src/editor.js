@@ -7,6 +7,10 @@ import {tags} from "@lezer/highlight";
 
 const post = payload => window.webkit?.messageHandlers.boardEditor.postMessage(payload);
 const toggleDetails = StateEffect.define();
+// 折叠记忆：标题收起（"h…" → true）、折叠块展开（"d…" → true/false）。按工作板存在原生层，打开时随配置传进来。
+const folds = new Map();
+const refold = StateEffect.define();
+const flashEffect = StateEffect.define();
 const external = Annotation.define();
 const externalChange = external.of(true);
 const editable = new Compartment();
@@ -73,7 +77,7 @@ function parseDetails(doc, tree) {
       return false;
     }
   }});
-  const result = [], stack = [];
+  const result = [], stack = [], seen = new Map();
   let codeIndex = 0;
   for (let number = 1; number <= doc.lines; number++) {
     const line = doc.line(number);
@@ -92,13 +96,88 @@ function parseDetails(doc, tree) {
       if (title == null) continue;
       const decoded = document.createElement("textarea");
       decoded.innerHTML = title;
-      stack.push({from: line.from, headerTo: doc.line(summaryLine).to,
-                  title: decoded.value || "折叠内容", initiallyOpen: /\bopen(?:\s|=|$)/i.test(opening[1])});
+      const name = decoded.value || "折叠内容";
+      const occurrence = seen.get(name) ?? 0;
+      seen.set(name, occurrence + 1);
+      stack.push({from: line.from, headerTo: doc.line(summaryLine).to, key: `d:${name}#${occurrence}`,
+                  title: name, initiallyOpen: /\bopen(?:\s|=|$)/i.test(opening[1])});
     } else if (/^\s{0,3}<\/details>\s*$/i.test(line.text) && stack.length) {
       result.push({...stack.pop(), to: line.to, closingFrom: line.from});
     }
   }
   return result.sort((left, right) => left.from - right.from);
+}
+
+// 标题的折叠范围：到下一个同级或更高级的标题为止；标题在折叠块里时不越过折叠块的结尾，
+// 折叠块里的标题也只和同一个折叠块里的标题比较。收起时末尾的空行留着，和下一个标题之间仍有间隔。
+function parseHeadings(doc, tree, details) {
+  const headings = [], seen = new Map();
+  tree.iterate({enter(node) {
+    if (["FencedCode", "CodeBlock"].includes(node.name)) return false;
+    const match = /^ATXHeading([1-6])$/.exec(node.name);
+    if (!match) return;
+    const line = doc.lineAt(node.from);
+    const text = line.text.replace(/^\s{0,3}#{1,6}\s*/, "").replace(/\s+#+\s*$/, "").trim();
+    const level = Number(match[1]);
+    const name = `h${level}:${text}`;
+    const occurrence = seen.get(name) ?? 0;
+    seen.set(name, occurrence + 1);
+    const container = details.filter(item => item.from < line.from && line.from < item.closingFrom)
+      .reduce((inner, item) => !inner || item.from > inner.from ? item : inner, null);
+    headings.push({from: line.from, lineTo: line.to, level, key: `${name}#${occurrence}`, container});
+    return false;
+  }});
+  for (let index = 0; index < headings.length; index++) {
+    const heading = headings[index];
+    const next = headings.slice(index + 1).find(item => item.container === heading.container && item.level <= heading.level);
+    let boundary = heading.container ? heading.container.closingFrom : doc.length + 1;
+    if (next && next.from < boundary) boundary = next.from;
+    let last = doc.lineAt(Math.max(heading.lineTo, boundary - 1)).number;
+    if (boundary <= doc.length && doc.lineAt(boundary).from === boundary) last = doc.lineAt(boundary).number - 1;
+    while (last > doc.lineAt(heading.from).number && !doc.line(last).text.trim()) last--;
+    heading.end = doc.line(last).to;
+  }
+  return headings.filter(heading => heading.end > heading.lineTo);
+}
+
+class HeadingFoldWidget extends WidgetType {
+  constructor(key, folded) { super(); this.key = key; this.folded = folded; }
+  eq(other) { return this.key === other.key && this.folded === other.folded; }
+  toDOM() {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "board-heading-fold";
+    button.dataset.folded = String(this.folded);
+    button.setAttribute("aria-expanded", String(!this.folded));
+    button.setAttribute("aria-label", this.folded ? (labels.expand || "展开") : (labels.collapse || "收起"));
+    button.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>';
+    button.addEventListener("mousedown", event => event.preventDefault());
+    button.addEventListener("click", () => setFold(this.key, !this.folded));
+    return button;
+  }
+  ignoreEvent() { return true; }
+}
+
+class FoldedMoreWidget extends WidgetType {
+  constructor(key) { super(); this.key = key; }
+  eq(other) { return this.key === other.key; }
+  toDOM() {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "board-fold-more";
+    button.textContent = "⋯";
+    button.setAttribute("aria-label", labels.expand || "展开");
+    button.addEventListener("mousedown", event => event.preventDefault());
+    button.addEventListener("click", () => setFold(this.key, false));
+    return button;
+  }
+  ignoreEvent() { return true; }
+}
+
+function setFold(key, folded) {
+  folds.set(key, folded);
+  post({kind: "fold", key, value: folded});
+  view.dispatch({effects: refold.of(null)});
 }
 
 class CheckWidget extends WidgetType {
@@ -134,7 +213,8 @@ class DetailsWidget extends WidgetType {
     button.setAttribute("aria-expanded", String(this.open));
     const arrow = document.createElement("span"), title = document.createElement("span");
     arrow.className = "arrow";
-    arrow.textContent = this.open ? "▼" : "▶";
+    arrow.dataset.open = String(this.open);
+    arrow.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>';
     title.className = "title";
     title.textContent = this.item.title;
     button.append(arrow, title);
@@ -159,18 +239,34 @@ class DetailsWidget extends WidgetType {
   ignoreEvent() { return true; }
 }
 
-function decorations(state, details, expanded) {
+function decorations(state, details, expanded, headings, flash) {
   const ranges = [], hidden = [];
   const selection = state.selection.main;
   const active = state.readOnly ? null : state.doc.lineAt(selection.head).number;
   const overlapsSelection = (from, to) => selection.from <= to && selection.to >= from;
   const add = (from, to, decoration) => { if (from < to) ranges.push(decoration.range(from, to)); };
   const replace = (from, to, widget, block = false) => add(from, to, Decoration.replace({widget, block, atomic: true}));
-  for (const item of details) {
+  // 标题和折叠块按位置依次处理：外层收起了，里面的就不再处理。标题只在浏览时可以折叠。
+  const foldables = [...details.map(item => ({item})), ...(state.readOnly ? headings : []).map(heading => ({heading}))]
+    .sort((left, right) => (left.item ?? left.heading).from - (right.item ?? right.heading).from);
+  for (const {item, heading} of foldables) {
+    if (heading) {
+      if (hidden.some(range => heading.from >= range[0] && heading.from <= range[1])) continue;
+      const folded = folds.get(heading.key) === true;
+      ranges.push(Decoration.line({class: "cm-foldable" + (folded ? " cm-folded" : "")}).range(heading.from));
+      ranges.push(Decoration.widget({widget: new HeadingFoldWidget(heading.key, folded), side: -1}).range(heading.from));
+      if (folded) {
+        ranges.push(Decoration.widget({widget: new FoldedMoreWidget(heading.key), side: 1}).range(heading.lineTo));
+        replace(heading.lineTo, heading.end, undefined);
+        hidden.push([heading.lineTo, heading.end]);
+      }
+      continue;
+    }
     if (hidden.some(range => item.from >= range[0] && item.to <= range[1])) continue;
-    const explicitlyClosed = expanded.get(item.from) === false;
+    const remembered = expanded.get(item.from) ?? folds.get(item.key);
+    const explicitlyClosed = remembered === false;
     const headerActive = !explicitlyClosed && active != null && overlapsSelection(item.from, item.headerTo);
-    let open = expanded.get(item.from) ?? item.initiallyOpen;
+    let open = remembered ?? item.initiallyOpen;
     if (!explicitlyClosed && (headerActive || (active != null && selection.head > item.headerTo && selection.head < item.closingFrom))) open = true;
     if (!headerActive) replace(item.from, item.headerTo, new DetailsWidget(item, open));
     if (!open) {
@@ -264,6 +360,10 @@ function decorations(state, details, expanded) {
       }
     }
   }});
+  if (flash && !concealed(flash.from, flash.to)) {
+    ranges.push(Decoration.line({class: "cm-search-line"}).range(state.doc.lineAt(flash.from).from));
+    add(flash.from, flash.to, Decoration.mark({class: "cm-search-hit"}));
+  }
   return Decoration.set(ranges, true);
 }
 
@@ -271,19 +371,33 @@ const live = StateField.define({
   create(state) {
     const tree = syntaxTree(state);
     const details = parseDetails(state.doc, tree);
+    const headings = parseHeadings(state.doc, tree, details);
     const expanded = new Map();
-    return {tree, details, expanded, decorations: decorations(state, details, expanded)};
+    return {tree, details, headings, expanded, flash: null, decorations: decorations(state, details, expanded, headings, null)};
   },
   update(value, transaction) {
     let expanded = value.expanded;
+    let flash = value.flash;
     const changed = transaction.docChanged;
-    if (changed) expanded = new Map([...expanded].map(([position, open]) => [transaction.changes.mapPos(position), open]));
+    if (changed) {
+      expanded = new Map([...expanded].map(([position, open]) => [transaction.changes.mapPos(position), open]));
+      flash = null;
+    }
     let effectsChanged = false;
     for (const effect of transaction.effects) {
       if (effect.is(toggleDetails)) {
         expanded = new Map(expanded);
         const item = value.details.find(item => item.from === effect.value.from);
-        if (item) expanded.set(item.from, effect.value.open);
+        if (item) {
+          expanded.set(item.from, effect.value.open);
+          folds.set(item.key, effect.value.open);
+          post({kind: "fold", key: item.key, value: effect.value.open});
+        }
+        effectsChanged = true;
+      } else if (effect.is(refold)) {
+        effectsChanged = true;
+      } else if (effect.is(flashEffect)) {
+        flash = effect.value;
         effectsChanged = true;
       }
     }
@@ -292,6 +406,7 @@ const live = StateField.define({
     const modeChanged = transaction.startState.readOnly !== transaction.state.readOnly;
     if (!changed && !transaction.selection && !effectsChanged && !parsed && !modeChanged) return value;
     const details = changed || parsed ? parseDetails(transaction.state.doc, tree) : value.details;
+    const headings = changed || parsed ? parseHeadings(transaction.state.doc, tree, details) : value.headings;
     if (transaction.selection && !effectsChanged && !transaction.state.readOnly) {
       const head = transaction.state.selection.main.head;
       for (const item of details) {
@@ -301,7 +416,7 @@ const live = StateField.define({
         }
       }
     }
-    return {tree, details, expanded, decorations: decorations(transaction.state, details, expanded)};
+    return {tree, details, headings, expanded, flash, decorations: decorations(transaction.state, details, expanded, headings, flash)};
   },
   provide: field => EditorView.decorations.from(field, value => value.decorations)
 });
@@ -341,6 +456,7 @@ window.boardEditor = {
   configure(config) {
     if (config.labels) labels = config.labels;
     if (!view) {
+      if (config.folds) for (const [key, value] of Object.entries(config.folds)) folds.set(key, value);
       view = new EditorView({parent: document.getElementById("editor"), state: EditorState.create({
         doc: config.source,
         selection: {anchor: config.readOnly ? 0 : config.source.length},
@@ -497,6 +613,36 @@ window.boardEditor = {
     return snapshot();
   },
   select(anchor, head = anchor) { view.dispatch({selection: {anchor, head}}); return snapshot(); },
+  // 搜索结果跳过来：展开包住这一行的标题和折叠块，滚到中间，把命中的文字闪一下。
+  reveal(line, query) {
+    if (!view) return false;
+    const doc = view.state.doc;
+    const number = Math.min(Math.max(1, line), doc.lines);
+    const target = doc.line(number);
+    let from = target.from, to = target.to;
+    const index = query ? target.text.toLocaleLowerCase().indexOf(query.toLocaleLowerCase()) : -1;
+    if (index >= 0) { from = target.from + index; to = from + query.length; }
+    const field = view.state.field(live, false);
+    const effects = [];
+    if (field) {
+      for (const heading of field.headings) {
+        if (heading.lineTo < from && from <= heading.end && folds.get(heading.key) === true) {
+          folds.set(heading.key, false);
+          post({kind: "fold", key: heading.key, value: false});
+        }
+      }
+      for (const item of field.details) {
+        const open = field.expanded.get(item.from) ?? folds.get(item.key) ?? item.initiallyOpen;
+        if (!open && item.headerTo < from && from < item.to) effects.push(toggleDetails.of({from: item.from, open: true}));
+      }
+      effects.push(refold.of(null), flashEffect.of({from, to}));
+    }
+    effects.push(EditorView.scrollIntoView(from, {y: "center"}));
+    view.dispatch({effects, selection: {anchor: from}});
+    clearTimeout(window.flashTimer);
+    window.flashTimer = setTimeout(() => view.dispatch({effects: flashEffect.of(null)}), 2400);
+    return true;
+  },
   undo() { runHistory(undo); return snapshot(); },
   redo() { runHistory(redo); return snapshot(); },
   history() { return {undo: undoDepth(view.state), redo: redoDepth(view.state)}; },

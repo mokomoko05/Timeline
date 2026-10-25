@@ -373,6 +373,95 @@ final class BoardLiveEditorTests: XCTestCase {
         XCTAssertEqual(editable, false, "撤销完仍是只读浏览")
     }
 
+    private static let foldSource = "# A\n\nalpha\n\n## A1\n\ninside\n\n# B\n\nbeta\n\n<details>\n<summary>D</summary>\n\n## In details\n\nhidden body\n\n</details>\n"
+
+    private func browse(_ session: BoardLiveEditorSession, _ webView: WKWebView) async throws {
+        session.configure(fontSize: 13, dark: true, previewOnly: true)
+        for _ in 0..<50 {
+            if (try await webView.evaluateJavaScript("document.querySelector('.cm-content').isContentEditable") as? Bool) == false { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    private func visibleText(_ webView: WKWebView) async throws -> String {
+        try await webView.evaluateJavaScript("document.querySelector('.cm-content').textContent") as? String ?? ""
+    }
+
+    /// 浏览时标题可以收起到下一个同级标题为止（不越过折叠块）；标题和折叠块的展开状态按工作板记住，重新打开照旧。
+    func testHeadingsFoldWhileBrowsingAndFoldStateIsRemembered() async throws {
+        let defaults = InMemoryDefaults()
+        let fixture = try LiveFixture(source: Self.foldSource, defaults: defaults)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        try await browse(fixture.session, fixture.webView)
+        let arrows = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.board-heading-fold').length") as? Int
+        XCTAssertEqual(arrows, 3, "A、A1、B 可以折叠；收起的折叠块里的标题看不到")
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-heading-fold').click()")
+        var text = try await visibleText(fixture.webView)
+        XCTAssertFalse(text.contains("alpha") || text.contains("inside"), "A 下面的内容（含 A1 一节）都收起")
+        XCTAssertTrue(text.contains("beta"), "下一个同级标题 B 不受影响")
+        let more = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.board-fold-more').length") as? Int
+        XCTAssertEqual(more, 1)
+        if let path = ProcessInfo.processInfo.environment["TIMELINE_FOLD_SNAPSHOT"] {
+            let image = try await fixture.webView.takeSnapshot(configuration: nil)
+            let bitmap = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        }
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-details').click()")
+        text = try await visibleText(fixture.webView)
+        XCTAssertTrue(text.contains("In details") && text.contains("hidden body"))
+        let unchanged = try await fixture.snapshot()["source"] as? String
+        XCTAssertEqual(unchanged, Self.foldSource, "折叠不改动正文")
+        let boardID = fixture.store.boards[0].id
+        let saved = defaults.dictionary(forKey: BoardLiveEditorSession.foldsKey(boardID)) as? [String: Bool]
+        XCTAssertEqual(saved, ["h1:A#0": true, "d:D#0": true])
+
+        // 重新打开同一个工作板：A 仍收起，折叠块仍展开。
+        let reopened = BoardLiveEditorSession(store: fixture.store, board: fixture.store.boards[0], defaults: defaults)
+        let webView = reopened.makeWebView()
+        reopened.configure(fontSize: 13, dark: true, previewOnly: true)
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 410, height: 480), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = webView
+        window.orderFront(nil)
+        defer { window.contentView = nil; window.close() }
+        try await waitForBoardEditor(webView)
+        try await browse(reopened, webView)
+        text = try await visibleText(webView)
+        XCTAssertFalse(text.contains("alpha"), "收起状态被记住")
+        XCTAssertTrue(text.contains("hidden body"), "折叠块的展开状态被记住")
+
+        // 展开后不再记录（标题默认就是展开的）。
+        _ = try await webView.evaluateJavaScript("document.querySelector('.board-fold-more').click()")
+        text = try await visibleText(webView)
+        XCTAssertTrue(text.contains("alpha"))
+        let after = defaults.dictionary(forKey: BoardLiveEditorSession.foldsKey(boardID)) as? [String: Bool]
+        XCTAssertEqual(after, ["d:D#0": true])
+    }
+
+    /// 搜索跳转：展开包住目标行的标题和折叠块，命中的文字高亮。
+    func testRevealUnfoldsAndHighlightsTheTargetLine() async throws {
+        let fixture = try LiveFixture(source: Self.foldSource)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        try await browse(fixture.session, fixture.webView)
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-heading-fold').click()")
+        fixture.session.reveal(line: 7, query: "INSIDE")
+        try await Task.sleep(for: .milliseconds(80))
+        var hit = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-search-hit')?.textContent") as? String
+        XCTAssertEqual(hit, "inside", "大小写不同也能定位到命中的文字")
+        var text = try await visibleText(fixture.webView)
+        XCTAssertTrue(text.contains("alpha"), "收起的标题被展开")
+        fixture.session.reveal(line: 18, query: "body")
+        try await Task.sleep(for: .milliseconds(80))
+        hit = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-search-hit')?.textContent") as? String
+        XCTAssertEqual(hit, "body")
+        text = try await visibleText(fixture.webView)
+        XCTAssertTrue(text.contains("hidden body"), "收起的折叠块被展开")
+        let unchanged = try await fixture.snapshot()["source"] as? String
+        XCTAssertEqual(unchanged, Self.foldSource)
+    }
+
     func testArrowKeysMoveThroughFormattedAndCompletedTextCharacterByCharacter() async throws {
         let fixture = try LiveFixture(source: "**Bold** text\n\n- [x] Completed\n\nEnd")
         defer { fixture.close() }
@@ -477,13 +566,16 @@ private final class LiveFixture {
     let webView: WKWebView
     let window: NSWindow
     let pasteboard = NSPasteboard(name: .init("board-editor-\(UUID().uuidString)"))
+    let defaults: UserDefaults
 
-    init(source: String) throws {
+    init(source: String, defaults: UserDefaults = InMemoryDefaults()) throws {
+        self.defaults = defaults
         store = JournalStore(directory: directory)
         let board = try XCTUnwrap(store.ensureBoard(for: .tag("Editor")))
         store.setBoardMarkdown(source, for: board.id)
         store.save()
-        session = BoardLiveEditorSession(store: store, board: try XCTUnwrap(store.board(for: board.owner)), pasteboard: pasteboard)
+        session = BoardLiveEditorSession(store: store, board: try XCTUnwrap(store.board(for: board.owner)), pasteboard: pasteboard,
+                                         defaults: defaults)
         webView = session.makeWebView()
         session.configure(fontSize: 13, dark: true)
         window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 410, height: 480),

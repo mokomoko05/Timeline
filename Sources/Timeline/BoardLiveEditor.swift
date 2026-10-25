@@ -31,6 +31,11 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     private let store: JournalStore
     private let boardID: UUID
     private let pasteboard: NSPasteboard
+    private let defaults: UserDefaults
+    /// 折叠记忆：哪些标题收起了、哪些折叠块展开了。按工作板存进偏好，下次打开照旧显示。
+    private var folds: [String: Bool]
+    /// 搜索结果要跳到的行（编辑器还没加载好时先记下）。
+    private var pendingReveal: (line: Int, query: String)?
     private var storedSource: String
     private(set) var source: String
     private var composing = false
@@ -59,9 +64,11 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     func undo() { webView?.evaluateJavaScript("window.boardEditor.undo()") }
     func redo() { webView?.evaluateJavaScript("window.boardEditor.redo()") }
 
-    init(store: JournalStore, board: Board, pasteboard: NSPasteboard = .general) {
+    init(store: JournalStore, board: Board, pasteboard: NSPasteboard = .general, defaults: UserDefaults = .standard) {
         self.store = store
         self.pasteboard = pasteboard
+        self.defaults = defaults
+        folds = defaults.dictionary(forKey: Self.foldsKey(board.id)) as? [String: Bool] ?? [:]
         boardID = board.id
         storedSource = board.markdown
         source = board.markdown
@@ -71,6 +78,22 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
+
+    static func foldsKey(_ id: UUID) -> String { "board.folds.\(id.uuidString)" }
+
+    /// 跳到第 `line` 行（从 1 开始）：展开包住它的标题和折叠块，滚到中间并高亮命中的文字。
+    func reveal(line: Int, query: String) {
+        pendingReveal = (line, query)
+        performPendingReveal()
+    }
+
+    private func performPendingReveal() {
+        guard ready, lastConfiguration != nil, let target = pendingReveal, let webView,
+              let data = try? JSONSerialization.data(withJSONObject: [target.query]) else { return }
+        pendingReveal = nil
+        let query = String(decoding: data, as: UTF8.self).dropFirst().dropLast()
+        webView.evaluateJavaScript("window.boardEditor.reveal(\(target.line), \(query))")
+    }
 
     /// 所有编辑器共用一份不落盘的数据存储（编辑器不联网，也不需要互相隔离）。
     private static let dataStore = WKWebsiteDataStore.nonPersistent()
@@ -171,9 +194,10 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
                       "selection-ink": css(Color(nsColor: .selectedTextColor))]
         for level in 1...6 { colors["heading-\(level)"] = css(Color(nsColor: MarkdownText.headingColor(level))) }
         settings = ["fontSize": fontSize, "readOnly": store.isReadOnly, "colors": colors,
-                    "sourceMode": sourceMode, "previewOnly": previewOnly]
+                    "sourceMode": sourceMode, "previewOnly": previewOnly, "folds": folds]
         settings["labels"] = ["openLink": AppLocalized("在 Safari 中打开"), "copyCode": AppLocalized("复制代码"),
-                              "copied": AppLocalized("已复制"), "copyFailed": AppLocalized("复制失败，请重试")]
+                              "copied": AppLocalized("已复制"), "copyFailed": AppLocalized("复制失败，请重试"),
+                              "expand": AppLocalized("展开标题下的内容"), "collapse": AppLocalized("收起标题下的内容")]
         let current = store.boards.first { $0.id == boardID }?.markdown ?? storedSource
         if current != storedSource {
             pending?.cancel()
@@ -203,6 +227,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         let json = String(decoding: data, as: UTF8.self)
         webView?.evaluateJavaScript("window.boardEditor.configure(\(json))") { [weak self] _, error in
             if error != nil { self?.error = AppLocalized("编辑器加载失败，请重新打开工作板。") }
+            self?.performPendingReveal()
         }
     }
 
@@ -222,6 +247,12 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
                     self?.flush()
                 }
             }
+        } else if kind == "fold", let key = body["key"] as? String, let value = body["value"] as? Bool {
+            folds[key] = value
+            // 只记和默认不同的：标题默认展开，折叠块的默认由 open 属性决定，两种都存下来以免默认值变化。
+            if key.hasPrefix("h"), !value { folds.removeValue(forKey: key) }
+            settings["folds"] = folds
+            defaults.set(folds, forKey: Self.foldsKey(boardID))
         } else if kind == "history" {
             undoDepth = body["undo"] as? Int ?? 0
             redoDepth = body["redo"] as? Int ?? 0

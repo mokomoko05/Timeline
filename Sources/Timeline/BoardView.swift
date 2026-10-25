@@ -13,7 +13,7 @@ final class BoardNavigation: ObservableObject {
 
     func editorSession(for board: Board, store: JournalStore) -> BoardLiveEditorSession {
         if editorSessions[board.id] == nil {
-            let session = BoardLiveEditorSession(store: store, board: board)
+            let session = BoardLiveEditorSession(store: store, board: board, defaults: defaults)
             // ⌘Enter：保存并回到只读浏览（和换工作板一样关掉源码模式）。
             session.onPreview = { [weak self, weak session] in
                 self?.sourceMode = false
