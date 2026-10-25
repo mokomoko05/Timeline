@@ -241,6 +241,8 @@ struct UnifiedJournalView: View {
     @State private var foldedRuns: Set<UUID> = []
     /// 刚提交的那条日志：滚过去并高亮。
     @State private var revealID: UUID?
+    /// 已经按「打开这一天」定位过的日期：切到笔记再切回来时页面会重新出现，不能再把读到一半的位置拉走。
+    @State private var openedDay: String?
     @State private var editingDate: Date?
     @State private var editText = ""
     @State private var editFocused = false
@@ -407,7 +409,8 @@ struct UnifiedJournalView: View {
                 .contentShape(Rectangle())
                 // 今天从最新一条开始（接着写），往日从当天第一条开始读。
                 .onAppear {
-                    if let id = revealLog { revealID = id; revealLog = nil } else { openDay(proxy) }
+                    if let id = revealLog { revealID = id; revealLog = nil }
+                    else if openedDay != JournalDates.key(date) { openDay(proxy) }
                 }
                 .onChange(of: revealLog) { id in if let id { revealID = id; revealLog = nil } }
                 .onChange(of: date) { _ in DispatchQueue.main.async { openDay(proxy) } }
@@ -514,6 +517,7 @@ struct UnifiedJournalView: View {
     }
 
     private func openDay(_ proxy: ScrollViewProxy) {
+        openedDay = JournalDates.key(date)
         guard let first = entry.logsInTimeOrder.first else { return }
         if JournalDates.calendar.isDateInToday(date) { proxy.scrollTo("journal-bottom", anchor: .bottom) }
         else { proxy.scrollTo(first.id, anchor: .top) }

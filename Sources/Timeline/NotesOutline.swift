@@ -87,18 +87,7 @@ struct NotesOutlinePanel<Chapters: View>: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 1) {
-                            ForEach(months) { month in
-                                HStack {
-                                    Text(month.date, format: .dateTime.year().month(.wide))
-                                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.ink)
-                                    Spacer()
-                                    Text("\(month.count)").font(.system(size: 10)).monospacedDigit().foregroundStyle(Palette.muted)
-                                }
-                                .padding(.horizontal, 6).padding(.top, 8).padding(.bottom, 2)
-                                ForEach(month.days) { day in dayRow(day).id(day.id) }
-                            }
-                        }
+                        NotesTimelineList(months: months, jump: jump)
                     }
                     // 时间线目录从最新的日期打开，和笔记页一样「最新在下面」。
                     .onAppear { if let last = months.last?.days.last { proxy.scrollTo(last.id, anchor: .bottom) } }
@@ -111,18 +100,106 @@ struct NotesOutlinePanel<Chapters: View>: View {
         .modifier(OutlineSurface(floating: floating))
         .accessibilityElement(children: .contain).accessibilityLabel("目录")
     }
+}
+
+/// 目录里的时间线：月份和日期串在同一根竖线上（和主界面的时间轴一样，日期是线上的结）。
+/// 点月份把这个月的一串日期收起 / 展开；点日期跳到那一天。
+struct NotesTimelineList: View {
+    let months: [NotesTimelineIndex.Month]
+    let jump: (NotesTimelineIndex.Day) -> Void
+    @State private var folded: Set<String> = []
+
+    /// 线在行里的横向位置（圆点的中心）。
+    static let lineX: CGFloat = 12
+
+    private enum Item: Identifiable {
+        case month(NotesTimelineIndex.Month)
+        case day(NotesTimelineIndex.Day)
+        var id: String {
+            switch self {
+            case .month(let month): return "month-" + month.id
+            case .day(let day): return day.id
+            }
+        }
+    }
+
+    private var items: [Item] {
+        months.flatMap { month -> [Item] in
+            [.month(month)] + (folded.contains(month.id) ? [] : month.days.map(Item.day))
+        }
+    }
+
+    var body: some View {
+        let items = items
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                Group {
+                    switch item {
+                    case .month(let month): monthRow(month)
+                    case .day(let day): dayRow(day)
+                    }
+                }
+                .background(alignment: .leading) { thread(top: index > 0, bottom: index < items.count - 1) }
+                .id(item.id)
+            }
+        }
+    }
+
+    /// 穿过这一行的那段线：第一行只画下半段，最后一行只画上半段，整串就连成一根。
+    private func thread(top: Bool, bottom: Bool) -> some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(top ? Palette.line : .clear)
+            Rectangle().fill(bottom ? Palette.line : .clear)
+        }
+        .frame(width: 1.5)
+        .padding(.leading, Self.lineX - 0.75)
+    }
+
+    private func monthRow(_ month: NotesTimelineIndex.Month) -> some View {
+        let isFolded = folded.contains(month.id)
+        return Button {
+            withAnimation(Motion.quick) {
+                if isFolded { folded.remove(month.id) } else { folded.insert(month.id) }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                // 月份是线上大一号的空心结。
+                Circle().strokeBorder(Palette.muted, lineWidth: 1.5)
+                    .background(Circle().fill(Palette.background))
+                    .frame(width: 9, height: 9)
+                    .frame(width: Self.lineX * 2 - 6)
+                Text(month.date, format: .dateTime.year().month(.wide))
+                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.ink)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(Palette.muted)
+                    .rotationEffect(.degrees(isFolded ? -90 : 0))
+                Spacer(minLength: 2)
+                Text("\(month.count)").font(.system(size: 10)).monospacedDigit().foregroundStyle(Palette.muted)
+            }
+            .padding(.leading, 3).padding(.trailing, 6).padding(.top, 8).padding(.bottom, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isFolded ? "展开这个月" : "收起这个月")
+        .accessibilityLabel(AppLocalizedFormat("%@，%lld 条笔记", month.date.formatted(.dateTime.year().month(.wide)), month.count))
+        .accessibilityValue(isFolded ? Text("已收起") : Text("已展开"))
+    }
 
     private func dayRow(_ day: NotesTimelineIndex.Day) -> some View {
         let today = JournalDates.calendar.isDateInToday(day.date)
         return Button { jump(day) } label: {
             HStack(spacing: 6) {
-                Circle().fill(today ? Palette.accent : Palette.muted.opacity(0.5)).frame(width: 5, height: 5)
+                ZStack {
+                    if today { Circle().fill(Palette.accent.opacity(0.22)).frame(width: 11, height: 11) }
+                    Circle().fill(today ? Palette.accent : Palette.muted.opacity(0.7)).frame(width: 5, height: 5)
+                }
+                .frame(width: Self.lineX * 2 - 6)
                 Text(day.date.relativeLabel).font(.system(size: 12)).foregroundStyle(today ? Palette.accent : Palette.ink)
                 Text(day.date, format: .dateTime.weekday(.abbreviated)).font(.system(size: 10)).foregroundStyle(Palette.muted)
                 Spacer(minLength: 2)
                 Text("\(day.count)").font(.system(size: 10)).monospacedDigit().foregroundStyle(Palette.muted)
             }
-            .padding(.horizontal, 6).padding(.vertical, 4)
+            .padding(.leading, 3).padding(.trailing, 6).padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }

@@ -155,11 +155,12 @@ struct SingleLineTaskInput: NSViewRepresentable {
         field.isEditable = enabled
         field.isSelectable = true
         (field as? TaskTextField)?.onPasteImages = onPasteImages
-        (field as? TaskTextField)?.onCommandReturn = commandReturnOnly ? { [weak coordinator = context.coordinator, weak field] in
+        // ⌘Enter 在所有输入框里都是「保存 / 提交」；普通 Enter 是否提交另看 commandReturnOnly。
+        (field as? TaskTextField)?.onCommandReturn = { [weak coordinator = context.coordinator, weak field] in
             guard let coordinator, let field else { return }
             coordinator.parent.text = (field.currentEditor() as? NSTextView)?.string ?? field.stringValue
             coordinator.parent.submit()
-        } : nil
+        }
         if field.stringValue != text, (field.currentEditor() as? NSTextView)?.hasMarkedText() != true { field.stringValue = text }
         let wantsFocus = focused && enabled
         if wantsFocus, !context.coordinator.focusRequested { context.coordinator.requestFocus(field) }
@@ -441,7 +442,7 @@ struct GrowingTaskInput: NSViewRepresentable {
 /// 字段编辑器：⌘V 时如果剪贴板是图片，交给输入框的 onPasteImages，而不是粘贴成乱码或什么都不做。
 final class ImagePasteTextView: NSTextView {
     var onPasteImages: (([Data]) -> Void)?
-    /// ⌘Enter 提交（`returnSubmits == false` 时）；`returnSubmits == true` 时普通 Enter 也提交，Shift+Enter 换行。
+    /// ⌘Enter 始终提交（全应用统一的保存 / 提交键）；`returnSubmits == true` 时普通 Enter 也提交，Shift+Enter 换行。
     /// 在 `keyDown` 里直接拦截，不走 `doCommandBy`（`insertNewline` 这个 selector 在输入法组词、候选框等场景下
     /// 的派发时机不可靠，`NSApp.currentEvent` 和「记录上一次 keyDown 再在 doCommandBy 里读」都验证过不准）。
     /// `keyDown` 拿到的 `event` 就是这次按键本身，修饰键判断不会错。
@@ -463,9 +464,8 @@ final class ImagePasteTextView: NSTextView {
     func shouldInterceptReturn(_ event: NSEvent) -> Bool {
         guard event.keyCode == 36, !hasMarkedText(), mentionActive?() != true else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
-        if returnSubmits, modifiers.isEmpty { return true }
-        if !returnSubmits, modifiers == .command { return true }
-        return false
+        if modifiers == .command { return true }
+        return returnSubmits && modifiers.isEmpty
     }
 
     override func paste(_ sender: Any?) {

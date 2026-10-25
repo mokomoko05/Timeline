@@ -247,6 +247,11 @@ final class BoardWindowTests: XCTestCase {
         navigation.open(tag: "Reading")
         try await Task.sleep(for: .milliseconds(100))
         host.layoutSubtreeIfNeeded()
+        // 标签页里的待办章节默认折叠，章节里的工作板也一起收起；展开后才显示。
+        XCTAssertFalse(texts(host).contains { $0.source == taskSource })
+        navigation.setCollapsed(false, tag: "Reading", chapter: task.id.uuidString)
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
         XCTAssertEqual(texts(host).filter { $0.source == taskSource }.count, 1)
         XCTAssertEqual(texts(host).filter { $0.source == tagSource }.count, 1)
         if let destination = ProcessInfo.processInfo.environment["TIMELINE_BOARD_NOTES_SNAPSHOT"],

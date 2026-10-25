@@ -764,6 +764,14 @@ struct NotesView: View {
                     VStack(alignment: .leading, spacing: 1) {
                         ForEach(chapters) { chapter in
                             outlineRow(tag, chapter, proxy: proxy) { if floating { floatingOutline = false } }
+                            // 直接记录没有待办可分章，在它下面挂一串日期，按时间找。
+                            if chapter.taskID == nil, !chapter.notes.isEmpty {
+                                NotesTimelineList(months: NotesTimelineIndex.months(chapter.notes)) { day in
+                                    jumpToDay(day, proxy: proxy, tag: tag, chapters: [chapter])
+                                    if floating { floatingOutline = false }
+                                }
+                                .padding(.leading, 10).padding(.bottom, 4)
+                            }
                         }
                     }
                 }

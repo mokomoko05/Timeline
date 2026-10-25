@@ -329,6 +329,13 @@ window.boardEditor = {
           livePreview.of(config.sourceMode ? [] : live),
           EditorView.atomicRanges.of(view => view.state.field(live, false)?.decorations.update({filter: (_from, _to, decoration) => decoration.spec.atomic === true}) ?? Decoration.none),
           editable.of(editability(config.readOnly || config.previewOnly)),
+          // ⌘Enter 是全应用统一的保存键：提交内容并回到只读浏览。
+          Prec.highest(keymap.of([{key: "Mod-Enter", run: view => {
+            if (view.state.readOnly || composing || view.composing) return false;
+            post({kind: "commit", ...snapshot()});
+            post({kind: "preview"});
+            return true;
+          }}])),
           keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
           Prec.lowest(EditorView.domEventHandlers({keydown(event) {
             if (event.key !== "Escape" || event.isComposing || composing || view.composing) return false;

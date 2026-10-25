@@ -15,6 +15,11 @@ final class ZZNoVisibleWindowsTests: XCTestCase {
         XCTAssertTrue(drawn.isEmpty, "这些窗口会真的出现在屏幕上：\(drawn.map { "\(type(of: $0)) \"\($0.title)\"" })")
     }
 
+    /// 测试进程从没被调到前台：用户正在用的应用不会丢焦点。
+    func testTheTestProcessNeverBecameTheActiveApp() {
+        XCTAssertFalse(NSApplication.shared.isActive, "测试把自己激活到了前台，会抢走用户正在用的窗口的焦点")
+    }
+
     /// 测试里的窗口只记录逻辑透明度，淡入淡出的代码读到的和平时一样。
     func testQuietWindowKeepsTheLogicalAlphaButNeverDrawsAnything() {
         let window = QuietWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)

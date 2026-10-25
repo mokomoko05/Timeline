@@ -32,3 +32,20 @@ final class FocusPanelClampTests: XCTestCase {
         XCTAssertEqual(clamped.maxY, visible.maxY)
     }
 }
+
+final class FocusPanelRestoreTests: XCTestCase {
+    private let visible = NSRect(x: 0, y: 40, width: 1440, height: 835)
+
+    /// 小伙伴贴在右下角时记下的位置，再打开完整面板：仍贴右边和底边，不会因为变高而离开底边。
+    func testRightDockedPanelKeepsRightAndBottomEdges() {
+        let companion = NSRect(x: 1374, y: 46, width: 60, height: 44)
+        let frame = FocusPanel.restored(companion, size: NSSize(width: 340, height: 158), in: visible)
+        XCTAssertEqual(frame, NSRect(x: 1094, y: 46, width: 340, height: 158))
+    }
+
+    func testLeftDockedPanelKeepsLeftEdge() {
+        let saved = NSRect(x: 6, y: 300, width: 340, height: 400)
+        let frame = FocusPanel.restored(saved, size: NSSize(width: 60, height: 44), in: visible)
+        XCTAssertEqual(frame, NSRect(x: 6, y: 300, width: 60, height: 44))
+    }
+}

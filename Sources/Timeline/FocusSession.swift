@@ -523,6 +523,12 @@ final class FocusPanel: NSPanel {
         super.sendEvent(event)
     }
 
+    /// 按记下的位置摆一个新尺寸的面板：在屏幕右半边就保持右边不动，否则保持左边；底边始终不动。
+    static func restored(_ saved: NSRect, size: NSSize, in visible: NSRect) -> NSRect {
+        let x = saved.midX >= visible.midX ? saved.maxX - size.width : saved.minX
+        return NSRect(x: x, y: saved.minY, width: size.width, height: size.height)
+    }
+
     /// 把窗口整个放进屏幕可见区域；窗口比屏幕还大时贴住左上角。
     static func clamp(_ frame: NSRect, to visible: NSRect) -> NSRect {
         var frame = frame
@@ -649,13 +655,12 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         }
         guard let panel else { return }
         // 第一次显示默认放在当前屏幕右下角；用户拖动后位置会被记住。
-        let topLeft: NSPoint
+        var frame: NSRect
         if created || !panel.isVisible {
-            topLeft = savedTopLeft(for: size) ?? defaultTopLeft(for: size)
+            frame = savedFrame(for: size) ?? defaultFrame(for: size)
         } else {
-            topLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
+            frame = NSRect(x: panel.frame.minX, y: panel.frame.maxY - size.height, width: size.width, height: size.height)
         }
-        var frame = NSRect(x: topLeft.x, y: topLeft.y - size.height, width: size.width, height: size.height)
         // 保存的位置可能只有一部分还在屏幕上（换了显示器、分辨率变了），整个挪回屏幕里。
         let screen = NSScreen.screens.max { $0.visibleFrame.intersection(frame).area < $1.visibleFrame.intersection(frame).area }
         if let visible = (screen ?? NSScreen.main)?.visibleFrame { frame = FocusPanel.clamp(frame, to: visible) }
@@ -665,9 +670,9 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
     }
 
     /// 默认贴在屏幕右下角：靠右边、靠底边。
-    private func defaultTopLeft(for size: NSSize) -> NSPoint {
+    private func defaultFrame(for size: NSSize) -> NSRect {
         let frame = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
-        return NSPoint(x: frame.maxX - size.width - Self.edgeInset, y: frame.minY + size.height + Self.edgeInset)
+        return NSRect(x: frame.maxX - size.width - Self.edgeInset, y: frame.minY + Self.edgeInset, width: size.width, height: size.height)
     }
 
     /// 收起时贴着屏幕边缘的距离。
@@ -719,19 +724,19 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         panel.contentView?.frame = NSRect(origin: .zero, size: frame.size)
     }
 
-    private func savedTopLeft(for size: NSSize) -> NSPoint? {
-        guard let text = defaults.string(forKey: Prefs.focusPanelTopLeft) else { return nil }
-        let point = NSPointFromString(text)
-        let rect = NSRect(x: point.x, y: point.y - size.height, width: size.width, height: size.height)
+    private func savedFrame(for size: NSSize) -> NSRect? {
+        guard let text = defaults.string(forKey: Prefs.focusPanelFrame) else { return nil }
+        let saved = NSRectFromString(text)
         // 保存的位置所在的屏幕还在才用。
-        return NSScreen.screens.contains { $0.visibleFrame.intersects(rect) } ? point : nil
+        guard saved.width > 0, let screen = NSScreen.screens.first(where: { $0.visibleFrame.intersects(saved) }) else { return nil }
+        return FocusPanel.restored(saved, size: size, in: screen.visibleFrame)
     }
 
     func windowDidMove(_ notification: Notification) {
         guard let frame = panel?.frame, panel?.isVisible == true else { return }
-        let position = NSStringFromPoint(NSPoint(x: frame.minX, y: frame.maxY))
-        if defaults.string(forKey: Prefs.focusPanelTopLeft) != position {
-            defaults.set(position, forKey: Prefs.focusPanelTopLeft)
+        let position = NSStringFromRect(frame)
+        if defaults.string(forKey: Prefs.focusPanelFrame) != position {
+            defaults.set(position, forKey: Prefs.focusPanelFrame)
         }
         // 小伙伴被拖到中间松手后，滑回离得近的那条边（上下位置保留）。
         guard !snapping else { return }
@@ -1542,7 +1547,11 @@ struct TaskFocusButton: View {
 
 struct FocusPanelSizeKey: PreferenceKey {
     static var defaultValue: CGSize = .zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+    /// 没量尺寸的兄弟视图也会送来默认值 .zero，不能让它盖掉真正量到的大小（否则面板永远不随输入变高）。
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        if next != .zero { value = next }
+    }
 }
 
 /// 专注中的桌面小伙伴：一颗会呼吸的进度环、剩余时间和任务名，浮在半透明的玻璃胶囊里。

@@ -162,6 +162,7 @@ final class GrowingInputTests: XCTestCase {
 
         XCTAssertFalse(editor.shouldInterceptReturn(keyEvent(modifiers: .shift)), "Shift+Enter 不拦截，交给系统换行")
         XCTAssertTrue(editor.shouldInterceptReturn(keyEvent(modifiers: [])), "普通 Enter 拦截去提交")
+        XCTAssertTrue(editor.shouldInterceptReturn(keyEvent(modifiers: .command)), "⌘Enter 是全应用统一的提交键，这里也提交")
     }
 
     /// `returnSubmits: true` 时，@/# 候选激活中按 Enter 要让 `doCommandBy` 去确认候选，不能被 `keyDown` 抢先提交。

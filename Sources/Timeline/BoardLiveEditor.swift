@@ -25,6 +25,8 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     static weak var active: BoardLiveEditorSession?
     @Published private(set) var ready = false
     @Published private(set) var error: String?
+    /// 编辑器里按了 ⌘Enter：内容已经提交，回到只读浏览。
+    var onPreview: (() -> Void)?
     private(set) var webView: WKWebView?
     private let store: JournalStore
     private let boardID: UUID
@@ -205,6 +207,9 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
                     self?.flush()
                 }
             }
+        } else if kind == "preview" {
+            flush()
+            onPreview?()
         } else if kind == "open", let value = body["url"] as? String, let url = TaskText.linkURL(value) {
             SafariLinks.open(url)
         } else if kind == "copy", let value = body["text"] as? String, let request = body["request"] as? Int {

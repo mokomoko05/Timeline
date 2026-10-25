@@ -33,9 +33,16 @@ final class NotesWindowTests: XCTestCase {
         let editor = try XCTUnwrap(views(host, type: ImagePasteTextView.self).first { !$0.isHiddenOrHasHiddenAncestor })
         let scroll = try XCTUnwrap(views(host, type: NSScrollView.self).filter { !$0.isHiddenOrHasHiddenAncestor }
             .max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) })
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: 300))
-        scroll.reflectScrolledClipView(scroll.contentView)
+        // 用滚轮事件往上滚（像用户那样），SwiftUI 才会把它当成当前位置记住。
+        let wheel = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 2000, wheel2: 0, wheel3: 0))
+        scroll.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: wheel)))
+        let bottom = scroll.contentView.bounds.origin
+        for _ in 0..<20 where scroll.contentView.bounds.origin == bottom {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            host.layoutSubtreeIfNeeded()
+        }
         let position = scroll.contentView.bounds.origin
+        XCTAssertLessThan(position.y, (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.height - 100, "已经离开底部")
         for _ in 0..<3 {
             workspace.mode = .notes
             try await Task.sleep(nanoseconds: 30_000_000)

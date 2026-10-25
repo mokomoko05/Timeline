@@ -709,7 +709,26 @@ final class FocusPanelStyleTests: XCTestCase {
         XCTAssertNil(FocusPanelStyle(rawValue: "nonsense"))
     }
 
-    func testFocusWindowGrowsDownwardAndShrinksForNotesAndReflection() async throws {
+    /// 上次收成小伙伴贴在右下角，重新打开时完整面板仍贴着右下角（以前记左上角，变高后会停在屏幕右侧中间）。
+    func testSavedCompanionPositionReopensAtTheSameBottomRightCorner() async throws {
+        let defaults = makeDefaults()
+        let screen = try XCTUnwrap(NSScreen.main ?? NSScreen.screens.first).visibleFrame
+        let companion = NSRect(x: screen.maxX - 66, y: screen.minY + 6, width: 60, height: 44)
+        defaults.set(NSStringFromRect(companion), forKey: Prefs.focusPanelFrame)
+        let (session, _) = try makeSession()
+        let controller = FocusPanelController(session: session, defaults: defaults)
+        let existing = Set(NSApp.windows.map(\.windowNumber))
+        controller.toggleWorkspace()
+        let panel = try XCTUnwrap(NSApp.windows.first { !existing.contains($0.windowNumber) && $0 is NSPanel })
+        defer { panel.close() }
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertGreaterThan(panel.frame.height, companion.height + 50)
+        XCTAssertEqual(panel.frame.minY, companion.minY, accuracy: 1, "底边不动")
+        XCTAssertEqual(panel.frame.maxX, companion.maxX, accuracy: 1, "右边不动")
+        controller.toggleWorkspace()
+    }
+
+    func testFocusWindowGrowsUpwardAndShrinksForNotesAndReflection() async throws {
         let defaults = makeDefaults()
         let (session, task) = try makeSession()
         let controller = FocusPanelController(session: session, defaults: defaults)
@@ -718,7 +737,8 @@ final class FocusPanelStyleTests: XCTestCase {
         let panel = try XCTUnwrap(NSApp.windows.first { !existing.contains($0.windowNumber) && $0 is NSPanel })
         defer { panel.close() }
         try await Task.sleep(for: .milliseconds(80))
-        XCTAssertEqual(panel.frame.height, 158, accuracy: 1, "选择任务时保持默认尺寸")
+        // 选任务时面板上方给内嵌的时间轴留好了位置，比专注中的面板高。
+        XCTAssertGreaterThan(panel.frame.height, 158 + 100, "选择任务时给时间轴留出位置")
         session.start(task: task, url: nil, plannedSeconds: 120)
         try await Task.sleep(for: .milliseconds(80))
         let original = panel.frame
@@ -738,7 +758,8 @@ final class FocusPanelStyleTests: XCTestCase {
             input.didChangeText()
             try await Task.sleep(for: .milliseconds(100))
             XCTAssertGreaterThan(panel.frame.height, original.height + 40)
-            XCTAssertEqual(panel.frame.maxY, original.maxY, accuracy: 1)
+            // 面板贴着屏幕底边，变高时底边不动、向上长。
+            XCTAssertEqual(panel.frame.minY, original.minY, accuracy: 1)
             let capped = scroll.frame.height
             input.string += String(repeating: "More text. ", count: 500)
             input.didChangeText()
@@ -752,7 +773,7 @@ final class FocusPanelStyleTests: XCTestCase {
             input.didChangeText()
             try await Task.sleep(for: .milliseconds(100))
             XCTAssertEqual(panel.frame.height, original.height, accuracy: 1)
-            XCTAssertEqual(panel.frame.maxY, original.maxY, accuracy: 1)
+            XCTAssertEqual(panel.frame.minY, original.minY, accuracy: 1)
         }
         session.stop(reason: "测试结束")
         controller.toggleWorkspace()

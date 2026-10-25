@@ -137,7 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.center()
         window.setFrameAutosaveName("TimelineMainWindow")
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        Headless.activateApp()
         reminders.onComplete = { [weak self] in self?.toast.show(AppLocalizedFormat("已从通知完成「%@」", $0)) }
         // 专注期间允许自由切换网页和应用；任务链接只用于开始时打开，不再需要 Safari 自动化权限。
         if CommandLine.arguments.contains("--enable-login") { loginItem.setEnabled(true) }
@@ -233,7 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.alphaValue = 1
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        Headless.activateApp()
     }
 
     /// 全局快捷键：Timeline 不在前台就在**当前桌面**淡入并调到最前面（不会把你切到 Timeline 所在的桌面）；
@@ -258,7 +258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         WindowFade.reset(window)
         if appearing, !Motion.reduced { window.alphaValue = 0 }
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        Headless.activateApp()
         if appearing, !Motion.reduced { fadeWindow(to: 1, duration: 0.18) }
     }
 

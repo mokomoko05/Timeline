@@ -139,7 +139,7 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
                     NotificationCenter.default.post(name: .timelineNavigate, object: date)
                     if let taskID { NotificationCenter.default.post(name: .timelineReveal, object: taskID) }
                     NSApp.windows.first(where: { $0.canBecomeMain })?.makeKeyAndOrderFront(nil)
-                    NSApp.activate(ignoringOtherApps: true)
+                    Headless.activateApp()
                 }
             }
         }

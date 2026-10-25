@@ -187,7 +187,18 @@ extension DesignPreviewTests {
                                             now: day.addingTimeInterval(TimeInterval(9 * 3600 + index * 1800)))
             }
         }
+        // 有待办的笔记本里也有直接记录：目录在「直接记录」下面挂一串日期。
+        for offset in [-40, -9, -1] {
+            let day = calendar.date(byAdding: .day, value: offset, to: today)!
+            _ = try store.quickLogEntry("随手记一笔 \(offset)", linkDefault: false, tags: ["阅读"], on: day,
+                                        now: day.addingTimeInterval(10 * 3600))
+        }
         for dark in [true, false] {
+            let chapters = NotesNavigation()
+            chapters.open(tag: "阅读")
+            chapters.outlineMode = .chapters
+            try render("notebook-chapters", size: NSSize(width: 1180, height: 680), dark: dark,
+                       NotesView(store: store, nav: chapters, reveal: { _ in }, openDay: { _ in }))
             let nav = NotesNavigation()
             nav.open(tag: "灵感")
             try render("notebook-outline", size: NSSize(width: 1180, height: 680), dark: dark,

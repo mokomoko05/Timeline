@@ -12,7 +12,15 @@ final class BoardNavigation: ObservableObject {
     static let liveEditorLimit = 4
 
     func editorSession(for board: Board, store: JournalStore) -> BoardLiveEditorSession {
-        if editorSessions[board.id] == nil { editorSessions[board.id] = BoardLiveEditorSession(store: store, board: board) }
+        if editorSessions[board.id] == nil {
+            let session = BoardLiveEditorSession(store: store, board: board)
+            // ⌘Enter：保存并回到只读浏览（和换工作板一样关掉源码模式）。
+            session.onPreview = { [weak self, weak session] in
+                self?.sourceMode = false
+                session?.setSourceMode(false)
+            }
+            editorSessions[board.id] = session
+        }
         editorOrder.removeAll { $0 == board.id }
         editorOrder.append(board.id)
         while editorOrder.count > Self.liveEditorLimit {
@@ -332,8 +340,13 @@ struct BoardContentView: View {
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .tint(Palette.muted).foregroundStyle(Palette.muted)
                     .help("插入模板").accessibilityLabel("插入模板")
-                    headerButton(editing ? "eye" : "chevron.left.forwardslash.chevron.right",
-                                 editing ? "预览" : "编辑 Markdown 源码", active: editing) { setEditing(!editing) }
+                    // 编辑时 ⌘Enter 由编辑器自己处理（保存后回到浏览）；浏览时 ⌘Enter 进入编辑。
+                    if editing {
+                        headerButton("eye", "保存并预览 · ⌘↩", active: true) { setEditing(false) }
+                    } else {
+                        headerButton("chevron.left.forwardslash.chevron.right", "编辑 Markdown 源码 · ⌘↩") { setEditing(true) }
+                            .keyboardShortcut(.return, modifiers: .command)
+                    }
                 }
                 if case .task(let id) = board.owner, store.locate(id) != nil {
                     headerButton("note.text", "笔记") { AppRouter.openNotes(id) }

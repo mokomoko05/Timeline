@@ -69,6 +69,29 @@ final class BoardLiveEditorTests: XCTestCase {
         }
     }
 
+    /// ⌘Enter：保存内容并回到只读浏览。
+    func testCommandEnterSavesAndReturnsToReadOnlyBrowsing() async throws {
+        let fixture = try LiveFixture(source: "Before body")
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        var previews = 0
+        fixture.session.onPreview = { previews += 1; fixture.session.setSourceMode(false) }
+        fixture.session.setSourceMode(true)
+        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.select(7);window.boardEditor.replaceSelection('edited ')")
+        let handled = try await fixture.webView.evaluateJavaScript(
+            "!document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',metaKey:true,bubbles:true,cancelable:true}))") as? Bool
+        XCTAssertEqual(handled, true, "⌘Enter 由编辑器处理，不插入换行")
+        for _ in 0..<50 where previews == 0 { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(previews, 1)
+        XCTAssertEqual(fixture.store.boards[0].markdown, "Before edited body", "按下时立即保存")
+        for _ in 0..<50 {
+            if (try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').isContentEditable") as? Bool) == false { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let editable = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').isContentEditable") as? Bool
+        XCTAssertEqual(editable, false, "回到只读浏览")
+    }
+
     func testRegularEditingSurvivesFocusChangesAndWebContentReloadWithoutVim() async throws {
         let fixture = try LiveFixture(source: "Before body")
         defer { fixture.close() }

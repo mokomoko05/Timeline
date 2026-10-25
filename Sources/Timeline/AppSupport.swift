@@ -62,8 +62,9 @@ enum Prefs {
     static let focusPanelHidden = "focusPanelHidden"
     /// 专注中把面板收成半透明的小伙伴（悬停展开）。
     static let focusCompanion = "focusCompanion"
-    /// 浮动计时窗口被拖到哪里：窗口左上角。
-    static let focusPanelTopLeft = "focusPanelTopLeft.v2"
+    /// 浮动计时窗口被拖到哪里：整个窗口的位置。恢复时贴住它所在的左 / 右边和底边——面板变大变小都以底边为准，
+    /// 旧版本记左上角，面板尺寸一变就会离开底边，所以换了新键。
+    static let focusPanelFrame = "focusPanelFrame.v3"
     static var focusMinLogSeconds: TimeInterval {
         let defaults = UserDefaults.standard
         let minutes = defaults.object(forKey: focusMinLogMinutes) == nil ? defaultFocusMinLogMinutes : defaults.integer(forKey: focusMinLogMinutes)

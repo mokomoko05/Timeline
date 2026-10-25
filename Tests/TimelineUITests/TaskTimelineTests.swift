@@ -90,6 +90,12 @@ final class TaskTimelineTests: XCTestCase {
         }
         let dot = try XCTUnwrap(handles(host).first { $0.taskID == items[0].id && $0.reorder != nil })
         let start = dot.convert(NSPoint(x: dot.bounds.midX, y: dot.bounds.midY), to: nil)
+        // 只拖到本组最后一个点稍下方：拖出本组会变成改日期（跨日期拖放），不是组内排序。
+        func windowY(_ id: UUID) throws -> CGFloat {
+            let handle = try XCTUnwrap(handles(host).first { $0.taskID == id && $0.reorder != nil })
+            return handle.convert(NSPoint(x: handle.bounds.midX, y: handle.bounds.midY), to: nil).y
+        }
+        let pastLast = start.y - (try windowY(items[2].id)) + 12
         let hit = try XCTUnwrap(host.hitTest(host.superview?.convert(start, from: nil) ?? start))
         XCTAssertTrue(hit === dot, "Main window dot hit: \(type(of: hit))")
         func mouse(_ type: NSEvent.EventType, _ delta: CGFloat = 0) throws -> NSEvent {
@@ -102,8 +108,8 @@ final class TaskTimelineTests: XCTestCase {
         XCTAssertEqual(interaction.selectedTaskID, items[0].id)
         window.sendEvent(try mouse(.leftMouseDragged, 5))
         XCTAssertTrue(dot.isReordering)
-        window.sendEvent(try mouse(.leftMouseDragged, 1000))
-        window.sendEvent(try mouse(.leftMouseUp, 1000))
+        window.sendEvent(try mouse(.leftMouseDragged, pastLast))
+        window.sendEvent(try mouse(.leftMouseUp, pastLast))
         XCTAssertEqual(store.tasks().sorted(by: TaskTimelineSection.precedes).map(\.id), [items[1].id, items[2].id, items[0].id])
         try await Task.sleep(for: .milliseconds(100))
         host.layoutSubtreeIfNeeded()
@@ -112,15 +118,16 @@ final class TaskTimelineTests: XCTestCase {
         XCTAssertEqual(displayedDots.compactMap(\.taskID), [items[1].id, items[2].id, items[0].id], "松手后界面也应更新顺序")
         let nextDot = try XCTUnwrap(displayedDots.first)
         let nextStart = nextDot.convert(NSPoint(x: nextDot.bounds.midX, y: nextDot.bounds.midY), to: nil)
+        let nextPastLast = nextStart.y - (try windowY(items[0].id)) + 12
         func nextMouse(_ type: NSEvent.EventType, _ delta: CGFloat = 0) throws -> NSEvent {
             try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: nextStart.x, y: nextStart.y - delta), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
         }
         window.sendEvent(try nextMouse(.leftMouseDown))
         try await Task.sleep(for: .milliseconds(100))
-        window.sendEvent(try nextMouse(.leftMouseDragged, 1000))
+        window.sendEvent(try nextMouse(.leftMouseDragged, nextPastLast))
         XCTAssertTrue(nextDot.isReordering)
-        window.sendEvent(try nextMouse(.leftMouseUp, 1000))
+        window.sendEvent(try nextMouse(.leftMouseUp, nextPastLast))
         XCTAssertEqual(store.tasks().sorted(by: TaskTimelineSection.precedes).map(\.id), [items[2].id, items[0].id, items[1].id])
     }
 
