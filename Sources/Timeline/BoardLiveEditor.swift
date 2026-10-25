@@ -5,7 +5,10 @@ import TimelineCore
 
 struct BoardLiveEditor: NSViewRepresentable {
     @ObservedObject var session: BoardLiveEditorSession
-    var sourceMode = false
+    /// 正在编辑（否则是只读浏览）。
+    var editing = false
+    /// 编辑时显示完整源码；否则所见即所得，只有光标所在的那一行露出 Markdown 标记。
+    var raw = false
     @Environment(\.typography) private var typography
     @Environment(\.colorScheme) private var colorScheme
 
@@ -14,7 +17,7 @@ struct BoardLiveEditor: NSViewRepresentable {
 
     func updateNSView(_ view: WKWebView, context: Context) {
         session.configure(fontSize: typography.pt(13), dark: colorScheme == .dark,
-                          sourceMode: sourceMode, previewOnly: !sourceMode)
+                          sourceMode: editing && raw, previewOnly: !editing)
     }
 
     static func dismantleNSView(_ view: WKWebView, coordinator: BoardLiveEditorSession) { coordinator.flush() }
@@ -208,11 +211,16 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         applyConfiguration()
     }
 
-    func setSourceMode(_ enabled: Bool) {
-        settings["sourceMode"] = enabled
-        settings["previewOnly"] = !enabled
+    /// 浏览 / 编辑切换。进入编辑时键盘焦点交给编辑器，光标落在浏览时点下的位置。
+    func setMode(editing: Bool, raw: Bool) {
+        settings["sourceMode"] = editing && raw
+        settings["previewOnly"] = !editing
         applyConfiguration()
+        if editing, let webView, webView.window?.firstResponder !== webView { webView.window?.makeFirstResponder(webView) }
     }
+
+    /// 编辑完整源码（true）或回到浏览（false）。
+    func setSourceMode(_ enabled: Bool) { setMode(editing: enabled, raw: true) }
 
     private func applyConfiguration() {
         guard ready, !settings.isEmpty else { return }

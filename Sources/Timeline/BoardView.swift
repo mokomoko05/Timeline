@@ -17,7 +17,7 @@ final class BoardNavigation: ObservableObject {
             // ⌘Enter：保存并回到只读浏览（和换工作板一样关掉源码模式）。
             session.onPreview = { [weak self, weak session] in
                 self?.sourceMode = false
-                session?.setSourceMode(false)
+                session?.setMode(editing: false, raw: false)
             }
             editorSessions[board.id] = session
         }
@@ -36,8 +36,12 @@ final class BoardNavigation: ObservableObject {
         editorOrder.removeAll { $0 != selection }
     }
 
-    /// 当前工作板是在看源码还是预览；换工作板回到预览。
+    /// 当前工作板是在编辑还是浏览；换工作板回到浏览。
     @Published var sourceMode = false
+    /// 编辑时显示完整 Markdown 源码；默认所见即所得（只有光标所在行露出标记）。记住上次的选择。
+    @Published var rawSource: Bool {
+        didSet { defaults.set(rawSource, forKey: "board.rawSource") }
+    }
 
     func select(_ id: UUID) {
         guard selection != id else { return }
@@ -57,6 +61,7 @@ final class BoardNavigation: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        rawSource = defaults.bool(forKey: "board.rawSource")
         selection = defaults.string(forKey: "board.selection").flatMap(UUID.init(uuidString:))
         var seen = Set<UUID>()
         favoriteBoardIDs = (defaults.stringArray(forKey: "board.favorites") ?? [])
@@ -277,7 +282,12 @@ struct BoardContentView: View {
 
     private func setEditing(_ value: Bool) {
         navigation.sourceMode = value
-        navigation.editorSession(for: board, store: store).setSourceMode(value)
+        navigation.editorSession(for: board, store: store).setMode(editing: value, raw: navigation.rawSource)
+    }
+
+    private func setRawSource(_ value: Bool) {
+        navigation.rawSource = value
+        navigation.editorSession(for: board, store: store).setMode(editing: editing, raw: value)
     }
 
     private func insertTemplate(_ template: BoardMarkdownTemplate) {
@@ -352,9 +362,12 @@ struct BoardContentView: View {
                     .help("插入模板").accessibilityLabel("插入模板")
                     // 编辑时 ⌘Enter 由编辑器自己处理（保存后回到浏览）；浏览时 ⌘Enter 进入编辑。
                     if editing {
-                        headerButton("eye", "保存并预览 · ⌘↩", active: true) { setEditing(false) }
+                        headerButton("chevron.left.forwardslash.chevron.right",
+                                     navigation.rawSource ? "回到所见即所得编辑" : "显示完整 Markdown 源码",
+                                     active: navigation.rawSource) { setRawSource(!navigation.rawSource) }
+                        headerButton("eye", "保存并浏览 · ⌘↩", active: true) { setEditing(false) }
                     } else {
-                        headerButton("chevron.left.forwardslash.chevron.right", "编辑 Markdown 源码 · ⌘↩") { setEditing(true) }
+                        headerButton("pencil", "编辑（光标停在点过的位置） · ⌘↩") { setEditing(true) }
                             .keyboardShortcut(.return, modifiers: .command)
                     }
                 }
@@ -465,7 +478,7 @@ private struct BoardEditorArea: View {
                     ScrollView { BoardMarkdownPreview(store: store, board: board).padding(12) }
                 }
             } else {
-                BoardLiveEditor(session: liveEditor, sourceMode: navigation.sourceMode)
+                BoardLiveEditor(session: liveEditor, editing: navigation.sourceMode, raw: navigation.rawSource)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }

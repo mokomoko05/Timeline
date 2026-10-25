@@ -387,6 +387,112 @@ final class BoardLiveEditorTests: XCTestCase {
         try await webView.evaluateJavaScript("document.querySelector('.cm-content').textContent") as? String ?? ""
     }
 
+    /// 在元素里横向 `fraction` 处模拟一次单击（按下、松开），返回点击的纵坐标。
+    private static func clickScript(_ element: String, fraction: Double = 0.3) -> String {
+        """
+        (()=>{const el=\(element);const r=el.getBoundingClientRect();const x=r.left+r.width*\(fraction),y=r.top+r.height/2;
+        const o={bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,detail:1};
+        el.dispatchEvent(new MouseEvent('mousedown',o));el.dispatchEvent(new MouseEvent('mouseup',o));return y;})()
+        """
+    }
+
+    private static func lineContaining(_ text: String) -> String {
+        "[...document.querySelectorAll('.cm-line')].find(l=>l.textContent.includes('\(text)'))"
+    }
+
+    /// 浏览时点标题文字的任何地方都能收起 / 展开，不用瞄准左边的小箭头。
+    func testClickingAnywhereOnAHeadingWhileBrowsingTogglesTheFold() async throws {
+        let fixture = try LiveFixture(source: Self.foldSource)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        try await browse(fixture.session, fixture.webView)
+        _ = try await fixture.webView.evaluateJavaScript(Self.clickScript("document.querySelector('.cm-line.cm-foldable')", fraction: 0.6))
+        var text = try await visibleText(fixture.webView)
+        XCTAssertFalse(text.contains("alpha"), "点标题本身就收起")
+        XCTAssertTrue(text.contains("beta"))
+        _ = try await fixture.webView.evaluateJavaScript(Self.clickScript("document.querySelector('.cm-line.cm-foldable')", fraction: 0.2))
+        text = try await visibleText(fixture.webView)
+        XCTAssertTrue(text.contains("alpha"), "再点一次展开")
+        let unchanged = try await fixture.snapshot()["source"] as? String
+        XCTAssertEqual(unchanged, Self.foldSource)
+    }
+
+    /// 浏览时点下的位置有一根光标；进入编辑（包括完整源码）时光标就在那里、那一行留在屏幕上原来的高度，回到浏览时光标还在。
+    func testBrowseCaretCarriesIntoEditingAndStaysInPlace() async throws {
+        let source = (1...30).map { "Paragraph \($0) **bold** text" }.joined(separator: "\n\n")
+        let fixture = try LiveFixture(source: source)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        try await browse(fixture.session, fixture.webView)
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-scroller').scrollTop=200")
+        try await Task.sleep(for: .milliseconds(60))
+        let line = Self.lineContaining("Paragraph 9 ")
+        _ = try await fixture.webView.evaluateJavaScript(Self.clickScript(line, fraction: 0.15))
+        var caret: Int?
+        for _ in 0..<50 {
+            caret = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.cm-browse-caret').length") as? Int
+            if caret == 1 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(caret, 1, "浏览时看得到点下的位置")
+        if let path = ProcessInfo.processInfo.environment["TIMELINE_CARET_SNAPSHOT"] {
+            let image = try await fixture.webView.takeSnapshot(configuration: nil)
+            let bitmap = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        }
+        let clicked = try await fixture.snapshot()
+        let head = try XCTUnwrap(clicked["head"] as? Int)
+        let lineStart = (source as NSString).range(of: "Paragraph 9 ").location
+        XCTAssertTrue((lineStart...(lineStart + 26)).contains(head), "光标在点下的那一行：\(head)")
+        let before = try await fixture.webView.evaluateJavaScript("\(line).getBoundingClientRect().top")
+        let topBefore = try XCTUnwrap(before as? Double)
+
+        fixture.session.setMode(editing: true, raw: true)
+        for _ in 0..<50 {
+            if (try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').isContentEditable") as? Bool) == true { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try await Task.sleep(for: .milliseconds(80))
+        let editing = try await fixture.snapshot()
+        XCTAssertEqual(editing["anchor"] as? Int, head, "进入编辑时光标就在浏览时点下的位置")
+        XCTAssertEqual(editing["head"] as? Int, head)
+        let after = try await fixture.webView.evaluateJavaScript("\(line).getBoundingClientRect().top")
+        let topAfter = try XCTUnwrap(after as? Double)
+        XCTAssertEqual(topAfter, topBefore, accuracy: 4, "那一行留在屏幕上原来的高度")
+        let raw = try await visibleText(fixture.webView)
+        XCTAssertTrue(raw.contains("**bold**"), "完整源码")
+
+        fixture.session.setMode(editing: false, raw: true)
+        try await browse(fixture.session, fixture.webView)
+        var caretBack: Int?
+        for _ in 0..<50 {
+            caretBack = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.cm-browse-caret').length") as? Int
+            if caretBack == 1 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(caretBack, 1, "回到浏览时在刚才编辑的地方留着光标")
+    }
+
+    /// 默认的编辑是所见即所得：正文照样渲染，只有光标所在的那一行露出 Markdown 标记。
+    func testLiveEditingShowsMarkupOnlyOnTheCaretLine() async throws {
+        let fixture = try LiveFixture(source: "# Title\n\n**Strong**\n\nAfter")
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        try await browse(fixture.session, fixture.webView)
+        _ = try await fixture.webView.evaluateJavaScript(Self.clickScript(Self.lineContaining("After"), fraction: 0.05))
+        fixture.session.setMode(editing: true, raw: false)
+        for _ in 0..<50 {
+            if (try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').isContentEditable") as? Bool) == true { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        var text = try await visibleText(fixture.webView)
+        XCTAssertFalse(text.contains("# Title") || text.contains("**Strong**"), text)
+        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.select(2)")
+        text = try await visibleText(fixture.webView)
+        XCTAssertTrue(text.contains("# Title"), "光标所在的标题行露出标记")
+        XCTAssertFalse(text.contains("**Strong**"))
+    }
+
     /// 浏览时标题可以收起到下一个同级标题为止（不越过折叠块）；标题和折叠块的展开状态按工作板记住，重新打开照旧。
     func testHeadingsFoldWhileBrowsingAndFoldStateIsRemembered() async throws {
         let defaults = InMemoryDefaults()

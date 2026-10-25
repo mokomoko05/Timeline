@@ -1007,8 +1007,6 @@
 "插入折叠内容（details / summary）" = "Insert collapsible section (details / summary)";
 "保存 / 提交编辑（所有输入框）" = "Save / submit edits (all inputs)";
 "保存并回到浏览；浏览时进入编辑" = "Save and return to browsing; edit while browsing";
-"保存并预览 · ⌘↩" = "Save and preview · ⌘↩";
-"编辑 Markdown 源码 · ⌘↩" = "Edit Markdown source · ⌘↩";
 "展开这个月" = "Expand month";
 "收起这个月" = "Collapse month";
 "展开标题下的内容" = "Expand section";
@@ -1031,3 +1029,7 @@
 "每日总结" = "Daily summary";
 "章节" = "Chapters";
 "笔记或日记" = "Notes or journal";
+"回到所见即所得编辑" = "Back to WYSIWYG editing";
+"显示完整 Markdown 源码" = "Show full Markdown source";
+"保存并浏览 · ⌘↩" = "Save and browse · ⌘↩";
+"编辑（光标停在点过的位置） · ⌘↩" = "Edit (caret starts where you clicked) · ⌘↩";

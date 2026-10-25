@@ -11,6 +11,8 @@ const toggleDetails = StateEffect.define();
 const folds = new Map();
 const refold = StateEffect.define();
 const flashEffect = StateEffect.define();
+// 浏览时点下的位置：画一根光标、淡淡铺亮这一行，进入编辑时光标就落在这里。
+const setBrowseCaret = StateEffect.define();
 const external = Annotation.define();
 const externalChange = external.of(true);
 const editable = new Compartment();
@@ -20,6 +22,9 @@ let composing = false;
 let currentReadOnly, currentSourceMode, currentPreviewOnly;
 let labels = {};
 let copyRequest = 0;
+// 浏览时拖选的范围（不写进编辑器状态，免得打断系统原生选区）；进入编辑时变成编辑器的选区。
+let browseRange = null;
+let pointerDown = null;
 const pendingCopies = new Map();
 
 function editability(readOnly) {
@@ -178,6 +183,86 @@ function setFold(key, folded) {
   folds.set(key, folded);
   post({kind: "fold", key, value: folded});
   view.dispatch({effects: refold.of(null)});
+}
+
+const browseCaret = StateField.define({
+  create() { return null; },
+  update(value, transaction) {
+    for (const effect of transaction.effects) if (effect.is(setBrowseCaret)) value = effect.value;
+    if (value != null && transaction.docChanged) value = transaction.changes.mapPos(value);
+    if (value != null && !transaction.state.readOnly) value = null;
+    return value;
+  },
+  // 光标用标记画在字的左边缘（行尾画在前一个字的右边缘，空行画在行首），不插进额外的元素，双击选词不受影响。
+  provide: field => EditorView.decorations.compute([field], state => {
+    const position = state.field(field);
+    if (position == null) return Decoration.none;
+    const line = state.doc.lineAt(position);
+    const ranges = [];
+    if (position < line.to) ranges.push(Decoration.mark({class: "cm-browse-caret"}).range(position, position + 1));
+    else if (position > line.from) ranges.push(Decoration.mark({class: "cm-browse-caret cm-browse-caret-end"}).range(position - 1, position));
+    ranges.unshift(Decoration.line({class: "cm-browse-line" + (line.length ? "" : " cm-browse-empty")}).range(line.from));
+    return Decoration.set(ranges, true);
+  })
+});
+
+// 浏览时松开鼠标：没有拖选就把光标放在点下的位置（点在可折叠的标题上同时收起 / 展开它）；拖选了就记下范围。
+function browsePointerUp(event) {
+  const start = pointerDown;
+  pointerDown = null;
+  if (!view?.state.readOnly || !start || event.button !== 0) return;
+  if (event.target.closest?.("button, .board-check, .board-details, .board-open-link, .board-copy-code, [data-url]")) return;
+  const selection = window.getSelection();
+  const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4;
+  if (selection && !selection.isCollapsed && selection.rangeCount && view.contentDOM.contains(selection.anchorNode)) {
+    try {
+      const range = selection.getRangeAt(0);
+      const from = view.posAtDOM(range.startContainer, range.startOffset), to = view.posAtDOM(range.endContainer, range.endOffset);
+      const backward = selection.anchorNode === range.endContainer && selection.anchorOffset === range.endOffset && from !== to;
+      browseRange = backward ? {anchor: to, head: from} : {anchor: from, head: to};
+    } catch { browseRange = null; }
+    if (view.state.field(browseCaret) != null) view.dispatch({effects: setBrowseCaret.of(null)});
+    return;
+  }
+  if (moved || event.detail > 1) return;
+  browseRange = null;
+  let position = view.posAtCoords({x: event.clientX, y: event.clientY});
+  if (position == null) return;
+  const clickedLine = event.target.closest?.(".cm-line");
+  if (clickedLine) {
+    try { position = Math.min(position, view.state.doc.lineAt(view.posAtDOM(clickedLine, 0)).to); } catch {}
+  }
+  const effects = [setBrowseCaret.of(position)];
+  const lineElement = event.target.closest?.(".cm-line.cm-foldable");
+  if (lineElement) {
+    // 收起的标题右边点下去，位置会落在被隐藏的那一节里：按点中的那一行找标题。
+    const lineFrom = view.state.doc.lineAt(view.posAtDOM(lineElement, 0)).from;
+    const heading = view.state.field(live, false)?.headings.find(item => item.from === lineFrom);
+    if (heading) {
+      const folded = folds.get(heading.key) === true;
+      folds.set(heading.key, !folded);
+      post({kind: "fold", key: heading.key, value: !folded});
+      effects.push(refold.of(null));
+    }
+  }
+  view.dispatch({effects, selection: {anchor: position}});
+}
+
+// 切换浏览 / 编辑 / 源码时，光标（或屏幕最上面那一行）留在屏幕上原来的高度，不会跳到别处去找不着。
+function captureAnchor(position) {
+  const box = view.scrollDOM.getBoundingClientRect();
+  const coords = position != null ? view.coordsAtPos(position) : null;
+  if (coords && coords.top >= box.top && coords.bottom <= box.bottom) return {position, offset: coords.top - box.top};
+  const top = view.posAtCoords({x: box.left + box.width / 2, y: box.top + 2}, false);
+  const topCoords = view.coordsAtPos(top);
+  return {position: top, offset: topCoords ? topCoords.top - box.top : 0};
+}
+
+function restoreAnchor(anchor) {
+  view.requestMeasure({
+    read: () => ({coords: view.coordsAtPos(anchor.position), box: view.scrollDOM.getBoundingClientRect()}),
+    write: ({coords, box}) => { if (coords) view.scrollDOM.scrollTop += coords.top - box.top - anchor.offset; }
+  });
 }
 
 class CheckWidget extends WidgetType {
@@ -462,7 +547,7 @@ window.boardEditor = {
         selection: {anchor: config.readOnly ? 0 : config.source.length},
         extensions: [history(), drawSelection({cursorBlinkRate: 0}), rectangularSelection(), EditorView.lineWrapping,
           indentOnInput(), bracketMatching(), markdown({base: markdownLanguage}), syntaxHighlighting(highlighting),
-          livePreview.of(config.sourceMode ? [] : live),
+          livePreview.of(config.sourceMode ? [] : live), browseCaret,
           EditorView.atomicRanges.of(view => view.state.field(live, false)?.decorations.update({filter: (_from, _to, decoration) => decoration.spec.atomic === true}) ?? Decoration.none),
           editable.of(editability(config.readOnly || config.previewOnly)),
           // 撤销 / 重做在浏览和编辑时都可用；没有可撤销的也吞掉按键，不落到应用别处的撤销上。
@@ -525,8 +610,10 @@ window.boardEditor = {
       view.dom.addEventListener("mousedown", event => {
         if (!view.state.readOnly || event.button !== 0) return;
         if (event.target.closest?.("button, .board-check, .board-details, .board-open-link, .board-copy-code")) return;
+        pointerDown = {x: event.clientX, y: event.clientY};
         event.stopPropagation();
       }, true);
+      view.dom.addEventListener("mouseup", browsePointerUp);
     } else {
       if (typeof config.source === "string" && config.source !== view.state.doc.toString() && !view.composing && !composing) {
         const old = view.state.selection.main;
@@ -535,9 +622,25 @@ window.boardEditor = {
                        annotations: [externalChange, Transaction.addToHistory.of(false)]});
       }
       const effects = [];
-      if (currentReadOnly !== config.readOnly || currentPreviewOnly !== config.previewOnly) effects.push(editable.reconfigure(editability(config.readOnly || config.previewOnly)));
+      const wasBrowsing = !!(currentReadOnly || currentPreviewOnly), browsing = !!(config.readOnly || config.previewOnly);
+      if (wasBrowsing !== browsing) effects.push(editable.reconfigure(editability(browsing)));
       if (currentSourceMode !== config.sourceMode) effects.push(livePreview.reconfigure(config.sourceMode ? [] : live));
-      if (effects.length) view.dispatch({effects});
+      if (effects.length) {
+        const caret = view.state.field(browseCaret);
+        const transaction = {effects};
+        if (wasBrowsing && !browsing) {
+          // 进入编辑：浏览时点下的位置或拖选的范围变成编辑器的光标 / 选区。
+          transaction.selection = browseRange ?? {anchor: caret ?? view.state.selection.main.head};
+        } else if (!wasBrowsing && browsing) {
+          // 回到浏览：在刚才编辑的地方留一根光标。
+          effects.push(setBrowseCaret.of(view.state.selection.main.head));
+        }
+        const anchor = captureAnchor(browseRange?.head ?? caret ?? view.state.selection.main.head);
+        browseRange = null;
+        view.dispatch(transaction);
+        restoreAnchor(anchor);
+        if (wasBrowsing && !browsing) view.focus();
+      }
     }
     currentReadOnly = config.readOnly;
     currentPreviewOnly = config.previewOnly;
