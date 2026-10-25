@@ -225,7 +225,8 @@ public final class JournalStore: ObservableObject {
     /// 固定关联的待办（不计时）。读 `pinnedTask` 才会排除已删除、已完成的。
     @Published public internal(set) var pinnedTaskID: UUID?
     public let directory: URL
-    @Published public private(set) var hasPendingSave = false
+    /// 只供保存逻辑判断，界面不读；不发布，否则每次写盘完成清除标记时都会让所有窗口再重算一遍。
+    public private(set) var hasPendingSave = false
     private var pendingSave: Task<Void, Never>?
     public let undoManager = UndoManager()
     /// 编码和写盘的串行队列。
