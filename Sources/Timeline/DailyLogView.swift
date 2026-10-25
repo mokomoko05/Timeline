@@ -622,6 +622,8 @@ private struct DailyLogRow: View {
     /// 这条日志的标签面板。
     @State private var editingTags = false
     @State private var hovered = false
+    /// 标签 / 关联待办的浮窗还开着：鼠标移进浮窗时浮出的按钮不能收起。
+    @State private var holding = false
 
     var body: some View {
         line.animation(Motion.quick, value: expanded)
@@ -739,12 +741,13 @@ private struct DailyLogRow: View {
     /// 悬停时才出现的小胶囊：复制、编辑，加上选择圈；已经选了几条之后，选择圈常驻，方便继续点选。
     @ViewBuilder
     private var floatingActions: some View {
-        let showsButtons = hovered && !store.isReadOnly
+        let showsButtons = (hovered || holding) && !store.isReadOnly
         let showsSelect = hovered || selection.selected || selection.anySelected
         if showsButtons || showsSelect {
             HStack(spacing: 0) {
                 if showsButtons {
                     EntryMetadataButtons(store: store, log: log, date: date)
+                        .environment(\.holdHoverActions) { holding = $0 }
                     ItemActionButton(symbol: "doc.on.doc", title: log.copyText == nil ? "没有可复制的文字（只有图片）" : "复制文字", compact: true) { copy(log) }
                         .disabled(log.copyText == nil)
                     ItemActionButton(symbol: "pencil", title: "编辑这条日志", compact: true) { edit(log, date) }

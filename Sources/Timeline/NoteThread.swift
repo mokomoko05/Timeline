@@ -48,6 +48,8 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
     @ViewBuilder let content: () -> Content
     @ViewBuilder let actions: () -> Actions
     @State private var hovered = false
+    /// 按钮弹出的浮窗还开着：鼠标移进浮窗时按钮不能收起。
+    @State private var holding = false
 
     private var beadY: CGFloat { typography.pt(8) }
 
@@ -59,7 +61,7 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
                     meta()
                     Spacer(minLength: 8)
                     // 悬停时才构建：每行常驻四五个透明按钮，长笔记页会多占几十 MB。行高按按钮高度预留，出现时不跳动。
-                    if hovered { actions() }
+                    if hovered || holding { actions().environment(\.holdHoverActions) { holding = $0 } }
                 }
                 .font(.system(size: typography.pt(11))).monospacedDigit()
                 .foregroundStyle(Palette.muted)

@@ -1,6 +1,35 @@
 import SwiftUI
 import TimelineCore
 
+/// 悬停才出现的行内按钮弹出浮窗时，告诉所在的行「浮窗还开着」：鼠标移进浮窗就离开了这一行，
+/// 行如果因此收起按钮，浮窗会跟着它的锚点一起消失。
+private struct HoverActionHoldKey: EnvironmentKey {
+    static let defaultValue: (Bool) -> Void = { _ in }
+}
+
+extension EnvironmentValues {
+    var holdHoverActions: (Bool) -> Void {
+        get { self[HoverActionHoldKey.self] }
+        set { self[HoverActionHoldKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// 浮窗开着时让所在的行保留悬停按钮。
+    func holdsHoverActions(while presented: Bool) -> some View { modifier(HoverActionHolder(presented: presented)) }
+}
+
+private struct HoverActionHolder: ViewModifier {
+    let presented: Bool
+    @Environment(\.holdHoverActions) private var hold
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: presented) { hold($0) }
+            .onDisappear { if presented { hold(false) } }
+    }
+}
+
 struct MetadataSymbol: View {
     @Environment(\.typography) private var typography
     let symbol: String
@@ -128,6 +157,7 @@ struct TagSelectionButton: View {
             .buttonStyle(.plain).raisedOnHover(radius: 5)
             .help("标签").accessibilityLabel("标签")
             .popover(isPresented: $showing, arrowEdge: .bottom) { TagSelectionPopover(store: store, tags: $tags) }
+            .holdsHoverActions(while: showing)
             .disabled(store.isReadOnly)
     }
 }

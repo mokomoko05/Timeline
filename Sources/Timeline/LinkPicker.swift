@@ -126,6 +126,7 @@ struct LinkPickerButton<Label: View>: View {
             .popover(isPresented: $showing, arrowEdge: .bottom) {
                 LinkPickerView(store: store, current: current, allowsNone: allowsNone, contextTags: contextTags, pick: pick)
             }
+            .holdsHoverActions(while: showing)
     }
 }
 
