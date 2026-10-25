@@ -567,6 +567,9 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
                     self?.refresh()
                 }, resize: { [weak self] size in self?.resize(to: size) })
             let host = NSHostingView(rootView: LocalizedRoot { content })
+            // 窗口大小和位置只由 resize(to:) 决定（收起时要贴边）；宿主视图自己改窗口大小会保留原来的左边，
+            // 小胶囊就停在面板原来的位置上。
+            host.sizingOptions = []
             host.setFrameSize(size)
             // 不激活的浮动窗口：点它不会抢走前台，否则会被判定为离开目标页面。
             let panel = FocusPanel(contentRect: NSRect(origin: .zero, size: size),
@@ -608,8 +611,7 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
 
     /// 内容大小变了。收成小伙伴时贴到离得近的那条屏幕左 / 右边缘；展开时从那条边向内展开，底边不动。
     private func resize(to size: CGSize) {
-        guard let panel, size.width > 40, size.height > 30,
-              abs(panel.frame.height - size.height) > 0.5 || abs(panel.frame.width - size.width) > 0.5 else { return }
+        guard let panel, size.width > 40, size.height > 30 else { return }
         let screen = (panel.screen ?? NSScreen.main)?.visibleFrame ?? panel.frame
         let compact = size.width < Self.workspaceSize.width - 20
         let dockedRight = panel.frame.midX >= screen.midX
@@ -624,7 +626,9 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
             frame.origin.x = min(max(frame.origin.x, screen.minX + Self.edgeInset), screen.maxX - size.width - Self.edgeInset)
         }
         frame.origin.y = min(max(panel.frame.minY, screen.minY + Self.edgeInset), screen.maxY - size.height)
+        guard frame.integral != panel.frame.integral else { return }
         panel.setFrame(frame, display: true)
+        panel.contentView?.frame = NSRect(origin: .zero, size: frame.size)
         panel.invalidateShadow()
     }
 
@@ -832,6 +836,8 @@ struct FocusPanelView: View {
     @State private var collapseTask: Task<Void, Never>?
     /// 设计预览用：测试环境里也显示收起的样子。
     var previewCompanion = false
+    /// 离屏探测用：测试环境里让真实的控制器也走收起流程。
+    static var allowCompanionInTests = false
     @AppStorage(Prefs.focusDefaultMinutes) private var defaultMinutes = Prefs.defaultFocusMinutes
     @AppStorage(Prefs.taskSortMode) private var taskSort = TaskSortMode.deadline.rawValue
     @State private var minutes: String
@@ -864,7 +870,8 @@ struct FocusPanelView: View {
 
     /// 只有专注进行中、没在写反馈、没在输入时才收起；测试环境始终展开，便于检查面板内容。
     private var showsCompanion: Bool {
-        guard companionEnabled, !expanded, !Headless.active || previewCompanion, let _ = session.active, !session.needsReflection else { return false }
+        guard companionEnabled, !expanded, !Headless.active || previewCompanion || Self.allowCompanionInTests,
+              let _ = session.active, !session.needsReflection else { return false }
         // 有没发出去的笔记就保持展开，免得输入到一半被收起。
         return draft.text.isEmpty && draft.images.isEmpty
     }
@@ -881,8 +888,11 @@ struct FocusPanelView: View {
         }
         .foregroundStyle(Palette.ink)
         .tint(Palette.accent)
-        .background(GeometryReader { proxy in Color.clear.preference(key: FocusPanelSizeKey.self, value: proxy.size) })
+        // 按内容的自然大小量（不被窗口当前的大小撑开），窗口据此缩成小胶囊或展开。
+        .fixedSize()
+        .overlay(GeometryReader { proxy in Color.clear.preference(key: FocusPanelSizeKey.self, value: proxy.size) })
         .onPreferenceChange(FocusPanelSizeKey.self, perform: resize)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .onHover { inside in
             if inside { expand() } else { scheduleCollapse() }
         }

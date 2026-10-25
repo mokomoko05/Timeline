@@ -216,3 +216,72 @@ final class BoardBrowseSelectionProbe: XCTestCase {
         XCTAssertEqual(store.boards.first?.markdown, source)
     }
 }
+
+/// 离屏探测：宿主视图是否会把窗口卡在完整面板的宽度上，导致收起后缩不小。
+@MainActor
+final class FocusDockProbe: XCTestCase {
+    final class Model: ObservableObject { @Published var compact = false }
+    struct Probe: View {
+        @ObservedObject var model: Model
+        var body: some View {
+            Group {
+                if model.compact { Color.red.frame(width: 213, height: 46) } else { Color.blue.frame(width: 340, height: 158) }
+            }
+        }
+    }
+
+    func testShrinkingTheWindowToTheCompanionSize() async throws {
+        guard ProcessInfo.processInfo.environment["TIMELINE_DESIGN_PREVIEW"] != nil else { throw XCTSkip("离屏探测，按需运行") }
+        for options in [nil, NSHostingSizingOptions()] as [NSHostingSizingOptions?] {
+            let model = Model()
+            let host = NSHostingView(rootView: Probe(model: model))
+            if let options { host.sizingOptions = options }
+            let window = QuietWindow(contentRect: NSRect(x: 600, y: 200, width: 340, height: 158), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderBack(nil)
+            model.compact = true
+            host.layoutSubtreeIfNeeded()
+            window.setFrame(NSRect(x: 900, y: 200, width: 213, height: 46), display: true)
+            try await Task.sleep(for: .milliseconds(50))
+            print("DOCK PROBE options=\(options == nil ? "default" : "[]") frame=\(window.frame) min=\(window.contentMinSize)")
+            window.contentView = nil
+            window.orderOut(nil)
+        }
+    }
+}
+
+@MainActor
+final class FocusControllerDockProbe: XCTestCase {
+    func testCompanionDocksToTheNearestScreenEdge() async throws {
+        guard ProcessInfo.processInfo.environment["TIMELINE_DESIGN_PREVIEW"] != nil else { throw XCTSkip("离屏探测，按需运行") }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "dock-probe-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        FocusPanelView.allowCompanionInTests = true
+        defer { FocusPanelView.allowCompanionInTests = false }
+        let store = JournalStore(directory: directory)
+        store.addTodo("探测任务", on: Date())
+        let session = FocusSession()
+        session.store = store
+        let controller = FocusPanelController(session: session, defaults: defaults)
+        session.start(task: try XCTUnwrap(store.tasks().first), url: nil, plannedSeconds: 1500)
+        controller.refresh()
+        try await Task.sleep(for: .seconds(3.5))
+        let panel = try XCTUnwrap(NSApp.windows.first { String(describing: type(of: $0)).contains("FocusPanel") && $0.isVisible })
+        let screen = (panel.screen ?? NSScreen.main)!.visibleFrame
+        print("CONTROLLER DOCK frame=\(panel.frame) screen=\(screen)")
+        XCTAssertEqual(panel.frame.maxX, screen.maxX - 6, accuracy: 1, "右半边收起时贴右边")
+        XCTAssertLessThan(panel.frame.width, 300)
+        // 拖到左半边：松手后贴到左边。
+        panel.setFrameOrigin(NSPoint(x: screen.minX + 200, y: panel.frame.minY + 120))
+        try await Task.sleep(for: .milliseconds(700))
+        print("CONTROLLER DOCK left frame=\(panel.frame)")
+        XCTAssertEqual(panel.frame.minX, screen.minX + 6, accuracy: 1, "左半边松手后贴左边")
+        XCTAssertGreaterThan(panel.frame.minY, screen.minY + 100, "保留拖到的高度")
+        session.stop(reason: "探测结束")
+        panel.orderOut(nil)
+    }
+}
