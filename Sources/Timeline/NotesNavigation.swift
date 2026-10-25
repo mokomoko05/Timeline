@@ -82,6 +82,9 @@ final class NotesNavigation: ObservableObject {
         outlineMode = defaults?.string(forKey: prefix + ".outlineMode").flatMap(NotesOutlineMode.init(rawValue:)) ?? .chapters
     }
 
+    /// 打开后要滚到并闪一下的那条笔记（来自全局搜索）。不存进偏好。
+    @Published var revealNote: UUID?
+
     func open(task id: UUID) {
         if tagSelection != nil { tagSelection = nil }
         if selection != id { selection = id }

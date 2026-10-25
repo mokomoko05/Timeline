@@ -437,3 +437,28 @@ final class FocusRailWindowProbe: XCTestCase {
         panel.orderOut(nil)
     }
 }
+
+extension DesignPreviewTests {
+    func testRenderSearchPanel() throws {
+        let store = JournalStore(directory: directory)
+        let board = try XCTUnwrap(store.ensureBoard(for: .tag("论文")))
+        store.setBoardMarkdown("# 论文阅读\n\n- [ ] 读完论文的方法部分\n- 记下两个问题", for: board.id)
+        let backdrop = LinearGradient(colors: [Color(red: 0.35, green: 0.45, blue: 0.75), Color(red: 0.85, green: 0.55, blue: 0.45)],
+                                      startPoint: .topLeading, endPoint: .bottomTrailing)
+        for dark in [true, false] {
+            for query in ["", "论文"] {
+                let model = GlobalSearchModel()
+                model.store = store
+                model.query = query
+                model.recompute()
+                model.selection = 1
+                let height = query.isEmpty ? GlobalSearchController.compactHeight : GlobalSearchController.expandedHeight
+                try render(query.isEmpty ? "search-empty" : "search", size: NSSize(width: 720, height: height + 60), dark: dark, ZStack {
+                    backdrop
+                    GlobalSearchView(model: model, open: { _ in }, close: {}, resize: { _ in })
+                        .frame(width: GlobalSearchController.width, height: height)
+                })
+            }
+        }
+    }
+}

@@ -21,8 +21,9 @@ final class HotKeyBindingTests: XCTestCase {
     func testNotesShortcutIsAGlobalBindingDefaultingToControlOptionN() {
         let defaults = defaults()
         XCTAssertEqual(HotKeyAction.notes.defaultBinding.label, "⌃⌥N")
-        XCTAssertEqual(Set(HotKeyAction.allCases), [.main, .shell, .log, .notes, .focusPanel, .board])
+        XCTAssertEqual(Set(HotKeyAction.allCases), [.main, .shell, .log, .notes, .focusPanel, .board, .search])
         XCTAssertEqual(HotKeyAction.board.defaultBinding.label, "⌃⌥M")
+        XCTAssertEqual(HotKeyAction.search.defaultBinding.label, "⌃⌥S")
         XCTAssertFalse(HotKeyAction.allCases.map(\.rawValue).contains("todo"))
         let custom = HotKeyBinding(keyCode: kVK_ANSI_K, modifiers: cmdKey | optionKey)
         HotKeyStore.save(custom, for: .notes, defaults: defaults)

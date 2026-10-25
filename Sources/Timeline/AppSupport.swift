@@ -225,6 +225,8 @@ enum AppRouter {
     static var togglePanel: (HotKeyAction) -> Void = { _ in }
     /// 打开日记并定位到某条日志。
     static var openLog: (Date, UUID) -> Void = { _, _ in }
+    /// 打开日记的某一天。
+    static var openJournal: (Date) -> Void = { _ in }
     /// 隐藏主窗口（和全局快捷键再按一次相同）。
     static var hideMain: () -> Void = {}
 }

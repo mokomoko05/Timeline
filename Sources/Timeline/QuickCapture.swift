@@ -155,6 +155,7 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
         summaryItem.isEnabled = false
         menu.addItem(summaryItem)
         menu.addItem(.separator())
+        hotKeyItem("全局搜索…", .search, symbol: "magnifyingglass")
         let todoItem = menu.addItem(withTitle: AppLocalized("快速添加待办…"), action: #selector(captureTodo), keyEquivalent: "")
         todoItem.target = self
         todoItem.image = NSImage(systemSymbolName: "plus.circle", accessibilityDescription: nil)

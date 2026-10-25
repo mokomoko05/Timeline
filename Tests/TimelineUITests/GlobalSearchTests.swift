@@ -29,6 +29,94 @@ final class GlobalSearchTests: XCTestCase {
 }
 
 @MainActor
+final class GlobalSearchPanelTests: XCTestCase {
+    private let day = JournalDates.calendar.date(from: DateComponents(year: 2026, month: 10, day: 7))!
+
+    private func makeStore() -> JournalStore {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return JournalStore(directory: directory)
+    }
+
+    /// 工作板里每一处命中都单列一行，带上行号（点开跳到那一行）；行首的 Markdown 记号去掉。
+    func testBoardHitsCarryTheirLineNumbers() throws {
+        let store = makeStore()
+        let board = try XCTUnwrap(store.ensureBoard(for: .tag("Reading")))
+        store.setBoardMarkdown("# Transformer 议程\n\n- [ ] 读 transformer 论文\n其他\n> transformer 引用", for: board.id)
+        let hits = GlobalSearch.hits(store: store, query: "transformer").filter { $0.kind == .board }
+        XCTAssertEqual(hits.map(\.title), ["Transformer 议程", "读 transformer 论文", "transformer 引用"])
+        XCTAssertEqual(hits.map(\.target), [1, 3, 5].map { .board(.tag("Reading"), line: $0) })
+        XCTAssertTrue(GlobalSearch.hits(store: store, query: "  ").isEmpty, "空搜索不列结果")
+    }
+
+    /// 文字只在图片里：结果标成图片，标题是图片里命中的那一行，带上那张图；有关联待办的日志在笔记里打开。
+    func testImageTextHitsCarryTheImageAndLinkedLogsOpenUnderTheirTask() throws {
+        let store = makeStore()
+        let task = try XCTUnwrap(store.addParsedTodo("读论文", on: day))
+        let note = try XCTUnwrap(store.quickLogEntry("截图", images: ["shot.png"], taskID: task.id, on: day, now: day.addingTimeInterval(60)).entry)
+        store.setImageTexts(["shot.png": "第一行\n注意力机制 Attention\n最后"])
+        let plain = try XCTUnwrap(store.quickLogEntry("聊了 attention 的细节", on: day, now: day.addingTimeInterval(120)).entry)
+        store.setSummary("今天\n收获：attention", on: day)
+
+        let hits = GlobalSearch.hits(store: store, query: "attention")
+        let image = try XCTUnwrap(hits.first { $0.kind == .image })
+        XCTAssertEqual(image.title, "注意力机制 Attention")
+        XCTAssertEqual(image.image, store.imageURL("shot.png"))
+        XCTAssertEqual(image.target, .log(date: day, id: note.id, taskID: task.id))
+        let log = try XCTUnwrap(hits.first { $0.kind == .log })
+        XCTAssertEqual(log.target, .log(date: day, id: plain.id, taskID: nil), "没关联待办的在日记里打开")
+        XCTAssertEqual(hits.last?.kind, .summary)
+        XCTAssertEqual(hits.last?.title, "收获：attention")
+
+        let model = GlobalSearchModel()
+        model.store = store
+        model.query = "attention"
+        model.recompute()
+        XCTAssertEqual(model.count(.images), 1)
+        XCTAssertEqual(model.count(.logs), 2, "日志和每日总结")
+        model.scope = .images
+        XCTAssertEqual(model.hits.map(\.kind), [.image])
+    }
+
+    private static var keepAlive: [NotesWindowController] = []
+
+    /// 笔记结果：笔记窗口打开到那个待办后，接住要定位的那条笔记（滚过去并闪一下）。
+    func testNotesPageTakesTheNoteToReveal() throws {
+        let store = makeStore()
+        let task = try XCTUnwrap(store.addParsedTodo("读论文", on: day))
+        let note = try XCTUnwrap(store.quickLogEntry("要找的那条", taskID: task.id, on: day).entry)
+        let nav = NotesNavigation(defaults: InMemoryDefaults())
+        let controller = NotesWindowController(nav: nav)
+        Self.keepAlive.append(controller)
+        nav.revealNote = note.id
+        controller.show(store: store, taskID: task.id, reveal: { _ in }, openDay: { _ in })
+        defer { controller.close() }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+        XCTAssertNil(nav.revealNote, "笔记页接住了定位请求")
+        XCTAssertEqual(nav.selection, task.id)
+    }
+
+    /// 面板不依赖主窗口：直接打开、关闭；选中工作板结果后打开工作板并跳到那一行。
+    func testPanelOpensOnItsOwnAndOpensBoardHitsAtTheirLine() throws {
+        let store = makeStore()
+        let board = try XCTUnwrap(store.ensureBoard(for: .tag("Panel")))
+        store.setBoardMarkdown("一\n二\n目标行 needle", for: board.id)
+        let controller = GlobalSearchController.shared
+        controller.show(store: store)
+        XCTAssertTrue(controller.isVisible)
+        controller.model.query = "needle"
+        controller.model.recompute()
+        let hit = try XCTUnwrap(controller.model.hits.first)
+        XCTAssertEqual(hit.target, .board(.tag("Panel"), line: 3))
+        controller.open(hit)
+        XCTAssertFalse(controller.isVisible, "打开结果后面板收起")
+        XCTAssertEqual(BoardWindowController.shared.navigation.selection, board.id)
+        BoardWindowController.shared.hide()
+        controller.model.query = ""
+    }
+}
+
+@MainActor
 final class NotesSearchShortcutTests: XCTestCase {
     private static var keepAlive: [NotesWindowController] = []
 

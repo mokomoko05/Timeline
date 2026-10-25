@@ -300,7 +300,8 @@ struct AgendaView: View {
 
     private func openBoard(_ board: Board) {
         dismiss()
-        BoardWindowController.shared.show(store: store, owner: board.owner)
+        let line = board.markdown.components(separatedBy: .newlines).firstIndex { $0.localizedStandardContains(query) }
+        BoardWindowController.shared.show(store: store, owner: board.owner, revealLine: line.map { $0 + 1 }, query: query)
     }
 
     private func moveSelection(_ amount: Int) {

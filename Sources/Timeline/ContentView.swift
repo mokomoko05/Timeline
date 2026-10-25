@@ -184,7 +184,7 @@ struct ContentView: View {
     /// 这些命令的结果在主窗口里（清单、日历、搜索面板……）：主窗口被收起了就先把它调出来，不然点了什么都看不到。
     private static func needsMainWindow(_ command: AppCommand) -> Bool {
         switch command {
-        case .newTodo, .search, .agenda, .reveal, .backups, .export, .rollover, .toggleTasks, .shiftMonth, .today, .shiftDay,
+        case .newTodo, .agenda, .reveal, .backups, .export, .rollover, .toggleTasks, .shiftMonth, .today, .shiftDay,
              .selectAdjacent, .toggleSelected, .editSelected, .deleteSelected, .deadlineSelected, .tagsSelected, .shortcuts,
              .postponeSelected:
             return true
@@ -234,7 +234,7 @@ struct ContentView: View {
             linkInsertion = LinkInsertion()
             showingLinkComposer = true
         case .today: select(Date()); scrollGroup = "today"
-        case .search: agenda = .all
+        case .search: GlobalSearchController.shared.show(store: store)
         case .notes: showNotes(tag: nil)
         case .notesForTask(let id): showNotes(tag: nil, taskID: id)
         case .notesHotKey(let appWasActive):
@@ -595,7 +595,7 @@ struct ContentView: View {
                     .buttonStyle(HitAreaButtonStyle()).font(.system(size: typography.pt(11), weight: .medium))
                     .foregroundStyle(Palette.accent).help("回到今天 · ⌘T")
                 Button("未完成") { agenda = .unfinished }.buttonStyle(HitAreaButtonStyle()).font(.system(size: typography.pt(11))).foregroundStyle(Palette.accent)
-                Button { agenda = .all } label: { Image(systemName: "magnifyingglass") }
+                Button { GlobalSearchController.shared.show(store: store) } label: { Image(systemName: "magnifyingglass") }
                     .buttonStyle(HitAreaButtonStyle()).help("搜索 · ⌘F").accessibilityLabel("搜索")
                 Button { commands.send(.notes) } label: { Image(systemName: "note.text") }
                     .buttonStyle(HitAreaButtonStyle()).help("笔记 · ⌘N").accessibilityLabel("笔记")

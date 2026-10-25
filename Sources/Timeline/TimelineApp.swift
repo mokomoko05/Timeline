@@ -70,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private let mainHotKey = GlobalHotKey(action: .main)
     private let shellHotKey = GlobalHotKey(action: .shell)
     private let boardHotKey = GlobalHotKey(action: .board)
+    private let searchHotKey = GlobalHotKey(action: .search)
     private let shell = ShellWindowController()
     private let interaction = WorkspaceInteraction()
     private let commands = CommandCenter()
@@ -157,6 +158,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 PreviousApp.remember()
                 NSApp.unhide(nil)
                 NotesWindowController.shared.showJournal(store: self.store, date: date, log: id)
+            }
+            AppRouter.openJournal = { [weak self] date in
+                guard let self else { return }
+                PreviousApp.remember()
+                NSApp.unhide(nil)
+                NotesWindowController.shared.showJournal(store: self.store, date: date)
             }
             for (action, hotKey) in allHotKeys { hotKey.onPress = { AppRouter.togglePanel(action) } }
             applyHotKeyPreference()
@@ -309,7 +316,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     // MARK: - 全局快捷键
 
     private var allHotKeys: [(HotKeyAction, GlobalHotKey)] {
-        [(.main, mainHotKey), (.shell, shellHotKey), (.log, logHotKey), (.notes, notesHotKey), (.focusPanel, focusHotKey), (.board, boardHotKey)]
+        [(.main, mainHotKey), (.shell, shellHotKey), (.log, logHotKey), (.notes, notesHotKey), (.focusPanel, focusHotKey), (.board, boardHotKey), (.search, searchHotKey)]
     }
 
     /// 被其他应用占用而注册失败的动作，设置里据此逐条提示。
@@ -339,6 +346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case .main: toggleMainWindow()
         case .shell: shell.toggle()
         case .board: BoardWindowController.shared.toggle(store: store)
+        case .search: GlobalSearchController.shared.toggle(store: store)
         }
     }
 
@@ -625,10 +633,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         editMenu.addItem(.separator())
         // ⌘F：笔记窗口里搜它自己（笔记或日记页的搜索框）；其他窗口里打开全局搜索。
-        editMenu.addItem(menuItem("搜索任务、日志与总结…", key: "f") { [commands] in
+        editMenu.addItem(menuItem("搜索任务、日志与总结…", key: "f") { [weak self] in
             let notes = NotesWindowController.shared
             if notes.isKey { notes.workspace.focusSearch() }
-            else { commands.send(.search) }
+            else if let store = self?.store { GlobalSearchController.shared.show(store: store) }
         })
         let editItem = NSMenuItem(title: AppLocalized("编辑"), action: nil, keyEquivalent: "")
         editItem.submenu = editMenu

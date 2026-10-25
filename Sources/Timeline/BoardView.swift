@@ -101,7 +101,8 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
         super.init()
     }
 
-    func show(store: JournalStore, owner: BoardOwner? = nil) {
+    /// 打开工作板；`revealLine` 指定时（搜索结果）跳到那一行并高亮 `query`。
+    func show(store: JournalStore, owner: BoardOwner? = nil, revealLine: Int? = nil, query: String = "") {
         let replacingContent = panel == nil || self.store !== store
         if replacingContent {
             panel?.makeFirstResponder(nil)
@@ -142,6 +143,9 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
         if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(panel.frame) }) { panel.center() }
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
+        if let revealLine, let owner, let board = store.board(for: owner) {
+            navigation.editorSession(for: board, store: store).reveal(line: revealLine, query: query)
+        }
     }
 
     func toggle(store: JournalStore) {

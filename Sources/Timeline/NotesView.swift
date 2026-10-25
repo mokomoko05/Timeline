@@ -138,6 +138,14 @@ struct NotesView: View {
             nav.validate(in: store)
             configureMention()
         }
+        // 全局搜索跳过来：等切换任务时的默认滚动（到工作板或末尾）做完，再滚到那条笔记并闪一下。
+        .onReceive(nav.$revealNote.compactMap { $0 }) { id in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                guard nav.revealNote == id else { return }
+                nav.revealNote = nil
+                revealNoteID = id
+            }
+        }
     }
 
     /// 输入框里 `@` / `#` 的候选：标签页里，正在写的标签名下的待办排前面；选中后记进对应输入框的草稿。
