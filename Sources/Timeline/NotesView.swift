@@ -12,10 +12,13 @@ struct NotesView: View {
     let close: () -> Void
     let reveal: (UUID) -> Void
     let openDay: (Date) -> Void
+    /// 每加一次就聚焦侧栏的搜索框（笔记窗口里的 ⌘F）。
+    let searchRequest: Int
     /// 停在哪里（选中的任务 / 标签、搜索词、视图方式）：存进偏好，关掉再开回到原处。
     @ObservedObject var nav: NotesNavigation
     @ObservedObject private var themes = ThemeStore.shared
     @State private var creatingTag = false
+    @FocusState private var searchFocused: Bool
     @State private var tagFocused = false
     /// 刚写下的那条：滚到它所在的位置（按待办分章时它可能在中间某章），并短暂高亮。
     @State private var revealNoteID: UUID?
@@ -57,8 +60,10 @@ struct NotesView: View {
 
     /// 明确指定了任务或标签（比如点了待办上的标签）就跳过去；否则保持 `nav` 里上次停留的位置。
     init(store: JournalStore, initialSelection: UUID? = nil, initialTag: String? = nil, nav: NotesNavigation? = nil,
-         close: @escaping () -> Void = {}, reveal: @escaping (UUID) -> Void, openDay: @escaping (Date) -> Void) {
+         close: @escaping () -> Void = {}, reveal: @escaping (UUID) -> Void, openDay: @escaping (Date) -> Void,
+         searchRequest: Int = 0) {
         self.store = store
+        self.searchRequest = searchRequest
         self.initialSelection = initialSelection
         self.initialTag = initialTag
         self.close = close
@@ -173,6 +178,8 @@ struct NotesView: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(Palette.muted)
                 TextField("搜索任务或标签（#标签）", text: $nav.query).textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .onChange(of: searchRequest) { _ in searchFocused = true }
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 7))

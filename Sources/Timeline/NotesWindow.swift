@@ -147,6 +147,13 @@ final class NotesWorkspaceNavigation: ObservableObject {
     @Published private(set) var requestID = 0
     /// 打开时要定位并高亮的那条日志（来自搜索结果）。
     @Published var revealLog: UUID?
+    /// ⌘F：聚焦当前页面自己的搜索框。两页各自计数，隐藏的那页不响应。
+    @Published private(set) var notesSearchRequest = 0
+    @Published private(set) var journalSearchRequest = 0
+
+    func focusSearch() {
+        if mode == .notes { notesSearchRequest += 1 } else { journalSearchRequest += 1 }
+    }
 
     func open(_ mode: UnifiedNotesMode, date: Date? = nil, log: UUID? = nil) {
         self.mode = mode
@@ -172,7 +179,8 @@ struct UnifiedNotesView: View {
             modeBar
             Divider()
             RetainedWorkspacePages(showsFirst: workspace.mode == .notes) {
-                NotesView(store: store, nav: nav, close: close, reveal: reveal, openDay: openDay)
+                NotesView(store: store, nav: nav, close: close, reveal: reveal, openDay: openDay,
+                          searchRequest: workspace.notesSearchRequest)
             } second: {
                 journalBody
             }
@@ -211,7 +219,7 @@ struct UnifiedNotesView: View {
 
     private var journalBody: some View {
         UnifiedJournalView(store: store, date: $workspace.date, navigationRequest: workspace.requestID,
-                           revealLog: $workspace.revealLog)
+                           revealLog: $workspace.revealLog, searchRequest: workspace.journalSearchRequest)
     }
 
 }
@@ -225,8 +233,12 @@ struct UnifiedJournalView: View {
     let navigationRequest: Int
     @Binding var revealLog: UUID?
 
-    init(store: JournalStore, date: Binding<Date>, navigationRequest: Int, revealLog: Binding<UUID?> = .constant(nil)) {
+    /// 每加一次就聚焦日期列表的搜索框（笔记窗口里的 ⌘F）。
+    let searchRequest: Int
+
+    init(store: JournalStore, date: Binding<Date>, navigationRequest: Int, revealLog: Binding<UUID?> = .constant(nil), searchRequest: Int = 0) {
         self.store = store
+        self.searchRequest = searchRequest
         _date = date
         self.navigationRequest = navigationRequest
         _revealLog = revealLog
@@ -249,6 +261,7 @@ struct UnifiedJournalView: View {
     @State private var unlinked = false
     /// 日记侧栏和笔记侧栏共用同一套搜索入口；日期、星期和日志正文都可检索。
     @State private var query = ""
+    @FocusState private var searchFocused: Bool
 
     private var entry: DayEntry { store.entry(for: date) }
     private var allDates: [Date] {
@@ -297,6 +310,8 @@ struct UnifiedJournalView: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(Palette.muted)
                 TextField("搜索日期或日志", text: $query).textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .onChange(of: searchRequest) { _ in searchFocused = true }
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 7))

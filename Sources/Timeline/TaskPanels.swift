@@ -118,12 +118,15 @@ struct AgendaView: View {
         case task(ScheduledTask)
         case log(key: String, entry: DailyLogEntry)
         case summary(key: String, text: String)
+        /// 工作板正文里的匹配：带上第一处命中的那一行。
+        case board(Board, line: String)
 
         var id: String {
             switch self {
             case .task(let item): return "task-\(item.id)"
             case .log(_, let entry): return "log-\(entry.id)"
             case .summary(let key, _): return "summary-\(key)"
+            case .board(let board, _): return "board-\(board.id)"
             }
         }
     }
@@ -132,7 +135,7 @@ struct AgendaView: View {
         VStack(spacing: 14) {
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(Palette.muted)
-                TextField("搜索任务、日志…", text: $query).textFieldStyle(.plain).font(.system(size: typography.pt(15))).focused($searching)
+                TextField("搜索任务、日志、工作板…", text: $query).textFieldStyle(.plain).font(.system(size: typography.pt(15))).focused($searching)
                 if !query.isEmpty {
                     Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).foregroundStyle(Palette.muted).accessibilityLabel("清除搜索词")
@@ -218,6 +221,18 @@ struct AgendaView: View {
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.buttonStyle(HitAreaButtonStyle())
+        case .board(let board, let line):
+            Button { openBoard(board) } label: {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "list.bullet.rectangle")
+                        Text(store.boardTitle(board)).lineLimit(1)
+                        Text("工作板").foregroundStyle(Palette.muted)
+                    }
+                    .font(.caption).foregroundStyle(Palette.accent)
+                    Text(highlighted(line)).font(.system(size: typography.pt(13))).lineLimit(2)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.buttonStyle(HitAreaButtonStyle())
         case .summary(let key, let text):
             Button { open(key) } label: {
                 VStack(alignment: .leading, spacing: 5) {
@@ -249,11 +264,22 @@ struct AgendaView: View {
     }
 
     private func recompute() {
+        let result = Self.searchHits(store: store, query: query, filter: filter)
+        hits = result
+        selection = min(selection, max(0, result.count - 1))
+    }
+
+    /// 搜索结果：待办在前，然后是工作板正文、日志和每日总结。
+    static func searchHits(store: JournalStore, query: String, filter: AgendaFilter) -> [SearchHit] {
         var result = store.tasks(matching: query, filter: filter).map(SearchHit.task)
         if let tag = TagText.searchTag(query) {
             // 「#标签」：带这个标签的待办，加上它们名下的日志（含待办已删除的）。
             result += store.logs(forTag: tag).map { SearchHit.log(key: $0.key, entry: $0.log) }
         } else if !query.isEmpty {
+            for board in store.boards where !board.archived {
+                guard let line = board.markdown.components(separatedBy: .newlines).first(where: { $0.localizedStandardContains(query) }) else { continue }
+                result.append(.board(board, line: line.trimmingCharacters(in: .whitespaces)))
+            }
             for key in store.days.keys.sorted() {
                 guard let day = store.days[key] else { continue }
                 for log in day.logs where log.searchableText.localizedStandardContains(query) || log.taskTitle?.localizedStandardContains(query) == true || log.taskTags.contains(where: { $0.localizedStandardContains(query) }) || log.tags.contains(where: { $0.localizedStandardContains(query) }) {
@@ -263,14 +289,18 @@ struct AgendaView: View {
                 if result.count > 300 { break }
             }
         }
-        hits = result
-        selection = min(selection, max(0, result.count - 1))
+        return result
     }
 
     private func open(_ key: String, log: UUID? = nil) {
         guard let date = JournalDates.date(for: key) else { return }
         if let log, let openLog { openLog(date, log) } else { navigate(date, nil) }
         dismiss()
+    }
+
+    private func openBoard(_ board: Board) {
+        dismiss()
+        BoardWindowController.shared.show(store: store, owner: board.owner)
     }
 
     private func moveSelection(_ amount: Int) {
@@ -284,6 +314,7 @@ struct AgendaView: View {
         case .task(let item): navigate(item.task.dueDate, item.id); dismiss()
         case .log(let key, let entry): open(key, log: entry.id)
         case .summary(let key, _): open(key)
+        case .board(let board, _): openBoard(board)
         }
     }
 }

@@ -615,7 +615,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             editMenu.addItem(withTitle: AppLocalized(title), action: Selector(selector), keyEquivalent: key)
         }
         editMenu.addItem(.separator())
-        editMenu.addItem(menuItem("搜索任务、日志与总结…", key: "f", send(.search)))
+        // ⌘F：笔记窗口里搜它自己（笔记或日记页的搜索框）；其他窗口里打开全局搜索。
+        editMenu.addItem(menuItem("搜索任务、日志与总结…", key: "f") { [commands] in
+            let notes = NotesWindowController.shared
+            if notes.isKey { notes.workspace.focusSearch() }
+            else { commands.send(.search) }
+        })
         let editItem = NSMenuItem(title: AppLocalized("编辑"), action: nil, keyEquivalent: "")
         editItem.submenu = editMenu
         mainMenu.addItem(editItem)
