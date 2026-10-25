@@ -3,6 +3,18 @@ import SwiftUI
 import WebKit
 import TimelineCore
 
+/// 放共用编辑器的容器：每次显示一块工作板都是新的容器，编辑器视图从上一个容器里挪过来，
+/// 两块工作板的界面交替时不会争同一个视图的父视图。
+final class BoardEditorContainer: NSView {
+    func attach(_ editor: NSView) {
+        guard editor.superview !== self else { return }
+        editor.removeFromSuperview()
+        editor.frame = bounds
+        editor.autoresizingMask = [.width, .height]
+        addSubview(editor)
+    }
+}
+
 struct BoardLiveEditor: NSViewRepresentable {
     @ObservedObject var session: BoardLiveEditorSession
     /// 正在编辑（否则是只读浏览）。
@@ -12,15 +24,21 @@ struct BoardLiveEditor: NSViewRepresentable {
     @Environment(\.typography) private var typography
     @Environment(\.colorScheme) private var colorScheme
 
-    func makeNSView(context: Context) -> WKWebView { session.makeWebView() }
+    func makeNSView(context: Context) -> BoardEditorContainer {
+        let container = BoardEditorContainer()
+        container.attach(session.makeWebView())
+        return container
+    }
     func makeCoordinator() -> BoardLiveEditorSession { session }
 
-    func updateNSView(_ view: WKWebView, context: Context) {
+    func updateNSView(_ container: BoardEditorContainer, context: Context) {
+        // 只有这块工作板还拥有编辑器时才放回来（编辑器被重建过）；不从别的工作板手里抢。
+        if let webView = session.webView, webView.superview !== container { container.attach(webView) }
         session.configure(fontSize: typography.pt(13), dark: colorScheme == .dark,
                           sourceMode: editing && raw, previewOnly: !editing)
     }
 
-    static func dismantleNSView(_ view: WKWebView, coordinator: BoardLiveEditorSession) { coordinator.flush() }
+    static func dismantleNSView(_ view: BoardEditorContainer, coordinator: BoardLiveEditorSession) { coordinator.flush() }
 }
 
 @MainActor
@@ -101,31 +119,42 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     /// 所有编辑器共用一份不落盘的数据存储（编辑器不联网，也不需要互相隔离）。
     private static let dataStore = WKWebsiteDataStore.nonPersistent()
 
+    /// 拿到共用的编辑器：所有工作板只有一个编辑器（一份 WebKit 网页进程）。上一个使用它的工作板先保存内容、交出来；
+    /// 网页里按工作板分别存着正文、光标、撤销历史和滚动位置，换回来时原样恢复。
     func makeWebView() -> WKWebView {
-        if let webView { Self.active = self; return webView }
-        ready = false
-        lastConfiguration = nil
-        sourceNeedsSynchronization = true
         Self.active = self
-        // 切到一个没有缓存编辑器的工作板时，接手预先加载好的空编辑器：省掉网页加载（约 100ms 的空白）。
-        if let spare = Self.takeSpare() {
-            spare.handler.session = self
-            spare.view.navigationDelegate = self
-            webView = spare.view
-            if spare.handler.pendingReady { ready = true }
-            return spare.view
-        }
-        let handler = WeakBoardScriptHandler()
-        handler.session = self
-        guard let view = Self.makeEditorView(handler: handler) else {
+        if let webView, Self.owner === self { return webView }
+        if let previous = Self.owner, previous !== self { previous.detach() }
+        guard let host = Self.sharedHost() else {
             error = AppLocalized("编辑器加载失败，请重新打开工作板。")
             let view = WKWebView(frame: .zero)
             webView = view
             return view
         }
-        view.navigationDelegate = self
-        webView = view
-        return view
+        host.handler.session = self
+        host.view.navigationDelegate = self
+        Self.owner = self
+        webView = host.view
+        ready = host.handler.pageReady
+        lastConfiguration = nil
+        sourceNeedsSynchronization = true
+        applyConfiguration()
+        return host.view
+    }
+
+    /// 交出编辑器：内容先保存，之后这块工作板不再向网页发任何指令，直到再次拿到编辑器。
+    private func detach() {
+        flush()
+        webView = nil
+        ready = false
+        lastConfiguration = nil
+        if Self.owner === self { Self.owner = nil }
+    }
+
+    /// 这块工作板不再保留（换出最近使用的范围）：网页里存着的状态也丢掉。
+    func forget() {
+        if Self.owner === self { detach() } else { flush() }
+        Self.shared?.view.evaluateJavaScript("window.boardEditor.forget('\(boardID.uuidString)')")
     }
 
     private static func makeEditorView(handler: WeakBoardScriptHandler) -> WKWebView? {
@@ -142,41 +171,48 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         return view
     }
 
-    // MARK: 预加载
+    // MARK: 共用编辑器
 
-    private static var spare: (view: WKWebView, handler: WeakBoardScriptHandler)?
-    private static let spareWatcher = SpareEditorWatcher()
-    private static var spareTask: Task<Void, Never>?
+    private static var shared: (view: WKWebView, handler: WeakBoardScriptHandler)?
+    private static weak var owner: BoardLiveEditorSession?
+    private static let idleWatcher = SharedEditorWatcher()
+    private static var preloadTask: Task<Void, Never>?
 
-    /// 空闲时预先加载一个编辑器，留给下一次切换到新工作板时用。已有一个就不再建。
-    static func prepareSpare(after delay: Duration = .milliseconds(600)) {
-        guard spare == nil, spareTask == nil else { return }
-        spareTask = Task { @MainActor in
+    private static func sharedHost() -> (view: WKWebView, handler: WeakBoardScriptHandler)? {
+        if let shared { return shared }
+        preloadTask?.cancel()
+        preloadTask = nil
+        let handler = WeakBoardScriptHandler()
+        guard let view = makeEditorView(handler: handler) else { return nil }
+        shared = (view, handler)
+        return shared
+    }
+
+    /// 工作板窗口刚出现、还没用到编辑器时，空闲时先把编辑器网页加载好（约 100ms），第一次打开工作板不用等。
+    static func preloadEditor(after delay: Duration = .milliseconds(600)) {
+        guard shared == nil, preloadTask == nil else { return }
+        preloadTask = Task { @MainActor in
             try? await Task.sleep(for: delay)
-            spareTask = nil
-            let handler = WeakBoardScriptHandler()
-            guard spare == nil, let view = makeEditorView(handler: handler) else { return }
-            view.navigationDelegate = spareWatcher
-            spare = (view, handler)
+            preloadTask = nil
+            guard shared == nil, let host = sharedHost() else { return }
+            host.view.navigationDelegate = idleWatcher
         }
     }
 
-    private static func takeSpare() -> (view: WKWebView, handler: WeakBoardScriptHandler)? {
-        guard let taken = spare else { return nil }
-        spare = nil
-        prepareSpare()
-        return taken
+    /// 释放共用编辑器（网页进程随之退出）：工作板窗口长时间隐藏或系统内存紧张时调用。内容先保存；
+    /// 下次打开工作板时重新加载，光标和撤销历史不再保留。
+    static func releaseSharedEditor() {
+        preloadTask?.cancel()
+        preloadTask = nil
+        owner?.detach()
+        shared?.view.removeFromSuperview()
+        shared = nil
     }
 
-    /// 系统内存紧张时丢掉预加载的空编辑器；下次打开新工作板时再按需创建。
-    static func releaseSpare() {
-        spareTask?.cancel()
-        spareTask = nil
-        spare = nil
-    }
+    static var hasSharedEditor: Bool { shared != nil }
 
-    fileprivate static func discardSpare(_ view: WKWebView) {
-        if spare?.view === view { spare = nil }
+    fileprivate static func discardShared(_ view: WKWebView) {
+        if shared?.view === view, owner == nil { shared = nil }
     }
 
     func configure(fontSize: CGFloat, dark: Bool, sourceMode: Bool = false, previewOnly: Bool = false) {
@@ -197,7 +233,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
                       "selection-ink": css(Color(nsColor: .selectedTextColor))]
         for level in 1...6 { colors["heading-\(level)"] = css(Color(nsColor: MarkdownText.headingColor(level))) }
         settings = ["fontSize": fontSize, "readOnly": store.isReadOnly, "colors": colors,
-                    "sourceMode": sourceMode, "previewOnly": previewOnly, "folds": folds]
+                    "sourceMode": sourceMode, "previewOnly": previewOnly, "folds": folds, "key": boardID.uuidString]
         settings["labels"] = ["openLink": AppLocalized("在 Safari 中打开"), "copyCode": AppLocalized("复制代码"),
                               "copied": AppLocalized("已复制"), "copyFailed": AppLocalized("复制失败，请重试"),
                               "expand": AppLocalized("展开标题下的内容"), "collapse": AppLocalized("收起标题下的内容")]
@@ -326,6 +362,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         flush()
+        Self.shared.map { $0.handler.pageReady = false }
         ready = false
         lastConfiguration = nil
         sourceNeedsSynchronization = true
@@ -336,20 +373,18 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
 /// 脚本消息转给编辑器会话；预加载的编辑器还没有主人时，只记下它已经就绪。
 final class WeakBoardScriptHandler: NSObject, WKScriptMessageHandler {
     weak var session: BoardLiveEditorSession?
-    private(set) var pendingReady = false
+    /// 网页已经加载好（之后换工作板不用再等）。网页进程重启后重新加载，再次就绪前为 false。
+    var pageReady = false
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        if let session {
-            session.userContentController(userContentController, didReceive: message)
-        } else if (message.body as? [String: Any])?["kind"] as? String == "ready" {
-            pendingReady = true
-        }
+        if (message.body as? [String: Any])?["kind"] as? String == "ready" { pageReady = true }
+        session?.userContentController(userContentController, didReceive: message)
     }
 }
 
-/// 预加载编辑器的网页进程退出了，就丢掉它，下次重新建。
-private final class SpareEditorWatcher: NSObject, WKNavigationDelegate {
+/// 预加载、还没有工作板使用的编辑器，网页进程退出了就丢掉，下次重新建。
+private final class SharedEditorWatcher: NSObject, WKNavigationDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        MainActor.assumeIsolated { BoardLiveEditorSession.discardSpare(webView) }
+        MainActor.assumeIsolated { BoardLiveEditorSession.discardShared(webView) }
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {

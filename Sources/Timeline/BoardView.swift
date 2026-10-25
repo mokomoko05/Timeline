@@ -7,9 +7,9 @@ final class BoardNavigation: ObservableObject {
     private let defaults: UserDefaults
     private var editorSessions: [UUID: BoardLiveEditorSession] = [:]
     private var editorOrder: [UUID] = []
-    /// 最近用过的几个工作板保留编辑器（光标、撤销历史、滚动位置）。每个编辑器有一份 WebKit 内容进程，
-    /// 长时间后台运行时限制数量；更早的切回来时重新加载正文。
-    static let liveEditorLimit = 4
+    /// 最近用过的几个工作板保留编辑器状态（光标、撤销历史、滚动位置）。所有工作板共用一个编辑器网页，
+    /// 这里只是每块工作板存在网页里的一小份状态；更早的切回来时重新加载正文。
+    static let liveEditorLimit = 8
 
     func editorSession(for board: Board, store: JournalStore) -> BoardLiveEditorSession {
         if editorSessions[board.id] == nil {
@@ -25,14 +25,14 @@ final class BoardNavigation: ObservableObject {
         editorOrder.append(board.id)
         while editorOrder.count > Self.liveEditorLimit {
             let oldest = editorOrder.removeFirst()
-            editorSessions.removeValue(forKey: oldest)?.flush()
+            editorSessions.removeValue(forKey: oldest)?.forget()
         }
         return editorSessions[board.id]!
     }
 
-    /// 系统内存紧张时：只留当前工作板的编辑器，其余的保存后释放（切回来时重新加载正文）。
+    /// 系统内存紧张时：只留当前工作板的编辑器状态，其余的保存后丢掉（切回来时重新加载正文）。
     func releaseInactiveEditors() {
-        for id in editorOrder where id != selection { editorSessions.removeValue(forKey: id)?.flush() }
+        for id in editorOrder where id != selection { editorSessions.removeValue(forKey: id)?.forget() }
         editorOrder.removeAll { $0 != selection }
     }
 
@@ -100,6 +100,8 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
     private(set) var panel: NSPanel?
     let navigation: BoardNavigation
     private var store: JournalStore?
+    /// 工作板窗口隐藏太久：释放界面和共用编辑器（一份网页进程），下次打开时重新加载（光标、撤销历史不再保留）。
+    private var content: HiddenContentReleaser?
 
     init(defaults: UserDefaults = .standard) {
         navigation = BoardNavigation(defaults: defaults)
@@ -136,9 +138,15 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
             if !panel.setFrameUsingName("TimelineBoardWindow") { panel.center() }
             panel.setFrameAutosaveName("TimelineBoardWindow")
             self.panel = panel
+            content = HiddenContentReleaser(window: panel, delay: .seconds(5 * 60), release: { [weak self] in
+                self?.navigation.releaseInactiveEditors()
+                BoardLiveEditorSession.releaseSharedEditor()
+                self?.panel?.contentView = nil
+            }, rebuild: { [weak self] in self?.installContent() })
         }
         guard let panel else { return }
-        if replacingContent {
+        content?.restoreIfNeeded()
+        if replacingContent || panel.contentView == nil {
             let content = BoardWorkspaceView(store: store, navigation: navigation,
                                              close: { [weak self] in self?.hide() })
             panel.contentView = NSHostingView(rootView: LocalizedRoot { content })
@@ -153,6 +161,16 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    func releaseHiddenContentNow() { content?.releaseNow() }
+
+    private func installContent() {
+        guard let panel, let store, panel.contentView == nil else { return }
+        let frame = panel.frame
+        let content = BoardWorkspaceView(store: store, navigation: navigation, close: { [weak self] in self?.hide() })
+        panel.contentView = NSHostingView(rootView: LocalizedRoot { content })
+        panel.setFrame(frame, display: false)
+    }
+
     func toggle(store: JournalStore) {
         if panel?.isVisible == true { hide() } else { show(store: store) }
     }
@@ -163,6 +181,7 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
             editor.commit { [weak self] in self?.store?.save() }
         } else { store?.save() }
         panel?.orderOut(nil)
+        content?.windowHidden()
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool { hide(); return false }
@@ -233,7 +252,7 @@ struct BoardWorkspaceView: View {
         .animation(Motion.reduced ? nil : .easeOut(duration: 0.12), value: choosing)
         .background(Palette.background).foregroundStyle(Palette.ink).tint(Palette.accent)
         .ignoresSafeArea(.container, edges: .top)
-        .onAppear { if !Headless.active { BoardLiveEditorSession.prepareSpare() } }
+        .onAppear { if !Headless.active { BoardLiveEditorSession.preloadEditor() } }
     }
 
     private var favoritesBar: some View {

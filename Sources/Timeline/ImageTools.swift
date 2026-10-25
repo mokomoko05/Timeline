@@ -7,12 +7,21 @@ import TimelineCore
 /// 日志图片的处理：从剪贴板或文件取图、缩放压缩、缩略图缓存、本地文字识别。
 enum ImageTools {
     static let maxPixel = 2048
+    /// 解码好的缩略图。按显示尺寸 × 屏幕倍率解码，一张常见的日志配图约 1MB；24MB 够来回翻几天的日记。
     private static let thumbnails: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
-        cache.countLimit = 128
-        cache.totalCostLimit = 64 * 1024 * 1024
+        cache.countLimit = 96
+        cache.totalCostLimit = 24 * 1024 * 1024
         return cache
     }()
+
+    /// 缩略图按这个倍率解码：屏幕的实际像素密度（视网膜屏 2 倍），更高也看不出区别。
+    @MainActor static var displayScale: CGFloat {
+        min(2, max(1, NSScreen.screens.map(\.backingScaleFactor).max() ?? 2))
+    }
+
+    /// 清空缩略图缓存（系统内存紧张、窗口内容释放时）。
+    static func purgeThumbnails() { thumbnails.removeAllObjects() }
 
     /// 把任意图片数据缩放到长边不超过 `maxPixel`，并编码成 PNG（小图）或 JPEG。
     static func process(_ data: Data) -> (data: Data, fileExtension: String)? {
@@ -103,9 +112,13 @@ enum ImageTools {
         }
     }
 
+    /// 实际解码过多少次缩略图（缓存没命中）；测量缓存大小是否合适用。
+    nonisolated(unsafe) static var decodeCount = 0
+
     nonisolated static func thumbnail(_ url: URL, maxPixel: Int = 240) -> NSImage? {
         let key = "\(url.path)#\(maxPixel)" as NSString
         if let cached = thumbnails.object(forKey: key) { return cached }
+        decodeCount += 1
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,

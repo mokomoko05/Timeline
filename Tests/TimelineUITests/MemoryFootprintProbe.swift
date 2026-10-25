@@ -108,7 +108,10 @@ final class MemoryFootprintProbe: XCTestCase {
 
         // 翻看两周的日记（每天一页）。
         // 每一步包在自动释放池里，和应用里每个事件结束时清空一样（不包的话测试方法里的临时对象会一直攒到测试结束）。
+        var browseTimes: [Double] = []
         func browse(_ offset: Int) {
+            let started = CFAbsoluteTimeGetCurrent()
+            defer { browseTimes.append((CFAbsoluteTimeGetCurrent() - started) * 1000) }
             autoreleasepool {
                 workspace.open(.journal, date: Calendar.current.date(byAdding: .day, value: -offset, to: Date())!)
                 notes.contentView?.layoutSubtreeIfNeeded()
@@ -116,8 +119,15 @@ final class MemoryFootprintProbe: XCTestCase {
             }
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
+        func browseStats() -> String {
+            defer { browseTimes.removeAll(); ImageTools.decodeCount = 0 }
+            let sorted = browseTimes.map { $0 - 50 }.sorted()
+            return String(format: "page median %.0fms max %.0fms, %d thumbnail decodes", sorted[sorted.count / 2], sorted.last ?? 0, ImageTools.decodeCount)
+        }
+        ImageTools.decodeCount = 0
         for offset in 1...14 { browse(offset) }
         report("+ 14 journal days browsed")
+        print("PROBE  ", browseStats())
         if let out = ProcessInfo.processInfo.environment["TIMELINE_MEMORY_HEAP"] {
             for (tool, args) in [("/usr/bin/vmmap", ["--summary"]), ("/usr/bin/heap", ["-s"])] {
                 let process = Process()
@@ -135,6 +145,7 @@ final class MemoryFootprintProbe: XCTestCase {
             for (label, range) in [("+ next 14 days", 15...28), ("revisit days 1-14", 1...14), ("revisit days 1-14 again", 1...14)] {
                 for offset in range { browse(offset) }
                 report(label)
+                print("PROBE  ", browseStats())
                 func count(_ view: NSView?) -> Int { guard let view else { return 0 } ; return (view is InteractiveTaskText ? 1 : 0) + view.subviews.reduce(0) { $0 + count($1) } }
                 print("PROBE   InteractiveTaskText in windows:", count(main.contentView) + count(notes.contentView))
             }
@@ -189,6 +200,26 @@ final class MemoryFootprintProbe: XCTestCase {
         editors.forEach { $0.2.contentView = nil }
         editors.removeAll()
         report("window contents released")
+        if let out = ProcessInfo.processInfo.environment["TIMELINE_MEMORY_HEAP"] {
+            RunLoop.main.run(until: Date().addingTimeInterval(2))
+            report("2s later")
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/heap")
+            process.arguments = [String(getpid())]
+            FileManager.default.createFile(atPath: out + ".released", contents: nil)
+            process.standardOutput = FileHandle(forWritingAtPath: out + ".released")
+            process.standardError = FileHandle.nullDevice
+            try? process.run()
+            process.waitUntilExit()
+            let vmmap = Process()
+            vmmap.executableURL = URL(fileURLWithPath: "/usr/bin/vmmap")
+            vmmap.arguments = ["--summary", String(getpid())]
+            FileManager.default.createFile(atPath: out + ".released.vmmap", contents: nil)
+            vmmap.standardOutput = FileHandle(forWritingAtPath: out + ".released.vmmap")
+            vmmap.standardError = FileHandle.nullDevice
+            try? vmmap.run()
+            vmmap.waitUntilExit()
+        }
     }
 
     /// WebKit 内容进程的物理占用（去重后求和）。

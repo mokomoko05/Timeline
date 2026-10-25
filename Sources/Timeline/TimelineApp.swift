@@ -80,6 +80,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var autoHide: AutoHideOnResign?
     private var languageObserver: NSObjectProtocol?
     private var memoryPressure: DispatchSourceMemoryPressure?
+    /// 主窗口隐藏半小时以上就释放界面，下次显示前重建。
+    private var mainContent: HiddenContentReleaser?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
@@ -130,10 +132,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // 在当前桌面（Space）打开，而不是切到窗口原来所在的桌面。
         window.collectionBehavior.insert(.moveToActiveSpace)
         window.delegate = self
-        window.contentView = NSHostingView(rootView: LocalizedRoot {
-            ContentView(store: self.store, loginItem: self.loginItem)
-                .environmentObject(self.reminders).environmentObject(self.interaction)
-                .environmentObject(self.commands).environmentObject(self.toast).environment(\.focusSession, self.focus).environment(\.appCommands, self.commands)
+        window.contentView = makeMainContent()
+        mainContent = HiddenContentReleaser(window: window, delay: .seconds(30 * 60), release: { [weak self] in self?.window.contentView = nil }, rebuild: { [weak self] in
+            guard let self else { return }
+            // 换内容视图时窗口可能按内容的理想大小变形：保持原来的位置和大小。
+            let frame = window.frame
+            window.contentView = makeMainContent()
+            window.setFrame(frame, display: false)
         })
         window.center()
         window.setFrameAutosaveName("TimelineMainWindow")
@@ -237,7 +242,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if target.delegate?.windowShouldClose?(target) ?? true { target.close() }
     }
 
+    private func makeMainContent() -> NSView {
+        NSHostingView(rootView: LocalizedRoot {
+            ContentView(store: self.store, loginItem: self.loginItem)
+                .environmentObject(self.reminders).environmentObject(self.interaction)
+                .environmentObject(self.commands).environmentObject(self.toast).environment(\.focusSession, self.focus).environment(\.appCommands, self.commands)
+        })
+    }
+
     private func showMainWindow() {
+        mainContent?.restoreIfNeeded()
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.alphaValue = 1
         window.makeKeyAndOrderFront(nil)
@@ -261,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         PreviousApp.remember()
         NSApp.unhide(nil)
         moveToMouseScreenIfNeeded()
+        mainContent?.restoreIfNeeded()
         if window.isMiniaturized { window.deminiaturize(nil) }
         let appearing = !window.isVisible
         WindowFade.reset(window)
@@ -276,6 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let finish: () -> Void = { [weak self] in
             guard let self else { return }
             window.orderOut(nil)
+            mainContent?.windowHidden()
             WindowFade.reset(window)
             PreviousApp.restore(handoff: otherWindowForHandoff(excluding: window))
         }
@@ -364,13 +380,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     // MARK: - 内存压力
 
-    /// 系统内存紧张时释放能重建的东西：看不见的工作板编辑器（各占一份 WebKit 内容）和预加载的空编辑器。
+    /// 系统内存紧张时释放能重建的东西：看不见的工作板的编辑器状态，工作板窗口没开着时连同编辑器网页一起释放。
     private func installMemoryPressureHandler() {
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
         source.setEventHandler {
             MainActor.assumeIsolated {
                 BoardWindowController.shared.navigation.releaseInactiveEditors()
-                BoardLiveEditorSession.releaseSpare()
+                ImageTools.purgeThumbnails()
+                // 工作板窗口没开着：整个编辑器（一份网页进程）也释放，下次打开时重新加载。
+                if BoardWindowController.shared.panel?.isVisible != true { BoardLiveEditorSession.releaseSharedEditor() }
             }
         }
         source.resume()

@@ -537,15 +537,8 @@ function snapshot() {
           head: view.state.selection.main.head, composing: composing || view.composing};
 }
 
-window.boardEditor = {
-  configure(config) {
-    if (config.labels) labels = config.labels;
-    if (!view) {
-      if (config.folds) for (const [key, value] of Object.entries(config.folds)) folds.set(key, value);
-      view = new EditorView({parent: document.getElementById("editor"), state: EditorState.create({
-        doc: config.source,
-        selection: {anchor: config.readOnly ? 0 : config.source.length},
-        extensions: [history(), drawSelection({cursorBlinkRate: 0}), rectangularSelection(), EditorView.lineWrapping,
+function editorExtensions(config) {
+  return [history(), drawSelection({cursorBlinkRate: 0}), rectangularSelection(), EditorView.lineWrapping,
           indentOnInput(), bracketMatching(), markdown({base: markdownLanguage}), syntaxHighlighting(highlighting),
           livePreview.of(config.sourceMode ? [] : live), browseCaret,
           EditorView.atomicRanges.of(view => view.state.field(live, false)?.decorations.update({filter: (_from, _to, decoration) => decoration.spec.atomic === true}) ?? Decoration.none),
@@ -602,8 +595,56 @@ window.boardEditor = {
               }
               return false;
             }
-          })]
-      })});
+          })];
+}
+
+function freshState(config) {
+  return EditorState.create({doc: config.source ?? "", selection: {anchor: config.readOnly ? 0 : (config.source ?? "").length},
+                             extensions: editorExtensions(config)});
+}
+
+function loadFolds(entries) {
+  folds.clear();
+  if (entries) for (const [key, value] of Object.entries(entries)) folds.set(key, value);
+}
+
+// 所有工作板共用一个编辑器（一份网页进程）。换工作板时把当前这块的编辑器状态（正文、光标、撤销历史、
+// 折叠块的展开、浏览光标）和滚动位置存起来，换回来时原样恢复。只留最近用过的几块。
+const savedBoards = new Map();
+const savedBoardLimit = 8;
+let currentKey = null;
+
+function switchBoard(config) {
+  if (currentKey != null) {
+    savedBoards.delete(currentKey);
+    savedBoards.set(currentKey, {state: view.state, scroll: view.scrollDOM.scrollTop, browseRange});
+    while (savedBoards.size > savedBoardLimit) savedBoards.delete(savedBoards.keys().next().value);
+  }
+  const saved = savedBoards.get(config.key);
+  savedBoards.delete(config.key);
+  currentKey = config.key;
+  loadFolds(config.folds);
+  browseRange = saved?.browseRange ?? null;
+  view.setState(saved?.state ?? freshState(config));
+  // 恢复的状态里模式可能和现在不同：按这次的配置重新设一遍，折叠按这块工作板的记忆重算。
+  const browsing = !!(config.readOnly || config.previewOnly);
+  view.dispatch({effects: [editable.reconfigure(editability(browsing)), livePreview.reconfigure(config.sourceMode ? [] : live), refold.of(null)]});
+  currentReadOnly = config.readOnly;
+  currentPreviewOnly = config.previewOnly;
+  currentSourceMode = config.sourceMode;
+  const scroll = saved?.scroll ?? 0;
+  view.requestMeasure({read: () => null, write: () => { view.scrollDOM.scrollTop = scroll; }});
+  lastHistory = "";
+  reportHistory(view.state);
+}
+
+window.boardEditor = {
+  configure(config) {
+    if (config.labels) labels = config.labels;
+    if (!view) {
+      currentKey = config.key ?? null;
+      loadFolds(config.folds);
+      view = new EditorView({parent: document.getElementById("editor"), state: freshState(config)});
       // 浏览（只读）时交给系统原生选区：CodeMirror 的鼠标选择在渲染后的标题、折叠块和浮动按钮附近
       // 算出的位置和看到的文字不一致，拖选会错位。捕获阶段截住按下事件、不阻止默认行为，
       // 原生选区照常工作，CodeMirror 不再另算一份选区。按钮类控件不受影响。
@@ -615,6 +656,7 @@ window.boardEditor = {
       }, true);
       view.dom.addEventListener("mouseup", browsePointerUp);
     } else {
+      if (config.key != null && config.key !== currentKey) switchBoard(config);
       if (typeof config.source === "string" && config.source !== view.state.doc.toString() && !view.composing && !composing) {
         const old = view.state.selection.main;
         view.dispatch({changes: {from: 0, to: view.state.doc.length, insert: config.source},
@@ -746,6 +788,8 @@ window.boardEditor = {
     window.flashTimer = setTimeout(() => view.dispatch({effects: flashEffect.of(null)}), 2400);
     return true;
   },
+  // 工作板不再保留（关掉或很久没用）：丢掉存着的编辑器状态。
+  forget(key) { savedBoards.delete(key); },
   undo() { runHistory(undo); return snapshot(); },
   redo() { runHistory(redo); return snapshot(); },
   history() { return {undo: undoDepth(view.state), redo: redoDepth(view.state)}; },

@@ -41,8 +41,8 @@ struct ImageThumb: View {
         .background(Palette.line.opacity(0.35))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Palette.line))
-        .onAppear { loader.load(url, maxPixel: Int(size * 3)) }
-        .onChange(of: url) { loader.load($0, maxPixel: Int(size * 3)) }
+        .onAppear { loader.load(url, maxPixel: Int(size * ImageTools.displayScale)) }
+        .onChange(of: url) { loader.load($0, maxPixel: Int(size * ImageTools.displayScale)) }
     }
 }
 
@@ -54,7 +54,7 @@ struct ImageFit: View {
     @StateObject private var loader = ThumbnailLoader()
     @State private var placeholder: CGSize?
 
-    private var maxPixel: Int { Int(max(maxWidth, maxHeight) * 3) }
+    private var maxPixel: Int { Int(max(maxWidth, maxHeight) * ImageTools.displayScale) }
 
     var body: some View {
         Group {

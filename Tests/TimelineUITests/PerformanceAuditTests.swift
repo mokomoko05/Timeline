@@ -231,17 +231,20 @@ final class PerformanceAuditTests: XCTestCase {
         var nav: BoardNavigation? = BoardNavigation(defaults: defaults())
         weak var firstSession: BoardLiveEditorSession?
         weak var firstWebView: WKWebView?
-        for index in 0..<8 {
+        for index in 0...BoardNavigation.liveEditorLimit {
             let board = try XCTUnwrap(store.ensureBoard(for: .tag("缓存/\(index)")))
             autoreleasepool {
                 let session = nav!.editorSession(for: board, store: store)
                 let view = session.makeWebView()
                 if index == 0 { firstSession = session; firstWebView = view }
+                XCTAssertTrue(view === firstWebView, "All boards share one editor")
             }
         }
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertNil(firstSession, "Evicted sessions must leave the cache")
-        XCTAssertNil(firstWebView, "The script handler must not retain its WebView")
+        autoreleasepool { BoardLiveEditorSession.releaseSharedEditor() }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertNil(firstWebView, "Releasing the shared editor must free its WebView")
         weak var lastSession: BoardLiveEditorSession?
         autoreleasepool {
             lastSession = nav!.editorSession(for: store.boards.last!, store: store)

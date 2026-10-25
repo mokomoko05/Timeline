@@ -17,7 +17,8 @@ func boardWebView(in root: NSView) throws -> WKWebView {
 @MainActor
 func waitForBoardEditor(_ view: WKWebView) async throws {
     for _ in 0..<400 {
-        if (try? await view.evaluateJavaScript("!!window.boardEditor?.view()")) as? Bool == true { return }
+        // 编辑器网页是共用的：上一个测试留下的页面可能还在重新加载，等加载完再用。
+        if !view.isLoading, (try? await view.evaluateJavaScript("!!window.boardEditor?.view()")) as? Bool == true { return }
         try await Task.sleep(for: .milliseconds(20))
     }
     XCTFail("Live editor did not load")
@@ -385,6 +386,44 @@ final class BoardLiveEditorTests: XCTestCase {
 
     private func visibleText(_ webView: WKWebView) async throws -> String {
         try await webView.evaluateJavaScript("document.querySelector('.cm-content').textContent") as? String ?? ""
+    }
+
+    /// 所有工作板共用一个编辑器（一份网页进程）：换走再换回来，正文、光标、撤销历史和折叠都还是这块工作板自己的。
+    func testBoardsShareOneEditorAndKeepTheirOwnStateWhenSwitching() async throws {
+        let fixture = try LiveFixture(source: Self.foldSource)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        let first = fixture.session
+        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.select(0);window.boardEditor.replaceSelection('Edited ');window.boardEditor.select(3)")
+        try await browse(first, fixture.webView)
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-heading-fold').click()")
+
+        let other = try XCTUnwrap(fixture.store.ensureBoard(for: .tag("Other")))
+        fixture.store.setBoardMarkdown("Other board", for: other.id)
+        let second = BoardLiveEditorSession(store: fixture.store, board: try XCTUnwrap(fixture.store.board(for: .tag("Other"))),
+                                            defaults: fixture.defaults)
+        let shared = second.makeWebView()
+        XCTAssertTrue(shared === fixture.webView, "两块工作板用的是同一个编辑器")
+        XCTAssertNil(first.webView, "上一块交出了编辑器")
+        second.configure(fontSize: 13, dark: true, previewOnly: true)
+        try await Task.sleep(for: .milliseconds(60))
+        var snapshot = try await fixture.snapshot()
+        XCTAssertEqual(snapshot["source"] as? String, "Other board")
+        let otherFolds = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.board-fold-more').length") as? Int
+        XCTAssertEqual(otherFolds, 0, "折叠记忆不串到别的工作板")
+
+        XCTAssertTrue(first.makeWebView() === shared)
+        first.configure(fontSize: 13, dark: true, previewOnly: true)
+        try await Task.sleep(for: .milliseconds(60))
+        snapshot = try await fixture.snapshot()
+        XCTAssertEqual(snapshot["source"] as? String, "Edited " + Self.foldSource)
+        XCTAssertEqual(snapshot["head"] as? Int, 3, "光标还在原处")
+        let folded = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.board-fold-more').length") as? Int
+        XCTAssertEqual(folded, 1, "这块工作板的折叠还在")
+        first.undo()
+        try await Task.sleep(for: .milliseconds(60))
+        snapshot = try await fixture.snapshot()
+        XCTAssertEqual(snapshot["source"] as? String, Self.foldSource, "撤销历史跟着工作板走")
     }
 
     /// 在元素里横向 `fraction` 处模拟一次单击（按下、松开），返回点击的纵坐标。
