@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import SwiftUI
+import WebKit
 import XCTest
 import TimelineCore
 @testable import Timeline
@@ -104,7 +105,101 @@ final class MemoryFootprintProbe: XCTestCase {
 
         for _ in 0..<5 { _ = try store.quickLog("probe edit", on: Date()) }
         report("5 edits, both windows alive")
+
+        // 翻看两周的日记（每天一页）。
+        // 每一步包在自动释放池里，和应用里每个事件结束时清空一样（不包的话测试方法里的临时对象会一直攒到测试结束）。
+        func browse(_ offset: Int) {
+            autoreleasepool {
+                workspace.open(.journal, date: Calendar.current.date(byAdding: .day, value: -offset, to: Date())!)
+                notes.contentView?.layoutSubtreeIfNeeded()
+                notes.displayIfNeeded()
+            }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        for offset in 1...14 { browse(offset) }
+        report("+ 14 journal days browsed")
+        if let out = ProcessInfo.processInfo.environment["TIMELINE_MEMORY_HEAP"] {
+            for (tool, args) in [("/usr/bin/vmmap", ["--summary"]), ("/usr/bin/heap", ["-s"])] {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: tool)
+                process.arguments = args + [String(getpid())]
+                FileManager.default.createFile(atPath: out + "." + (tool as NSString).lastPathComponent, contents: nil)
+                process.standardOutput = FileHandle(forWritingAtPath: out + "." + (tool as NSString).lastPathComponent)
+                process.standardError = FileHandle.nullDevice
+                try? process.run()
+                process.waitUntilExit()
+            }
+        }
+
+        if ProcessInfo.processInfo.environment["TIMELINE_MEMORY_DAYS"] != nil {
+            for (label, range) in [("+ next 14 days", 15...28), ("revisit days 1-14", 1...14), ("revisit days 1-14 again", 1...14)] {
+                for offset in range { browse(offset) }
+                report(label)
+                func count(_ view: NSView?) -> Int { guard let view else { return 0 } ; return (view is InteractiveTaskText ? 1 : 0) + view.subviews.reduce(0) { $0 + count($1) } }
+                print("PROBE   InteractiveTaskText in windows:", count(main.contentView) + count(notes.contentView))
+            }
+            if let out = ProcessInfo.processInfo.environment["TIMELINE_MEMORY_HEAP"] {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/heap")
+                process.arguments = [String(getpid())]
+                let vmmap = Process()
+                vmmap.executableURL = URL(fileURLWithPath: "/usr/bin/vmmap")
+                vmmap.arguments = ["--summary", String(getpid())]
+                FileManager.default.createFile(atPath: out + ".after.vmmap", contents: nil)
+                vmmap.standardOutput = FileHandle(forWritingAtPath: out + ".after.vmmap")
+                vmmap.standardError = FileHandle.nullDevice
+                try? vmmap.run()
+                vmmap.waitUntilExit()
+                FileManager.default.createFile(atPath: out + ".after", contents: nil)
+                process.standardOutput = FileHandle(forWritingAtPath: out + ".after")
+                process.standardError = FileHandle.nullDevice
+                try? process.run()
+                process.waitUntilExit()
+            }
+        }
+
+        // 全局搜索：常见字，包含图片文字。
+        let started = Date()
+        let hits = GlobalSearch.hits(store: store, query: "的")
+        report(String(format: "search \"的\" %d hits %.0fms", hits.count, Date().timeIntervalSince(started) * 1000))
+
+        // 工作板编辑器：每个编辑器一份 WebKit 内容进程（不算在本进程里），分开统计。
+        var editors: [(BoardLiveEditorSession, WKWebView, QuietWindow)] = []
+        for board in store.boards.sorted(by: { $0.markdown.count > $1.markdown.count }).prefix(BoardNavigation.liveEditorLimit) {
+            let session = BoardLiveEditorSession(store: store, board: board, defaults: InMemoryDefaults())
+            let webView = session.makeWebView()
+            session.configure(fontSize: 13, dark: true, previewOnly: true)
+            let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 820), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = webView
+            window.orderBack(nil)
+            for _ in 0..<100 where !session.ready { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+            editors.append((session, webView, window))
+            report("board editor \(editors.count) (\(board.markdown.count) chars)")
+            print(String(format: "PROBE   web content processes %.1f MB", webFootprint(editors.map(\.1))))
+        }
+
+        // 窗口隐藏（应用里关窗口只是隐藏）：内容和图层还在不在。
+        notes.orderOut(nil)
+        main.orderOut(nil)
+        editors.forEach { $0.2.orderOut(nil) }
+        report("all windows hidden")
         notes.contentView = nil
         main.contentView = nil
+        editors.forEach { $0.2.contentView = nil }
+        editors.removeAll()
+        report("window contents released")
+    }
+
+    /// WebKit 内容进程的物理占用（去重后求和）。
+    private func webFootprint(_ views: [WKWebView]) -> Double {
+        let pids = Set(views.compactMap { ($0.value(forKey: "_webProcessIdentifier") as? NSNumber)?.int32Value }.filter { $0 > 0 })
+        return pids.reduce(0) { total, pid in
+            var info = rusage_info_v4()
+            let result = withUnsafeMutablePointer(to: &info) {
+                $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V4, $0) }
+            }
+            return total + (result == 0 ? Double(info.ri_phys_footprint) / 1_048_576 : 0)
+        }
     }
 }
