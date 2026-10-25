@@ -1,6 +1,6 @@
 import {EditorState, StateField, StateEffect, Compartment, Transaction, Annotation, Prec} from "@codemirror/state";
 import {EditorView, Decoration, WidgetType, keymap, drawSelection, rectangularSelection} from "@codemirror/view";
-import {defaultKeymap, history, historyKeymap, indentWithTab} from "@codemirror/commands";
+import {defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, undoDepth, redoDepth} from "@codemirror/commands";
 import {markdown, markdownLanguage, markdownKeymap} from "@codemirror/lang-markdown";
 import {syntaxTree, syntaxHighlighting, HighlightStyle, indentOnInput, bracketMatching} from "@codemirror/language";
 import {tags} from "@lezer/highlight";
@@ -312,6 +312,26 @@ const highlighting = HighlightStyle.define([
   {tag: tags.contentSeparator, class: "cm-syntax"}
 ]);
 
+// 浏览（只读预览）时也能撤销：勾掉的待办、刚保存的修改都能用 ⌘Z 找回。CodeMirror 的撤销命令在只读状态下不执行，
+// 这里临时放开可编辑，执行完立刻恢复；切换可编辑不进撤销历史。数据本身只读（没有写入权限）时不撤销。
+function runHistory(command) {
+  if (!view || currentReadOnly) return false;
+  const locked = view.state.readOnly;
+  if (locked) view.dispatch({effects: editable.reconfigure(editability(false))});
+  const done = command(view);
+  if (locked) view.dispatch({effects: editable.reconfigure(editability(true))});
+  return done;
+}
+
+let lastHistory = "";
+function reportHistory(state) {
+  const depth = {undo: undoDepth(state), redo: redoDepth(state)};
+  const key = depth.undo + "/" + depth.redo;
+  if (key === lastHistory) return;
+  lastHistory = key;
+  post({kind: "history", ...depth});
+}
+
 function snapshot() {
   return {source: view.state.doc.toString(), anchor: view.state.selection.main.anchor,
           head: view.state.selection.main.head, composing: composing || view.composing};
@@ -329,6 +349,12 @@ window.boardEditor = {
           livePreview.of(config.sourceMode ? [] : live),
           EditorView.atomicRanges.of(view => view.state.field(live, false)?.decorations.update({filter: (_from, _to, decoration) => decoration.spec.atomic === true}) ?? Decoration.none),
           editable.of(editability(config.readOnly || config.previewOnly)),
+          // 撤销 / 重做在浏览和编辑时都可用；没有可撤销的也吞掉按键，不落到应用别处的撤销上。
+          Prec.highest(keymap.of([
+            {key: "Mod-z", run: () => { runHistory(undo); return true; }, preventDefault: true},
+            {key: "Mod-Shift-z", run: () => { runHistory(redo); return true; }, preventDefault: true},
+            {key: "Mod-y", run: () => { runHistory(redo); return true; }, preventDefault: true}
+          ])),
           // ⌘Enter 是全应用统一的保存键：提交内容并回到只读浏览。
           Prec.highest(keymap.of([{key: "Mod-Enter", run: view => {
             if (view.state.readOnly || composing || view.composing) return false;
@@ -347,6 +373,7 @@ window.boardEditor = {
             spellcheck: "false", tabindex: "0"
           })),
           EditorView.updateListener.of(update => {
+            if (update.transactions.length) reportHistory(update.state);
             if (update.docChanged && !update.transactions.some(transaction => transaction.annotation(external))) {
               post({kind: "change", ...snapshot()});
             }
@@ -470,8 +497,9 @@ window.boardEditor = {
     return snapshot();
   },
   select(anchor, head = anchor) { view.dispatch({selection: {anchor, head}}); return snapshot(); },
-  undo() { const command = historyKeymap.find(item => item.key === "Mod-z"); command?.run(view); return snapshot(); },
-  redo() { const command = historyKeymap.find(item => item.key === "Mod-Shift-z"); command?.run(view); return snapshot(); },
+  undo() { runHistory(undo); return snapshot(); },
+  redo() { runHistory(redo); return snapshot(); },
+  history() { return {undo: undoDepth(view.state), redo: redoDepth(view.state)}; },
   view() { return view; }
 };
 post({kind: "ready"});

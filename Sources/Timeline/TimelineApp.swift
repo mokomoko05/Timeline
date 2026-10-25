@@ -380,8 +380,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func installKeyboardNavigation() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
-            return MainActor.assumeIsolated { self.handleKey(event) } ? nil : event
+            return MainActor.assumeIsolated { self.handleControlZ(event) || self.handleKey(event) } ? nil : event
         }
+    }
+
+    /// ⌃Z / ⌃⇧Z：和 ⌘Z / ⇧⌘Z 一样撤销、重做。只在编辑文字（输入框、工作板）时接管，终端里的 ⌃Z 照常发给程序。
+    private func handleControlZ(_ event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        guard event.keyCode == 6, modifiers == .control || modifiers == [.control, .shift] else { return false }
+        let board = BoardLiveEditorSession.active.map { modifiers == .control ? $0.handlesUndo : $0.handlesRedo } ?? false
+        guard board || (NSApp.keyWindow?.firstResponder as? NSText)?.isEditable == true else { return false }
+        if modifiers == .control { undoAction(nil) } else { redoAction(nil) }
+        return true
     }
 
     private func handleKey(_ event: NSEvent) -> Bool {
@@ -415,14 +425,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// ⌘Z：输入框里有能撤销的打字就撤销打字；没有（比如刚在日志窗口里删了日志，光标还在输入框里）就撤销上一步操作。
     @objc private func undoAction(_ sender: Any?) {
-        if let editor = BoardLiveEditorSession.active, editor.handlesTextCommands { editor.undo(); return }
+        if let editor = BoardLiveEditorSession.active, editor.handlesUndo { editor.undo(); return }
         if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isEditable, editor.undoManager?.canUndo == true {
             editor.undoManager?.undo()
         } else { store.undo() }
     }
 
     @objc private func redoAction(_ sender: Any?) {
-        if let editor = BoardLiveEditorSession.active, editor.handlesTextCommands { editor.redo(); return }
+        if let editor = BoardLiveEditorSession.active, editor.handlesRedo { editor.redo(); return }
         if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isEditable, editor.undoManager?.canRedo == true {
             editor.undoManager?.redo()
         } else { store.redo() }
@@ -491,13 +501,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         guard let action = item.representedObject as? MenuAction else {
             if item.action == #selector(undoAction(_:)) {
-                let typing = isEditingText
+                let typing = isEditingText || BoardLiveEditorSession.active?.handlesUndo == true
                 let name = store.undoManager.undoActionName
                 item.title = typing || name.isEmpty ? AppLocalized("撤销") : AppLocalizedFormat("撤销%@", AppLocalized(name))
                 return typing || store.undoManager.canUndo
             }
             if item.action == #selector(redoAction(_:)) {
-                let typing = isEditingText
+                let typing = isEditingText || BoardLiveEditorSession.active?.handlesRedo == true
                 let name = store.undoManager.redoActionName
                 item.title = typing || name.isEmpty ? AppLocalized("重做") : AppLocalizedFormat("重做%@", AppLocalized(name))
                 return typing || store.undoManager.canRedo

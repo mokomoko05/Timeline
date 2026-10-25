@@ -337,6 +337,42 @@ final class BoardLiveEditorTests: XCTestCase {
         XCTAssertEqual(undone["source"] as? String, "Before\n\n中文 body\n\nAfter")
     }
 
+    /// 浏览（只读预览）时也能撤销：⌘Enter 保存后的修改、勾掉的待办都能 ⌘Z 找回，撤销历史报给原生层。
+    func testUndoWorksWhileBrowsingAndReportsHistory() async throws {
+        let fixture = try LiveFixture(source: "Intro\n\n- [ ] Task\n")
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        fixture.session.setSourceMode(true)
+        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.select(5);window.boardEditor.replaceSelection(' edited')")
+        fixture.session.setSourceMode(false)
+        for _ in 0..<50 {
+            if (try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').isContentEditable") as? Bool) == false { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-check').click()")
+        let checked = try await fixture.snapshot()["source"] as? String
+        XCTAssertEqual(checked, "Intro edited\n\n- [x] Task\n")
+        let handled = try await fixture.webView.evaluateJavaScript(
+            "!document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:'z',metaKey:true,bubbles:true,cancelable:true}))") as? Bool
+        XCTAssertEqual(handled, true, "浏览时 ⌘Z 由编辑器处理")
+        let unchecked = try await fixture.snapshot()["source"] as? String
+        XCTAssertEqual(unchecked, "Intro edited\n\n- [ ] Task\n")
+        for _ in 0..<50 where fixture.session.redoDepth == 0 { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertGreaterThan(fixture.session.undoDepth, 0)
+        XCTAssertEqual(fixture.session.redoDepth, 1)
+        fixture.session.undo()
+        try await Task.sleep(for: .milliseconds(300))
+        let undone = try await fixture.snapshot()["source"] as? String
+        XCTAssertEqual(undone, "Intro\n\n- [ ] Task\n")
+        XCTAssertEqual(fixture.store.boards[0].markdown, "Intro\n\n- [ ] Task\n", "撤销后的内容照常保存")
+        fixture.session.redo()
+        try await Task.sleep(for: .milliseconds(60))
+        let redone = try await fixture.snapshot()["source"] as? String
+        XCTAssertEqual(redone, "Intro edited\n\n- [ ] Task\n")
+        let editable = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').isContentEditable") as? Bool
+        XCTAssertEqual(editable, false, "撤销完仍是只读浏览")
+    }
+
     func testArrowKeysMoveThroughFormattedAndCompletedTextCharacterByCharacter() async throws {
         let fixture = try LiveFixture(source: "**Bold** text\n\n- [x] Completed\n\nEnd")
         defer { fixture.close() }

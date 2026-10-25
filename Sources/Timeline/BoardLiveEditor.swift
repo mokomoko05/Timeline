@@ -43,6 +43,14 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         webView?.window === NSApp.keyWindow && hasTextFocus
     }
 
+    /// 编辑器自己的撤销历史（打字、勾待办、插入模板）还有几步。浏览时也算：工作板在前面时 ⌘Z 先撤销它。
+    private(set) var undoDepth = 0
+    private(set) var redoDepth = 0
+
+    /// 工作板是当前窗口，且光标在编辑器里或编辑器有可撤销 / 重做的修改。
+    var handlesUndo: Bool { webView?.window === NSApp.keyWindow && (hasTextFocus || undoDepth > 0) }
+    var handlesRedo: Bool { webView?.window === NSApp.keyWindow && (hasTextFocus || redoDepth > 0) }
+
     private var hasTextFocus: Bool {
         guard let webView, let responder = webView.window?.firstResponder as? NSView else { return false }
         return responder === webView || responder.isDescendant(of: webView)
@@ -214,6 +222,9 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
                     self?.flush()
                 }
             }
+        } else if kind == "history" {
+            undoDepth = body["undo"] as? Int ?? 0
+            redoDepth = body["redo"] as? Int ?? 0
         } else if kind == "preview" {
             flush()
             onPreview?()
