@@ -171,6 +171,11 @@ struct SourceEditor: UIViewRepresentable {
         view.keyboardDismissMode = .interactive
         view.text = text
         view.delegate = context.coordinator
+        let toolbar = MarkdownToolbar(textView: view) { [weak coordinator = context.coordinator, weak view] in
+            if let view { coordinator?.textViewDidChange(view) }
+        }
+        view.inputAccessoryView = toolbar
+        context.coordinator.toolbar = toolbar
         handle.view = view
         DispatchQueue.main.async { view.becomeFirstResponder() }
         return view
@@ -185,10 +190,21 @@ struct SourceEditor: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: SourceEditor
+        weak var toolbar: MarkdownToolbar?
 
         init(parent: SourceEditor) { self.parent = parent }
 
+        /// 列表里按回车：续上同样的记号；空的列表项按回车结束列表。输入法正在拼字时不管。
+        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            guard text == "\n", range.length == 0, textView.markedTextRange == nil,
+                  let edit = MarkdownEditing.newline(in: textView.text, at: range.location) else { return true }
+            toolbar?.apply(edit, to: textView)
+            textViewDidChange(textView)
+            return false
+        }
+
         func textViewDidChange(_ textView: UITextView) {
+            toolbar?.refreshUndo()
             let handle = parent.handle
             handle.pending?.cancel()
             let work = DispatchWorkItem { [weak textView] in

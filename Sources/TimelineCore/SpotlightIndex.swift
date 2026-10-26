@@ -1,12 +1,12 @@
 import Combine
-import CoreSpotlight
+@preconcurrency import CoreSpotlight
 import Foundation
 import OSLog
 import UniformTypeIdentifiers
 
 /// 放进系统 Spotlight 的一项：一条日志、一个待办或一页工作板。
-public struct SpotlightItem: Equatable {
-    public enum Kind: String { case log, task, board }
+public struct SpotlightItem: Equatable, Sendable {
+    public enum Kind: String, Sendable { case log, task, board }
 
     public let kind: Kind
     public let id: UUID

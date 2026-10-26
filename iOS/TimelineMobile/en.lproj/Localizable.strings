@@ -275,3 +275,16 @@
 "搜索全部内容" = "Search Everything";
 "待办、工作板正文、日志与笔记、每日小结。输入 #标签 只看这个标签。" = "Tasks, board text, entries, notes and daily summaries. Type #tag to see just that tag.";
 "搜索待办、工作板、日志" = "Search tasks, boards, entries";
+
+/* 工作板格式工具栏 */
+"撤销" = "Undo";
+"重做" = "Redo";
+"加粗" = "Bold";
+"斜体" = "Italic";
+"链接" = "Link";
+"列表" = "Bulleted List";
+"编号" = "Numbered List";
+"引用" = "Quote";
+"缩进" = "Indent";
+"取消缩进" = "Outdent";
+"收起键盘" = "Hide Keyboard";
