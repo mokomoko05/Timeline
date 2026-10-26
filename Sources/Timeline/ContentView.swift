@@ -508,7 +508,7 @@ struct ContentView: View {
                             expandedFinished.insert(id)
                             if let due = item.task.dueDate { select(due) }
                         }
-                        DispatchQueue.main.async { withAnimation(Motion.quick) { proxy.scrollTo(id, anchor: .center) } }
+                        DispatchQueue.main.async { proxy.scrollTo(id, anchor: .center) }
                         scrollTarget = nil
                     }
                 }
@@ -519,11 +519,11 @@ struct ContentView: View {
                 .onChange(of: scrollGroup) { id in
                     if let id {
                         if id == "undated" {
-                            withAnimation(Motion.quick) { proxy.scrollTo("undated", anchor: .top) }
+                            proxy.scrollTo("undated", anchor: .top)
                         } else if id == "today" {
-                            withAnimation(Motion.quick) { proxy.scrollTo(TaskTimelineSection.dayID(Date()), anchor: .top) }
+                            proxy.scrollTo(TaskTimelineSection.dayID(Date()), anchor: .top)
                         } else if let item = visible.first(where: { !$0.task.completed && (id == "overdue" ? ($0.task.effectiveDeadline ?? .distantFuture) < Date() : JournalDates.calendar.isDateInToday($0.task.dueDate ?? .distantPast)) }) {
-                            withAnimation(Motion.quick) { proxy.scrollTo(item.id, anchor: .top) }
+                            proxy.scrollTo(item.id, anchor: .top)
                         }
                         scrollGroup = nil
                     }
@@ -536,14 +536,14 @@ struct ContentView: View {
                 }
                 .onChange(of: interaction.selectedTaskID) { id in
                     if interaction.suppressNextTaskScroll { interaction.suppressNextTaskScroll = false; return }
-                    if let id { withAnimation(Motion.quick) { proxy.scrollTo(id) } }
+                    if let id { proxy.scrollTo(id) }
                 }
                 // 空日期定位到省略段，不为日历浏览添加空刻度。
                 .onChange(of: selectedDate) { _ in
                     DispatchQueue.main.async {
                         let sections = TaskTimelineSection.sections(for: orderedTasks, today: JournalDates.date(for: currentDayKey) ?? Date())
                         if let id = TaskTimelineSection.navigationID(for: selectedDate, in: sections) {
-                            withAnimation(Motion.quick) { proxy.scrollTo(id, anchor: .top) }
+                            proxy.scrollTo(id, anchor: .top)
                         }
                     }
                 }

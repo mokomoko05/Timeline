@@ -64,7 +64,9 @@ struct TaskTagLine: View {
         HStack(spacing: 4) {
             ForEach(tags, id: \.self) { tag in
                 Button {
-                    NotificationCenter.default.post(name: .timelineOpenTag, object: tag, userInfo: log.map { ["log": $0] })
+                    // 笔记窗口已经建好就直接在里面打开（主窗口可能收起着，界面已经释放）；否则交给主窗口去建。
+                    if NotesWindowController.shared.window != nil { NotesWindowController.shared.openTag(tag, log: log) }
+                    else { NotificationCenter.default.post(name: .timelineOpenTag, object: tag, userInfo: log.map { ["log": $0] }) }
                 } label: {
                     Text("#" + tag).font(.system(size: typography.pt(fontSize))).lineLimit(1)
                         .padding(.horizontal, 5).padding(.vertical, 1)

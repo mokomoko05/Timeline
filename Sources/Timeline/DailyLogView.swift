@@ -413,7 +413,7 @@ struct DailyLogView: View {
                 }
                 // 打开时不滚动，停在顶部。只有自己刚写了一条新日志时，才跟到那一条。
                 .onChange(of: entry.logs.count) { [count = entry.logs.count] new in
-                    if focused, new > count { withAnimation(Motion.quick) { proxy.scrollTo("tail", anchor: .bottom) } }
+                    if focused, new > count { proxy.scrollTo("tail", anchor: .bottom) }
                 }
             }
         }

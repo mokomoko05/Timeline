@@ -36,6 +36,10 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
     }
     /// 笔记关闭后，Timeline 别的窗口（主窗口、终端）如果还开着，焦点交给它；由 AppDelegate 设置。
     var handoffWindow: () -> NSWindow? = { nil }
+    /// 笔记窗口出现在前面时调用：主窗口和笔记互斥，AppDelegate 在这里收起主窗口。
+    var willShow: () -> Void = {}
+    /// 主窗口要出现而关掉笔记时不交还焦点（焦点就在主窗口上）。
+    private var closingForMain = false
 
     var isVisible: Bool { window?.isVisible == true }
 
@@ -77,9 +81,27 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
     func bringToFront() {
         guard let window else { return }
         if window.isMiniaturized { window.deminiaturize(nil) }
+        willShow()
         WindowFade.reset(window)
         window.makeKeyAndOrderFront(nil)
         Headless.activateApp()
+    }
+
+    /// 主窗口出现时关掉笔记（两者互斥），焦点留在主窗口，不回到之前的应用。
+    func closeForMain() {
+        guard let window, window.isVisible else { return }
+        closingForMain = true
+        window.close()
+        closingForMain = false
+    }
+
+    /// 在已经建好的笔记窗口里打开一个标签的笔记本，停在 `log` 那一条。
+    func openTag(_ tag: String, log: UUID?) {
+        NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
+        nav.open(tag: tag)
+        workspace.open(.notes)
+        if let log { nav.revealNote = log }
+        bringToFront()
     }
 
     func hotKeyAction(_ appWasActive: Bool) -> NotesHotKeyAction {
@@ -104,6 +126,7 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
         nav.open(task: id)
         workspace.open(.notes)
         if let log { nav.revealNote = log }
+        bringToFront()
     }
     func shift(_ days: Int) { setDate(JournalDates.calendar.date(byAdding: .day, value: days, to: journalDate) ?? journalDate) }
     var isKey: Bool { window?.isKeyWindow == true }
@@ -144,6 +167,7 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
 
     /// 关闭后：Timeline 还有别的窗口开着就交给它，否则回到刚才在用的应用（和主窗口、终端的收起一致）。
     func windowWillClose(_ notification: Notification) {
+        guard !closingForMain else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self, NSApplication.shared.isActive else { return }
             PreviousApp.restore(handoff: handoffWindow())

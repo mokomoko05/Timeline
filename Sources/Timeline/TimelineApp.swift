@@ -102,6 +102,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }, extraHide: { [weak self] in self?.shell.hideForAppDeactivation() })
         shell.handoffWindow = { [unowned self] in otherWindowForHandoff(excluding: nil) }
         NotesWindowController.shared.handoffWindow = { [unowned self] in otherWindowForHandoff(excluding: NotesWindowController.shared.window) }
+        // 主窗口和笔记 / 日记互斥：一个出现就收起另一个。
+        NotesWindowController.shared.willShow = { [unowned self] in hideMainForNotes() }
         _ = ThemeStore.shared   // 读取已保存的配色和外观并应用
         _ = LanguageStore.shared
         languageObserver = NotificationCenter.default.addObserver(forName: .appLanguageDidChange, object: nil, queue: .main) { [weak self] _ in
@@ -253,6 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     private func showMainWindow() {
+        NotesWindowController.shared.closeForMain()
         mainContent?.restoreIfNeeded()
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.alphaValue = 1
@@ -274,6 +277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     private func showMainWindowSoftly() {
+        NotesWindowController.shared.closeForMain()
         PreviousApp.remember()
         NSApp.unhide(nil)
         moveToMouseScreenIfNeeded()
@@ -298,6 +302,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             PreviousApp.restore(handoff: otherWindowForHandoff(excluding: window))
         }
         if Motion.reduced { finish() } else { fadeWindow(to: 0, duration: 0.14, completion: finish) }
+    }
+
+    /// 笔记 / 日记出现时收起主窗口：直接收起，不交还焦点（焦点马上给笔记窗口）。
+    private func hideMainForNotes() {
+        guard window.isVisible else { return }
+        NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
+        WindowFade.reset(window)
+        window.orderOut(nil)
+        mainContent?.windowHidden()
     }
 
     private var visibleNotesWindow: NSWindow? {
@@ -574,7 +587,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let wasActive = NSApp.isActive
         PreviousApp.remember()
         NSApp.unhide(nil)
-        commands.send(.notesHotKey(appWasActive: wasActive))
+        // 笔记窗口建好后直接开关它：主窗口常收起着，界面可能已经释放，不能再靠它转发。
+        let notes = NotesWindowController.shared
+        guard notes.window != nil else {
+            mainContent?.restoreIfNeeded()
+            commands.send(.notesHotKey(appWasActive: wasActive))
+            return
+        }
+        switch notes.hotKeyAction(wasActive) {
+        case .open, .bringForward: notes.bringToFront()
+        case .close: notes.close()
+        }
     }
 
     private func menuItem(_ title: String, key: String = "", modifiers: NSEvent.ModifierFlags = [.command],

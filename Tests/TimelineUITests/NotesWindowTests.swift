@@ -182,6 +182,38 @@ final class NotesWindowTests: XCTestCase {
         controller.close()
     }
 
+    /// 主窗口和笔记互斥：笔记出现前请主窗口收起；主窗口出现时笔记关掉，且不把焦点交还给之前的应用。
+    func testNotesAndMainWindowTakeTurns() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let main = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        main.isReleasedWhenClosed = false
+        main.orderFront(nil)
+        let controller = NotesWindowController()
+        Self.keepAlive += [main, controller]
+        controller.willShow = { main.orderOut(nil) }
+        var handedOff = 0
+        controller.handoffWindow = { handedOff += 1; return nil }
+
+        controller.show(store: store, taskID: nil, reveal: { _ in }, openDay: { _ in })
+        let window = try XCTUnwrap(controller.window)
+        XCTAssertTrue(window.isVisible)
+        XCTAssertFalse(main.isVisible, "笔记出现时主窗口收起")
+
+        main.orderFront(nil)
+        controller.closeForMain()
+        XCTAssertFalse(window.isVisible, "主窗口出现时笔记关掉")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(handedOff, 0, "为主窗口让路时不交还焦点")
+
+        controller.openTag("Work", log: nil)
+        XCTAssertTrue(window.isVisible, "已经建好的笔记窗口直接打开标签")
+        XCTAssertEqual(controller.workspace.mode, .notes)
+        XCTAssertFalse(main.isVisible)
+        controller.close()
+    }
+
     func testToggleOpensThenClosesAndKeepsSizeAcrossToggles() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
