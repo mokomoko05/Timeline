@@ -437,10 +437,10 @@ final class BoardLiveEditorTests: XCTestCase {
     }
 
     /// 在元素里横向 `fraction` 处模拟一次单击（按下、松开），返回点击的纵坐标。
-    private static func clickScript(_ element: String, fraction: Double = 0.3) -> String {
+    private static func clickScript(_ element: String, fraction: Double = 0.3, detail: Int = 1) -> String {
         """
         (()=>{const el=\(element);const r=el.getBoundingClientRect();const x=r.left+r.width*\(fraction),y=r.top+r.height/2;
-        const o={bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,detail:1};
+        const o={bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,detail:\(detail)};
         el.dispatchEvent(new MouseEvent('mousedown',o));el.dispatchEvent(new MouseEvent('mouseup',o));return y;})()
         """
     }
@@ -464,6 +464,29 @@ final class BoardLiveEditorTests: XCTestCase {
         XCTAssertTrue(text.contains("alpha"), "再点一次展开")
         let unchanged = try await fixture.snapshot()["source"] as? String
         XCTAssertEqual(unchanged, Self.foldSource)
+    }
+
+    /// 连续快点标题：第二下（双击）也算一次收起 / 展开；连点箭头时原生层的回传不会把新状态盖回去。
+    func testRapidClicksOnAHeadingEachToggleTheFold() async throws {
+        let fixture = try LiveFixture(source: Self.foldSource)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        try await browse(fixture.session, fixture.webView)
+        let heading = "document.querySelector('.cm-line.cm-foldable')"
+        _ = try await fixture.webView.evaluateJavaScript(Self.clickScript(heading, fraction: 0.6))
+        _ = try await fixture.webView.evaluateJavaScript(Self.clickScript(heading, fraction: 0.6, detail: 2))
+        var text = try await visibleText(fixture.webView)
+        XCTAssertTrue(text.contains("alpha"), "双击的第二下把它展开回来")
+
+        _ = try await fixture.webView.evaluateJavaScript("""
+            (()=>{const b=()=>document.querySelector('.board-heading-fold');const first=b();first.click();
+            const same=b()===first;b().click();return same;})()
+            """)
+        try await Task.sleep(for: .milliseconds(300))
+        text = try await visibleText(fixture.webView)
+        XCTAssertTrue(text.contains("alpha"), "连点两下箭头：收起再展开，不被回传改回收起")
+        let reused = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.board-fold-more').length") as? Int
+        XCTAssertEqual(reused, 0)
     }
 
     /// 浏览时点下的位置有一根光标；进入编辑（包括完整源码）时光标就在那里、那一行留在屏幕上原来的高度，回到浏览时光标还在。

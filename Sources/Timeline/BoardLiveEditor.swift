@@ -108,6 +108,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     deinit { NotificationCenter.default.removeObserver(self) }
 
     static func foldsKey(_ id: UUID) -> String { BoardFolds.key(id) }
+    private var recordingOwnFold = false
 
     /// 折叠记忆（哪些标题收起了、哪些折叠块展开了）在别处改了（比如笔记里的看板内容）：编辑器跟着变。
     @objc private func foldsChanged(_ notification: Notification) {
@@ -115,6 +116,8 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         let folds = BoardFolds.load(boardID, defaults: defaults)
         guard settings["folds"] as? [String: Bool] != folds else { return }
         settings["folds"] = folds
+        // 编辑器自己刚折叠的：它已经是这个状态。回传反而会在连续快点时把更新的一次点击盖回旧状态。
+        guard !recordingOwnFold else { return }
         applyConfiguration()
     }
 
@@ -343,7 +346,9 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
             }
         } else if kind == "fold", let key = body["key"] as? String, let value = body["value"] as? Bool {
             // 存进共用的折叠记忆；通知回到 foldsChanged 更新配置（编辑器里已经是这个状态，不会重画）。
+            recordingOwnFold = true
             BoardFolds.set(key, value, board: boardID, defaults: defaults)
+            recordingOwnFold = false
         } else if kind == "history" {
             undoDepth = body["undo"] as? Int ?? 0
             redoDepth = body["redo"] as? Int ?? 0

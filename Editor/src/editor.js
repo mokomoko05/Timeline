@@ -154,13 +154,20 @@ class HeadingFoldWidget extends WidgetType {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "board-heading-fold";
+    button.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>';
+    this.updateDOM(button);
+    button.addEventListener("mousedown", event => event.preventDefault());
+    // 按按钮上现在的状态翻转：按钮在两次点击之间被重画也不会按旧状态再设一遍。
+    button.addEventListener("click", () => setFold(button.dataset.key, button.dataset.folded !== "true", lineStart(button)));
+    return button;
+  }
+  // 状态变了也沿用同一个按钮：快速连点时按下和松开落在同一个元素上，点击不会丢。
+  updateDOM(button) {
+    button.dataset.key = this.key;
     button.dataset.folded = String(this.folded);
     button.setAttribute("aria-expanded", String(!this.folded));
     button.setAttribute("aria-label", this.folded ? (labels.expand || "展开") : (labels.collapse || "收起"));
-    button.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>';
-    button.addEventListener("mousedown", event => event.preventDefault());
-    button.addEventListener("click", () => setFold(this.key, !this.folded, lineStart(button)));
-    return button;
+    return true;
   }
   ignoreEvent() { return true; }
 }
@@ -275,7 +282,7 @@ function browsePointerUp(event) {
     if (view.state.field(browseCaret) != null) view.dispatch({effects: setBrowseCaret.of(null)});
     return;
   }
-  if (moved || event.detail > 1) return;
+  if (moved || (event.detail > 1 && !event.target.closest?.(".cm-line.cm-foldable"))) return;
   browseRange = null;
   let position = view.posAtCoords({x: event.clientX, y: event.clientY});
   if (position == null) return;
@@ -760,6 +767,8 @@ window.boardEditor = {
         if (!view.state.readOnly || event.button !== 0) return;
         if (event.target.closest?.("button, .board-check, .board-details, .board-open-link, .board-copy-code")) return;
         pointerDown = {x: event.clientX, y: event.clientY};
+        // 可折叠的标题上连续快点：每一下都是一次收起 / 展开，不让第二下变成双击选词。
+        if (event.detail > 1 && event.target.closest?.(".cm-line.cm-foldable")) event.preventDefault();
         event.stopPropagation();
       }, true);
       view.dom.addEventListener("mouseup", browsePointerUp);

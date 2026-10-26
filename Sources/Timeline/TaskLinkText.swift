@@ -415,6 +415,12 @@ final class InteractiveTaskText: NSTextView {
     override func mouseDown(with event: NSEvent) {
         if markdown {
             let point = convert(event.locationInWindow, from: nil)
+            // 标题上连续快点：每一下都收起 / 展开，不当成双击进入编辑或选词。
+            if event.clickCount > 1, let heading = headingKey(at: point) {
+                onSelect?()
+                toggleHeading(heading)
+                return
+            }
             if event.clickCount == 2 || link(at: point) != nil || taskRegions().contains(where: { $0.rect.contains(point) }) {
                 activate(at: point, clickCount: event.clickCount)
                 return

@@ -182,44 +182,46 @@ struct DayRhythmStrip: View {
     }
 
     var body: some View {
+        // 轨道、专注时段和记录点都画得醒目一些：记录点用带底色描边的圆点，挨得近也分得开。
         GeometryReader { geometry in
             let width = geometry.size.width
             ZStack(alignment: .leading) {
-                Capsule().fill(Palette.line.opacity(0.35)).frame(height: 4)
+                Capsule().fill(Palette.line.opacity(0.6)).frame(height: 6)
                 ForEach(Array(focusSpans.enumerated()), id: \.offset) { _, span in
-                    Capsule().fill(Palette.accent.opacity(0.55))
-                        .frame(width: max(4, (span.1 - span.0) * width), height: 4)
+                    Capsule().fill(Palette.accent.opacity(0.7))
+                        .frame(width: max(6, (span.1 - span.0) * width), height: 6)
                         .offset(x: span.0 * width)
                 }
                 ForEach(logs) { log in
                     Button { select(log.id) } label: {
-                        Capsule().fill(LogEventStyle.color(log)).frame(width: 2, height: 10)
-                            .frame(width: 8, height: 16).contentShape(Rectangle())
+                        Circle().fill(LogEventStyle.color(log)).frame(width: 9, height: 9)
+                            .overlay(Circle().strokeBorder(Palette.background, lineWidth: 1.5))
+                            .frame(width: 14, height: 22).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .help(NoteThread.shortTime(log.createdAt) + " · " + String(TaskText.rendered(LogEventStyle.body(log)).characters.prefix(40)))
-                    .offset(x: fraction(log.createdAt) * width - 4)
+                    .offset(x: fraction(log.createdAt) * width - 7)
                 }
                 if JournalDates.calendar.isDateInToday(date) {
-                    Circle().fill(Palette.accent).frame(width: 6, height: 6)
-                        .overlay(Circle().strokeBorder(Palette.background, lineWidth: 1.5))
-                        .offset(x: fraction(Date()) * width - 3)
+                    Capsule().fill(Palette.accent).frame(width: 3, height: 18)
+                        .overlay(Capsule().strokeBorder(Palette.background, lineWidth: 1))
+                        .offset(x: fraction(Date()) * width - 1.5)
                         .help("现在")
                 }
             }
-            .frame(height: 16)
+            .frame(height: 22)
         }
-        .frame(height: 16)
+        .frame(height: 22)
         .overlay(alignment: .bottom) {
             HStack {
                 ForEach([0, 6, 12, 18, 24], id: \.self) { hour in
-                    Text("\(hour)").font(.system(size: 9)).monospacedDigit().foregroundStyle(Palette.muted.opacity(0.7))
+                    Text("\(hour)").font(.system(size: 10)).monospacedDigit().foregroundStyle(Palette.muted)
                     if hour < 24 { Spacer(minLength: 0) }
                 }
             }
-            .offset(y: 12)
+            .offset(y: 14)
         }
-        .padding(.bottom, 12)
+        .padding(.bottom, 14)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("这一天的记录分布")
     }

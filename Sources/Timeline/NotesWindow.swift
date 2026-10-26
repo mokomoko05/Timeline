@@ -385,7 +385,8 @@ struct UnifiedJournalView: View {
                 }
                 Divider()
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
+                    // 一天的日志不多时整列排好，滚动条按真实高度算（长日志也不会让它跳）。
+                    NotesStack(lazy: entry.logs.count > NotesView.lazyThreshold, spacing: 0) {
                         if entry.logsInTimeOrder.isEmpty {
                             VStack(spacing: 8) {
                                 Image(systemName: "book.pages").font(.system(size: 30, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))

@@ -71,6 +71,28 @@ final class MarkdownHeadingFoldTests: XCTestCase {
     }
 
     /// 工作板正文的折叠范围和键与编辑器一致：到下一个同级或更高级标题为止，不越过折叠块，末尾空行不算。
+    /// 标题上快速连点：第二下（双击）也收起 / 展开，不进入编辑。
+    func testDoubleClickOnAHeadingTogglesInsteadOfEditing() throws {
+        let view = InteractiveTaskText(frame: NSRect(x: 0, y: 0, width: 360, height: 400))
+        view.markdown = true
+        var toggled: [String] = []
+        var edited = false
+        view.onToggleHeading = { toggled.append($0) }
+        view.onEdit = { edited = true }
+        view.textStorage?.setAttributedString(render([]))
+        let region = try XCTUnwrap(view.headingRegions().first { $0.key == "h1:A#0" })
+        let window = QuietWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        defer { window.contentView = nil; window.close() }
+        let point = view.convert(NSPoint(x: region.rect.midX, y: region.rect.midY), to: nil)
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+                                                     windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 2, pressure: 1))
+        view.mouseDown(with: event)
+        XCTAssertEqual(toggled, ["h1:A#0"])
+        XCTAssertFalse(edited)
+    }
+
     func testBoardFoldLayoutMatchesTheEditor() {
         let board = "# A\n\nalpha\n\n## A1\n\ninside\n\n# B\n\nbeta\n\n<details>\n<summary>D</summary>\n\n## In details\n\nhidden body\n\n</details>\n\n```\n# not a heading\n```\n# **Bold** title ##\n"
         let layout = BoardFoldLayout(board)

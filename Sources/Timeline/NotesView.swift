@@ -1101,15 +1101,17 @@ extension View {
 }
 
 /// 笔记列表的容器：内容不多时用普通 VStack（滚动条比例准确），很长时才用 LazyVStack。
-private struct NotesStack<Content: View>: View {
+/// 懒加载时没画出来的行只能按估计的高度算，有长条目时滚动条会忽大忽小、位置跳动。
+struct NotesStack<Content: View>: View {
     let lazy: Bool
+    var spacing: CGFloat = 4
     @ViewBuilder let content: () -> Content
 
     var body: some View {
         if lazy {
-            LazyVStack(alignment: .leading, spacing: 4, content: content)
+            LazyVStack(alignment: .leading, spacing: spacing, content: content)
         } else {
-            VStack(alignment: .leading, spacing: 4, content: content)
+            VStack(alignment: .leading, spacing: spacing, content: content)
         }
     }
 }

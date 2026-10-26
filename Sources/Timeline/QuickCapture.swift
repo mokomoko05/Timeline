@@ -400,10 +400,13 @@ struct QuickCaptureView: View {
                           mention: mode == .log ? mention : nil)
                     .fixedSize(horizontal: false, vertical: true)
                 if mode == .todo {
-                    DraftDeadlineButton(options: $model.creationOptions,
-                                        initial: model.creationOptions.applying(to: parsed.resolve(defaultDay: Date()).todo))
-                        .foregroundStyle(Palette.muted).frame(maxWidth: 94)
-                    TodoDraftTagButton(store: store, text: $model.text)
+                    // 日期与标签贴在一起靠右；按内容取宽，不再撑出一块空白。
+                    HStack(spacing: 0) {
+                        DraftDeadlineButton(options: $model.creationOptions,
+                                            initial: model.creationOptions.applying(to: parsed.resolve(defaultDay: Date()).todo))
+                            .foregroundStyle(Palette.muted)
+                        TodoDraftTagButton(store: store, text: $model.text)
+                    }.fixedSize()
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
