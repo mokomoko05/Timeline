@@ -3,16 +3,14 @@ import SwiftUI
 import TimelineCore
 import UIKit
 
-/// 日记：顶部是可以横向滑动的日期条，下面只显示选中的那一天；在内容上左右划动换到前后一天。
+/// 日记：只显示选中的那一天；左上角日历跳到任意一天，在内容上左右划动换到前后一天。
 /// 只渲染当前这一天（不用分页视图一次挂上所有页面），前后两天的 Markdown 在后台预先解析，换天时不卡。
 struct JournalView: View {
     @ObservedObject var store: JournalStore
     let sync: SyncModel
     @State private var selection = JournalDates.key(Date())
-    @State private var picking = false
     @State private var composing = false
     @State private var query = ""
-    @State private var direction: Edge = .trailing
     /// 在底部节奏条上点了某个时刻：滚到那条日志。
     @State private var jump: UUID?
     /// 右下角跳到顶部 / 底部的按钮（不订阅：滚动时只刷新按钮）。
@@ -24,8 +22,6 @@ struct JournalView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 if query.isEmpty {
-                    DateStrip(keys: keys, counts: byDay.mapValues(\.count), selection: selection) { go(to: $0, keys: keys) }
-                    Divider().overlay(Palette.line.opacity(0.6))
                     page(byDay[selection] ?? [], keys: keys)
                 } else {
                     JournalSearchResults(store: store, query: query)
@@ -39,7 +35,7 @@ struct JournalView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { picking = true } label: { Image(systemName: "calendar") }
+                    CalendarButton(days: keys, selection: selection) { go(to: $0, keys: keys) }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if selection != JournalDates.key(Date()) {
@@ -60,9 +56,6 @@ struct JournalView: View {
             }
             .sheet(isPresented: $composing) {
                 ComposeSheet(store: store) { selection = JournalDates.key(Date()) }
-            }
-            .sheet(isPresented: $picking) {
-                DayPicker(days: Set(keys), selection: Binding(get: { selection }, set: { go(to: $0, keys: keys) }))
             }
             .onAppear { prewarm(around: selection, keys: keys, byDay: byDay) }
             .onChange(of: selection) { _, key in prewarm(around: key, keys: keys, byDay: byDay) }
@@ -100,7 +93,6 @@ struct JournalView: View {
             .refreshable { await sync.syncNow() }
             // 换一天就是一个新的滚动视图：从顶部开始，不沿用上一天的位置。
             .id(selection)
-            .transition(.asymmetric(insertion: .move(edge: direction).combined(with: .opacity), removal: .opacity))
             .simultaneousGesture(
                 DragGesture(minimumDistance: 30).onEnded { value in
                     let dx = value.translation.width, dy = value.translation.height
@@ -113,8 +105,7 @@ struct JournalView: View {
 
     private func go(to key: String, keys: [String]) {
         guard key != selection else { return }
-        direction = key > selection ? .trailing : .leading
-        withAnimation(.easeOut(duration: 0.18)) { selection = key }
+        selection = key
     }
 
     private func neighbor(of key: String, in keys: [String], by offset: Int) -> String? {
@@ -126,56 +117,6 @@ struct JournalView: View {
     private func prewarm(around key: String, keys: [String], byDay: [String: [JournalStore.LoggedLog]]) {
         let near = [-2, -1, 1, 2].compactMap { neighbor(of: key, in: keys, by: $0) }
         MarkdownBlock.prewarm(near.flatMap { byDay[$0] ?? [] }.map { LogStyle.body($0.log) }.filter { !$0.isEmpty })
-    }
-}
-
-/// 日期条：有记录的日子排成一行，可以横向滑动，点一下跳过去；圆点多少表示那天记了多少。
-private struct DateStrip: View {
-    let keys: [String]
-    let counts: [String: Int]
-    let selection: String
-    let select: (String) -> Void
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 6) {
-                    ForEach(keys, id: \.self) { key in
-                        cell(key).id(key).onTapGesture { select(key) }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            }
-            .onAppear { proxy.scrollTo(selection, anchor: .center) }
-            .onChange(of: selection) { _, key in proxy.scrollTo(key, anchor: .center) }
-        }
-        .frame(height: 76)
-    }
-
-    private func cell(_ key: String) -> some View {
-        let date = JournalDates.date(for: key) ?? Date()
-        let selected = key == selection
-        let today = JournalDates.calendar.isDateInToday(date)
-        let day = JournalDates.calendar.component(.day, from: date)
-        let count = counts[key] ?? 0
-        return VStack(spacing: 3) {
-            Text(day == 1 || key == keys.first ? date.formatted(.dateTime.month(.abbreviated)) : date.formatted(.dateTime.weekday(.narrow)))
-                .font(.caption2)
-                .foregroundStyle(selected ? .white.opacity(0.85) : Palette.muted)
-            Text("\(day)")
-                .font(.system(size: 17, weight: selected || today ? .bold : .medium).monospacedDigit())
-                .foregroundStyle(selected ? .white : (today ? Palette.accent : Palette.ink))
-            HStack(spacing: 2) {
-                ForEach(0..<min(3, (count + 4) / 5), id: \.self) { _ in
-                    Circle().fill(selected ? .white : Palette.accent.opacity(0.7)).frame(width: 4, height: 4)
-                }
-            }
-            .frame(height: 4)
-        }
-        .frame(width: 42, height: 58)
-        .background(selected ? Palette.accent : (today ? Palette.soft : .clear), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .contentShape(Rectangle())
     }
 }
 
@@ -360,34 +301,47 @@ private struct JournalSearchResults: View {
     }
 }
 
-/// 跳到某一天：日历上有记录的日子可选。
-private struct DayPicker: View {
-    let days: Set<String>
-    @Binding var selection: String
-    @Environment(\.dismiss) private var dismiss
-    @State private var date = Date()
+/// 左上角的日历按钮。弹出状态放在这个小视图里：点按钮只刷新它，不重算整页日记，弹得快。
+private struct CalendarButton: View {
+    let days: [String]
+    let selection: String
+    let go: (String) -> Void
+    @State private var picking = false
 
     var body: some View {
-        NavigationStack {
-            DatePicker("日期", selection: $date, in: ...Date(), displayedComponents: .date)
-                .datePickerStyle(.graphical)
-                .padding()
-                .navigationTitle("跳到日期")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("前往") {
-                            let key = JournalDates.key(date)
-                            // 没记录的日子：去最近的、更早的一天。
-                            selection = days.contains(key) ? key : (days.filter { $0 <= key }.max() ?? days.min() ?? key)
-                            dismiss()
-                        }
-                    }
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+        Button { picking = true } label: { Image(systemName: "calendar") }
+            .sheet(isPresented: $picking) {
+                DayPicker(days: Set(days), selection: selection) { key in
+                    picking = false
+                    go(key)
                 }
-                .onAppear { date = JournalDates.date(for: selection) ?? Date() }
-        }
-        .presentationDetents([.medium, .large])
+            }
+    }
+}
+
+/// 跳到某一天：点日历上的日子直接过去，下拉关掉就是取消。
+private struct DayPicker: View {
+    let days: Set<String>
+    let pick: (String) -> Void
+    @State private var date: Date
+
+    init(days: Set<String>, selection: String, pick: @escaping (String) -> Void) {
+        self.days = days
+        self.pick = pick
+        _date = State(initialValue: JournalDates.date(for: selection) ?? Date())
+    }
+
+    var body: some View {
+        DatePicker("日期", selection: $date, in: ...Date(), displayedComponents: .date)
+            .datePickerStyle(.graphical)
+            .padding()
+            .onChange(of: date) { _, date in
+                let key = JournalDates.key(date)
+                // 没记录的日子：去最近的、更早的一天。
+                pick(days.contains(key) ? key : (days.filter { $0 <= key }.max() ?? days.min() ?? key))
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
     }
 }
 
