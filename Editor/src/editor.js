@@ -765,10 +765,14 @@ function editorExtensions(config) {
             compositionstart() { composing = true; },
             compositionend() { composing = false; setTimeout(commit, 0); },
             // 光标进出编辑器：按编辑区自己的焦点算（不看窗口是不是在前台），切到别的应用再回来时版面不变。
-            focus(_event, view) { if (!view.state.field(focused)) view.dispatch({effects: setFocused.of(true)}); },
+            focus(_event, view) {
+              if (!view.state.field(focused)) view.dispatch({effects: setFocused.of(true)});
+              post({kind: "focus", value: true});
+            },
             blur(_event, view) {
               commit();
               if (view.state.field(focused)) view.dispatch({effects: setFocused.of(false)});
+              post({kind: "focus", value: false});
             },
             click(event) {
               const link = event.target.closest("[data-url]");
@@ -875,6 +879,16 @@ window.boardEditor = {
     if (config.fontSize) document.documentElement.style.setProperty("--font-size", config.fontSize + "px");
     return snapshot();
   },
+  // iPhone 键盘上方的格式按钮：原生层按全文和选区算好替换，这里作为一次输入（进撤销历史）应用。
+  applyEdit(from, to, insert, anchor, head) {
+    if (currentReadOnly) return false;
+    view.dispatch({changes: {from, to, insert}, selection: {anchor, head}, scrollIntoView: true,
+                   annotations: Transaction.userEvent.of("input.format")});
+    view.focus();
+    return true;
+  },
+  blur() { view.contentDOM.blur(); },
+
   snapshot,
   edit() {
     if (currentReadOnly) return;
@@ -988,4 +1002,8 @@ window.boardEditor = {
   },
   view() { return view; }
 };
+// 编辑区变矮（iPhone 弹出键盘）时光标还要看得见。
+window.addEventListener("resize", () => {
+  if (view?.hasFocus) view.dispatch({effects: EditorView.scrollIntoView(view.state.selection.main.head, {y: "nearest", yMargin: 24})});
+});
 post({kind: "ready"});

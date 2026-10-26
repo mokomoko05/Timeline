@@ -10,6 +10,7 @@
 		A10000000000000000000001 /* TimelineCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000020 /* TimelineCore */; };
 		A10000000000000000000022 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000023 /* Markdown */; };
 		B10000000000000000000001 /* TimelineFocus.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* TimelineFocus.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A10000000000000000000031 /* EditorAssets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000030 /* EditorAssets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -39,6 +40,7 @@
 /* Begin PBXFileReference section */
 		A10000000000000000000002 /* Timeline.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Timeline.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10000000000000000000002 /* TimelineFocus.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TimelineFocus.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000030 /* EditorAssets */ = {isa = PBXFileReference; lastKnownFileType = folder; name = EditorAssets; path = ../Sources/Timeline/EditorAssets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -73,6 +75,7 @@
 				A10000000000000000000003 /* TimelineMobile */,
 				B10000000000000000000006 /* Shared */,
 				B10000000000000000000005 /* TimelineFocus */,
+				A10000000000000000000030 /* EditorAssets */,
 				A10000000000000000000006 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -177,6 +180,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000031 /* EditorAssets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

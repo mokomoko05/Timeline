@@ -40,6 +40,8 @@ struct BoardsView: View {
             .overlay { if boards.isEmpty { ContentUnavailableView("没有工作板", systemImage: "doc.text", description: Text("在待办页面创建")) } }
             .navigationTitle("工作板")
             .navigationDestination(for: UUID.self) { BoardPage(store: store, id: $0) }
+            // 先在后台把编辑器网页加载好，点进工作板时不用等。
+            .onAppear { BoardWebSession.preload() }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { note in
                 if note.object as? String == "board", let first = boards.first { path = [first.id] }
             }
@@ -74,152 +76,46 @@ private struct BoardOutline: View {
     }
 }
 
-/// 一页工作板：阅读时标题可以收起（记住状态）、勾选可以直接点；右上角切到源码编辑。
-///
-/// 编辑用原生的文本框，按键不经过 SwiftUI：工作板常有上万字，SwiftUI 的 `TextEditor` 每个字都要把全文复制、比较一遍，
-/// 写进数据还会让所有页面重算。停顿半秒才写进数据；点「完成」、离开这一页、应用退到后台时立即写回。
+/// 一页工作板：和 Mac 一样是渲染好的 Markdown，点到哪里就在哪里编辑，光标所在的元素才露出 Markdown 标记。
+/// 右上角菜单里可以切到完整源码；编辑时右上角「完成」收起键盘并写回。
 struct BoardPage: View {
     @ObservedObject var store: JournalStore
     let id: UUID
-    @State private var editing = false
-    @State private var editor = SourceEditor.Handle()
+    @StateObject private var session: BoardWebSession
     @State private var showingHistory = false
+    @AppStorage("boardSourceMode") private var sourceMode = false
     @Environment(\.scenePhase) private var scenePhase
+
+    init(store: JournalStore, id: UUID) {
+        self.store = store
+        self.id = id
+        _session = StateObject(wrappedValue: BoardWebSession(store: store, boardID: id))
+    }
 
     private var board: Board? { store.boards.first { $0.id == id } }
 
     var body: some View {
-        Group {
-            if editing {
-                SourceEditor(text: board?.markdown ?? "", handle: editor) { store.setBoardMarkdown($0, for: id) }
-                    .padding(.horizontal, 8)
-            } else {
-                ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if let board {
-                            Text(store.boardTitle(board)).font(.title2.weight(.bold)).foregroundStyle(Palette.ink)
-                            Text(LF("更新于 %@", board.updatedAt.formatted(.relative(presentation: .named))))
-                                .font(.caption).foregroundStyle(Palette.muted)
-                            Divider().overlay(Palette.line)
-                            MarkdownView(source: board.markdown, foldScope: "board." + id.uuidString) { line in
-                                store.toggleBoardMarkdownTask(atLine: line, in: id)
-                                store.save()
-                            }
-                        }
-                    }
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .markdownScrolling(proxy)
+        BoardWebEditor(session: session, sourceMode: sourceMode)
+            .background(Palette.background)
+            .navigationTitle(board.map(store.boardTitle) ?? "")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if session.editing {
+                    Button("完成") { session.endEditing() }
+                } else {
+                    Menu {
+                        Toggle(isOn: $sourceMode) { Label("显示 Markdown 源码", systemImage: "chevron.left.forwardslash.chevron.right") }
+                        Button { session.commit(); showingHistory = true } label: { Label("版本历史", systemImage: "clock.arrow.circlepath") }
+                    } label: { Image(systemName: "ellipsis.circle") }
                 }
             }
-        }
-        .background(Palette.background)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if !editing {
-                Menu {
-                    Button { flush(); showingHistory = true } label: { Label("版本历史", systemImage: "clock.arrow.circlepath") }
-                } label: { Image(systemName: "ellipsis.circle") }
+            .sheet(isPresented: $showingHistory) { BoardHistoryView(store: store, boardID: id) }
+            .onChange(of: scenePhase) { _, phase in if phase != .active { session.commit() } }
+            .onAppear {
+                if PerfProbe.typing == "board" {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { session.runTypingTest(PerfProbe.typingText) }
+                }
             }
-            Button(editing ? "完成" : "编辑") {
-                if editing { flush() }
-                editing.toggle()
-            }
-        }
-        .sheet(isPresented: $showingHistory) { BoardHistoryView(store: store, boardID: id) }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { flush() } }
-        .onAppear { if PerfProbe.typing == "board" { editing = true } }
-        .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
-            if note.object as? String == "editBoard" { if editing { flush() }; editing.toggle() }
-        }
-        .onDisappear { flush() }
-    }
-
-    private func flush() {
-        if let text = editor.flush() { store.setBoardMarkdown(text, for: id) }
-        store.save()
-    }
-}
-
-/// 编辑 Markdown 源码的原生文本框：按键只在文本框里，停顿 `delay` 秒后才把全文交出去（`commit`）。
-/// 外面的 `text` 变了（另一台设备同步过来）而这边没在输入、也没有没交出去的修改时，跟着换掉。
-struct SourceEditor: UIViewRepresentable {
-    let text: String
-    let handle: Handle
-    var delay: TimeInterval = 0.5
-    let commit: (String) -> Void
-
-    /// 页面用它在「完成」、离开、进后台时立即取回还没交出去的文字。
-    @MainActor final class Handle {
-        fileprivate weak var view: UITextView?
-        fileprivate var pending: DispatchWorkItem?
-
-        /// 有没交出去的修改就返回全文。
-        func flush() -> String? {
-            guard let pending else { return nil }
-            pending.cancel()
-            self.pending = nil
-            return view?.text
-        }
-    }
-
-    func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
-        view.font = UIFontMetrics(forTextStyle: .callout).scaledFont(for: .monospacedSystemFont(ofSize: 15, weight: .regular))
-        view.adjustsFontForContentSizeCategory = true
-        view.backgroundColor = .clear
-        view.textColor = UIColor(Palette.ink)
-        view.smartQuotesType = .no
-        view.smartDashesType = .no
-        view.autocapitalizationType = .none
-        view.alwaysBounceVertical = true
-        view.keyboardDismissMode = .interactive
-        view.text = text
-        view.delegate = context.coordinator
-        let toolbar = MarkdownToolbar(textView: view) { [weak coordinator = context.coordinator, weak view] in
-            if let view { coordinator?.textViewDidChange(view) }
-        }
-        view.inputAccessoryView = toolbar
-        context.coordinator.toolbar = toolbar
-        handle.view = view
-        DispatchQueue.main.async { view.becomeFirstResponder() }
-        return view
-    }
-
-    func updateUIView(_ view: UITextView, context: Context) {
-        context.coordinator.parent = self
-        if !view.isFirstResponder, handle.pending == nil, view.text != text { view.text = text }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
-
-    final class Coordinator: NSObject, UITextViewDelegate {
-        var parent: SourceEditor
-        weak var toolbar: MarkdownToolbar?
-
-        init(parent: SourceEditor) { self.parent = parent }
-
-        /// 列表里按回车：续上同样的记号；空的列表项按回车结束列表。输入法正在拼字时不管。
-        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
-            guard text == "\n", range.length == 0, textView.markedTextRange == nil,
-                  let edit = MarkdownEditing.newline(in: textView.text, at: range.location) else { return true }
-            toolbar?.apply(edit, to: textView)
-            textViewDidChange(textView)
-            return false
-        }
-
-        func textViewDidChange(_ textView: UITextView) {
-            toolbar?.refreshUndo()
-            let handle = parent.handle
-            handle.pending?.cancel()
-            let work = DispatchWorkItem { [weak textView] in
-                handle.pending = nil
-                if let text = textView?.text { self.parent.commit(text) }
-            }
-            handle.pending = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + parent.delay, execute: work)
-        }
+            .onDisappear { session.commit() }
     }
 }

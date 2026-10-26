@@ -2,16 +2,24 @@ import TimelineCore
 import UIKit
 
 /// 编辑工作板时键盘上方的一排格式按钮：标题、加粗、斜体、代码、链接、列表、勾选、编号、引用、缩进，加上撤销 / 重做和收起键盘。
-/// 按钮多，横向可以滑；收起键盘固定在最右边。每个按钮都是一次纯文字替换（`MarkdownEditing`），走文本框自己的撤销。
+/// 按钮多，横向可以滑；收起键盘固定在最右边。每个按钮都是一次纯文字替换（`MarkdownEditing`），走编辑器自己的撤销。
+@MainActor protocol MarkdownToolbarTarget: AnyObject {
+    var canUndo: Bool { get }
+    var canRedo: Bool { get }
+    func undo()
+    func redo()
+    func dismissKeyboard()
+    /// 按现在的全文和选区（UTF-16）算出替换并应用。
+    func format(_ edit: @escaping (String, NSRange) -> MarkdownEdit)
+}
+
 final class MarkdownToolbar: UIInputView {
-    private weak var textView: UITextView?
-    private let changed: () -> Void
+    private weak var target: MarkdownToolbarTarget?
     private var undoButton: UIButton?
     private var redoButton: UIButton?
 
-    init(textView: UITextView, changed: @escaping () -> Void) {
-        self.textView = textView
-        self.changed = changed
+    init(target: MarkdownToolbarTarget) {
+        self.target = target
         super.init(frame: CGRect(x: 0, y: 0, width: 320, height: 46), inputViewStyle: .keyboard)
         allowsSelfSizing = true
         build()
@@ -31,8 +39,8 @@ final class MarkdownToolbar: UIInputView {
         stack.alignment = .center
         scroll.addSubview(stack)
 
-        undoButton = button("arrow.uturn.backward", L("撤销")) { $0.undoManager?.undo() }
-        redoButton = button("arrow.uturn.forward", L("重做")) { $0.undoManager?.redo() }
+        undoButton = button("arrow.uturn.backward", L("撤销")) { $0.undo() }
+        redoButton = button("arrow.uturn.forward", L("重做")) { $0.redo() }
         let items: [UIView] = [
             undoButton!, redoButton!, divider(),
             button("number", L("标题")) { view in MarkdownEditing.cycleHeading(in: view.text, selection: view.selectedRange) },
@@ -51,7 +59,7 @@ final class MarkdownToolbar: UIInputView {
         items.forEach(stack.addArrangedSubview)
 
         let dismiss = UIButton(type: .system, primaryAction: UIAction(image: UIImage(systemName: "keyboard.chevron.compact.down")) { [weak self] _ in
-            self?.textView?.resignFirstResponder()
+            self?.target?.dismissKeyboard()
         })
         dismiss.accessibilityLabel = L("收起键盘")
         dismiss.tintColor = UIColor(Palette.muted)
@@ -79,20 +87,24 @@ final class MarkdownToolbar: UIInputView {
 
     /// 文字变了：撤销 / 重做按钮跟着亮灭。
     func refreshUndo() {
-        undoButton?.isEnabled = textView?.undoManager?.canUndo == true
-        redoButton?.isEnabled = textView?.undoManager?.canRedo == true
+        undoButton?.isEnabled = target?.canUndo == true
+        redoButton?.isEnabled = target?.canRedo == true
     }
 
-    private func button(_ symbol: String, _ label: String, edit: @escaping (UITextView) -> MarkdownEdit) -> UIButton {
-        button(symbol, label) { [weak self] view in self?.apply(edit(view), to: view) }
+    private func button(_ symbol: String, _ label: String, edit: @escaping (Source) -> MarkdownEdit) -> UIButton {
+        button(symbol, label) { target in target.format { text, selection in edit(Source(text: text, selectedRange: selection)) } }
     }
 
-    private func button(_ symbol: String, _ label: String, perform: @escaping (UITextView) -> Void) -> UIButton {
+    /// 按钮算替换时看到的全文和选区（和 `UITextView` 的同名属性一样）。
+    struct Source {
+        let text: String
+        let selectedRange: NSRange
+    }
+
+    private func button(_ symbol: String, _ label: String, perform: @escaping (MarkdownToolbarTarget) -> Void) -> UIButton {
         let button = UIButton(type: .system, primaryAction: UIAction(image: UIImage(systemName: symbol)) { [weak self] _ in
-            guard let self, let view = textView else { return }
-            perform(view)
-            changed()
-            refreshUndo()
+            guard let target = self?.target else { return }
+            perform(target)
         })
         button.accessibilityLabel = label
         button.tintColor = UIColor(Palette.ink)
@@ -114,15 +126,5 @@ final class MarkdownToolbar: UIInputView {
             line.centerXAnchor.constraint(equalTo: holder.centerXAnchor), line.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
         ])
         return holder
-    }
-
-    /// 用文本框自己的替换接口改文字（进撤销栈），再放好光标。
-    func apply(_ edit: MarkdownEdit, to view: UITextView) {
-        guard let start = view.position(from: view.beginningOfDocument, offset: edit.range.location),
-              let end = view.position(from: start, offset: edit.range.length),
-              let range = view.textRange(from: start, to: end) else { return }
-        view.replace(range, withText: edit.replacement)
-        view.selectedRange = edit.selection
-        view.scrollRangeToVisible(edit.selection)
     }
 }

@@ -106,11 +106,10 @@ enum PerfProbe {
             ("切到日记", { switchTab(.journal) }),
             ("记一笔", { send("compose") }),
             ("关掉记一笔", { send("closeSheet") }),
+            ("滑动中跳转", { send("flingJump") }),
             ("切到笔记", { switchTab(.notes) }),
             ("切到工作板", { switchTab(.boards) }),
             ("打开工作板", { send("openBoard") }),
-            ("编辑工作板", { send("editBoard") }),
-            ("完成编辑", { send("editBoard") }),
             ("切到待办", { switchTab(.tasks) }),
         ]
         // 走两遍：第一遍含第一次建界面的开销，第二遍是平时的样子。`-perfSteps 切到日记,切到待办 -perfRounds 6` 只走其中几步。
@@ -129,15 +128,18 @@ enum PerfProbe {
         }
     }
 
+    static let typingText = "今天把同步的问题查清楚了 fix the board export when backgrounding 再测一下输入延迟"
+
     static func runTyping(switchTab: @escaping (RootView.Tab) -> Void) {
         guard enabled, let typing else { return }
         switchTab(typing == "compose" ? .journal : (typing == "board" ? .boards : .tasks))
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             mark("打开输入框 " + typing)
+            // 工作板的编辑器在网页里：工作板页自己跑测试（见 BoardWebSession.runTypingTest）。
             NotificationCenter.default.post(name: openEditor, object: typing)
         }
-        let text: [Character] = Array("今天把同步的问题查清楚了 fix the board export when backgrounding 再测一下输入延迟")
-        for (index, character) in text.enumerated() {
+        let text: [Character] = Array(typingText)
+        for (index, character) in text.enumerated() where typing != "board" {
             let delay: Double = 6 + Double(index) * 0.1
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 if index == 0 { mark("开始输入") }
@@ -146,14 +148,14 @@ enum PerfProbe {
             }
         }
         let end: Double = 7 + Double(text.count) * 0.1
-        DispatchQueue.main.asyncAfter(deadline: .now() + end) {
+        if typing != "board" { DispatchQueue.main.asyncAfter(deadline: .now() + end) {
             let sorted: [Double] = latencies.sorted()
             guard let slowest = sorted.last else { print("[perf] 没有输入（没找到输入框）"); return }
             let total: Double = sorted.reduce(0, +)
             let average = total / Double(sorted.count)
             let median = sorted[sorted.count / 2]
             print(String(format: "[perf] 输入 %d 个字：平均 %.1f ms · 中位 %.1f ms · 最慢 %.1f ms", sorted.count, average, median, slowest))
-        }
+        } }
     }
 
     /// 自动操作脚本：每一步之间留足时间让上一步的卡顿结束。

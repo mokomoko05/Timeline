@@ -12,8 +12,10 @@ struct JournalView: View {
     @State private var selection = JournalDates.key(Date())
     @State private var composing = false
     @State private var query = ""
-    /// 在底部节奏条上点了某个时刻：滚到那条日志。
+    /// 要滚到的那条日志（从别处跳过来、截图检查）。
     @State private var jump: UUID?
+    /// 现在页面顶上是哪一条（不订阅：只有右边的节奏条跟着变）。
+    @State private var positions = LogPositions()
     /// 右下角跳到顶部 / 底部的按钮（不订阅：滚动时只刷新按钮）。
     @State private var edges = ScrollEdges()
     /// 左上角日历开没开（不订阅：开关日历不重算整页）。
@@ -55,12 +57,7 @@ struct JournalView: View {
                 if query.isEmpty { FloatingButtons(edges: edges) { composing = true } }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                VStack(spacing: 0) {
-                    FocusBar()
-                    if query.isEmpty, let logs = byDay[selection], !logs.isEmpty {
-                        RhythmBar(logs: logs.map(\.log)) { jump = $0 }
-                    }
-                }
+                FocusBar()
             }
             .sheet(isPresented: $composing) {
                 ComposeSheet(store: store) { selection = JournalDates.key(Date()) }
@@ -71,6 +68,21 @@ struct JournalView: View {
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
                 if note.object as? String == "compose" { composing = true }
                 if note.object as? String == "closeSheet" { composing = false }
+                if note.object as? String == "flingJump", let view = edges.scrollView {
+                    // 滚动动画还在走的时候点「跳到底部」/「回到顶部」：报落点和真正的底 / 顶差多少。
+                    view.setContentOffset(CGPoint(x: 0, y: view.contentSize.height / 3), animated: true)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { edges.jump(.bottom) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        let bottom = view.contentSize.height - view.bounds.height + view.adjustedContentInset.bottom
+                        print("[perf] 滑动中跳到底部：落点 \(Int(view.contentOffset.y)) · 底 \(Int(bottom)) · 差 \(Int(view.contentOffset.y - bottom))")
+                        view.setContentOffset(CGPoint(x: 0, y: bottom / 2), animated: true)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { edges.jump(.top) }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                            print("[perf] 滑动中回到顶部：落点 \(Int(view.contentOffset.y)) · 顶 \(Int(-view.adjustedContentInset.top))")
+                            print("[perf] 顶上这一条：\(positions.current.flatMap { id in (byDay[selection] ?? []).firstIndex { $0.log.id == id } }.map { "第 \($0 + 1) 条" } ?? "无")")
+                        }
+                    }
+                }
             }
             .onReceive(QuickEntry.shared.$request) { _ in
                 if QuickEntry.shared.take(.log) { selection = JournalDates.key(Date()); composing = true }
@@ -109,16 +121,33 @@ struct JournalView: View {
                         }
                         DayContent(store: store, key: selection, summary: store.entry(for: JournalDates.date(for: selection) ?? Date()).summary, logs: logs)
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.leading, 16)
+                    .padding(.trailing, logs.isEmpty ? 16 : DayRail.width + 8)
                     .padding(.bottom, 100)
                     Color.clear.frame(height: 0).scrollEdgeMarker(.bottom)
                 }
+                .coordinateSpace(name: LogPositions.space)
             }
+            // 不显示滚动条：右边的节奏条代替它（长日志多时滚动条按估算高度走，位置不准）。
+            .scrollIndicators(.hidden)
+            .environment(\.logPositions, positions)
             .markdownScrolling(proxy)
             .trackScrollEdges(edges, proxy: proxy)
+            .overlay(alignment: .topTrailing) {
+                if !logs.isEmpty {
+                    DayRail(logs: logs.map(\.log), positions: positions) { edges.reveal($0.uuidString) }
+                        .padding(.trailing, 4)
+                        .padding(.top, 8)
+                        .padding(.bottom, 96)
+                }
+            }
+            .onAppear {
+                positions.reset()
+                edges.scrolled = { [positions] in positions.update($0) }
+            }
             .onChange(of: jump) { _, id in
                 guard let id else { return }
-                proxy.scrollTo(id.uuidString, anchor: .top)
+                edges.reveal(id.uuidString)
                 jump = nil
             }
             .refreshable { await sync.syncNow() }
@@ -238,75 +267,68 @@ private struct DayHeader: View {
     }
 }
 
-/// 贴在日记页底部的节奏条：一直看得到这一天的节奏，点一下（或按住滑动）跳到那个时刻的日志。
-private struct RhythmBar: View {
+/// 日记页右边竖着的节奏条，代替滚动条：从上到下是 0–24 点，每条记录一道刻度，专注的时段画成一段，
+/// 现在页面顶上那一条的位置有一个滑块。点一下或按住上下滑，跳到离手指最近的那条日志的开头。
+struct DayRail: View {
+    static let width: CGFloat = 30
     let logs: [DailyLogEntry]
+    @ObservedObject var positions: LogPositions
     let select: (UUID) -> Void
     @State private var picked: UUID?
+    @State private var dragging = false
 
     var body: some View {
         GeometryReader { geometry in
-            RhythmStrip(logs: logs)
-                .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 0).onChanged { value in
-                    pick(at: value.location.x / max(1, geometry.size.width))
-                })
+            let height = geometry.size.height
+            let x = Self.width - 9
+            ZStack(alignment: .topLeading) {
+                Capsule().fill(Palette.line.opacity(dragging ? 0.9 : 0.55))
+                    .frame(width: 3, height: height)
+                    .position(x: x, y: height / 2)
+                ForEach(spans, id: \.start) { span in
+                    Capsule().fill(Palette.accent.opacity(0.35))
+                        .frame(width: 7, height: max(3, height * (span.end - span.start)))
+                        .position(x: x, y: height * (span.start + span.end) / 2)
+                }
+                ForEach(logs) { log in
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(LogStyle.color(log))
+                        .frame(width: log.isFocusMarker ? 13 : 9, height: 2)
+                        .position(x: x, y: height * fraction(log.createdAt))
+                }
+                ForEach([6, 12, 18], id: \.self) { hour in
+                    Text("\(hour)").font(.system(size: 9, weight: .medium).monospacedDigit()).foregroundStyle(Palette.muted)
+                        .position(x: 7, y: height * CGFloat(hour) / 24)
+                }
+                if let current = positions.current, let log = logs.first(where: { $0.id == current }) {
+                    Capsule().fill(Palette.accent)
+                        .frame(width: 15, height: 5)
+                        .overlay(Capsule().stroke(Palette.background, lineWidth: 1.5))
+                        .shadow(color: .black.opacity(0.15), radius: 2, y: 1)
+                        .position(x: x, y: height * fraction(log.createdAt))
+                        .animation(.snappy(duration: 0.2), value: current)
+                }
+            }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    dragging = true
+                    pick(at: value.location.y / max(1, height))
+                }
+                .onEnded { _ in dragging = false; picked = nil })
         }
-        .frame(height: 36)
-        .padding(.horizontal, 16)
-        .padding(.top, 6)
-        .padding(.bottom, 4)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
-        .sensoryFeedback(.selection, trigger: picked)
+        .frame(width: Self.width)
+        .sensoryFeedback(.selection, trigger: picked) { _, new in new != nil }
+        .accessibilityHidden(true)
     }
 
     /// 离手指最近的一条日志。
     private func pick(at fraction: CGFloat) {
-        guard let first = logs.first else { return }
-        let start = JournalDates.calendar.startOfDay(for: first.createdAt)
-        let time = start.addingTimeInterval(Double(min(1, max(0, fraction))) * 86_400)
-        guard let nearest = logs.min(by: { abs($0.createdAt.timeIntervalSince(time)) < abs($1.createdAt.timeIntervalSince(time)) }),
+        let target = min(1, max(0, fraction))
+        guard let nearest = logs.min(by: { abs(self.fraction($0.createdAt) - target) < abs(self.fraction($1.createdAt) - target) }),
               nearest.id != picked else { return }
         picked = nearest.id
         select(nearest.id)
-    }
-}
-
-/// 一天的节奏：0–24 点的横条，每条记录一道刻度，专注的时段画成一段。
-struct RhythmStrip: View {
-    let logs: [DailyLogEntry]
-
-    var body: some View {
-        VStack(spacing: 4) {
-            GeometryReader { geometry in
-                let width = geometry.size.width
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Palette.line.opacity(0.5)).frame(height: 4)
-                    ForEach(spans, id: \.start) { span in
-                        Capsule().fill(Palette.accent.opacity(0.35))
-                            .frame(width: max(3, width * (span.end - span.start)), height: 8)
-                            .offset(x: width * span.start)
-                    }
-                    ForEach(logs) { log in
-                        RoundedRectangle(cornerRadius: 1)
-                            .fill(LogStyle.color(log))
-                            .frame(width: 2.5, height: log.isFocusMarker ? 14 : 10)
-                            .offset(x: width * fraction(log.createdAt) - 1)
-                    }
-                }
-                .frame(height: 16)
-            }
-            .frame(height: 16)
-            HStack {
-                ForEach([0, 6, 12, 18, 24], id: \.self) { hour in
-                    Text("\(hour)").frame(maxWidth: .infinity, alignment: hour == 0 ? .leading : (hour == 24 ? .trailing : .center))
-                }
-            }
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(Palette.muted)
-        }
-        .padding(.vertical, 4)
     }
 
     private func fraction(_ date: Date) -> CGFloat {
@@ -322,6 +344,51 @@ struct RhythmStrip: View {
             if log.focusMarker == "END", let start = open { result.append((fraction(start), fraction(log.createdAt))); open = nil }
         }
         return result
+    }
+}
+
+/// 日记页现在看到哪一条：每条日志记下自己在内容里的位置（只在排版变了时），滚动时按位置找出顶上那一条。
+/// 只有节奏条订阅它，滚动不会让整页重算。
+@MainActor
+final class LogPositions: ObservableObject {
+    static let space = "log-positions"
+    @Published private(set) var current: UUID?
+    private var tops: [UUID: CGFloat] = [:]
+
+    func record(_ id: UUID, top: CGFloat) { tops[id] = top }
+
+    func update(_ view: UIScrollView) {
+        let line = view.contentOffset.y + view.adjustedContentInset.top + 12
+        let above = tops.filter { $0.value <= line }
+        let best = above.max { $0.value < $1.value }?.key ?? tops.min { $0.value < $1.value }?.key
+        if best != current { current = best }
+    }
+
+    func reset() {
+        tops = [:]
+        current = nil
+    }
+}
+
+private struct LogPositionsKey: EnvironmentKey {
+    static let defaultValue: LogPositions? = nil
+}
+
+extension EnvironmentValues {
+    var logPositions: LogPositions? {
+        get { self[LogPositionsKey.self] }
+        set { self[LogPositionsKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// 日记页里的一条日志：把自己在内容里的位置记给 `LogPositions`（别的页面没有它，什么也不做）。
+    @ViewBuilder func recordsLogPosition(_ id: UUID, in positions: LogPositions?) -> some View {
+        if let positions {
+            onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(LogPositions.space)).minY } action: { positions.record(id, top: $0) }
+        } else {
+            self
+        }
     }
 }
 
@@ -347,7 +414,9 @@ private struct DayContent: View {
                 ContentUnavailableView("这天没有记录", systemImage: "book.closed", description: Text("点右下角写一条"))
                     .padding(.top, 40)
             } else {
-                LogTimeline(store: store, logs: logs)
+                // 一天的日志不多，整列排出来：行高差很多（一篇长文顶几十条短日志）时懒加载按平均高度估算位置，
+                // 跳到底部会落进空白、节奏条和滚动位置对不上。长文的排版有缓存，整列重排不贵。
+                LogTimeline(store: store, logs: logs, lazy: false)
             }
         }
     }
@@ -549,15 +618,11 @@ struct ComposeSheet: View {
     @State private var images: [String] = []
     @State private var picked: [PhotosPickerItem] = []
     @State private var error: String?
-    @FocusState private var focused: Bool
 
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 12) {
-                TextField("写点什么… 支持 Markdown 和 #标签", text: $text, axis: .vertical)
-                    .lineLimit(4...14)
-                    .focused($focused)
-                    .font(.body)
+                AutoFocusTextView(text: $text, placeholder: L("写点什么… 支持 Markdown 和 #标签"), minLines: 4, maxLines: 14)
                 if !tags.isEmpty || !pickedTags.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
@@ -595,7 +660,6 @@ struct ComposeSheet: View {
             }
             .onAppear {
                 linked = taskID
-                focused = true
                 choices = TaskChoice.open(in: store, including: taskID)
                 tagChoices = store.allTags().map(\.name)
             }

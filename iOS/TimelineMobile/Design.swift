@@ -163,7 +163,8 @@ struct RailRow<Node: View, Content: View>: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(labelColor)
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                // 只有可能放不下的（日期）才允许缩小：带缩放的文字要多量几遍，时刻「05:21」总放得下。
+                .minimumScaleFactor(label.count > 5 ? 0.7 : 1)
                 .frame(width: Self.labelWidth, alignment: .trailing)
                 .padding(.top, nodeY - 8)
             node().frame(width: 20, height: 20).offset(y: nodeY - 10)

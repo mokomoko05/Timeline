@@ -14,6 +14,8 @@ struct LogTimeline: View {
     var newestFirst = false
     /// 打开时要滚到并闪一下的那条（从日记里点标签过来）：先把它前面的行都排上。
     var reveal: UUID?
+    /// 很多天的日志（笔记页）只排看得到的行；一天的（日记页）整列排，位置准确。
+    var lazy = true
     @State private var collapsedRounds: Set<UUID> = []
     @State private var flash: UUID?
 
@@ -90,9 +92,8 @@ struct LogTimeline: View {
 
     var body: some View {
         let rows = rows
-        // 用 LazyVStack：只排屏幕上看得到的几行。整列一起排的话，每次切回这一页、开关面板都要把几十条长日志重新量一遍，
-        // 要好几百毫秒；代价是长日志多时右边的滚动条按估算高度走，会有点跳。
-        LazyVStack(alignment: .leading, spacing: 0) {
+        // 很多天的日志用 LazyVStack，只排屏幕上看得到的几行；代价是行高差别大时滚动条按估算高度走，会有点跳。
+        Stack(lazy: lazy) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                 switch row {
                 case .day(_, let date, let count):
@@ -138,6 +139,20 @@ struct LogTimeline: View {
     }
 }
 
+/// 竖排的一列：`lazy` 时只排看得到的行。
+private struct Stack<Content: View>: View {
+    let lazy: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if lazy {
+            LazyVStack(alignment: .leading, spacing: 0, content: content)
+        } else {
+            VStack(alignment: .leading, spacing: 0, content: content)
+        }
+    }
+}
+
 /// 一条日志：时刻、类型、关联的待办、标签，Markdown 正文和图片。
 struct LogEntryRow: View, Equatable {
     let store: JournalStore
@@ -150,6 +165,7 @@ struct LogEntryRow: View, Equatable {
     var focus: (before: Bool, after: Bool) = (false, false)
     var highlighted = false
     @Environment(\.logActions) private var actions
+    @Environment(\.logPositions) private var positions
 
     private var log: DailyLogEntry { logged.log }
 
@@ -192,6 +208,7 @@ struct LogEntryRow: View, Equatable {
                 }
             }
         }
+        .recordsLogPosition(log.id, in: positions)
         .overlay(alignment: .topLeading) {
             // 专注中的那一段竖线用强调色。
             let top: CGFloat = focus.before && hasPrevious ? 0 : 10

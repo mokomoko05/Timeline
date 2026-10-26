@@ -3,7 +3,7 @@
 @media (prefers-color-scheme: light) { :root { --background: #f6f8fa; --ink: #1f2328; --muted: #59636e; --accent: #0969da; --soft: #ddf4ff; --selection: #b6d7ff; --selection-ink: #1f2328; --line: #d1d9e0; --success: #1a7f37; } }
 * { box-sizing: border-box; }
 html, body, #editor { height: 100%; margin: 0; background: var(--background); color: var(--ink); }
-body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif; }
+body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif; -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
 .cm-editor { height: 100%; background: transparent; }
 .cm-editor.cm-focused { outline: none; }
 #editor .cm-scroller { overflow: auto; font-family: -apple-system, BlinkMacSystemFont, sans-serif; line-height: 1.65; overscroll-behavior: contain; }

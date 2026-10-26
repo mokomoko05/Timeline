@@ -644,15 +644,11 @@ struct AddTaskSheet: View {
     @State private var hasDue = false
     @State private var due = Date()
     @State private var priority = TaskPriority.normal
-    @FocusState private var focused: Bool
 
     var body: some View {
         NavigationStack {
             Form {
-                TextField("要做什么？可写「明天 下午3点」「#标签」", text: $text, axis: .vertical)
-                    .focused($focused)
-                    .submitLabel(.done)
-                    .onSubmit(add)
+                AutoFocusTextView(text: $text, placeholder: L("要做什么？可写「明天 下午3点」「#标签」"), maxLines: 4, submit: add)
                 Toggle("截止日期", isOn: $hasDue.animation())
                 if hasDue { DatePicker("日期", selection: $due, displayedComponents: .date) }
                 Picker("优先级", selection: $priority) {
@@ -667,7 +663,6 @@ struct AddTaskSheet: View {
                     Button("添加", action: add).disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
-            .onAppear { focused = true }
         }
         .presentationDetents([.medium, .large])
     }

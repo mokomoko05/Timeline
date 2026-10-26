@@ -229,6 +229,7 @@ struct RichTextView: UIViewRepresentable {
     let text: RichText
     let size: CGFloat
     private static let probeWidth: CGFloat = 80
+    private static let fallbackWidth: CGFloat = 320
 
     func makeUIView(context: Context) -> RichTextCanvas { RichTextCanvas() }
 
@@ -241,8 +242,10 @@ struct RichTextView: UIViewRepresentable {
         guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
         // 外层排版时会拿很窄的宽度（几个点）来试探：真按那么窄排一遍，长正文要几十毫秒，还会排出几千点高。
         // 这种试探给上次正常宽度的高度就行，不排、也不当成常用宽度记下。
-        if width < Self.probeWidth, let usual = RichText.width(for: size) {
-            return CGSize(width: width, height: text.layout(width: usual).height)
+        // 还没有记下常用宽度时（这种字号第一次排）按一个普通手机宽度估：真按几点宽排，一篇长文会排出几十万点高，
+        // 滚动视图按这个高度算，跳到底部会落进一大片空白。
+        if width < Self.probeWidth {
+            return CGSize(width: width, height: text.layout(width: RichText.width(for: size) ?? Self.fallbackWidth).height)
         }
         RichText.remember(width: width, size: size)
         return CGSize(width: width, height: text.layout(width: width).height)
