@@ -176,7 +176,7 @@ struct LogEntryRow: View, Equatable {
 
     var body: some View {
         RailRow(label: DayText.time(log.createdAt), hasPrevious: hasPrevious, hasNext: hasNext,
-                lineColor: Palette.line, nodeY: 10) {
+                lineColor: Palette.line, nodeY: 10, accent: focusSegment) {
             node
         } content: {
             let body = LogStyle.body(log).nilIfEmpty
@@ -209,16 +209,13 @@ struct LogEntryRow: View, Equatable {
             }
         }
         .recordsLogPosition(log.id, in: positions)
-        .overlay(alignment: .topLeading) {
-            // 专注中的那一段竖线用强调色。
-            let top: CGFloat = focus.before && hasPrevious ? 0 : 10
-            let bottom: CGFloat? = focus.after && hasNext ? nil : 10
-            if top < 10 || bottom == nil {
-                RailSegment(x: RailRow<EmptyView, EmptyView>.labelWidth + 6 + 10, top: top, bottom: bottom, width: 2)
-                    .fill(Palette.accent.opacity(0.8))
-                    .allowsHitTesting(false)
-            }
-        }
+    }
+
+    /// 专注中的那一段竖线用强调色：画在节点下面，节点盖住线。
+    private var focusSegment: (top: CGFloat, bottom: CGFloat?)? {
+        let top: CGFloat = focus.before && hasPrevious ? 0 : 10
+        let bottom: CGFloat? = focus.after && hasNext ? nil : 10
+        return top < 10 || bottom == nil ? (top, bottom) : nil
     }
 
     @ViewBuilder private var node: some View {
@@ -509,7 +506,7 @@ private struct ImageViewer: View {
             Color.black.ignoresSafeArea()
             TabView(selection: $selection) {
                 ForEach(names, id: \.self) { name in
-                    ZoomableImage(url: store.imageURL(name)).tag(name)
+                    ZoomableImage(url: store.imageURL(name)) { dismiss() }.tag(name)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: names.count > 1 ? .automatic : .never))
@@ -546,8 +543,10 @@ private struct ViewerActionLabel: LabelStyle {
     }
 }
 
+/// 双指缩放、双击放大；单击（图上或旁边的黑底）退出查看。
 private struct ZoomableImage: View {
     let url: URL
+    let close: () -> Void
     @State private var scale: CGFloat = 1
     @State private var settled: CGFloat = 1
 
@@ -560,7 +559,10 @@ private struct ZoomableImage: View {
                 .gesture(MagnificationGesture()
                     .onChanged { scale = max(1, settled * $0) }
                     .onEnded { _ in settled = scale })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
                 .onTapGesture(count: 2) { withAnimation { scale = scale > 1 ? 1 : 2.5; settled = scale } }
+                .onTapGesture(perform: close)
         } else {
             ProgressView().tint(.white)
         }

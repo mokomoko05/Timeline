@@ -47,7 +47,6 @@ struct TasksView: View {
                     Button { adding = true } label: { Image(systemName: "plus") }
                 }
             }
-            .sheet(isPresented: $adding) { AddTaskSheet(store: store) }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { note in
                 if note.object as? String == "task" { adding = true }
             }
@@ -57,6 +56,7 @@ struct TasksView: View {
                 case "closeSheet": adding = false
                 case "openTask": if let item = TaskSortMode.deadline.sorted(store.tasks()).first(where: { !$0.task.completed }) { path = [item.id] }
                 case "popTask": path = []
+                case "openNotedTask": if let item = store.tasks().max(by: { store.notes(for: $0.id).count < store.notes(for: $1.id).count }) { path = [item.id] }
                 default: break
                 }
             }
@@ -69,6 +69,7 @@ struct TasksView: View {
             .syncOnRefresh(sync)
             .safeAreaInset(edge: .bottom) { FocusBar() }
         }
+        .floatingEditor(isPresented: $adding) { AddTaskSheet(store: store) }
     }
 
     // MARK: 时间轴的行
@@ -640,12 +641,40 @@ struct TaskDateSheet: View {
 struct AddTaskSheet: View {
     @ObservedObject var store: JournalStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.closeEditor) private var closeEditor
     @State private var text = ""
     @State private var hasDue = false
     @State private var due = Date()
     @State private var priority = TaskPriority.normal
 
     var body: some View {
+        if let close = closeEditor {
+            VStack(alignment: .leading, spacing: 8) {
+                EditorCardHeader(title: "新待办", confirm: "添加", canConfirm: canAdd, cancel: close.close, action: add)
+                AutoFocusTextView(text: $text, placeholder: L("要做什么？可写「明天 下午3点」「#标签」"), maxLines: 4, submit: add)
+                HStack(spacing: 14) {
+                    Toggle(isOn: $hasDue.animation(.snappy(duration: 0.2))) { Label("截止", systemImage: "calendar") }
+                        .toggleStyle(.button)
+                    if hasDue { DatePicker("日期", selection: $due, displayedComponents: .date).labelsHidden() }
+                    Menu {
+                        Picker("优先级", selection: $priority) {
+                            ForEach(TaskPriority.allCases) { Text(L($0.title)).tag($0) }
+                        }
+                    } label: {
+                        Label(L(priority.title), systemImage: "flag")
+                    }
+                    Spacer()
+                }
+                .font(.subheadline)
+            }
+        } else {
+            sheet
+        }
+    }
+
+    private var canAdd: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    private var sheet: some View {
         NavigationStack {
             Form {
                 AutoFocusTextView(text: $text, placeholder: L("要做什么？可写「明天 下午3点」「#标签」"), maxLines: 4, submit: add)
@@ -670,6 +699,6 @@ struct AddTaskSheet: View {
     private func add() {
         guard let created = store.addParsedTodo(text, on: Date(), priority: priority) else { return }
         if hasDue { store.setDeadline(created.id, to: due) }
-        dismiss()
+        if let closeEditor { closeEditor() } else { dismiss() }
     }
 }

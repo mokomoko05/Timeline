@@ -112,6 +112,7 @@ struct TaskPage: View {
     @State private var editing = false
     @State private var composing = false
     @State private var edges = ScrollEdges()
+    @State private var positions = LogPositions()
 
     var body: some View {
         let item = store.locate(id)
@@ -119,6 +120,7 @@ struct TaskPage: View {
         let notes = store.notes(for: id)
         ScrollViewReader { proxy in
         ScrollView {
+          VStack(spacing: 0) {
             Color.clear.frame(height: 0).scrollEdgeMarker(.top)
             VStack(alignment: .leading, spacing: 18) {
                 header(item: item, topic: topic, noteCount: notes.count)
@@ -129,15 +131,21 @@ struct TaskPage: View {
                 if notes.isEmpty {
                     ContentUnavailableView("还没有笔记", systemImage: "text.bubble", description: Text("点右上角记一笔")).padding(.top, 20)
                 } else {
-                    LogTimeline(store: store, logs: notes, groupByDay: true, showsTask: false, newestFirst: true, reveal: reveal)
+                    LogTimeline(store: store, logs: notes, groupByDay: true, showsTask: false, reveal: reveal)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.leading, 16)
+            .padding(.trailing, notes.isEmpty ? 16 : EntryRail.width + 8)
             .padding(.bottom, 100)
             Color.clear.frame(height: 0).scrollEdgeMarker(.bottom)
+          }
+          .coordinateSpace(name: LogPositions.space)
         }
+        .startsAtBottom(reveal == nil && !notes.isEmpty, edges: edges)
         .markdownScrolling(proxy)
         .trackScrollEdges(edges, proxy: proxy)
+        // 从上到下是从前到后：打开时停在最下面最新的笔记；右边的节奏条代替滚动条。
+        .entryRail(NotesRhythm.marks(notes), ticks: NotesRhythm.ticks(notes), positions: positions, edges: edges)
         .revealing(reveal, proxy: proxy)
         }
         .background(Palette.background)
@@ -154,7 +162,7 @@ struct TaskPage: View {
         }
         .logActionsHost(store)
         .sheet(isPresented: $editing) { TaskEditSheet(store: store, id: id) }
-        .sheet(isPresented: $composing) { ComposeSheet(store: store, taskID: id) }
+        .floatingEditor(isPresented: $composing) { ComposeSheet(store: store, taskID: id) }
         .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
             if note.object as? String == "editTask" { editing = true }
             if note.object as? String == "closeSheet" { editing = false }
@@ -217,6 +225,7 @@ struct TagPage: View {
     var reveal: UUID?
     @State private var composing = false
     @State private var edges = ScrollEdges()
+    @State private var positions = LogPositions()
 
     var body: some View {
         let tasks = store.tasks(taggedWith: name)
@@ -224,6 +233,7 @@ struct TagPage: View {
         let notes = store.notes(forTag: name)
         ScrollViewReader { proxy in
         ScrollView {
+          VStack(spacing: 0) {
             Color.clear.frame(height: 0).scrollEdgeMarker(.top)
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -257,22 +267,28 @@ struct TagPage: View {
                     }
                 }
                 if !notes.isEmpty {
-                    LogTimeline(store: store, logs: notes, groupByDay: true, newestFirst: true, reveal: reveal)
+                    LogTimeline(store: store, logs: notes, groupByDay: true, reveal: reveal)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.leading, 16)
+            .padding(.trailing, notes.isEmpty ? 16 : EntryRail.width + 8)
             .padding(.bottom, 100)
             Color.clear.frame(height: 0).scrollEdgeMarker(.bottom)
+          }
+          .coordinateSpace(name: LogPositions.space)
         }
+        .startsAtBottom(reveal == nil && !notes.isEmpty, edges: edges)
         .markdownScrolling(proxy)
         .trackScrollEdges(edges, proxy: proxy)
+        // 从上到下是从前到后：打开时停在最下面最新的笔记；右边的节奏条代替滚动条。
+        .entryRail(NotesRhythm.marks(notes), ticks: NotesRhythm.ticks(notes), positions: positions, edges: edges)
         .revealing(reveal, proxy: proxy)
         }
         .background(Palette.background)
         .overlay(alignment: .bottomTrailing) { FloatingButtons(edges: edges) { composing = true } }
         .navigationBarTitleDisplayMode(.inline)
         .logActionsHost(store)
-        .sheet(isPresented: $composing) { ComposeSheet(store: store, tags: [name]) }
+        .floatingEditor(isPresented: $composing) { ComposeSheet(store: store, tags: [name]) }
     }
 }
 

@@ -59,9 +59,6 @@ struct JournalView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 FocusBar()
             }
-            .sheet(isPresented: $composing) {
-                ComposeSheet(store: store) { selection = JournalDates.key(Date()) }
-            }
             .onAppear { prewarm(around: selection, keys: keys, byDay: byDay) }
             .onChange(of: selection) { _, key in prewarm(around: key, keys: keys, byDay: byDay) }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { if $0.object as? String == "compose" { composing = true } }
@@ -107,6 +104,9 @@ struct JournalView: View {
                 if let target = neighbor(of: selection, in: keys, by: -1) { go(to: target, keys: keys) }
             }
         }
+        .floatingEditor(isPresented: $composing) {
+            ComposeSheet(store: store) { selection = JournalDates.key(Date()) }
+        }
     }
 
     private func page(_ logs: [JournalStore.LoggedLog], keys: [String]) -> some View {
@@ -122,29 +122,18 @@ struct JournalView: View {
                         DayContent(store: store, key: selection, summary: store.entry(for: JournalDates.date(for: selection) ?? Date()).summary, logs: logs)
                     }
                     .padding(.leading, 16)
-                    .padding(.trailing, logs.isEmpty ? 16 : DayRail.width + 8)
+                    .padding(.trailing, logs.isEmpty ? 16 : EntryRail.width + 8)
                     .padding(.bottom, 100)
                     Color.clear.frame(height: 0).scrollEdgeMarker(.bottom)
                 }
                 .coordinateSpace(name: LogPositions.space)
             }
-            // 不显示滚动条：右边的节奏条代替它（长日志多时滚动条按估算高度走，位置不准）。
-            .scrollIndicators(.hidden)
-            .environment(\.logPositions, positions)
             .markdownScrolling(proxy)
             .trackScrollEdges(edges, proxy: proxy)
-            .overlay(alignment: .topTrailing) {
-                if !logs.isEmpty {
-                    DayRail(logs: logs.map(\.log), positions: positions) { edges.reveal($0.uuidString) }
-                        .padding(.trailing, 4)
-                        .padding(.top, 8)
-                        .padding(.bottom, 96)
-                }
-            }
-            .onAppear {
-                positions.reset()
-                edges.scrolled = { [positions] in positions.update($0) }
-            }
+            // 不显示滚动条：右边的节奏条代替它（长日志多时滚动条按估算高度走，位置不准）。
+            .entryRail(DayRhythm.marks(logs.map(\.log)), spans: DayRhythm.spans(logs.map(\.log)),
+                       ticks: [6, 12, 18].map { RailTick(position: CGFloat($0) / 24, text: "\($0)") },
+                       positions: positions, edges: edges)
             .onChange(of: jump) { _, id in
                 guard let id else { return }
                 edges.reveal(id.uuidString)
@@ -264,131 +253,6 @@ private struct DayHeader: View {
         }
         .disabled(target == nil)
         .foregroundStyle(target == nil ? Palette.line : Palette.accent)
-    }
-}
-
-/// 日记页右边竖着的节奏条，代替滚动条：从上到下是 0–24 点，每条记录一道刻度，专注的时段画成一段，
-/// 现在页面顶上那一条的位置有一个滑块。点一下或按住上下滑，跳到离手指最近的那条日志的开头。
-struct DayRail: View {
-    static let width: CGFloat = 30
-    let logs: [DailyLogEntry]
-    @ObservedObject var positions: LogPositions
-    let select: (UUID) -> Void
-    @State private var picked: UUID?
-    @State private var dragging = false
-
-    var body: some View {
-        GeometryReader { geometry in
-            let height = geometry.size.height
-            let x = Self.width - 9
-            ZStack(alignment: .topLeading) {
-                Capsule().fill(Palette.line.opacity(dragging ? 0.9 : 0.55))
-                    .frame(width: 3, height: height)
-                    .position(x: x, y: height / 2)
-                ForEach(spans, id: \.start) { span in
-                    Capsule().fill(Palette.accent.opacity(0.35))
-                        .frame(width: 7, height: max(3, height * (span.end - span.start)))
-                        .position(x: x, y: height * (span.start + span.end) / 2)
-                }
-                ForEach(logs) { log in
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(LogStyle.color(log))
-                        .frame(width: log.isFocusMarker ? 13 : 9, height: 2)
-                        .position(x: x, y: height * fraction(log.createdAt))
-                }
-                ForEach([6, 12, 18], id: \.self) { hour in
-                    Text("\(hour)").font(.system(size: 9, weight: .medium).monospacedDigit()).foregroundStyle(Palette.muted)
-                        .position(x: 7, y: height * CGFloat(hour) / 24)
-                }
-                if let current = positions.current, let log = logs.first(where: { $0.id == current }) {
-                    Capsule().fill(Palette.accent)
-                        .frame(width: 15, height: 5)
-                        .overlay(Capsule().stroke(Palette.background, lineWidth: 1.5))
-                        .shadow(color: .black.opacity(0.15), radius: 2, y: 1)
-                        .position(x: x, y: height * fraction(log.createdAt))
-                        .animation(.snappy(duration: 0.2), value: current)
-                }
-            }
-            .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    dragging = true
-                    pick(at: value.location.y / max(1, height))
-                }
-                .onEnded { _ in dragging = false; picked = nil })
-        }
-        .frame(width: Self.width)
-        .sensoryFeedback(.selection, trigger: picked) { _, new in new != nil }
-        .accessibilityHidden(true)
-    }
-
-    /// 离手指最近的一条日志。
-    private func pick(at fraction: CGFloat) {
-        let target = min(1, max(0, fraction))
-        guard let nearest = logs.min(by: { abs(self.fraction($0.createdAt) - target) < abs(self.fraction($1.createdAt) - target) }),
-              nearest.id != picked else { return }
-        picked = nearest.id
-        select(nearest.id)
-    }
-
-    private func fraction(_ date: Date) -> CGFloat {
-        let start = JournalDates.calendar.startOfDay(for: date)
-        return CGFloat(min(1, max(0, date.timeIntervalSince(start) / 86_400)))
-    }
-
-    private var spans: [(start: CGFloat, end: CGFloat)] {
-        var result: [(CGFloat, CGFloat)] = []
-        var open: Date?
-        for log in logs.sorted(by: { $0.createdAt < $1.createdAt }) {
-            if log.focusMarker == "FOCUS" { open = log.createdAt }
-            if log.focusMarker == "END", let start = open { result.append((fraction(start), fraction(log.createdAt))); open = nil }
-        }
-        return result
-    }
-}
-
-/// 日记页现在看到哪一条：每条日志记下自己在内容里的位置（只在排版变了时），滚动时按位置找出顶上那一条。
-/// 只有节奏条订阅它，滚动不会让整页重算。
-@MainActor
-final class LogPositions: ObservableObject {
-    static let space = "log-positions"
-    @Published private(set) var current: UUID?
-    private var tops: [UUID: CGFloat] = [:]
-
-    func record(_ id: UUID, top: CGFloat) { tops[id] = top }
-
-    func update(_ view: UIScrollView) {
-        let line = view.contentOffset.y + view.adjustedContentInset.top + 12
-        let above = tops.filter { $0.value <= line }
-        let best = above.max { $0.value < $1.value }?.key ?? tops.min { $0.value < $1.value }?.key
-        if best != current { current = best }
-    }
-
-    func reset() {
-        tops = [:]
-        current = nil
-    }
-}
-
-private struct LogPositionsKey: EnvironmentKey {
-    static let defaultValue: LogPositions? = nil
-}
-
-extension EnvironmentValues {
-    var logPositions: LogPositions? {
-        get { self[LogPositionsKey.self] }
-        set { self[LogPositionsKey.self] = newValue }
-    }
-}
-
-extension View {
-    /// 日记页里的一条日志：把自己在内容里的位置记给 `LogPositions`（别的页面没有它，什么也不做）。
-    @ViewBuilder func recordsLogPosition(_ id: UUID, in positions: LogPositions?) -> some View {
-        if let positions {
-            onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(LogPositions.space)).minY } action: { positions.record(id, top: $0) }
-        } else {
-            self
-        }
     }
 }
 
@@ -618,58 +482,76 @@ struct ComposeSheet: View {
     @State private var images: [String] = []
     @State private var picked: [PhotosPickerItem] = []
     @State private var error: String?
+    @Environment(\.closeEditor) private var closeEditor
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 12) {
-                AutoFocusTextView(text: $text, placeholder: L("写点什么… 支持 Markdown 和 #标签"), minLines: 4, maxLines: 14)
-                if !tags.isEmpty || !pickedTags.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(tags, id: \.self) { Chip(text: "#" + $0, color: Palette.note) }
-                            ForEach(pickedTags, id: \.self) { tag in
-                                Button { pickedTags.removeAll { TagText.key($0) == TagText.key(tag) } } label: {
-                                    Chip(text: "#" + tag + " ×", color: Palette.note)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                }
-                if !images.isEmpty { ImageStrip(store: store, names: images) }
-                if let error { Text(error).font(.caption).foregroundStyle(Palette.danger) }
-                HStack(spacing: 16) {
-                    TaskChoiceMenu(choices: choices, linked: $linked)
-                    TagChoiceMenu(choices: tagChoices, fixed: tags, picked: $pickedTags)
-                    PhotosPicker(selection: $picked, maxSelectionCount: 6, matching: .images) {
-                        Label("图片", systemImage: "photo")
-                    }
+        if let close = closeEditor {
+            VStack(alignment: .leading, spacing: 10) {
+                EditorCardHeader(title: "记一笔", confirm: "保存", canConfirm: canSend, cancel: close.close, action: send)
+                fields(maxLines: 8)
+            }
+            .onAppear(perform: load)
+            .onChange(of: picked) { _, items in take(items) }
+        } else {
+            NavigationStack {
+                VStack(alignment: .leading, spacing: 12) {
+                    fields(maxLines: 14)
                     Spacer()
                 }
-                .font(.subheadline)
-                Spacer()
+                .padding()
+                .navigationTitle("记一笔")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) { Button("保存", action: send).disabled(!canSend) }
+                }
+                .onAppear(perform: load)
+                .onChange(of: picked) { _, items in take(items) }
             }
-            .padding()
-            .navigationTitle("记一笔")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存", action: send).disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty)
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+    private var canSend: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty }
+
+    @ViewBuilder private func fields(maxLines: Int) -> some View {
+        AutoFocusTextView(text: $text, placeholder: L("写点什么… 支持 Markdown 和 #标签"), minLines: 4, maxLines: maxLines)
+        if !tags.isEmpty || !pickedTags.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(tags, id: \.self) { Chip(text: "#" + $0, color: Palette.note) }
+                    ForEach(pickedTags, id: \.self) { tag in
+                        Button { pickedTags.removeAll { TagText.key($0) == TagText.key(tag) } } label: {
+                            Chip(text: "#" + tag + " ×", color: Palette.note)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
-            .onAppear {
-                linked = taskID
-                choices = TaskChoice.open(in: store, including: taskID)
-                tagChoices = store.allTags().map(\.name)
-            }
-            .onChange(of: picked) { _, items in
-                guard !items.isEmpty else { return }
-                picked = []
-                Task { await attach(items) }
-            }
         }
-        .presentationDetents([.medium, .large])
+        if !images.isEmpty { ImageStrip(store: store, names: images) }
+        if let error { Text(error).font(.caption).foregroundStyle(Palette.danger) }
+        HStack(spacing: 16) {
+            TaskChoiceMenu(choices: choices, linked: $linked)
+            TagChoiceMenu(choices: tagChoices, fixed: tags, picked: $pickedTags)
+            PhotosPicker(selection: $picked, maxSelectionCount: 6, matching: .images) {
+                Label("图片", systemImage: "photo")
+            }
+            Spacer()
+        }
+        .font(.subheadline)
+    }
+
+    private func load() {
+        linked = taskID
+        choices = TaskChoice.open(in: store, including: taskID)
+        tagChoices = store.allTags().map(\.name)
+    }
+
+    private func take(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty else { return }
+        picked = []
+        Task { await attach(items) }
     }
 
     private func attach(_ items: [PhotosPickerItem]) async {
@@ -688,7 +570,7 @@ struct ComposeSheet: View {
                                allowInlineTaskReference: linked == nil, on: Date())
             store.save()
             sent()
-            dismiss()
+            if let closeEditor { closeEditor() } else { dismiss() }
         } catch {
             self.error = error.localizedDescription
         }
@@ -768,5 +650,33 @@ extension UIImage {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         return UIGraphicsImageRenderer(size: target, format: format).image { _ in draw(in: CGRect(origin: .zero, size: target)) }
+    }
+}
+
+/// 日记页的节奏条：从上到下是 0–24 点，每条日志按时刻放，专注的时段画成一段。
+enum DayRhythm {
+    static func marks(_ logs: [DailyLogEntry]) -> [RailMark] {
+        logs.sorted { $0.createdAt < $1.createdAt }.map { log in
+            RailMark(id: log.id, position: fraction(log.createdAt), color: LogStyle.color(log), emphasized: log.isFocusMarker,
+                     label: DayText.time(log.createdAt), preview: RailMark.preview(log))
+        }
+    }
+
+    static func spans(_ logs: [DailyLogEntry]) -> [ClosedRange<CGFloat>] {
+        var result: [ClosedRange<CGFloat>] = []
+        var open: Date?
+        for log in logs.sorted(by: { $0.createdAt < $1.createdAt }) {
+            if log.focusMarker == "FOCUS" { open = log.createdAt }
+            if log.focusMarker == "END", let start = open {
+                result.append(fraction(start)...max(fraction(start), fraction(log.createdAt)))
+                open = nil
+            }
+        }
+        return result
+    }
+
+    private static func fraction(_ date: Date) -> CGFloat {
+        let start = JournalDates.calendar.startOfDay(for: date)
+        return CGFloat(min(1, max(0, date.timeIntervalSince(start) / 86_400)))
     }
 }

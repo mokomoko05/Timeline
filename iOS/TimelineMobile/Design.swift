@@ -151,6 +151,8 @@ struct RailRow<Node: View, Content: View>: View {
     var hasNext = true
     var lineColor: Color = Palette.line
     var nodeY: CGFloat = 10
+    /// 竖线上用强调色的一段（专注中）：从 `top` 到 `bottom`（nil 是到行底）。画在节点下面，不穿过节点。
+    var accent: (top: CGFloat, bottom: CGFloat?)?
     @ViewBuilder var node: () -> Node
     @ViewBuilder var content: () -> Content
 
@@ -177,6 +179,10 @@ struct RailRow<Node: View, Content: View>: View {
         .background(alignment: .topLeading) {
             Self.segment(from: hasPrevious ? 0 : nodeY, to: hasNext ? nil : nodeY)
                 .fill(lineColor)
+            if let accent {
+                RailSegment(x: Self.labelWidth + 6 + 10, top: accent.top, bottom: accent.bottom, width: 2)
+                    .fill(Palette.accent.opacity(0.8))
+            }
         }
     }
 
