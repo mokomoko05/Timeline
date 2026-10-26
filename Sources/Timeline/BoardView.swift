@@ -13,13 +13,7 @@ final class BoardNavigation: ObservableObject {
 
     func editorSession(for board: Board, store: JournalStore) -> BoardLiveEditorSession {
         if editorSessions[board.id] == nil {
-            let session = BoardLiveEditorSession(store: store, board: board, defaults: defaults)
-            // ⌘Enter：保存并回到只读浏览（和换工作板一样关掉源码模式）。
-            session.onPreview = { [weak self, weak session] in
-                self?.sourceMode = false
-                session?.setMode(editing: false, raw: false)
-            }
-            editorSessions[board.id] = session
+            editorSessions[board.id] = BoardLiveEditorSession(store: store, board: board, defaults: defaults)
         }
         editorOrder.removeAll { $0 == board.id }
         editorOrder.append(board.id)
@@ -36,16 +30,13 @@ final class BoardNavigation: ObservableObject {
         editorOrder.removeAll { $0 != selection }
     }
 
-    /// 当前工作板是在编辑还是浏览；换工作板回到浏览。
-    @Published var sourceMode = false
-    /// 编辑时显示完整 Markdown 源码；默认所见即所得（只有光标所在行露出标记）。记住上次的选择。
+    /// 显示完整 Markdown 源码；默认所见即所得（只有光标所在的元素露出标记）。记住上次的选择。
     @Published var rawSource: Bool {
         didSet { defaults.set(rawSource, forKey: "board.rawSource") }
     }
 
     func select(_ id: UUID) {
         guard selection != id else { return }
-        if sourceMode { sourceMode = false }
         // The editor already debounces and flushes every change. Switching boards should
         // update the lightweight SwiftUI selection immediately instead of waiting for an
         // asynchronous WebKit round trip; the cached session keeps its caret and scroll.
@@ -294,25 +285,17 @@ struct BoardContentView: View {
 
     @State private var showingHistory = false
 
-    private var editing: Bool { navigation.sourceMode }
-
     private var markdown: Binding<String> {
         Binding(get: { store.boards.first { $0.id == board.id }?.markdown ?? board.markdown },
                 set: { store.setBoardMarkdown($0, for: board.id) })
     }
 
-    private func setEditing(_ value: Bool) {
-        navigation.sourceMode = value
-        navigation.editorSession(for: board, store: store).setMode(editing: value, raw: navigation.rawSource)
-    }
-
     private func setRawSource(_ value: Bool) {
         navigation.rawSource = value
-        navigation.editorSession(for: board, store: store).setMode(editing: editing, raw: value)
+        navigation.editorSession(for: board, store: store).setSourceMode(value)
     }
 
     private func insertTemplate(_ template: BoardMarkdownTemplate) {
-        setEditing(true)
         let liveEditor = navigation.editorSession(for: board, store: store)
         if liveEditor.error == nil { liveEditor.insertTemplate(template); return }
         if let editor = NSApp.keyWindow?.firstResponder as? NSTextView,
@@ -324,7 +307,6 @@ struct BoardContentView: View {
         }
         let insertion = template.insertion(into: markdown.wrappedValue)
         markdown.wrappedValue = insertion.source
-        setEditing(true)
         DispatchQueue.main.async {
             guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView,
                   editor.isEditable, editor.string == insertion.source else { return }
@@ -338,8 +320,7 @@ struct BoardContentView: View {
             header
             if let favorites { favorites.padding(.horizontal, 4) }
             Divider()
-            BoardEditorArea(store: store, navigation: navigation, board: board, markdown: markdown,
-                            preview: { setEditing(false) })
+            BoardEditorArea(store: store, navigation: navigation, board: board, markdown: markdown)
                 .sheet(isPresented: $showingHistory) { BoardHistoryView(store: store, boardID: board.id) }
                 .id(board.id)
             relatedBoards
@@ -387,16 +368,9 @@ struct BoardContentView: View {
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .tint(Palette.muted).foregroundStyle(Palette.muted)
                     .help("插入模板、版本历史").accessibilityLabel("插入模板、版本历史")
-                    // 编辑时 ⌘Enter 由编辑器自己处理（保存后回到浏览）；浏览时 ⌘Enter 进入编辑。
-                    if editing {
-                        headerButton("chevron.left.forwardslash.chevron.right",
-                                     navigation.rawSource ? "回到所见即所得编辑" : "显示完整 Markdown 源码",
-                                     active: navigation.rawSource) { setRawSource(!navigation.rawSource) }
-                        headerButton("eye", "保存并浏览 · ⌘↩", active: true) { setEditing(false) }
-                    } else {
-                        headerButton("pencil", "编辑（光标停在点过的位置） · ⌘↩") { setEditing(true) }
-                            .keyboardShortcut(.return, modifiers: .command)
-                    }
+                    headerButton("chevron.left.forwardslash.chevron.right",
+                                 navigation.rawSource ? "回到所见即所得编辑" : "显示完整 Markdown 源码",
+                                 active: navigation.rawSource) { setRawSource(!navigation.rawSource) }
                 }
                 if case .task(let id) = board.owner, store.locate(id) != nil {
                     headerButton("note.text", "笔记") { AppRouter.openNotes(id) }
@@ -484,28 +458,26 @@ private struct BoardEditorArea: View {
     @ObservedObject var navigation: BoardNavigation
     let board: Board
     let markdown: Binding<String>
-    let preview: () -> Void
     @StateObject private var liveEditor: BoardLiveEditorSession
 
-    init(store: JournalStore, navigation: BoardNavigation, board: Board, markdown: Binding<String>, preview: @escaping () -> Void) {
+    init(store: JournalStore, navigation: BoardNavigation, board: Board, markdown: Binding<String>) {
         self.store = store
         self.navigation = navigation
         self.board = board
         self.markdown = markdown
-        self.preview = preview
         _liveEditor = StateObject(wrappedValue: navigation.editorSession(for: board, store: store))
     }
 
     var body: some View {
         VStack(spacing: 0) {
             if liveEditor.error != nil {
-                if navigation.sourceMode {
-                    BoardMarkdownEditor(text: markdown, preview: preview).padding(10)
-                } else {
+                if store.isReadOnly {
                     ScrollView { BoardMarkdownPreview(store: store, board: board).padding(12) }
+                } else {
+                    BoardMarkdownEditor(text: markdown, preview: {}).padding(10)
                 }
             } else {
-                BoardLiveEditor(session: liveEditor, editing: navigation.sourceMode, raw: navigation.rawSource)
+                BoardLiveEditor(session: liveEditor, raw: navigation.rawSource)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }

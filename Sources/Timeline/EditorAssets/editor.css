@@ -13,7 +13,7 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 #editor .cm-cursorLayer { animation: none !important; }
 #editor .cm-editor[data-preview="true"] .cm-cursorLayer { display: none; }
 #editor .cm-editor[data-preview="true"] .cm-content { caret-color: transparent; }
-/* 浏览时只显示系统原生选区，不再叠加 CodeMirror 自绘的一层（两层不一致看起来就是错位）。 */
+/* 只读的工作板只显示系统原生选区，不再叠加 CodeMirror 自绘的一层（两层不一致看起来就是错位）。 */
 #editor .cm-editor[data-preview="true"] .cm-selectionLayer { display: none; }
 #editor .cm-editor[data-preview="true"] .cm-content { user-select: text; -webkit-user-select: text; cursor: text; }
 #editor .cm-selectionBackground { background: var(--selection) !important; }
@@ -72,11 +72,9 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 #editor .cm-code-header-concealed .board-copy-code[data-copied="true"]::after { content: attr(data-label); }
 #editor .cm-code-header-concealed .board-copy-code:hover { color: var(--accent); border-color: var(--line); }
 #editor .cm-line.cm-code-first { padding-right: 40px; }
-/* 标题折叠：浏览时点整行标题就能收起 / 展开；左边留白里的箭头平时淡淡显示，悬停这一行时变清楚。
+/* 标题折叠：左边留白里的箭头平时淡淡显示，悬停这一行时变清楚。
    收起后箭头朝右、标题后面跟一个「…」，点它也能展开。 */
 #editor .cm-line.cm-foldable { position: relative; }
-#editor .cm-editor[data-preview="true"] .cm-line.cm-foldable { cursor: pointer; border-radius: 6px; transition: background-color .12s ease; }
-#editor .cm-editor[data-preview="true"] .cm-line.cm-foldable:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
 .board-heading-fold { position: absolute; left: -4px; top: 0; bottom: 0; width: 18px; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; background: transparent; color: var(--muted); opacity: .4; cursor: pointer; transition: opacity .12s ease, color .12s ease; }
 .board-heading-fold svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; transform: rotate(90deg); transition: transform .16s ease; }
 .board-heading-fold[data-folded="true"] svg { transform: rotate(0deg); }
@@ -84,15 +82,6 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 #editor .cm-line.cm-foldable:hover .board-heading-fold { color: var(--accent); }
 .board-fold-more { display: inline-flex; align-items: center; justify-content: center; height: 16px; margin-left: .5em; padding: 0 7px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--soft) 70%, var(--background)); color: var(--muted); font: 700 12px/16px -apple-system, sans-serif; vertical-align: middle; cursor: pointer; }
 .board-fold-more:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
-/* 浏览时的光标：点下的位置一根强调色细线，这一行淡淡铺亮；进入编辑时光标就从这里开始。 */
-#editor .cm-line.cm-browse-line { background: color-mix(in srgb, var(--accent) 7%, transparent); }
-.cm-browse-caret { box-shadow: inset 2px 0 0 var(--accent); animation: board-caret-in .6s ease-out; }
-.cm-browse-caret.cm-browse-caret-end { box-shadow: inset -2px 0 0 var(--accent); animation-name: board-caret-in-end; }
-.cm-browse-range { background: var(--selection); color: var(--selection-ink); border-radius: 2px; }
-#editor .cm-line.cm-browse-empty { background-image: linear-gradient(var(--accent), var(--accent)); background-repeat: no-repeat; background-size: 2px 1.2em; background-position: 13px 50%; }
-@keyframes board-caret-in { 0% { box-shadow: inset 2px 0 0 var(--accent), -3px 0 6px color-mix(in srgb, var(--accent) 60%, transparent); } 100% { box-shadow: inset 2px 0 0 var(--accent); } }
-@keyframes board-caret-in-end { 0% { box-shadow: inset -2px 0 0 var(--accent), 3px 0 6px color-mix(in srgb, var(--accent) 60%, transparent); } 100% { box-shadow: inset -2px 0 0 var(--accent); } }
-@media (prefers-reduced-motion: reduce) { .board-heading-fold, .board-heading-fold svg { transition: none; } .cm-browse-caret { animation: none; } }
 /* 搜索跳转：命中的那一行淡淡铺一层强调色，命中的文字高亮，两秒多后淡去。 */
 #editor .cm-line.cm-search-line { background: color-mix(in srgb, var(--accent) 12%, transparent); animation: board-search-fade 2.4s ease-out forwards; }
 .cm-search-hit { background: color-mix(in srgb, var(--accent) 38%, transparent); border-radius: 3px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 38%, transparent); }

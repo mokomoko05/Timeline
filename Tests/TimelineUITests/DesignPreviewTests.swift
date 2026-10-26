@@ -244,7 +244,7 @@ final class BoardBrowseSelectionProbe: XCTestCase {
         window.orderBack(nil)
         defer { window.contentView = nil; window.orderOut(nil) }
         try await waitForBoardEditor(webView)
-        session.configure(fontSize: 13, dark: true, previewOnly: true)
+        session.configure(fontSize: 13, dark: true)
         try await Task.sleep(for: .milliseconds(80))
         let result = try await webView.evaluateJavaScript("""
         (()=>{

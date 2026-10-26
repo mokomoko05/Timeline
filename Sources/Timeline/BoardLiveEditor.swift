@@ -17,9 +17,7 @@ final class BoardEditorContainer: NSView {
 
 struct BoardLiveEditor: NSViewRepresentable {
     @ObservedObject var session: BoardLiveEditorSession
-    /// 正在编辑（否则是只读浏览）。
-    var editing = false
-    /// 编辑时显示完整源码；否则所见即所得，只有光标所在的那一行露出 Markdown 标记。
+    /// 显示完整源码；否则所见即所得，只有光标所在的元素露出 Markdown 标记。
     var raw = false
     @Environment(\.typography) private var typography
     @Environment(\.colorScheme) private var colorScheme
@@ -34,8 +32,7 @@ struct BoardLiveEditor: NSViewRepresentable {
     func updateNSView(_ container: BoardEditorContainer, context: Context) {
         // 只有这块工作板还拥有编辑器时才放回来（编辑器被重建过）；不从别的工作板手里抢。
         if let webView = session.webView, webView.superview !== container { container.attach(webView) }
-        session.configure(fontSize: typography.pt(13), dark: colorScheme == .dark,
-                          sourceMode: editing && raw, previewOnly: !editing)
+        session.configure(fontSize: typography.pt(13), dark: colorScheme == .dark, sourceMode: raw)
     }
 
     static func dismantleNSView(_ view: BoardEditorContainer, coordinator: BoardLiveEditorSession) { coordinator.flush() }
@@ -46,8 +43,6 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     static weak var active: BoardLiveEditorSession?
     @Published private(set) var ready = false
     @Published private(set) var error: String?
-    /// 编辑器里按了 ⌘Enter：内容已经提交，回到只读浏览。
-    var onPreview: (() -> Void)?
     private(set) var webView: WKWebView?
     private let store: JournalStore
     private let boardID: UUID
@@ -58,7 +53,6 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     private var storedSource: String
     private(set) var source: String
     private var composing = false
-    private var pending: Task<Void, Never>?
     private var settings: [String: Any] = [:]
     private var lastConfiguration: Data?
     private var sourceNeedsSynchronization = true
@@ -75,7 +69,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         webView?.window === NSApp.keyWindow && hasTextFocus
     }
 
-    /// 编辑器自己的撤销历史（打字、勾待办、插入模板）还有几步。浏览时也算：工作板在前面时 ⌘Z 先撤销它。
+    /// 编辑器自己的撤销历史（打字、勾待办、插入模板）还有几步：光标不在编辑器里时，工作板在前面 ⌘Z 也先撤销它。
     private(set) var undoDepth = 0
     private(set) var redoDepth = 0
 
@@ -99,8 +93,10 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         storedSource = board.markdown
         source = board.markdown
         super.init()
-        NotificationCenter.default.addObserver(self, selector: #selector(commitEditing),
-                                               name: .timelineCommitEditing, object: nil)
+        Self.sessions.setObject(self, forKey: board.id.uuidString as NSString)
+        for name in [Notification.Name.timelineCommitEditing, NSApplication.willTerminateNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(commitEditing), name: name, object: nil)
+        }
         NotificationCenter.default.addObserver(self, selector: #selector(foldsChanged(_:)),
                                                name: .boardFoldsChanged, object: nil)
     }
@@ -108,6 +104,17 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     deinit { NotificationCenter.default.removeObserver(self) }
 
     static func foldsKey(_ id: UUID) -> String { BoardFolds.key(id) }
+
+    /// 每块工作板的会话（弱引用），按 key 找：编辑器停顿一下才把改动送过来，换了工作板之后才到的改动记回原来那块。
+    private static let sessions = NSMapTable<NSString, BoardLiveEditorSession>.strongToWeakObjects()
+
+    fileprivate static func session(forKey key: String) -> BoardLiveEditorSession? { sessions.object(forKey: key as NSString) }
+
+    /// 已经交出编辑器以后才到的改动：照常保存。
+    fileprivate func acceptLate(_ body: [String: Any]) {
+        accept(body)
+        flush()
+    }
     private var recordingOwnFold = false
 
     /// 折叠记忆（哪些标题收起了、哪些折叠块展开了）在别处改了（比如笔记里的看板内容）：编辑器跟着变。
@@ -266,7 +273,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         if shared?.view === view, owner == nil { shared = nil }
     }
 
-    func configure(fontSize: CGFloat, dark: Bool, sourceMode: Bool = false, previewOnly: Bool = false) {
+    func configure(fontSize: CGFloat, dark: Bool, sourceMode: Bool = false) {
         func css(_ color: Color) -> String {
             let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
             var result = ""
@@ -284,13 +291,12 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
                       "selection-ink": css(Color(nsColor: .selectedTextColor))]
         for level in 1...6 { colors["heading-\(level)"] = css(Color(nsColor: MarkdownText.headingColor(level))) }
         settings = ["fontSize": fontSize, "readOnly": store.isReadOnly, "colors": colors,
-                    "sourceMode": sourceMode, "previewOnly": previewOnly, "folds": BoardFolds.load(boardID, defaults: defaults), "key": boardID.uuidString]
+                    "sourceMode": sourceMode, "folds": BoardFolds.load(boardID, defaults: defaults), "key": boardID.uuidString]
         settings["labels"] = ["openLink": AppLocalized("在 Safari 中打开"), "copyCode": AppLocalized("复制代码"),
                               "copied": AppLocalized("已复制"), "copyFailed": AppLocalized("复制失败，请重试"),
                               "expand": AppLocalized("展开标题下的内容"), "collapse": AppLocalized("收起标题下的内容")]
         let current = store.boards.first { $0.id == boardID }?.markdown ?? storedSource
         if current != storedSource {
-            pending?.cancel()
             storedSource = current
             source = current
             sourceNeedsSynchronization = true
@@ -298,16 +304,11 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         applyConfiguration()
     }
 
-    /// 浏览 / 编辑切换。进入编辑时键盘焦点交给编辑器，光标落在浏览时点下的位置。
-    func setMode(editing: Bool, raw: Bool) {
-        settings["sourceMode"] = editing && raw
-        settings["previewOnly"] = !editing
+    /// 编辑完整源码（true）或所见即所得（false）。
+    func setSourceMode(_ enabled: Bool) {
+        settings["sourceMode"] = enabled
         applyConfiguration()
-        if editing, let webView, webView.window?.firstResponder !== webView { webView.window?.makeFirstResponder(webView) }
     }
-
-    /// 编辑完整源码（true）或回到浏览（false）。
-    func setSourceMode(_ enabled: Bool) { setMode(editing: enabled, raw: true) }
 
     private func applyConfiguration() {
         guard ready, !settings.isEmpty else { return }
@@ -334,16 +335,9 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
             ready = true
             applyConfiguration()
         } else if kind == "change" || kind == "commit" {
+            // 编辑器停顿一下才送改动过来，这里直接保存。
             accept(body)
-            if kind == "commit" { flush() }
-            else {
-                pending?.cancel()
-                guard !composing else { return }
-                pending = Task { @MainActor [weak self] in
-                    do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
-                    self?.flush()
-                }
-            }
+            flush()
         } else if kind == "fold", let key = body["key"] as? String, let value = body["value"] as? Bool {
             // 存进共用的折叠记忆；通知回到 foldsChanged 更新配置（编辑器里已经是这个状态，不会重画）。
             recordingOwnFold = true
@@ -352,9 +346,6 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         } else if kind == "history" {
             undoDepth = body["undo"] as? Int ?? 0
             redoDepth = body["redo"] as? Int ?? 0
-        } else if kind == "preview" {
-            flush()
-            onPreview?()
         } else if kind == "open", let value = body["url"] as? String, let url = TaskText.linkURL(value) {
             SafariLinks.open(url)
         } else if kind == "copy", let value = body["text"] as? String, let request = body["request"] as? Int {
@@ -371,8 +362,6 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     }
 
     func flush() {
-        pending?.cancel()
-        pending = nil
         guard !composing, source != storedSource else { return }
         storedSource = source
         store.setBoardMarkdown(source, for: boardID)
@@ -432,9 +421,16 @@ final class WeakBoardScriptHandler: NSObject, WKScriptMessageHandler {
     /// WebKit 已经来问过导航策略（加载真的开始了）。
     var navigationStarted = false
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        if (message.body as? [String: Any])?["kind"] as? String == "ready" {
+        let body = message.body as? [String: Any]
+        if body?["kind"] as? String == "ready" {
             pageReady = true
             BoardLiveEditorSession.editorBecameReady()
+        }
+        // 换工作板之前那块的改动（编辑器停顿后才送）：交给那块工作板的会话。
+        if let body, let kind = body["kind"] as? String, kind == "change" || kind == "commit",
+           let key = body["key"] as? String, let target = BoardLiveEditorSession.session(forKey: key), target !== session {
+            target.acceptLate(body)
+            return
         }
         session?.userContentController(userContentController, didReceive: message)
     }

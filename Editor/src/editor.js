@@ -1,5 +1,5 @@
 import {EditorState, StateField, StateEffect, Compartment, Transaction, Annotation, Prec} from "@codemirror/state";
-import {EditorView, Decoration, WidgetType, keymap, drawSelection, rectangularSelection} from "@codemirror/view";
+import {EditorView, ViewPlugin, Decoration, WidgetType, keymap, drawSelection, rectangularSelection} from "@codemirror/view";
 import {defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, undoDepth, redoDepth} from "@codemirror/commands";
 import {markdown, markdownLanguage, markdownKeymap} from "@codemirror/lang-markdown";
 import {syntaxTree, syntaxHighlighting, HighlightStyle, indentOnInput, bracketMatching} from "@codemirror/language";
@@ -11,22 +11,17 @@ const toggleDetails = StateEffect.define();
 const folds = new Map();
 const refold = StateEffect.define();
 const flashEffect = StateEffect.define();
-// 浏览时点下的位置：画一根光标、淡淡铺亮这一行，进入编辑时光标就落在这里。
-const setBrowseCaret = StateEffect.define();
+// 光标在不在编辑器里：不在时整页都是渲染好的样子，不露任何 Markdown 标记。
+const setFocused = StateEffect.define();
 const external = Annotation.define();
 const externalChange = external.of(true);
 const editable = new Compartment();
 const livePreview = new Compartment();
 let view;
 let composing = false;
-let currentReadOnly, currentSourceMode, currentPreviewOnly;
+let currentReadOnly, currentSourceMode;
 let labels = {};
 let copyRequest = 0;
-// 浏览时拖选的范围（不写进编辑器状态，免得打断系统原生选区）；进入编辑时变成编辑器的选区。
-let browseRange = null;
-let pointerDown = null;
-// 浏览时这一次按键交给方向键命令移动光标（见 browseKeydown / browseCaret / browseKeyRange）。
-let browseKeyPending = false;
 const pendingCopies = new Map();
 
 function editability(readOnly) {
@@ -44,6 +39,14 @@ function actionButton(className, label, path) {
   return button;
 }
 
+// 链接地址和折叠块标题里的 HTML 实体（&amp; 之类）：没有 & 就不用解码，有的话共用一个元素解码。
+const entityDecoder = document.createElement("textarea");
+function decodeEntities(text) {
+  if (!text.includes("&")) return text;
+  entityDecoder.innerHTML = text;
+  return entityDecoder.value;
+}
+
 class OpenLinkWidget extends WidgetType {
   constructor(url) { super(); this.url = url; }
   eq(other) { return this.url === other.url; }
@@ -57,16 +60,25 @@ class OpenLinkWidget extends WidgetType {
   ignoreEvent() { return true; }
 }
 
+// 代码块的正文（不含围栏），点复制时按按钮所在的位置现找：正文改了、前面插了字，按钮不用重画。
+function codeBody(position) {
+  const state = view.state, code = state.field(live, false)?.blocks.codes.find(code => code.from === position);
+  if (!code) return "";
+  const line = state.doc.lineAt(code.from);
+  const firstBody = line.number < state.doc.lines ? state.doc.line(line.number + 1).from : code.to;
+  const end = code.closing != null ? state.doc.lineAt(code.closing).from : code.to;
+  return state.doc.sliceString(firstBody, Math.max(firstBody, end));
+}
+
 class CopyCodeWidget extends WidgetType {
-  constructor(from, to) { super(); this.from = from; this.to = to; }
-  eq(other) { return this.from === other.from && this.to === other.to; }
+  eq() { return true; }
   toDOM() {
     const button = actionButton("board-copy-code", labels.copyCode || "复制代码", '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2A1.5 1.5 0 0 0 9 2H3.5A1.5 1.5 0 0 0 2 3.5V9A1.5 1.5 0 0 0 3.5 10.5h2"/>');
     button.dataset.label = labels.copyCode || "复制代码";
     button.addEventListener("click", () => {
       const request = ++copyRequest;
       pendingCopies.set(request, button);
-      post({kind: "copy", request, text: view.state.doc.sliceString(this.from, this.to)});
+      post({kind: "copy", request, text: codeBody(lineStart(button))});
     });
     return button;
   }
@@ -76,20 +88,43 @@ class CopyCodeWidget extends WidgetType {
   }
 }
 
-function parseDetails(doc, tree) {
-  const excluded = [];
+// 只看块级结构（列表、引用里面的块也看），不进段落和标题里面：长工作板每次改字只走一遍大块，不走每个字的格式。
+const containerBlocks = new Set(["Document", "BulletList", "OrderedList", "ListItem", "Blockquote"]);
+
+function collectBlocks(state, tree) {
+  const codes = [], headings = [], quotes = [], html = [];
   tree.iterate({enter(node) {
-    if (["FencedCode", "CodeBlock"].includes(node.name)) {
-      excluded.push([node.from, node.to]);
-      return false;
+    const name = node.name;
+    if (containerBlocks.has(name)) {
+      if (name === "Blockquote" && !(node.from <= quotes[quotes.length - 1]?.to)) quotes.push({from: node.from, to: node.to});
+      return;
     }
+    if (name === "FencedCode" || name === "CodeBlock") {
+      const last = node.node.lastChild;
+      codes.push({name, from: node.from, to: node.to, closing: name === "FencedCode" && last?.name === "CodeMark" ? last.from : null});
+    } else if (name === "HTMLBlock") {
+      html.push({from: node.from, to: node.to});
+    } else {
+      const match = /^ATXHeading([1-6])$/.exec(name);
+      if (match) headings.push({from: node.from, level: Number(match[1])});
+    }
+    return false;
   }});
+  return {codes, headings, quotes, html};
+}
+
+// <details> 和 </details> 只会出现在 HTML 块里：只看这些块的行，不逐行扫整篇。
+function parseDetails(doc, html) {
   const result = [], stack = [], seen = new Map();
-  let codeIndex = 0;
-  for (let number = 1; number <= doc.lines; number++) {
+  const numbers = [];
+  for (const block of html) {
+    const last = doc.lineAt(block.to).number;
+    for (let number = doc.lineAt(block.from).number; number <= last; number++) {
+      if (numbers[numbers.length - 1] !== number) numbers.push(number);
+    }
+  }
+  for (const number of numbers) {
     const line = doc.line(number);
-    while (excluded[codeIndex]?.[1] < line.from) codeIndex++;
-    if (excluded[codeIndex]?.[0] <= line.from && excluded[codeIndex][1] > line.from) continue;
     if (/^(?: {4}|\t)/.test(line.text)) continue;
     const opening = line.text.match(/^\s{0,3}<details\b([^>]*)>\s*(?:<summary>(.*?)<\/summary>)?\s*$/i);
     if (opening) {
@@ -101,9 +136,7 @@ function parseDetails(doc, tree) {
         if (summary) { title = summary[1]; summaryLine = next; }
       }
       if (title == null) continue;
-      const decoded = document.createElement("textarea");
-      decoded.innerHTML = title;
-      const name = decoded.value || "折叠内容";
+      const name = decodeEntities(title) || "折叠内容";
       const occurrence = seen.get(name) ?? 0;
       seen.set(name, occurrence + 1);
       stack.push({from: line.from, headerTo: doc.line(summaryLine).to, key: `d:${name}#${occurrence}`,
@@ -117,28 +150,29 @@ function parseDetails(doc, tree) {
 
 // 标题的折叠范围：到下一个同级或更高级的标题为止；标题在折叠块里时不越过折叠块的结尾，
 // 折叠块里的标题也只和同一个折叠块里的标题比较。收起时末尾的空行留着，和下一个标题之间仍有间隔。
-function parseHeadings(doc, tree, details) {
+function parseHeadings(doc, found, details) {
   const headings = [], seen = new Map();
-  tree.iterate({enter(node) {
-    if (["FencedCode", "CodeBlock"].includes(node.name)) return false;
-    const match = /^ATXHeading([1-6])$/.exec(node.name);
-    if (!match) return;
-    const line = doc.lineAt(node.from);
+  for (const {from, level} of found) {
+    const line = doc.lineAt(from);
     const text = line.text.replace(/^\s{0,3}#{1,6}\s*/, "").replace(/\s+#+\s*$/, "").trim();
-    const level = Number(match[1]);
     const name = `h${level}:${text}`;
     const occurrence = seen.get(name) ?? 0;
     seen.set(name, occurrence + 1);
     const container = details.filter(item => item.from < line.from && line.from < item.closingFrom)
       .reduce((inner, item) => !inner || item.from > inner.from ? item : inner, null);
-    headings.push({from: line.from, lineTo: line.to, level, key: `${name}#${occurrence}`, container});
-    return false;
-  }});
-  for (let index = 0; index < headings.length; index++) {
-    const heading = headings[index];
-    const next = headings.slice(index + 1).find(item => item.container === heading.container && item.level <= heading.level);
+    headings.push({from: line.from, lineTo: line.to, level, key: `${name}#${occurrence}`, container, next: null});
+  }
+  // 每个折叠块（和整页）各一个栈：遇到同级或更高级的标题，栈里比它低的标题就到此为止。
+  const stacks = new Map();
+  for (const heading of headings) {
+    const stack = stacks.get(heading.container) ?? [];
+    stacks.set(heading.container, stack);
+    while (stack.length && stack[stack.length - 1].level >= heading.level) stack.pop().next = heading;
+    stack.push(heading);
+  }
+  for (const heading of headings) {
     let boundary = heading.container ? heading.container.closingFrom : doc.length + 1;
-    if (next && next.from < boundary) boundary = next.from;
+    if (heading.next && heading.next.from < boundary) boundary = heading.next.from;
     let last = doc.lineAt(Math.max(heading.lineTo, boundary - 1)).number;
     if (boundary <= doc.length && doc.lineAt(boundary).from === boundary) last = doc.lineAt(boundary).number - 1;
     while (last > doc.lineAt(heading.from).number && !doc.line(last).text.trim()) last--;
@@ -235,117 +269,7 @@ function keepInPlace(lineFrom, spec) {
   });
 }
 
-// 浏览时的选区是不是方向键选出来的：只有这种才由编辑器自己铺颜色；鼠标拖出来的是系统原生选区，不能再往上叠装饰。
-// 原生选区照常同步进编辑器（不能拦下：拦下后编辑器会把网页里的选区改回自己的，拖选时选区一直闪、选不住）；
-// 浏览光标只跟方向键和点击走（见 browseCaret），收起 / 展开标题重画时不会被浏览器的选区带到开头去。
-const browseKeyRange = StateField.define({
-  create() { return false; },
-  update(value, transaction) {
-    if (!transaction.selection) return value;
-    return transaction.state.readOnly && browseKeyPending && transaction.isUserEvent("select");
-  }
-});
-
-const browseCaret = StateField.define({
-  create() { return null; },
-  update(value, transaction) {
-    let explicit = false;
-    for (const effect of transaction.effects) if (effect.is(setBrowseCaret)) { value = effect.value; explicit = true; }
-    // 浏览时用方向键（以及 Home / End / 翻页）移动光标：光标跟着编辑器的选区走。
-    // 鼠标拖选、重画后浏览器自己放的选区也会同步进编辑器，但不带动光标。
-    if (!explicit && transaction.state.readOnly && transaction.isUserEvent("select") && browseKeyPending) value = transaction.state.selection.main.head;
-    if (value != null && transaction.docChanged) value = transaction.changes.mapPos(value);
-    if (value != null && !transaction.state.readOnly) value = null;
-    return value;
-  },
-  // 光标用标记画在字的左边缘（行尾画在前一个字的右边缘，空行画在行首），不插进额外的元素，双击选词不受影响。
-  // 按住 Shift 用方向键选出的范围也铺上选区的颜色。
-  provide: field => EditorView.decorations.compute([field, browseKeyRange, "selection"], state => {
-    const position = state.field(field);
-    if (position == null) return Decoration.none;
-    const line = state.doc.lineAt(position);
-    const ranges = [];
-    const selection = state.selection.main;
-    if (state.readOnly && state.field(browseKeyRange) && !selection.empty && selection.head === position) {
-      ranges.push(Decoration.mark({class: "cm-browse-range"}).range(selection.from, selection.to));
-    }
-    if (position < line.to) ranges.push(Decoration.mark({class: "cm-browse-caret"}).range(position, position + 1));
-    else if (position > line.from) ranges.push(Decoration.mark({class: "cm-browse-caret cm-browse-caret-end"}).range(position - 1, position));
-    ranges.unshift(Decoration.line({class: "cm-browse-line" + (line.length ? "" : " cm-browse-empty")}).range(line.from));
-    return Decoration.set(ranges, true);
-  })
-});
-
-// 浏览时松开鼠标：没有拖选就把光标放在点下的位置（点在可折叠的标题上同时收起 / 展开它）；拖选了就记下范围。
-function browsePointerUp(event) {
-  const start = pointerDown;
-  pointerDown = null;
-  if (!view?.state.readOnly || !start || event.button !== 0) return;
-  if (event.target.closest?.("button, .board-check, .board-details, .board-open-link, .board-copy-code, [data-url]")) return;
-  const selection = window.getSelection();
-  const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4;
-  if (selection && !selection.isCollapsed && selection.rangeCount && view.contentDOM.contains(selection.anchorNode)) {
-    try {
-      const range = selection.getRangeAt(0);
-      const from = view.posAtDOM(range.startContainer, range.startOffset), to = view.posAtDOM(range.endContainer, range.endOffset);
-      const backward = selection.anchorNode === range.endContainer && selection.anchorOffset === range.endOffset && from !== to;
-      browseRange = backward ? {anchor: to, head: from} : {anchor: from, head: to};
-    } catch { browseRange = null; }
-    if (view.state.field(browseCaret) != null) view.dispatch({effects: setBrowseCaret.of(null)});
-    return;
-  }
-  if (moved || (event.detail > 1 && !event.target.closest?.(".cm-line.cm-foldable"))) return;
-  browseRange = null;
-  let position = view.posAtCoords({x: event.clientX, y: event.clientY});
-  if (position == null) return;
-  const clickedLine = event.target.closest?.(".cm-line");
-  if (clickedLine) {
-    try { position = Math.min(position, view.state.doc.lineAt(view.posAtDOM(clickedLine, 0)).to); } catch {}
-  }
-  const effects = [setBrowseCaret.of(position)];
-  const lineElement = event.target.closest?.(".cm-line.cm-foldable");
-  let toggledLine = null;
-  if (lineElement) {
-    // 收起的标题右边点下去，位置会落在被隐藏的那一节里：按点中的那一行找标题。
-    const lineFrom = view.state.doc.lineAt(view.posAtDOM(lineElement, 0)).from;
-    const heading = view.state.field(live, false)?.headings.find(item => item.from === lineFrom);
-    if (heading) {
-      const folded = folds.get(heading.key) === true;
-      folds.set(heading.key, !folded);
-      post({kind: "fold", key: heading.key, value: !folded});
-      effects.push(refold.of(null));
-      toggledLine = heading.from;
-    }
-  }
-  if (toggledLine != null) keepInPlace(toggledLine, {effects, selection: {anchor: position}});
-  else view.dispatch({effects, selection: {anchor: position}});
-}
-
-// 浏览时按方向键：还没有光标就先放在屏幕最上面那一行；有拖选的范围就从光标处重新开始，不接着旧的选区走。
-function browseKeydown(event, view) {
-  if (!view.state.readOnly || event.metaKey || event.ctrlKey || event.isComposing) return false;
-  if (!/^(Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown)$/.test(event.key)) return false;
-  const caret = view.state.field(browseCaret);
-  if (browseRange || window.getSelection()?.isCollapsed === false) {
-    browseRange = null;
-    window.getSelection()?.removeAllRanges();
-  }
-  if (caret == null) {
-    const box = view.scrollDOM.getBoundingClientRect();
-    const top = view.lineBlockAtHeight(Math.max(0, box.top - view.documentTop + 2)).from;
-    view.dispatch({selection: {anchor: top}, effects: setBrowseCaret.of(top), scrollIntoView: true});
-    event.preventDefault();
-    return true;
-  }
-  const selection = view.state.selection.main;
-  if (selection.head !== caret) view.dispatch({selection: {anchor: caret}});
-  browseKeyPending = true;
-  queueMicrotask(() => { browseKeyPending = false; });
-  return false;
-}
-
-
-// 切换浏览 / 编辑 / 源码时，光标（或屏幕最上面那一行）留在屏幕上原来的高度，不会跳到别处去找不着。
+// 切换所见即所得 / 完整源码时，光标（或屏幕最上面那一行）留在屏幕上原来的高度，不会跳到别处去找不着。
 function captureAnchor(position) {
   const box = view.scrollDOM.getBoundingClientRect();
   const coords = position != null ? view.coordsAtPos(position) : null;
@@ -389,7 +313,9 @@ class CheckWidget extends WidgetType {
 
 class DetailsWidget extends WidgetType {
   constructor(item, open) { super(); this.item = item; this.open = open; }
-  eq(other) { return this.item.from === other.item.from && this.item.title === other.item.title && this.open === other.open; }
+  eq(other) { return this.item.key === other.item.key && this.item.title === other.item.title && this.open === other.open; }
+  // 点的时候按 key 找现在的位置（前面改过字，这个小部件是挪过来的，没有重画）。
+  current() { return view.state.field(live, false)?.details.find(item => item.key === this.item.key) ?? this.item; }
   toDOM() {
     const button = document.createElement("button");
     button.className = "board-details";
@@ -404,18 +330,20 @@ class DetailsWidget extends WidgetType {
     button.append(arrow, title);
     button.addEventListener("mousedown", event => event.preventDefault());
     button.addEventListener("click", () => {
-      const transaction = {effects: [toggleDetails.of({from: this.item.from, open: !this.open})]};
+      const item = this.current();
+      const transaction = {effects: [toggleDetails.of({from: item.from, open: !this.open})]};
       const head = view.state.selection.main.head;
-      if (this.open && head >= this.item.from && head <= this.item.to) {
-        transaction.selection = {anchor: this.item.to < view.state.doc.length ? this.item.to + 1 : Math.max(0, this.item.from - 1)};
+      if (this.open && head >= item.from && head <= item.to) {
+        transaction.selection = {anchor: item.to < view.state.doc.length ? item.to + 1 : Math.max(0, item.from - 1)};
       }
-      keepInPlace(this.item.from, transaction);
+      keepInPlace(item.from, transaction);
     });
     button.addEventListener("dblclick", () => {
       if (view.state.readOnly) return;
-      const line = view.state.doc.lineAt(this.item.headerTo);
+      const item = this.current();
+      const line = view.state.doc.lineAt(item.headerTo);
       const offset = line.text.indexOf("<summary>") + "<summary>".length;
-      view.dispatch({selection: {anchor: line.from + offset}, effects: toggleDetails.of({from: this.item.from, open: true}), scrollIntoView: true});
+      view.dispatch({selection: {anchor: line.from + offset}, effects: toggleDetails.of({from: item.from, open: true}), scrollIntoView: true});
       view.focus();
     });
     return button;
@@ -423,18 +351,50 @@ class DetailsWidget extends WidgetType {
   ignoreEvent() { return true; }
 }
 
-function decorations(state, details, expanded, headings, flash) {
+const focused = StateField.define({
+  create() { return false; },
+  update(value, transaction) {
+    for (const effect of transaction.effects) if (effect.is(setFocused)) value = effect.value;
+    return value;
+  }
+});
+
+// 露出 Markdown 标记要看的选区：只在可编辑、光标在编辑器里时才有。
+function revealSelection(state) {
+  return !state.readOnly && state.field(focused, false) ? state.selection.main : null;
+}
+
+// 折叠块的状态（展开没有、头和尾是不是露出源码）只随选区变化。连成一个字符串比较，选区移动但这些都没变时不重算结构。
+function detailsStates(state, details, expanded) {
+  const selection = revealSelection(state);
+  const overlaps = (from, to) => selection && selection.from <= to && selection.to >= from;
+  return details.map(item => {
+    const remembered = expanded.get(item.from) ?? folds.get(item.key);
+    const explicitlyClosed = remembered === false;
+    const headerActive = !explicitlyClosed && !!overlaps(item.from, item.headerTo);
+    let open = remembered ?? item.initiallyOpen;
+    if (!explicitlyClosed && (headerActive || (selection && selection.head > item.headerTo && selection.head < item.closingFrom))) open = true;
+    const closingLine = state.doc.lineAt(item.closingFrom).number;
+    const previous = closingLine > 1 ? state.doc.line(closingLine - 1) : null;
+    const closingFrom = previous && !previous.text.trim() ? previous.from - 1 : item.closingFrom;
+    return {item, open, headerActive, closingFrom, closingActive: !!overlaps(closingFrom, item.to)};
+  });
+}
+
+function statesKey(states) {
+  return states.map(state => (state.open ? "o" : "c") + (state.headerActive ? "h" : "") + (state.closingActive ? "e" : "")).join();
+}
+
+// 结构层：标题折叠、折叠块、代码块和引用的底框、标题的字号、搜索高亮。跨行隐藏只能放在这里（状态字段），
+// 正文和折叠变了才重算；每个字的格式和标记的显隐交给只看屏幕上那一段的 inlinePreview。
+function structure(state, blocks, states, headings, flash) {
   const ranges = [], hidden = [];
-  const selection = state.selection.main;
-  const active = state.readOnly ? null : state.doc.lineAt(selection.head).number;
-  const overlapsSelection = (from, to) => selection.from <= to && selection.to >= from;
   const add = (from, to, decoration) => { if (from < to) ranges.push(decoration.range(from, to)); };
-  const replace = (from, to, widget, block = false) => add(from, to, Decoration.replace({widget, block, atomic: true}));
-  // 标题和折叠块按位置依次处理：外层收起了，里面的就不再处理。标题在浏览和编辑时一样收起，
-  // 切换时版面不变，光标留在屏幕上原来的地方。
-  const foldables = [...details.map(item => ({item})), ...headings.map(heading => ({heading}))]
-    .sort((left, right) => (left.item ?? left.heading).from - (right.item ?? right.heading).from);
-  for (const {item, heading} of foldables) {
+  const replace = (from, to, widget) => add(from, to, Decoration.replace({widget, atomic: true}));
+  // 标题和折叠块按位置依次处理：外层收起了，里面的就不再处理。
+  const foldables = [...states.map(details => ({details})), ...headings.map(heading => ({heading}))]
+    .sort((left, right) => (left.details?.item ?? left.heading).from - (right.details?.item ?? right.heading).from);
+  for (const {details, heading} of foldables) {
     if (heading) {
       if (hidden.some(range => heading.from >= range[0] && heading.from <= range[1])) continue;
       const folded = folds.get(heading.key) === true;
@@ -447,21 +407,14 @@ function decorations(state, details, expanded, headings, flash) {
       }
       continue;
     }
+    const {item, open, headerActive, closingFrom, closingActive} = details;
     if (hidden.some(range => item.from >= range[0] && item.to <= range[1])) continue;
-    const remembered = expanded.get(item.from) ?? folds.get(item.key);
-    const explicitlyClosed = remembered === false;
-    const headerActive = !explicitlyClosed && active != null && overlapsSelection(item.from, item.headerTo);
-    let open = remembered ?? item.initiallyOpen;
-    if (!explicitlyClosed && (headerActive || (active != null && selection.head > item.headerTo && selection.head < item.closingFrom))) open = true;
     if (!headerActive) replace(item.from, item.headerTo, new DetailsWidget(item, open));
     if (!open) {
       replace(item.headerTo, item.to, undefined);
       hidden.push([item.headerTo, item.to]);
     } else {
-      const closingLine = state.doc.lineAt(item.closingFrom).number;
-      const previous = closingLine > 1 ? state.doc.line(closingLine - 1) : null;
-      const closingFrom = previous && !previous.text.trim() ? previous.from - 1 : item.closingFrom;
-      if (active == null || !overlapsSelection(closingFrom, item.to)) replace(closingFrom, item.to, undefined);
+      if (!closingActive) replace(closingFrom, item.to, undefined);
       const first = state.doc.lineAt(item.headerTo).number + 1;
       const last = state.doc.lineAt(item.closingFrom).number;
       for (let number = first; number < last; number++) {
@@ -473,84 +426,25 @@ function decorations(state, details, expanded, headings, flash) {
     }
   }
   const concealed = (from, to) => hidden.some(range => from >= range[0] && to <= range[1]);
-  // 引用：最外层引用占的行号范围，最后合成灰底的引用框。
-  const quotes = [];
-  syntaxTree(state).iterate({enter(node) {
-    if (concealed(node.from, node.to)) return false;
-    const name = node.name;
-    const line = state.doc.lineAt(node.from);
-    const editing = active != null && state.doc.lineAt(node.to).number >= active && line.number <= active;
-    if (/^ATXHeading[1-6]$/.test(name)) {
-      ranges.push(Decoration.line({class: "cm-heading-" + name.slice(-1)}).range(line.from));
+  for (const {from, level} of blocks.headings) {
+    if (!concealed(from, from)) ranges.push(Decoration.line({class: "cm-heading-" + level}).range(state.doc.lineAt(from).from));
+  }
+  for (const code of blocks.codes) {
+    if (concealed(code.from, code.to)) continue;
+    const line = state.doc.lineAt(code.from);
+    const lastLine = state.doc.lineAt(code.to).number;
+    for (let number = line.number; number <= lastLine; number++) {
+      const classes = "cm-code" + (number === line.number ? " cm-code-start" : "") + (number === lastLine ? " cm-code-end" : "");
+      ranges.push(Decoration.line({class: classes}).range(state.doc.line(number).from));
     }
-    if (["FencedCode", "CodeBlock"].includes(name)) {
-      const lastLine = state.doc.lineAt(node.to).number;
-      for (let number = line.number; number <= lastLine; number++) {
-        const classes = "cm-code" + (number === line.number ? " cm-code-start" : "") + (number === lastLine ? " cm-code-end" : "");
-        ranges.push(Decoration.line({class: classes}).range(state.doc.line(number).from));
-      }
-      if (name === "FencedCode") {
-        const firstBody = line.number < state.doc.lines ? state.doc.line(line.number + 1).from : node.to;
-        const lastChild = node.node.lastChild;
-        const end = lastChild?.name === "CodeMark" ? state.doc.lineAt(lastChild.from).from : node.to;
-        ranges.push(Decoration.line({class: "cm-code-header"}).range(line.from));
-        ranges.push(Decoration.widget({widget: new CopyCodeWidget(firstBody, Math.max(firstBody, end)), side: -1}).range(line.from));
-        if (state.readOnly || !editing) {
-          // Keep the header for the copy action, but never expose fences or HTML examples as markup.
-          // The hidden fence line shrinks to the block's top edge; the copy button floats in the corner.
-          // An empty block keeps the row: the button is all there is to show.
-          const closingLine = lastChild?.name === "CodeMark" && lastChild.from > line.from ? state.doc.lineAt(lastChild.from).number : lastLine + 1;
-          if (closingLine - line.number - 1 > 0) {
-            ranges.push(Decoration.line({class: "cm-code-header-concealed"}).range(line.from));
-            ranges.push(Decoration.line({class: "cm-code-first"}).range(state.doc.line(line.number + 1).from));
-          }
-          replace(line.from, line.to, undefined);
-          if (lastChild?.name === "CodeMark" && lastChild.from > line.from) {
-            const closing = state.doc.lineAt(lastChild.from);
-            replace(closing.from, closing.to, undefined);
-            ranges.push(Decoration.line({class: "cm-code-footer"}).range(closing.from));
-          }
-        }
-      }
-      return false;
+    if (code.name === "FencedCode") {
+      ranges.push(Decoration.line({class: "cm-code-header"}).range(line.from));
+      ranges.push(Decoration.widget({widget: new CopyCodeWidget(), side: -1}).range(line.from));
     }
-    if (name === "Blockquote" && !quotes.some(range => line.number <= range[1])) {
-      quotes.push([line.number, state.doc.lineAt(Math.max(node.from, node.to - 1)).number]);
-    }
-    if (name === "StrongEmphasis") add(node.from, node.to, Decoration.mark({class: "cm-strong"}));
-    if (name === "Emphasis") add(node.from, node.to, Decoration.mark({class: "cm-emphasis"}));
-    if (name === "Strikethrough") add(node.from, node.to, Decoration.mark({class: "cm-strike"}));
-    if (name === "InlineCode") add(node.from, node.to, Decoration.mark({class: "cm-code"}));
-    if (["HeaderMark", "EmphasisMark", "CodeMark", "StrikethroughMark", "QuoteMark"].includes(name) && !editing) {
-      const end = (name === "HeaderMark" || name === "QuoteMark") && state.doc.sliceString(node.to, node.to + 1) === " " ? node.to + 1 : node.to;
-      replace(node.from, end, undefined);
-    }
-    if (name === "TaskMarker") {
-      const checked = /[xX]/.test(state.doc.sliceString(node.from, node.to));
-      if (checked) add(node.to, line.to, Decoration.mark({class: "cm-task-done"}));
-      const start = line.text.search(/\[[ xX]\]/);
-      if (start >= 0) replace(line.from + start, line.from + start + 3, new CheckWidget(checked, line.from + start + 1));
-    }
-    if (name === "ListMark" && /^\s*[-+*]\s+\[[ xX]\]/.test(line.text)) replace(node.from, node.to + 1, undefined);
-    if (name === "Link") {
-      const destination = node.node.getChild("URL");
-      const closing = node.node.getChildren("LinkMark").find(mark => state.doc.sliceString(mark.from, mark.to) === "]");
-      if (destination && closing) {
-        const decoded = document.createElement("textarea");
-        decoded.innerHTML = state.doc.sliceString(destination.from, destination.to).replace(/^<|>$/g, "").replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, "$1");
-        const url = decoded.value;
-        add(node.from + 1, closing.from,
-            Decoration.mark({class: "cm-link", attributes: {"data-url": url}}));
-        ranges.push(Decoration.widget({widget: new OpenLinkWidget(url), side: 1}).range(node.to));
-        if (!editing) {
-          replace(node.from, node.from + 1, undefined);
-          replace(closing.from, node.to, undefined);
-        }
-      }
-    }
-  }});
-  // 一个引用的每一行都铺底色，只有第一行、最后一行是框的上下边；隔着空行的两段引用是两块，空行不铺。
-  for (const [first, last] of quotes) {
+  }
+  // 引用：一个引用的每一行都铺底色，只有第一行、最后一行是框的上下边；隔着空行的两段引用是两块，空行不铺。
+  for (const quote of blocks.quotes) {
+    const first = state.doc.lineAt(quote.from).number, last = state.doc.lineAt(Math.max(quote.from, quote.to - 1)).number;
     for (let number = first; number <= last; number++) {
       const line = state.doc.line(number);
       if (concealed(line.from, line.to)) continue;
@@ -564,13 +458,51 @@ function decorations(state, details, expanded, headings, flash) {
   return Decoration.set(ranges, true);
 }
 
+// 一次只改了一行里的普通文字（不是标题、引用、围栏、HTML、分隔线这类决定版面的行，也没有增删行）：
+// 块的结构不会变，把上次算好的结构挪个位置就行，不用整篇重算。长工作板上打字主要走这条路。
+const structuralLine = /^\s*(?:#|>|<|```|~~~)/;
+function plainLine(text) {
+  if (!text.trim() || /^(?: {4}|\t)/.test(text) || /^\s*[-=_*]+\s*$/.test(text)) return false;
+  return !structuralLine.test(text.replace(/^(?:\s*(?:[-+*]|\d+[.)])\s+)+/, ""));
+}
+
+function plainEdit(transaction) {
+  const before = transaction.startState.doc, after = transaction.state.doc;
+  if (before.lines !== after.lines) return false;
+  let plain = true;
+  transaction.changes.iterChanges((fromA, toA, fromB, toB) => {
+    if (!plain) return;
+    const a = before.lineAt(fromA), b = after.lineAt(fromB);
+    plain = a.to >= toA && b.to >= toB && plainLine(a.text) && plainLine(b.text);
+  });
+  return plain;
+}
+
+// 结构里记的位置跟着改动挪：开头挪到改动前面，结尾跟着改动往后延（在一节、一块的末尾打字，范围也包住新字）。
+function mapStructure(value, changes) {
+  const start = position => changes.mapPos(position, -1), end = position => changes.mapPos(position, 1);
+  const details = value.details.map(item => ({...item, from: start(item.from), headerTo: start(item.headerTo),
+                                               closingFrom: start(item.closingFrom), to: end(item.to)}));
+  const container = new Map(value.details.map((item, index) => [item, details[index]]));
+  const headings = value.headings.map(heading => ({...heading, from: start(heading.from), lineTo: start(heading.lineTo),
+                                                   end: end(heading.end), container: heading.container && container.get(heading.container)}));
+  const range = item => ({...item, from: start(item.from), to: end(item.to)});
+  const blocks = {codes: value.blocks.codes.map(code => ({...range(code), closing: code.closing == null ? null : start(code.closing)})),
+                  headings: value.blocks.headings.map(heading => ({...heading, from: start(heading.from)})),
+                  quotes: value.blocks.quotes.map(range), html: value.blocks.html.map(range)};
+  return {blocks, details, headings};
+}
+
 const live = StateField.define({
   create(state) {
     const tree = syntaxTree(state);
-    const details = parseDetails(state.doc, tree);
-    const headings = parseHeadings(state.doc, tree, details);
+    const blocks = collectBlocks(state, tree);
+    const details = parseDetails(state.doc, blocks.html);
+    const headings = parseHeadings(state.doc, blocks.headings, details);
     const expanded = new Map();
-    return {tree, details, headings, expanded, flash: null, decorations: decorations(state, details, expanded, headings, null)};
+    const states = detailsStates(state, details, expanded);
+    return {tree, blocks, details, headings, expanded, flash: null, key: statesKey(states),
+            decorations: structure(state, blocks, states, headings, null)};
   },
   update(value, transaction) {
     let expanded = value.expanded;
@@ -600,11 +532,14 @@ const live = StateField.define({
     }
     const tree = syntaxTree(transaction.state);
     const parsed = tree !== value.tree;
-    const modeChanged = transaction.startState.readOnly !== transaction.state.readOnly;
-    // 浏览时选区不影响版面（拖选时每动一下都会来一次）：只有选区变了就不重算。
-    if (!changed && !effectsChanged && !parsed && !modeChanged && (!transaction.selection || transaction.state.readOnly)) return value;
-    const details = changed || parsed ? parseDetails(transaction.state.doc, tree) : value.details;
-    const headings = changed || parsed ? parseHeadings(transaction.state.doc, tree, details) : value.headings;
+    let {blocks, details, headings} = value;
+    const mapped = changed && plainEdit(transaction);
+    if (mapped) ({blocks, details, headings} = mapStructure(value, transaction.changes));
+    else if (changed || parsed) {
+      blocks = collectBlocks(transaction.state, tree);
+      details = parseDetails(transaction.state.doc, blocks.html);
+      headings = parseHeadings(transaction.state.doc, blocks.headings, details);
+    }
     if ((transaction.selection || changed) && !transaction.state.readOnly) {
       // 编辑时光标进了收起的标题下面（比如在收起的标题末尾回车）：展开这一节，不在看不见的地方打字。
       const head = transaction.state.selection.main.head;
@@ -612,22 +547,130 @@ const live = StateField.define({
         if (head > heading.lineTo && head <= heading.end && folds.get(heading.key) === true) {
           folds.set(heading.key, false);
           post({kind: "fold", key: heading.key, value: false});
+          effectsChanged = true;
+        }
+      }
+      // 光标进了收起的折叠块：展开它，并且记住是展开的（光标离开、编辑器失去焦点时不再收回去跳一下）。
+      if (transaction.selection && !transaction.effects.some(effect => effect.is(toggleDetails))) {
+        for (const item of details) {
+          if (head > item.headerTo && head < item.to && !(expanded.get(item.from) ?? folds.get(item.key) ?? item.initiallyOpen)) {
+            expanded = new Map(expanded);
+            expanded.set(item.from, true);
+          }
         }
       }
     }
-    if (transaction.selection && !effectsChanged && !transaction.state.readOnly) {
-      const head = transaction.state.selection.main.head;
-      for (const item of details) {
-        if (head >= item.from && head < item.to && expanded.get(item.from) === false) {
-          expanded = new Map(expanded);
-          expanded.set(item.from, true);
-        }
-      }
+    const states = detailsStates(transaction.state, details, expanded);
+    const key = statesKey(states);
+    if (!changed && !parsed && !effectsChanged && key === value.key) {
+      return expanded === value.expanded ? value : {...value, expanded};
     }
-    return {tree, details, headings, expanded, flash, decorations: decorations(transaction.state, details, expanded, headings, flash)};
+    if (mapped && !effectsChanged && key === value.key && flash === value.flash) {
+      return {tree, blocks, details, headings, expanded, flash, key, decorations: value.decorations.map(transaction.changes)};
+    }
+    return {tree, blocks, details, headings, expanded, flash, key,
+            decorations: structure(transaction.state, blocks, states, headings, flash)};
   },
-  provide: field => EditorView.decorations.from(field, value => value.decorations)
+  provide: field => [
+    EditorView.decorations.from(field, value => value.decorations),
+    EditorView.atomicRanges.of(view => view.state.field(field, false)?.decorations.update({filter: (_from, _to, decoration) => decoration.spec.atomic === true}) ?? Decoration.none)
+  ]
 });
+
+// 行内层：加粗、斜体、行内代码、链接、待办勾选框，以及 Markdown 标记的显隐。只排屏幕上看得到的那一段。
+// 标记只在光标进到那个元素里面时露出来（不是整行都露）：上下移动光标经过一行时版面不变，不会一行行跳动。
+// 光标停在元素的边上（比如加粗文字的后面）不算进去，这时打的字也确实在元素外面。
+function inlineDecorations(view) {
+  const {state} = view;
+  const selection = revealSelection(state);
+  const inside = (from, to) => selection && selection.to > from && selection.from < to;
+  const ranges = [], seen = new Set();
+  const add = (from, to, decoration) => { if (from < to) ranges.push(decoration.range(from, to)); };
+  const hide = (from, to) => add(from, to, Decoration.replace({atomic: true}));
+  const tree = syntaxTree(state);
+  for (const visible of view.visibleRanges) {
+    tree.iterate({from: visible.from, to: visible.to, enter(node) {
+      const name = node.name;
+      if (containerBlocks.has(name)) return;
+      const id = name + ":" + node.from;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      if (name === "FencedCode") {
+        // 围栏那两行（``` 和语言名）只在光标碰到那一行时露出来；平时开头一行缩成代码块的上边，复制按钮浮在右上角。
+        const line = state.doc.lineAt(node.from), lastLine = state.doc.lineAt(node.to).number;
+        const touches = target => selection && selection.from <= target.to && selection.to >= target.from;
+        const last = node.node.lastChild;
+        const closing = last?.name === "CodeMark" && last.from > line.from ? state.doc.lineAt(last.from) : null;
+        if (!touches(line)) {
+          if ((closing ? closing.number : lastLine + 1) - line.number - 1 > 0) {
+            ranges.push(Decoration.line({class: "cm-code-header-concealed"}).range(line.from));
+            ranges.push(Decoration.line({class: "cm-code-first"}).range(state.doc.line(line.number + 1).from));
+          }
+          hide(line.from, line.to);
+        }
+        if (closing && !touches(closing)) {
+          hide(closing.from, closing.to);
+          ranges.push(Decoration.line({class: "cm-code-footer"}).range(closing.from));
+        }
+        return false;
+      }
+      if (name === "CodeBlock" || name === "HTMLBlock") return false;
+      if (name === "StrongEmphasis") add(node.from, node.to, Decoration.mark({class: "cm-strong"}));
+      else if (name === "Emphasis") add(node.from, node.to, Decoration.mark({class: "cm-emphasis"}));
+      else if (name === "Strikethrough") add(node.from, node.to, Decoration.mark({class: "cm-strike"}));
+      else if (name === "InlineCode") add(node.from, node.to, Decoration.mark({class: "cm-code"}));
+      else if (name === "HeaderMark" || name === "QuoteMark") {
+        // 行首的 # 和 >：光标在行首（按 ← 越过它们）时才露出来，可以改级别、删掉；光标在文字开头时不露。
+        // 藏着的时候在文字开头按退格，整个标记一起删掉（标题变回正文）。
+        const end = state.doc.sliceString(node.to, node.to + 1) === " " ? node.to + 1 : node.to;
+        if (!(selection && selection.from < end && selection.to >= node.from)) hide(node.from, end);
+      } else if (name === "EmphasisMark" || name === "StrikethroughMark" || name === "CodeMark") {
+        const parent = node.node.parent;
+        if (parent && !inside(parent.from, parent.to)) hide(node.from, node.to);
+      } else if (name === "TaskMarker") {
+        const line = state.doc.lineAt(node.from);
+        const checked = /[xX]/.test(state.doc.sliceString(node.from, node.to));
+        if (checked) add(node.to, line.to, Decoration.mark({class: "cm-task-done"}));
+        ranges.push(Decoration.replace({widget: new CheckWidget(checked, node.from + 1), atomic: true}).range(node.from, node.to));
+      } else if (name === "ListMark") {
+        const line = state.doc.lineAt(node.from);
+        if (/^\s*[-+*]\s+\[[ xX]\]/.test(line.text)) hide(node.from, node.to + 1);
+      } else if (name === "Link") {
+        const destination = node.node.getChild("URL");
+        const closing = node.node.getChildren("LinkMark").find(mark => state.doc.sliceString(mark.from, mark.to) === "]");
+        if (destination && closing) {
+          const url = decodeEntities(state.doc.sliceString(destination.from, destination.to).replace(/^<|>$/g, "")
+            .replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, "$1"));
+          add(node.from + 1, closing.from, Decoration.mark({class: "cm-link", attributes: {"data-url": url}}));
+          ranges.push(Decoration.widget({widget: new OpenLinkWidget(url), side: 1}).range(node.to));
+          if (!inside(node.from, node.to)) {
+            hide(node.from, node.from + 1);
+            hide(closing.from, node.to);
+          }
+        }
+      }
+    }});
+  }
+  return Decoration.set(ranges, true);
+}
+
+const inlinePreview = ViewPlugin.fromClass(class {
+  constructor(view) { this.build(view); }
+  update(update) {
+    const {startState, state} = update;
+    if (update.docChanged || update.viewportChanged || update.selectionSet || update.transactions.some(transaction => transaction.effects.length)
+        || syntaxTree(startState) !== syntaxTree(state) || startState.readOnly !== state.readOnly) this.build(update.view);
+  }
+  build(view) {
+    this.decorations = inlineDecorations(view);
+    this.atomic = this.decorations.update({filter: (_from, _to, decoration) => decoration.spec.atomic === true});
+  }
+}, {
+  decorations: plugin => plugin.decorations,
+  provide: plugin => EditorView.atomicRanges.of(view => view.plugin(plugin)?.atomic ?? Decoration.none)
+});
+
+const livePreviewExtensions = [live, inlinePreview];
 
 const highlighting = HighlightStyle.define([
   {tag: tags.processingInstruction, class: "cm-syntax"},
@@ -635,15 +678,9 @@ const highlighting = HighlightStyle.define([
   {tag: tags.contentSeparator, class: "cm-syntax"}
 ]);
 
-// 浏览（只读预览）时也能撤销：勾掉的待办、刚保存的修改都能用 ⌘Z 找回。CodeMirror 的撤销命令在只读状态下不执行，
-// 这里临时放开可编辑，执行完立刻恢复；切换可编辑不进撤销历史。数据本身只读（没有写入权限）时不撤销。
 function runHistory(command) {
   if (!view || currentReadOnly) return false;
-  const locked = view.state.readOnly;
-  if (locked) view.dispatch({effects: editable.reconfigure(editability(false))});
-  const done = command(view);
-  if (locked) view.dispatch({effects: editable.reconfigure(editability(true))});
-  return done;
+  return command(view);
 }
 
 let lastHistory = "";
@@ -656,30 +693,51 @@ function reportHistory(state) {
 }
 
 function snapshot() {
-  return {source: view.state.doc.toString(), anchor: view.state.selection.main.anchor,
+  return {key: currentKey, source: view.state.doc.toString(), anchor: view.state.selection.main.anchor,
           head: view.state.selection.main.head, composing: composing || view.composing};
+}
+
+// 改动不是每个字都把全文送给原生层：停顿一下再送；失去焦点、⌘↩、输入法结束、换工作板时立即送。
+// 每条消息带着工作板的 key，换走之后才到的也记到原来那块工作板上。
+const changeDelay = 150;
+let changeTimer = null;
+
+function scheduleChange() {
+  clearTimeout(changeTimer);
+  changeTimer = setTimeout(flushChange, changeDelay);
+}
+
+function flushChange() {
+  if (changeTimer == null) return;
+  clearTimeout(changeTimer);
+  changeTimer = null;
+  post({kind: "change", ...snapshot()});
+}
+
+function commit() {
+  clearTimeout(changeTimer);
+  changeTimer = null;
+  post({kind: "commit", ...snapshot()});
 }
 
 function editorExtensions(config) {
   return [history(), drawSelection({cursorBlinkRate: 0}), rectangularSelection(), EditorView.lineWrapping,
           indentOnInput(), bracketMatching(), markdown({base: markdownLanguage}), syntaxHighlighting(highlighting),
-          livePreview.of(config.sourceMode ? [] : live), browseCaret, browseKeyRange,
-          EditorView.atomicRanges.of(view => view.state.field(live, false)?.decorations.update({filter: (_from, _to, decoration) => decoration.spec.atomic === true}) ?? Decoration.none),
-          editable.of(editability(config.readOnly || config.previewOnly)),
-          // 撤销 / 重做在浏览和编辑时都可用；没有可撤销的也吞掉按键，不落到应用别处的撤销上。
+          focused,
+          livePreview.of(config.sourceMode ? [] : livePreviewExtensions),
+          editable.of(editability(config.readOnly)),
+          // 撤销 / 重做：没有可撤销的也吞掉按键，不落到应用别处的撤销上。
           Prec.highest(keymap.of([
             {key: "Mod-z", run: () => { runHistory(undo); return true; }, preventDefault: true},
             {key: "Mod-Shift-z", run: () => { runHistory(redo); return true; }, preventDefault: true},
             {key: "Mod-y", run: () => { runHistory(redo); return true; }, preventDefault: true}
           ])),
-          // ⌘Enter 是全应用统一的保存键：提交内容并回到只读浏览。
+          // ⌘Enter 是全应用统一的保存键：立即保存，继续编辑。
           Prec.highest(keymap.of([{key: "Mod-Enter", run: view => {
             if (view.state.readOnly || composing || view.composing) return false;
-            post({kind: "commit", ...snapshot()});
-            post({kind: "preview"});
+            commit();
             return true;
           }}])),
-          Prec.highest(EditorView.domEventHandlers({keydown: browseKeydown})),
           keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
           Prec.lowest(EditorView.domEventHandlers({keydown(event) {
             if (event.key !== "Escape" || event.isComposing || composing || view.composing) return false;
@@ -692,12 +750,10 @@ function editorExtensions(config) {
           })),
           EditorView.updateListener.of(update => {
             if (update.transactions.length) reportHistory(update.state);
-            if (update.docChanged && !update.transactions.some(transaction => transaction.annotation(external))) {
-              post({kind: "change", ...snapshot()});
-            }
+            if (update.docChanged && !update.transactions.some(transaction => transaction.annotation(external))) scheduleChange();
           }),
           EditorView.domEventHandlers({
-            // 浏览时复制系统原生选区里看到的文字（CodeMirror 自己的选区在只读时不跟随拖选）。
+            // 只读的工作板：复制系统原生选区里看到的文字（CodeMirror 自己的选区在只读时不跟随拖选）。
             copy(event, view) {
               if (!view.state.readOnly) return false;
               const text = window.getSelection()?.toString() ?? "";
@@ -707,8 +763,13 @@ function editorExtensions(config) {
               return true;
             },
             compositionstart() { composing = true; },
-            compositionend() { composing = false; setTimeout(() => post({kind: "change", ...snapshot()}), 0); },
-            blur() { post({kind: "commit", ...snapshot()}); },
+            compositionend() { composing = false; setTimeout(commit, 0); },
+            // 光标进出编辑器：按编辑区自己的焦点算（不看窗口是不是在前台），切到别的应用再回来时版面不变。
+            focus(_event, view) { if (!view.state.field(focused)) view.dispatch({effects: setFocused.of(true)}); },
+            blur(_event, view) {
+              commit();
+              if (view.state.field(focused)) view.dispatch({effects: setFocused.of(false)});
+            },
             click(event) {
               const link = event.target.closest("[data-url]");
               if (link && (event.metaKey || view.state.readOnly)) {
@@ -723,8 +784,8 @@ function editorExtensions(config) {
 }
 
 function freshState(config) {
-  return EditorState.create({doc: config.source ?? "", selection: {anchor: config.readOnly ? 0 : (config.source ?? "").length},
-                             extensions: editorExtensions(config)});
+  // 光标先放在末尾：用键盘进到编辑器时接着往下写，也不会一进来就露出开头那个元素的标记。
+  return EditorState.create({doc: config.source ?? "", selection: {anchor: (config.source ?? "").length}, extensions: editorExtensions(config)});
 }
 
 function loadFolds(entries) {
@@ -742,15 +803,16 @@ function sameFolds(entries) {
 }
 
 // 所有工作板共用一个编辑器（一份网页进程）。换工作板时把当前这块的编辑器状态（正文、光标、撤销历史、
-// 折叠块的展开、浏览光标）和滚动位置存起来，换回来时原样恢复。只留最近用过的几块。
+// 折叠块的展开）和滚动位置存起来，换回来时原样恢复。只留最近用过的几块。
 const savedBoards = new Map();
 const savedBoardLimit = 8;
 let currentKey = null;
 
 function switchBoard(config) {
   if (currentKey != null) {
+    flushChange();
     savedBoards.delete(currentKey);
-    savedBoards.set(currentKey, {state: view.state, scroll: view.scrollDOM.scrollTop, browseRange});
+    savedBoards.set(currentKey, {state: view.state, scroll: view.scrollDOM.scrollTop});
     while (savedBoards.size > savedBoardLimit) savedBoards.delete(savedBoards.keys().next().value);
   }
   setBottomSlack(0);
@@ -758,13 +820,11 @@ function switchBoard(config) {
   savedBoards.delete(config.key);
   currentKey = config.key;
   loadFolds(config.folds);
-  browseRange = saved?.browseRange ?? null;
   view.setState(saved?.state ?? freshState(config));
   // 恢复的状态里模式可能和现在不同：按这次的配置重新设一遍，折叠按这块工作板的记忆重算。
-  const browsing = !!(config.readOnly || config.previewOnly);
-  view.dispatch({effects: [editable.reconfigure(editability(browsing)), livePreview.reconfigure(config.sourceMode ? [] : live), refold.of(null)]});
+  view.dispatch({effects: [editable.reconfigure(editability(!!config.readOnly)), livePreview.reconfigure(config.sourceMode ? [] : livePreviewExtensions),
+                           refold.of(null), setFocused.of(document.activeElement === view.contentDOM)]});
   currentReadOnly = config.readOnly;
-  currentPreviewOnly = config.previewOnly;
   currentSourceMode = config.sourceMode;
   const scroll = saved?.scroll ?? 0;
   view.requestMeasure({read: () => null, write: () => { view.scrollDOM.scrollTop = scroll; }});
@@ -779,18 +839,13 @@ window.boardEditor = {
       currentKey = config.key ?? null;
       loadFolds(config.folds);
       view = new EditorView({parent: document.getElementById("editor"), state: freshState(config)});
-      // 浏览（只读）时交给系统原生选区：CodeMirror 的鼠标选择在渲染后的标题、折叠块和浮动按钮附近
-      // 算出的位置和看到的文字不一致，拖选会错位。捕获阶段截住按下事件、不阻止默认行为，
-      // 原生选区照常工作，CodeMirror 不再另算一份选区。按钮类控件不受影响。
+      // 只读的工作板交给系统原生选区：CodeMirror 的鼠标选择在渲染后的标题、折叠块和浮动按钮附近
+      // 算出的位置和看到的文字不一致，拖选会错位。捕获阶段截住按下事件、不阻止默认行为。按钮类控件不受影响。
       view.dom.addEventListener("mousedown", event => {
         if (!view.state.readOnly || event.button !== 0) return;
         if (event.target.closest?.("button, .board-check, .board-details, .board-open-link, .board-copy-code")) return;
-        pointerDown = {x: event.clientX, y: event.clientY};
-        // 可折叠的标题上连续快点：每一下都是一次收起 / 展开，不让第二下变成双击选词。
-        if (event.detail > 1 && event.target.closest?.(".cm-line.cm-foldable")) event.preventDefault();
         event.stopPropagation();
       }, true);
-      view.dom.addEventListener("mouseup", browsePointerUp);
       view.scrollDOM.addEventListener("scroll", trimBottomSlack, {passive: true});
     } else {
       if (config.key != null && config.key !== currentKey) switchBoard(config);
@@ -805,32 +860,17 @@ window.boardEditor = {
                        annotations: [externalChange, Transaction.addToHistory.of(false)]});
       }
       const effects = [];
-      const wasBrowsing = !!(currentReadOnly || currentPreviewOnly), browsing = !!(config.readOnly || config.previewOnly);
-      if (wasBrowsing !== browsing) effects.push(editable.reconfigure(editability(browsing)));
-      if (currentSourceMode !== config.sourceMode) effects.push(livePreview.reconfigure(config.sourceMode ? [] : live));
+      if (!!currentReadOnly !== !!config.readOnly) effects.push(editable.reconfigure(editability(!!config.readOnly)));
+      if (!!currentSourceMode !== !!config.sourceMode) effects.push(livePreview.reconfigure(config.sourceMode ? [] : livePreviewExtensions));
       if (effects.length) {
-        const caret = view.state.field(browseCaret);
-        const transaction = {effects};
-        if (wasBrowsing && !browsing) {
-          // 进入编辑：浏览时点下的位置或拖选（按 Shift 用方向键选）的范围变成编辑器的光标 / 选区。
-          const selection = view.state.selection.main;
-          const keyboardRange = caret != null && !selection.empty && selection.head === caret ? {anchor: selection.anchor, head: selection.head} : null;
-          transaction.selection = browseRange ?? keyboardRange ?? {anchor: caret ?? selection.head};
-        } else if (!wasBrowsing && browsing) {
-          // 回到浏览：在刚才编辑的地方留一根光标。
-          effects.push(setBrowseCaret.of(view.state.selection.main.head));
-        }
-        const anchor = captureAnchor(browseRange?.head ?? caret ?? view.state.selection.main.head);
-        browseRange = null;
-        view.dispatch(transaction);
+        const anchor = captureAnchor(view.state.selection.main.head);
+        view.dispatch({effects});
         restoreAnchor(anchor);
-        if (wasBrowsing && !browsing) view.focus();
       }
     }
     currentReadOnly = config.readOnly;
-    currentPreviewOnly = config.previewOnly;
     currentSourceMode = config.sourceMode;
-    view.dom.dataset.preview = String(!!(config.readOnly || config.previewOnly));
+    view.dom.dataset.preview = String(!!config.readOnly);
     if (config.colors) for (const [key, value] of Object.entries(config.colors)) document.documentElement.style.setProperty("--" + key, value);
     if (config.fontSize) document.documentElement.style.setProperty("--font-size", config.fontSize + "px");
     return snapshot();
@@ -893,7 +933,7 @@ window.boardEditor = {
                    selection: {anchor, head: anchor + title.length}, scrollIntoView: true,
                    annotations: Transaction.userEvent.of("input.template")});
     view.focus();
-    post({kind: "commit", ...snapshot()});
+    commit();
     return snapshot();
   },
   replaceSelection(text) {
@@ -936,6 +976,16 @@ window.boardEditor = {
   undo() { runHistory(undo); return snapshot(); },
   redo() { runHistory(redo); return snapshot(); },
   history() { return {undo: undoDepth(view.state), redo: redoDepth(view.state)}; },
+  // 测试用：现在的结构（打字时挪过来的）和对同样正文从头算的结构，两者应当一致。
+  outline() {
+    const summary = value => value && {
+      headings: value.headings.map(heading => [heading.from, heading.lineTo, heading.end, heading.key]),
+      details: value.details.map(item => [item.from, item.headerTo, item.closingFrom, item.to, item.key]),
+      codes: value.blocks.codes.map(code => [code.from, code.to, code.closing]),
+      quotes: value.blocks.quotes.map(quote => [quote.from, quote.to])};
+    const fresh = EditorState.create({doc: view.state.doc, extensions: [markdown({base: markdownLanguage}), live]});
+    return {current: summary(view.state.field(live, false)), fresh: summary(fresh.field(live))};
+  },
   view() { return view; }
 };
 post({kind: "ready"});

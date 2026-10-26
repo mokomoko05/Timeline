@@ -179,7 +179,7 @@ final class MemoryFootprintProbe: XCTestCase {
         for board in store.boards.sorted(by: { $0.markdown.count > $1.markdown.count }).prefix(BoardNavigation.liveEditorLimit) {
             let session = BoardLiveEditorSession(store: store, board: board, defaults: InMemoryDefaults())
             let webView = session.makeWebView()
-            session.configure(fontSize: 13, dark: true, previewOnly: true)
+            session.configure(fontSize: 13, dark: true)
             let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 820), styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = webView
