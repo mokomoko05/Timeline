@@ -197,7 +197,7 @@ struct LogEntryRow: View, Equatable {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .logContextMenu(store: store, logged: logged, actions: actions, long: (body?.count ?? 0) > 1200)
+                    .logContextMenu(store: store, logged: logged, actions: actions)
                 }
                 if !log.images.isEmpty {
                     ImageStrip(store: store, names: log.images, texts: log.imageText, logged: hasText ? nil : logged)
@@ -592,26 +592,12 @@ enum ImageCache {
 }
 
 private extension View {
-    /// 长按文字：文字块浮起来，弹出日志操作。很长的日志浮起整块太大，换成前几百字的预览。
+    /// 长按文字：文字块浮起来，弹出日志操作。比屏幕高的长日志整块浮起来会先弹出去再缩回来，只浮起手指附近的一段（见 `LongTextMenu`）。
     @ViewBuilder
-    func logContextMenu(store: JournalStore, logged: JournalStore.LoggedLog, actions: LogActions?, long: Bool) -> some View {
+    func logContextMenu(store: JournalStore, logged: JournalStore.LoggedLog, actions: LogActions?) -> some View {
         if let actions {
-            let shaped = contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 10, style: .continuous).inset(by: -6))
-                .background(Palette.background)
-            if long {
-                shaped.contextMenu {
-                    LogMenuItems(store: store, logged: logged, actions: actions)
-                } preview: {
-                    Text(String(LogStyle.body(logged.log).prefix(600)) + "…")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Palette.ink)
-                        .padding(14)
-                        .frame(width: 340, alignment: .leading)
-                        .background(Palette.card)
-                }
-            } else {
-                shaped.contextMenu { LogMenuItems(store: store, logged: logged, actions: actions) }
-            }
+            background(Palette.background)
+                .background(LongTextMenu { actions.menu(store: store, logged: logged) })
         } else {
             self
         }

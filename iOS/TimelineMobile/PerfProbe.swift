@@ -115,6 +115,8 @@ enum PerfProbe {
             ("节奏条放大镜", { send("railLoupe") }),
             ("收起放大镜", { send("railLoupeEnd") }),
             ("选择文字", { switchTab(.journal); send("selectText") }),
+            ("滚动全文", { scrollThrough() }),
+            ("长按长文", { pressLongText() }),
         ]
         // 走两遍：第一遍含第一次建界面的开销，第二遍是平时的样子。`-perfSteps 切到日记,切到待办 -perfRounds 6` 只走其中几步。
         let only = UserDefaults.standard.string(forKey: "perfSteps")?.components(separatedBy: ",")
@@ -188,6 +190,85 @@ enum PerfProbe {
             delay += wait
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { mark(name); action() }
         }
+    }
+}
+
+extension PerfProbe {
+    /// 「滚动全文」：把最上面那个竖向滚动视图（弹出的页面优先）以手指快划的速度滚到底再滚回顶，报这段时间掉了多少帧。
+    static func scrollThrough() {
+        guard let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+        var found: [UIScrollView] = []
+        func walk(_ view: UIView) {
+            guard !view.isHidden, view.alpha > 0.01 else { return }
+            if let scroll = view as? UIScrollView, (view as? UITextView)?.isEditable != true, scroll.contentSize.height > scroll.bounds.height * 1.5,
+               view.convert(view.bounds, to: window).intersects(window.bounds) { found.append(scroll) }
+            view.subviews.forEach(walk)
+        }
+        walk(window)
+        guard let view = found.last else {
+            print("[perf] 没找到滚动视图"); return
+        }
+        scroller = Scroller(view)
+    }
+
+    fileprivate static var scroller: Scroller?
+
+    /// 「长按长文」：在屏幕上第一块很长的日志中间弹出长按菜单（模拟器里没法真的长按，用菜单交互测试用的入口）。
+    static func pressLongText() {
+        guard let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+        var anchor: LongTextMenuAnchor?
+        func walk(_ view: UIView) {
+            if anchor == nil, let found = view as? LongTextMenuAnchor, found.convert(found.bounds, to: window).intersects(window.bounds) { anchor = found }
+            view.subviews.forEach(walk)
+        }
+        walk(window)
+        guard let anchor, let scroll = sequence(first: anchor.superview, next: { $0?.superview }).first(where: { $0 is UIScrollView }) as? UIScrollView,
+              let interaction = LongTextMenuHub.on(scroll).interaction else { print("[perf] 屏幕上没有很长的日志"); return }
+        let shown = anchor.convert(anchor.bounds, to: scroll).intersection(scroll.bounds)
+        let selector = NSSelectorFromString("_presentMenuAtLocation:")
+        guard let method = class_getInstanceMethod(UIContextMenuInteraction.self, selector) else { print("[perf] 没有菜单测试入口"); return }
+        typealias Present = @convention(c) (AnyObject, Selector, CGPoint) -> Void
+        unsafeBitCast(method_getImplementation(method), to: Present.self)(interaction, selector, CGPoint(x: shown.midX, y: shown.midY))
+    }
+}
+
+/// 用显示链接一帧一帧推着滚：每秒 2500 点，下去再上来。
+private final class Scroller: NSObject {
+    private let view: UIScrollView
+    private var link: CADisplayLink?
+    private var last: CFTimeInterval = 0
+    private var down = true
+    private var frames = 0
+    private var slow = 0
+    private var worst: CFTimeInterval = 0
+    private var interval: CFTimeInterval = 1 / 60
+
+    init(_ view: UIScrollView) {
+        self.view = view
+        super.init()
+        view.setContentOffset(CGPoint(x: 0, y: -view.adjustedContentInset.top), animated: false)
+        link = CADisplayLink(target: self, selector: #selector(step(_:)))
+        link?.add(to: .main, forMode: .common)
+        print("[perf] 开始滚动：内容高 \(Int(view.contentSize.height))")
+    }
+
+    @objc private func step(_ link: CADisplayLink) {
+        defer { last = link.timestamp }
+        guard last > 0 else { interval = link.targetTimestamp - link.timestamp; return }
+        let gap = link.timestamp - last
+        frames += 1
+        if gap > interval * 1.5 { slow += 1 }
+        worst = max(worst, gap)
+        let top = -view.adjustedContentInset.top
+        let bottom = view.contentSize.height - view.bounds.height + view.adjustedContentInset.bottom
+        var y = view.contentOffset.y + (down ? 1 : -1) * 2500 * gap
+        if down, y >= bottom { y = bottom; down = false }
+        if !down, y <= top {
+            y = top
+            link.invalidate()
+            print(String(format: "[perf] 滚动全文：%d 帧，掉帧 %d 帧，最长一帧 %.0f ms，内容高 %d", frames, slow, worst * 1000, Int(view.contentSize.height)))
+        }
+        view.contentOffset.y = y
     }
 }
 

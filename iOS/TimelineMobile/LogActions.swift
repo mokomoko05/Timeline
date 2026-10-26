@@ -71,9 +71,9 @@ private struct LogActionsHost: ViewModifier {
             }
             .floatingEditor(item: $actions.editing) { LogEditSheet(store: store, logged: $0) }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
-                // 性能 / 截图检查：打开最近一条较长日志的「选择文字」。
+                // 性能 / 截图检查：打开最长那条日志的「选择文字」。
                 if note.object as? String == "selectText", actions.sheet == nil,
-                   let logged = store.allLogs().last(where: { $0.log.text.count > 300 }) { actions.sheet = .select(logged) }
+                   let logged = store.allLogs().max(by: { $0.log.text.count < $1.log.text.count }) { actions.sheet = .select(logged) }
             }
             .confirmationDialog("删除这条日志？", isPresented: Binding(get: { actions.deleting != nil }, set: { if !$0 { actions.deleting = nil } }),
                                 titleVisibility: .visible, presenting: actions.deleting) { logged in
@@ -98,25 +98,48 @@ struct LogMenuItems: View {
     let actions: LogActions
 
     var body: some View {
+        ForEach(Array(actions.menu(store: store, logged: logged).enumerated()), id: \.offset) { _, item in
+            if item.separated { Divider() }
+            Button(role: item.destructive ? .destructive : nil, action: item.run) { Label(item.title, systemImage: item.symbol) }
+                .disabled(item.disabled)
+        }
+    }
+}
+
+extension LogActions {
+    /// 长按菜单的一项。图片的 SwiftUI 菜单（`LogMenuItems`）和文字的 UIKit 菜单（`LongTextMenu`）都从这里出，两边一样。
+    struct MenuItem {
+        let title: String
+        let symbol: String
+        var disabled = false
+        var destructive = false
+        /// 和上一项之间画一条分隔线。
+        var separated = false
+        let run: () -> Void
+    }
+
+    func menu(store: JournalStore, logged: JournalStore.LoggedLog) -> [MenuItem] {
         let log = logged.log
-        Button { actions.copy(log) } label: { Label(log.images.isEmpty ? "复制文字" : "复制文字（不含图片）", systemImage: "doc.on.doc") }
-            .disabled(log.copyText == nil)
-        Button { actions.sheet = .select(logged) } label: { Label("选择文字", systemImage: "character.cursor.ibeam") }
-            .disabled(log.copyText == nil)
+        var items = [
+            MenuItem(title: L(log.images.isEmpty ? "复制文字" : "复制文字（不含图片）"), symbol: "doc.on.doc", disabled: log.copyText == nil) { [self] in copy(log) },
+            MenuItem(title: L("选择文字"), symbol: "character.cursor.ibeam", disabled: log.copyText == nil) { [self] in sheet = .select(logged) },
+        ]
         if !store.isReadOnly {
-            Button { actions.editing = logged } label: { Label("编辑", systemImage: "pencil") }
-            Button { actions.sheet = .tags(logged) } label: { Label(log.tags.isEmpty ? "加标签…" : "标签…", systemImage: "tag") }
-            Button { actions.sheet = .link(logged) } label: { Label(log.taskID == nil ? "关联待办…" : "更改关联待办…", systemImage: "link") }
+            items += [
+                MenuItem(title: L("编辑"), symbol: "pencil") { [self] in editing = logged },
+                MenuItem(title: L(log.tags.isEmpty ? "加标签…" : "标签…"), symbol: "tag") { [self] in sheet = .tags(logged) },
+                MenuItem(title: L(log.taskID == nil ? "关联待办…" : "更改关联待办…"), symbol: "link") { [self] in sheet = .link(logged) },
+            ]
         }
         if let id = log.taskID, let task = store.locate(id) {
-            Button { actions.openTask = .task(id, reveal: logged.id) } label: {
-                Label(LF("打开「%@」的笔记", String(TaskText.rendered(task.task.title).characters)), systemImage: "text.bubble")
-            }
+            items.append(MenuItem(title: LF("打开「%@」的笔记", String(TaskText.rendered(task.task.title).characters)), symbol: "text.bubble") { [self] in
+                openTask = .task(id, reveal: logged.id)
+            })
         }
         if !store.isReadOnly {
-            Divider()
-            Button(role: .destructive) { actions.deleting = logged } label: { Label("删除", systemImage: "trash") }
+            items.append(MenuItem(title: L("删除"), symbol: "trash", destructive: true, separated: true) { [self] in deleting = logged })
         }
+        return items
     }
 }
 
@@ -183,8 +206,10 @@ private struct LogSelectSheet: View {
 private struct SelectableTextView: UIViewRepresentable {
     let text: NSAttributedString
 
-    func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+    func makeUIView(context: Context) -> LaidOutTextView {
+        // TextKit 2 只排看得到的那段、其余按估算高度：上万字的日志一滚动就边排边改总高度，每帧都卡。
+        // 用 TextKit 1，宽度定下来时一次排完整篇（一万多字几毫秒），滚动时只需要画。
+        let view = LaidOutTextView(usingTextLayoutManager: false)
         view.isEditable = false
         view.isSelectable = true
         view.backgroundColor = .clear
@@ -194,10 +219,28 @@ private struct SelectableTextView: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ view: UITextView, context: Context) {
+    func updateUIView(_ view: LaidOutTextView, context: Context) {
         guard view.attributedText != text else { return }
         view.attributedText = text
+        view.relayout()
         view.selectedRange = NSRange(location: 0, length: 0)
+    }
+}
+
+/// 宽度变了（或换了文字）就把全文排完，总高度一开始就是准的。
+private final class LaidOutTextView: UITextView {
+    private var laidOutWidth: CGFloat = 0
+
+    func relayout() {
+        laidOutWidth = 0
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width > 0, bounds.width != laidOutWidth else { return }
+        laidOutWidth = bounds.width
+        layoutManager.ensureLayout(for: textContainer)
     }
 }
 
