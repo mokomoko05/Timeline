@@ -233,8 +233,20 @@ indirect enum MarkdownBlock {
         Task.detached(priority: .utility) { for source in sources { _ = parse(source) } }
     }
 
+    /// 相邻的引用（中间只隔空行）合成一块，画成同一个灰底引用框。
     private static func blocks(_ node: Markup, seen: inout [String: Int]) -> [MarkdownBlock] {
-        node.children.compactMap { block($0, seen: &seen) }
+        var result: [MarkdownBlock] = []
+        var lastWasQuote = false
+        for child in node.children {
+            guard let block = block(child, seen: &seen) else { continue }
+            if child is BlockQuote, lastWasQuote, case .quote(let inner) = block, case .quote(let previous)? = result.last {
+                result[result.count - 1] = .quote(previous + inner)
+            } else {
+                result.append(block)
+            }
+            lastWasQuote = child is BlockQuote
+        }
+        return result
     }
 
     private static func block(_ node: Markup, seen: inout [String: Int]) -> MarkdownBlock? {
@@ -377,9 +389,11 @@ private struct BlockView: View {
             VStack(alignment: .leading, spacing: size * 0.4) {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { _, child in BlockView(block: child, size: size, toggleTask: toggleTask) }
             }
-            .opacity(0.8)
-            .padding(.leading, 12)
-            .overlay(alignment: .leading) { RoundedRectangle(cornerRadius: 1.5).fill(Palette.line).frame(width: 3) }
+            // 灰底引用框（像论坛里的引用）：左边一道竖线，连着的几段引用合成一块。
+            .padding(.vertical, 8).padding(.leading, 14).padding(.trailing, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.muted.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+            .overlay(alignment: .leading) { UnevenRoundedRectangle(topLeadingRadius: 6, bottomLeadingRadius: 6).fill(Palette.muted.opacity(0.45)).frame(width: 4) }
         case .code(let language, let code):
             CodeBlockView(language: language, code: code, size: size)
         case .table(let header, let rows):

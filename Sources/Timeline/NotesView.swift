@@ -379,7 +379,8 @@ struct NotesView: View {
                                 BoardNotesSection(store: store, owner: .task(id)).id("board-start")
                                 if notes.isEmpty { NoteThreadEmpty(text: topic.deleted ? "这个任务没有留下笔记" : "还没有笔记 · 在下方写下第一条") }
                                 ForEach(Dictionary(grouping: notes, by: \.key).sorted { $0.key < $1.key }, id: \.key) { group in
-                                    dayHeader(group.key, date: group.value[0].date, count: group.value.count)
+                                    dayHeader(group.key, date: group.value[0].date, count: group.value.count,
+                                              first: group.value.min { $0.log.createdAt < $1.log.createdAt }?.id)
                                     threadedRows(group.value)
                                 }
                                 Color.clear.frame(height: 1).id("end").notesScrollEdge(.bottom)
@@ -572,8 +573,9 @@ struct NotesView: View {
         }
     }
 
-    private func dayHeader(_ key: String, date: Date, count: Int? = nil) -> some View {
-        NoteDayKnot(date: date, key: key, count: count) { close(); openDay(date) }
+    /// 点日期：在同一个窗口里切到日记的这一天，停在这一天的第一条笔记。
+    private func dayHeader(_ key: String, date: Date, count: Int? = nil, first: UUID? = nil) -> some View {
+        NoteDayKnot(date: date, key: key, count: count) { NotesWindowController.shared.openJournal(date: date, log: first) }
             .id(NotesTimelineIndex.dayAnchor(key))
     }
 
@@ -599,7 +601,11 @@ struct NotesView: View {
                 Text(kind).foregroundStyle(LogEventStyle.color(log)).fontWeight(.medium)
             }
             if showTask, let label = Self.sourceLabel(log) {
-                Button { if let id = log.taskID, store.noteTopic(for: id) != nil { select(task: id) } } label: {
+                Button {
+                    guard let id = log.taskID, store.noteTopic(for: id) != nil else { return }
+                    select(task: id)
+                    nav.revealNote = log.id
+                } label: {
                     Text(label).lineLimit(1)
                 }
                 .buttonStyle(.plain).foregroundStyle(Palette.accent).help("查看这个待办的全部笔记")
@@ -876,7 +882,8 @@ struct NotesView: View {
 
     private func dateList(_ notes: [JournalStore.LoggedLog], tag: String) -> some View {
         ForEach(Dictionary(grouping: notes, by: \.key).sorted { $0.key < $1.key }, id: \.key) { group in
-            dayHeader(group.key, date: group.value[0].date, count: group.value.count)
+            dayHeader(group.key, date: group.value[0].date, count: group.value.count,
+                                              first: group.value.min { $0.log.createdAt < $1.log.createdAt }?.id)
             threadedRows(group.value, showTask: true, tag: tag)
         }
     }
@@ -1101,9 +1108,9 @@ struct CreateNotebookTagView: View {
 }
 
 extension View {
-    /// 笔记正文限制在适合阅读的宽度里，宽窗口时居中，不拉成很长的行。
+    /// 笔记正文和日记一样靠左排：时间轴固定在左边，目录展开收起时不跟着移动。
     func readingColumn() -> some View {
-        padding(20).frame(maxWidth: 820).frame(maxWidth: .infinity)
+        padding(20).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

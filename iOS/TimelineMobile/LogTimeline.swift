@@ -39,6 +39,7 @@ struct LogTimeline: View {
         var reviewed = false
     }
 
+    /// `newestFirst` 时日期和一天里的时刻都是新的在上；一轮专注整体倒过来，摘要卡仍在这一轮最上面。
     private var rows: [Row] {
         var rows: [Row] = []
         let days = Dictionary(grouping: logs, by: \.key)
@@ -46,13 +47,18 @@ struct LogTimeline: View {
         for key in keys {
             let dayLogs = days[key]!.sorted { $0.log.createdAt < $1.log.createdAt }
             if groupByDay, let first = dayLogs.first { rows.append(.day(key, first.date, dayLogs.count)) }
-            var dayRows: [Row] = []
+            // 一段是一条单独的日志，或者一轮专注（摘要卡 + 这一轮的记录）。
+            var segments: [[Row]] = []
             var round: FocusRound?
-            var roundRows: [Row] = []
+            var roundRows: [(JournalStore.LoggedLog, (before: Bool, after: Bool))] = []
             func closeRound() {
                 guard let current = round else { return }
-                dayRows.append(.round(current))
-                if !collapsedRounds.contains(current.id) { dayRows += roundRows }
+                var segment: [Row] = [.round(current)]
+                if !collapsedRounds.contains(current.id) {
+                    let ordered = newestFirst ? roundRows.reversed().map { ($0.0, (before: $0.1.after, after: $0.1.before)) } : roundRows
+                    segment += ordered.map { Row.log($0.0, inFocus: $0.1) }
+                }
+                segments.append(segment)
                 round = nil
                 roundRows = []
             }
@@ -61,22 +67,22 @@ struct LogTimeline: View {
                 if marker == "FOCUS" {
                     closeRound()
                     round = FocusRound(id: logged.id, start: logged.log)
-                    roundRows = [.log(logged, inFocus: (false, true))]
+                    roundRows = [(logged, (false, true))]
                 } else if round != nil {
                     if marker == "END" {
                         round!.end = logged.log
-                        roundRows.append(.log(logged, inFocus: (true, false)))
+                        roundRows.append((logged, (true, false)))
                         closeRound()
                     } else {
                         if marker == "REVIEW" { round!.reviewed = true } else { round!.notes += 1 }
-                        roundRows.append(.log(logged, inFocus: (true, true)))
+                        roundRows.append((logged, (true, true)))
                     }
                 } else {
-                    dayRows.append(.log(logged, inFocus: (false, false)))
+                    segments.append([.log(logged, inFocus: (false, false))])
                 }
             }
             closeRound()
-            rows += newestFirst && !groupByDay ? dayRows.reversed() : dayRows
+            rows += (newestFirst ? segments.reversed() : segments).flatMap { $0 }
         }
         return rows
     }
@@ -223,8 +229,17 @@ struct LogEntryRow: View {
             HStack(spacing: 6) {
                 if let label { Text(label).fontWeight(.semibold).foregroundStyle(LogStyle.color(log)) }
                 if let taskTitle {
-                    Text(((task?.task.number ?? log.taskNumber).map { "#\($0) " } ?? "") + taskTitle)
+                    let text = Text(((task?.task.number ?? log.taskNumber).map { "#\($0) " } ?? "") + taskTitle)
                         .foregroundStyle(Palette.accent).lineLimit(1)
+                    // 点关联的待办：打开它的笔记本，停在这一条。
+                    if let id = task?.id {
+                        NavigationLink(value: NotesView.Destination.task(id, reveal: log.id)) {
+                            text.padding(.vertical, 4).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        text
+                    }
                 }
                 // 点标签：打开这个标签的笔记本，停在这一条。
                 ForEach(log.tags, id: \.self) { tag in

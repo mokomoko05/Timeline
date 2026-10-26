@@ -44,6 +44,9 @@ enum MarkdownText {
         var sourceLines: [String] = []
         var folds: Set<String>?
         var boardFolds: BoardFoldMarks?
+        /// 紧接在上一个引用后面（中间只隔空行）的引用沿用它的框，画成同一块。
+        private var lastQuote: NSTextBlock?
+        private var mergeQuote: NSTextBlock?
         init(color: NSColor, size: CGFloat, monospaced: Bool, lineSpacing: CGFloat, interactiveTasks: Bool) {
             self.color = color
             self.size = size
@@ -110,14 +113,18 @@ enum MarkdownText {
             var previousEnd: Int?
             var seen: [String: Int] = [:]
             var index = 0
+            var previousWasQuote = false
             while index < children.count {
                 let child = children[index]
+                let merging = previousWasQuote && child is BlockQuote
+                previousWasQuote = child is BlockQuote
+                mergeQuote = merging ? lastQuote : nil
                 if let marks, let start = child.range?.lowerBound.line, marks.hidden.contains(where: { $0.contains(start) }) {
                     previousEnd = child.range?.upperBound.line
                     index += 1
                     continue
                 }
-                if let end = previousEnd, let start = child.range?.lowerBound.line, start > end + 1 {
+                if !merging, let end = previousEnd, let start = child.range?.lowerBound.line, start > end + 1 {
                     let blankCount = sourceLines.dropFirst(end).prefix(start - end - 1)
                         .filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
                     for _ in 0..<blankCount { paragraph(text(""), style: style(indent: indent)) }
@@ -187,9 +194,19 @@ enum MarkdownText {
             case let list as UnorderedList:
                 renderList(list, start: nil, indent: indent)
             case let quote as BlockQuote:
+                // 灰底引用框（像论坛里的引用）：左边一道竖线；连着的几段引用合成一块。
+                let frame = mergeQuote ?? quoteBlock(indent: indent)
+                mergeQuote = nil
                 let start = output.length
-                blocks(quote, indent: indent + 16)
-                output.addAttribute(.foregroundColor, value: color.withAlphaComponent(0.75), range: NSRange(location: start, length: output.length - start))
+                blocks(quote, indent: 0)
+                let range = NSRange(location: start, length: output.length - start)
+                output.addAttribute(.foregroundColor, value: color.withAlphaComponent(0.85), range: range)
+                output.enumerateAttribute(.paragraphStyle, in: range) { value, part, _ in
+                    guard let style = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle else { return }
+                    style.textBlocks.insert(frame, at: 0)
+                    output.addAttribute(.paragraphStyle, value: style, range: part)
+                }
+                lastQuote = frame
             case is ThematicBreak:
                 paragraph(text("────────────────"), style: style(indent: indent))
             case let html as HTMLBlock:
@@ -197,6 +214,23 @@ enum MarkdownText {
             default:
                 blocks(node, indent: indent)
             }
+        }
+
+        func quoteBlock(indent: CGFloat) -> NSTextBlock {
+            let block = NSTextBlock()
+            // 不给宽度时内容宽度是 0（字一列一个）：占满整行。
+            block.setContentWidth(100, type: .percentageValueType)
+            block.backgroundColor = color.withAlphaComponent(0.07)
+            block.setWidth(4, type: .absoluteValueType, for: .border, edge: .minX)
+            block.setBorderColor(color.withAlphaComponent(0.28), for: .minX)
+            block.setWidth(12, type: .absoluteValueType, for: .padding, edge: .minX)
+            block.setWidth(10, type: .absoluteValueType, for: .padding, edge: .maxX)
+            block.setWidth(6, type: .absoluteValueType, for: .padding, edge: .minY)
+            block.setWidth(4, type: .absoluteValueType, for: .padding, edge: .maxY)
+            block.setWidth(indent, type: .absoluteValueType, for: .margin, edge: .minX)
+            block.setWidth(3, type: .absoluteValueType, for: .margin, edge: .minY)
+            block.setWidth(3, type: .absoluteValueType, for: .margin, edge: .maxY)
+            return block
         }
 
         func renderList(_ list: Markup, start: Int?, indent: CGFloat) {

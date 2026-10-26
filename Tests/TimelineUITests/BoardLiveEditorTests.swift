@@ -398,6 +398,45 @@ final class BoardLiveEditorTests: XCTestCase {
         try await webView.evaluateJavaScript("document.querySelector('.cm-content').textContent") as? String ?? ""
     }
 
+    /// 浏览时拖选：网页里的原生选区留着，编辑器不把它改回自己的选区（否则拖选时选区一直闪、选不住）；浏览光标不跟着动。
+    func testBrowsingKeepsTheNativeDragSelection() async throws {
+        let fixture = try LiveFixture(source: Self.foldSource)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        try await browse(fixture.session, fixture.webView)
+        for end in [3, 5] {
+            _ = try await fixture.webView.evaluateJavaScript("""
+            (()=>{
+              const content=document.querySelector('.cm-content');content.focus();
+              const line=[...document.querySelectorAll('.cm-line')].find(e=>e.textContent==='alpha');
+              const text=document.createTreeWalker(line,NodeFilter.SHOW_TEXT).nextNode();
+              window.getSelection().setBaseAndExtent(text,0,text,\(end));
+            })()
+            """)
+            try await Task.sleep(for: .milliseconds(120))
+            let selected = try await fixture.webView.evaluateJavaScript("window.getSelection().toString()") as? String
+            XCTAssertEqual(selected, String("alpha".prefix(end)), "拖选的范围留在网页里")
+            let decorated = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.cm-browse-range,.cm-browse-caret').length") as? Int
+            XCTAssertEqual(decorated, 0, "拖选时不往选区上叠装饰")
+        }
+    }
+
+    /// 引用是灰底框：每一行都在框里，隔着空行的几段合成一块（空行也铺底色），只有首尾两行是框的上下边。
+    func testQuotesMergeIntoOneBackgroundBlock() async throws {
+        let fixture = try LiveFixture(source: "Intro\n\n> one\n> two\n\n> three\n\nAfter")
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        try await browse(fixture.session, fixture.webView)
+        let lines = try await fixture.webView.evaluateJavaScript(
+            "[...document.querySelectorAll('.cm-line')].map(e=>[e.textContent,e.className.includes('cm-quote'),e.className.includes('cm-quote-start'),e.className.includes('cm-quote-end'),getComputedStyle(e).backgroundColor])") as? [[Any]] ?? []
+        let quoted = lines.filter { $0[1] as? Bool == true }.map { $0[0] as? String ?? "?" }
+        XCTAssertEqual(quoted, ["one", "two", "", "three"])
+        XCTAssertEqual(lines.filter { $0[2] as? Bool == true }.count, 1)
+        XCTAssertEqual(lines.filter { $0[3] as? Bool == true }.count, 1)
+        let background = lines.first { $0[0] as? String == "one" }?[4] as? String
+        XCTAssertNotEqual(background, "rgba(0, 0, 0, 0)")
+    }
+
     /// 所有工作板共用一个编辑器（一份网页进程）：换走再换回来，正文、光标、撤销历史和折叠都还是这块工作板自己的。
     func testBoardsShareOneEditorAndKeepTheirOwnStateWhenSwitching() async throws {
         let fixture = try LiveFixture(source: Self.foldSource)

@@ -92,6 +92,19 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
         workspace.open(.journal, date: date)
     }
+    /// 在同一个窗口里切到日记的这一天，停在 `log` 那一条（从笔记的日期点过来）。
+    func openJournal(date: Date, log: UUID?) {
+        NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
+        workspace.open(.journal, date: date, log: log)
+    }
+
+    /// 在同一个窗口里切到这个任务的笔记，滚到 `log` 那一条（从日记里点了日志关联的任务）。
+    func openTaskNotes(_ id: UUID, log: UUID?) {
+        NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
+        nav.open(task: id)
+        workspace.open(.notes)
+        if let log { nav.revealNote = log }
+    }
     func shift(_ days: Int) { setDate(JournalDates.calendar.date(byAdding: .day, value: days, to: journalDate) ?? journalDate) }
     var isKey: Bool { window?.isKeyWindow == true }
 
@@ -430,7 +443,12 @@ struct UnifiedJournalView: View {
                     else if openedDay != JournalDates.key(date) { openDay(proxy) }
                 }
                 .onChange(of: revealLog) { id in if let id { revealID = id; revealLog = nil } }
-                .onChange(of: date) { _ in DispatchQueue.main.async { openDay(proxy) } }
+                // 带着要定位的那一条换日期时，不再按「打开这一天」滚到开头 / 末尾，免得把定位冲掉。
+                .onChange(of: date) { _ in
+                    DispatchQueue.main.async {
+                        if revealID == nil && highlightedID == nil { openDay(proxy) } else { openedDay = JournalDates.key(date) }
+                    }
+                }
                 .onChange(of: revealID) { id in
                     guard let id else { return }
                     DispatchQueue.main.async {
@@ -489,7 +507,11 @@ struct UnifiedJournalView: View {
                 Text(kind).foregroundStyle(LogEventStyle.color(log)).fontWeight(.medium)
             }
             if log.showsTimelineContext || !hasPrevious, let label = LogTaskLabel.saved(log, store: store, logDate: date) {
-                Text(label).foregroundStyle(Palette.accent).lineLimit(1)
+                // 点关联的任务：切到它的笔记，停在这一条。
+                Button {
+                    if let id = log.taskID, store.noteTopic(for: id) != nil { NotesWindowController.shared.openTaskNotes(id, log: log.id) }
+                } label: { Text(label).lineLimit(1) }
+                .buttonStyle(.plain).foregroundStyle(Palette.accent).help("查看这个待办的全部笔记")
             }
             if log.showsTimelineTags, !log.tags.isEmpty { TaskTagLine(tags: log.tags, log: log.id) }
         } content: {

@@ -404,6 +404,9 @@ struct ComposeSheet: View {
     @State private var text = ""
     @State private var linked: UUID?
     @State private var choices: [TaskChoice] = []
+    /// 用 # 按钮加上的标签（正文里写的 #标签 发送时另外解析）。
+    @State private var pickedTags: [String] = []
+    @State private var tagChoices: [String] = []
     @State private var images: [String] = []
     @State private var picked: [PhotosPickerItem] = []
     @State private var error: String?
@@ -416,13 +419,24 @@ struct ComposeSheet: View {
                     .lineLimit(4...14)
                     .focused($focused)
                     .font(.body)
-                if !tags.isEmpty {
-                    HStack(spacing: 6) { ForEach(tags, id: \.self) { Chip(text: "#" + $0, color: Palette.note) } }
+                if !tags.isEmpty || !pickedTags.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(tags, id: \.self) { Chip(text: "#" + $0, color: Palette.note) }
+                            ForEach(pickedTags, id: \.self) { tag in
+                                Button { pickedTags.removeAll { TagText.key($0) == TagText.key(tag) } } label: {
+                                    Chip(text: "#" + tag + " ×", color: Palette.note)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
                 }
                 if !images.isEmpty { ImageStrip(store: store, names: images) }
                 if let error { Text(error).font(.caption).foregroundStyle(Palette.danger) }
                 HStack(spacing: 16) {
                     TaskChoiceMenu(choices: choices, linked: $linked)
+                    TagChoiceMenu(choices: tagChoices, fixed: tags, picked: $pickedTags)
                     PhotosPicker(selection: $picked, maxSelectionCount: 6, matching: .images) {
                         Label("图片", systemImage: "photo")
                     }
@@ -444,6 +458,7 @@ struct ComposeSheet: View {
                 linked = taskID
                 focused = true
                 choices = TaskChoice.open(in: store, including: taskID)
+                tagChoices = store.allTags().map(\.name)
             }
             .onChange(of: picked) { _, items in
                 guard !items.isEmpty else { return }
@@ -466,7 +481,7 @@ struct ComposeSheet: View {
     private func send() {
         let parsed = TagText.extract(from: text)
         do {
-            try store.quickLog(parsed.title, images: images, taskID: linked, linkDefault: false, tags: TagText.merge(tags, parsed.tags),
+            try store.quickLog(parsed.title, images: images, taskID: linked, linkDefault: false, tags: TagText.merge(TagText.merge(tags, pickedTags), parsed.tags),
                                allowInlineTaskReference: linked == nil, on: Date())
             store.save()
             sent()
@@ -502,6 +517,41 @@ private struct TaskChoiceMenu: View {
         } label: {
             Label(choices.first { $0.id == linked }?.title ?? L("关联待办"), systemImage: "at").lineLimit(1)
         }
+    }
+}
+
+/// 「加标签」菜单：已有的标签点一下加上 / 去掉，也可以输入新标签。单独一个视图，输入文字时不重建。
+private struct TagChoiceMenu: View {
+    let choices: [String]
+    /// 标签笔记本里固定带上的，不在菜单里。
+    let fixed: [String]
+    @Binding var picked: [String]
+    @State private var naming = false
+    @State private var newTag = ""
+
+    var body: some View {
+        Menu {
+            Button { naming = true } label: { Label("新标签…", systemImage: "plus") }
+            ForEach(choices.filter { tag in !fixed.contains { TagText.key($0) == TagText.key(tag) } }, id: \.self) { tag in
+                Button { toggle(tag) } label: {
+                    if picked.contains(where: { TagText.key($0) == TagText.key(tag) }) { Label("#" + tag, systemImage: "checkmark") } else { Text("#" + tag) }
+                }
+            }
+        } label: {
+            Label(picked.isEmpty ? L("标签") : picked.map { "#" + $0 }.joined(separator: " "), systemImage: "number").lineLimit(1)
+        }
+        .alert("新标签", isPresented: $naming) {
+            TextField("标签名", text: $newTag).textInputAutocapitalization(.never).autocorrectionDisabled()
+            Button("取消", role: .cancel) { newTag = "" }
+            Button("添加") {
+                if let name = TagText.normalize(newTag), !picked.contains(where: { TagText.key($0) == TagText.key(name) }) { picked.append(name) }
+                newTag = ""
+            }
+        }
+    }
+
+    private func toggle(_ tag: String) {
+        if let index = picked.firstIndex(where: { TagText.key($0) == TagText.key(tag) }) { picked.remove(at: index) } else { picked.append(tag) }
     }
 }
 

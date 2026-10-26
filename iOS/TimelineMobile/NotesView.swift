@@ -8,8 +8,8 @@ struct NotesView: View {
     @State private var query = ""
 
     enum Destination: Hashable {
-        case task(UUID)
-        /// `reveal`：打开后滚到这条笔记并闪一下（在日记里点了日志的标签）。
+        /// `reveal`：打开后滚到这条笔记并闪一下（在日记里点了日志的标签或关联的待办）。
+        case task(UUID, reveal: UUID? = nil)
         case tag(String, reveal: UUID? = nil)
     }
 
@@ -83,11 +83,20 @@ struct NotesView: View {
 }
 
 extension View {
+    /// 从日记里点标签或关联的待办进来：等那条笔记排进来，再滚过去。
+    func revealing(_ reveal: UUID?, proxy: ScrollViewProxy) -> some View {
+        task {
+            guard let reveal else { return }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(reveal.uuidString, anchor: .center) }
+        }
+    }
+
     /// 笔记里的任务页、标签页：笔记页和日记页（点日志的标签）都能推进来。
     func notesDestinations(_ store: JournalStore) -> some View {
         navigationDestination(for: NotesView.Destination.self) { destination in
             switch destination {
-            case .task(let id): TaskPage(store: store, id: id)
+            case .task(let id, let reveal): TaskPage(store: store, id: id, reveal: reveal)
             case .tag(let name, let reveal): TagPage(store: store, name: name, reveal: reveal)
             }
         }
@@ -98,6 +107,7 @@ extension View {
 struct TaskPage: View {
     @ObservedObject var store: JournalStore
     let id: UUID
+    var reveal: UUID?
     @State private var editing = false
     @State private var composing = false
     @State private var edges = ScrollEdges()
@@ -118,7 +128,7 @@ struct TaskPage: View {
                 if notes.isEmpty {
                     ContentUnavailableView("还没有笔记", systemImage: "text.bubble", description: Text("点右上角记一笔")).padding(.top, 20)
                 } else {
-                    LogTimeline(store: store, logs: notes, groupByDay: true, showsTask: false, newestFirst: true)
+                    LogTimeline(store: store, logs: notes, groupByDay: true, showsTask: false, newestFirst: true, reveal: reveal)
                 }
             }
             .padding(.horizontal, 16)
@@ -127,6 +137,7 @@ struct TaskPage: View {
         }
         .markdownScrolling(proxy)
         .trackScrollEdges(edges, proxy: proxy)
+        .revealing(reveal, proxy: proxy)
         }
         .background(Palette.background)
         .overlay(alignment: .bottomTrailing) {
@@ -250,12 +261,7 @@ struct TagPage: View {
         }
         .markdownScrolling(proxy)
         .trackScrollEdges(edges, proxy: proxy)
-        .task {
-            // 从日记里点标签进来：等那条笔记排进来，再滚过去。
-            guard let reveal else { return }
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(reveal.uuidString, anchor: .center) }
-        }
+        .revealing(reveal, proxy: proxy)
         }
         .background(Palette.background)
         .overlay(alignment: .bottomTrailing) { FloatingButtons(edges: edges) { composing = true } }

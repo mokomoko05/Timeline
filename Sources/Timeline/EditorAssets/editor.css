@@ -37,7 +37,10 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 #editor .cm-line.cm-code-start { margin-top: 8px; border-top: 1px solid var(--line); border-radius: 9px 9px 0 0; padding-top: 4px; }
 #editor .cm-line.cm-code-end { margin-bottom: 8px; border-bottom: 1px solid var(--line); border-radius: 0 0 9px 9px; padding-bottom: 5px; }
 #editor .cm-line.cm-code-start.cm-code-end { border-radius: 9px; }
-.cm-quote { border-left: 2px solid var(--line); color: var(--muted); }
+/* 引用：灰底的引用框，左边一道竖线（像论坛里的引用）；连着的几行、隔着空行的几段引用合成一块。 */
+#editor .cm-line.cm-quote { margin: 0 12px; padding-left: 14px; padding-right: 10px; background: color-mix(in srgb, var(--ink) 7%, var(--background)); border-left: 4px solid color-mix(in srgb, var(--ink) 28%, var(--background)); color: color-mix(in srgb, var(--ink) 85%, var(--background)); }
+#editor .cm-line.cm-quote-start { margin-top: 4px; padding-top: 5px; border-top-right-radius: 6px; }
+#editor .cm-line.cm-quote-end { margin-bottom: 4px; padding-bottom: 5px; border-bottom-right-radius: 6px; }
 .cm-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .board-open-link, .board-copy-code { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 4px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); vertical-align: middle; cursor: pointer; }
 .board-open-link { margin-left: 3px; }

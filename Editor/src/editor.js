@@ -25,7 +25,7 @@ let copyRequest = 0;
 // 浏览时拖选的范围（不写进编辑器状态，免得打断系统原生选区）；进入编辑时变成编辑器的选区。
 let browseRange = null;
 let pointerDown = null;
-// 浏览时这一次按键交给方向键命令移动光标（见 browseKeydown / browseSelectionFilter）。
+// 浏览时这一次按键交给方向键命令移动光标（见 browseKeydown / browseCaret / browseKeyRange）。
 let browseKeyPending = false;
 const pendingCopies = new Map();
 
@@ -235,26 +235,38 @@ function keepInPlace(lineFrom, spec) {
   });
 }
 
+// 浏览时的选区是不是方向键选出来的：只有这种才由编辑器自己铺颜色；鼠标拖出来的是系统原生选区，不能再往上叠装饰。
+// 原生选区照常同步进编辑器（不能拦下：拦下后编辑器会把网页里的选区改回自己的，拖选时选区一直闪、选不住）；
+// 浏览光标只跟方向键和点击走（见 browseCaret），收起 / 展开标题重画时不会被浏览器的选区带到开头去。
+const browseKeyRange = StateField.define({
+  create() { return false; },
+  update(value, transaction) {
+    if (!transaction.selection) return value;
+    return transaction.state.readOnly && browseKeyPending && transaction.isUserEvent("select");
+  }
+});
+
 const browseCaret = StateField.define({
   create() { return null; },
   update(value, transaction) {
     let explicit = false;
     for (const effect of transaction.effects) if (effect.is(setBrowseCaret)) { value = effect.value; explicit = true; }
     // 浏览时用方向键（以及 Home / End / 翻页）移动光标：光标跟着编辑器的选区走。
-    if (!explicit && transaction.state.readOnly && transaction.isUserEvent("select")) value = transaction.state.selection.main.head;
+    // 鼠标拖选、重画后浏览器自己放的选区也会同步进编辑器，但不带动光标。
+    if (!explicit && transaction.state.readOnly && transaction.isUserEvent("select") && browseKeyPending) value = transaction.state.selection.main.head;
     if (value != null && transaction.docChanged) value = transaction.changes.mapPos(value);
     if (value != null && !transaction.state.readOnly) value = null;
     return value;
   },
   // 光标用标记画在字的左边缘（行尾画在前一个字的右边缘，空行画在行首），不插进额外的元素，双击选词不受影响。
   // 按住 Shift 用方向键选出的范围也铺上选区的颜色。
-  provide: field => EditorView.decorations.compute([field, "selection"], state => {
+  provide: field => EditorView.decorations.compute([field, browseKeyRange, "selection"], state => {
     const position = state.field(field);
     if (position == null) return Decoration.none;
     const line = state.doc.lineAt(position);
     const ranges = [];
     const selection = state.selection.main;
-    if (state.readOnly && !selection.empty && selection.head === position) {
+    if (state.readOnly && state.field(browseKeyRange) && !selection.empty && selection.head === position) {
       ranges.push(Decoration.mark({class: "cm-browse-range"}).range(selection.from, selection.to));
     }
     if (position < line.to) ranges.push(Decoration.mark({class: "cm-browse-caret"}).range(position, position + 1));
@@ -332,12 +344,6 @@ function browseKeydown(event, view) {
   return false;
 }
 
-// 浏览时编辑器的选区只听方向键和点击：系统原生选区（拖选、重画后浏览器自己放的选区）不改动它，
-// 否则收起 / 展开标题重画时光标会被浏览器的选区带到开头去。
-const browseSelectionFilter = EditorState.transactionFilter.of(transaction => {
-  if (!transaction.startState.readOnly || !transaction.selection || browseKeyPending || !transaction.isUserEvent("select")) return transaction;
-  return transaction.docChanged || transaction.effects.length ? transaction : [];
-});
 
 // 切换浏览 / 编辑 / 源码时，光标（或屏幕最上面那一行）留在屏幕上原来的高度，不会跳到别处去找不着。
 function captureAnchor(position) {
@@ -467,6 +473,8 @@ function decorations(state, details, expanded, headings, flash) {
     }
   }
   const concealed = (from, to) => hidden.some(range => from >= range[0] && to <= range[1]);
+  // 引用：最外层引用占的行号范围，最后合成灰底的引用框。
+  const quotes = [];
   syntaxTree(state).iterate({enter(node) {
     if (concealed(node.from, node.to)) return false;
     const name = node.name;
@@ -506,13 +514,15 @@ function decorations(state, details, expanded, headings, flash) {
       }
       return false;
     }
-    if (name === "Blockquote") ranges.push(Decoration.line({class: "cm-quote"}).range(line.from));
+    if (name === "Blockquote" && !quotes.some(range => line.number <= range[1])) {
+      quotes.push([line.number, state.doc.lineAt(Math.max(node.from, node.to - 1)).number]);
+    }
     if (name === "StrongEmphasis") add(node.from, node.to, Decoration.mark({class: "cm-strong"}));
     if (name === "Emphasis") add(node.from, node.to, Decoration.mark({class: "cm-emphasis"}));
     if (name === "Strikethrough") add(node.from, node.to, Decoration.mark({class: "cm-strike"}));
     if (name === "InlineCode") add(node.from, node.to, Decoration.mark({class: "cm-code"}));
     if (["HeaderMark", "EmphasisMark", "CodeMark", "StrikethroughMark", "QuoteMark"].includes(name) && !editing) {
-      const end = name === "HeaderMark" && state.doc.sliceString(node.to, node.to + 1) === " " ? node.to + 1 : node.to;
+      const end = (name === "HeaderMark" || name === "QuoteMark") && state.doc.sliceString(node.to, node.to + 1) === " " ? node.to + 1 : node.to;
       replace(node.from, end, undefined);
     }
     if (name === "TaskMarker") {
@@ -539,6 +549,21 @@ function decorations(state, details, expanded, headings, flash) {
       }
     }
   }});
+  // 连着的几段引用（中间只隔空行）合成一块：空行也铺上底色，只有整块的第一行、最后一行是圆角。
+  const merged = [];
+  for (const range of quotes) {
+    const previous = merged[merged.length - 1];
+    let blank = !!previous;
+    for (let number = previous ? previous[1] + 1 : 0; blank && number < range[0]; number++) blank = !state.doc.line(number).text.trim();
+    if (blank) previous[1] = range[1]; else merged.push([...range]);
+  }
+  for (const [first, last] of merged) {
+    for (let number = first; number <= last; number++) {
+      const line = state.doc.line(number);
+      if (concealed(line.from, line.to)) continue;
+      ranges.push(Decoration.line({class: "cm-quote" + (number === first ? " cm-quote-start" : "") + (number === last ? " cm-quote-end" : "")}).range(line.from));
+    }
+  }
   if (flash && !concealed(flash.from, flash.to)) {
     ranges.push(Decoration.line({class: "cm-search-line"}).range(state.doc.lineAt(flash.from).from));
     add(flash.from, flash.to, Decoration.mark({class: "cm-search-hit"}));
@@ -583,7 +608,8 @@ const live = StateField.define({
     const tree = syntaxTree(transaction.state);
     const parsed = tree !== value.tree;
     const modeChanged = transaction.startState.readOnly !== transaction.state.readOnly;
-    if (!changed && !transaction.selection && !effectsChanged && !parsed && !modeChanged) return value;
+    // 浏览时选区不影响版面（拖选时每动一下都会来一次）：只有选区变了就不重算。
+    if (!changed && !effectsChanged && !parsed && !modeChanged && (!transaction.selection || transaction.state.readOnly)) return value;
     const details = changed || parsed ? parseDetails(transaction.state.doc, tree) : value.details;
     const headings = changed || parsed ? parseHeadings(transaction.state.doc, tree, details) : value.headings;
     if ((transaction.selection || changed) && !transaction.state.readOnly) {
@@ -644,7 +670,7 @@ function snapshot() {
 function editorExtensions(config) {
   return [history(), drawSelection({cursorBlinkRate: 0}), rectangularSelection(), EditorView.lineWrapping,
           indentOnInput(), bracketMatching(), markdown({base: markdownLanguage}), syntaxHighlighting(highlighting),
-          livePreview.of(config.sourceMode ? [] : live), browseCaret, browseSelectionFilter,
+          livePreview.of(config.sourceMode ? [] : live), browseCaret, browseKeyRange,
           EditorView.atomicRanges.of(view => view.state.field(live, false)?.decorations.update({filter: (_from, _to, decoration) => decoration.spec.atomic === true}) ?? Decoration.none),
           editable.of(editability(config.readOnly || config.previewOnly)),
           // 撤销 / 重做在浏览和编辑时都可用；没有可撤销的也吞掉按键，不落到应用别处的撤销上。

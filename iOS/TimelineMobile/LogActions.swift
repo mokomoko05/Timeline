@@ -24,7 +24,7 @@ final class LogActions: ObservableObject {
     @Published var sheet: Sheet?
     @Published var deleting: JournalStore.LoggedLog?
     /// 「打开待办的笔记」：推进任务页。
-    @Published var openTask: UUID?
+    @Published var openTask: NotesView.Destination?
     let toast = Toast()
 
     func copy(_ log: DailyLogEntry) {
@@ -77,7 +77,9 @@ private struct LogActionsHost: ViewModifier {
             } message: { logged in
                 if let text = logged.log.copyText { Text(String(text.prefix(80))) }
             }
-            .navigationDestination(item: $actions.openTask) { TaskPage(store: store, id: $0) }
+            .navigationDestination(item: $actions.openTask) { destination in
+                if case .task(let id, let reveal) = destination { TaskPage(store: store, id: id, reveal: reveal) }
+            }
     }
 }
 
@@ -97,7 +99,7 @@ struct LogMenuItems: View {
             Button { actions.sheet = .link(logged) } label: { Label(log.taskID == nil ? "关联待办…" : "更改关联待办…", systemImage: "link") }
         }
         if let id = log.taskID, let task = store.locate(id) {
-            Button { actions.openTask = id } label: {
+            Button { actions.openTask = .task(id, reveal: logged.id) } label: {
                 Label(LF("打开「%@」的笔记", String(TaskText.rendered(task.task.title).characters)), systemImage: "text.bubble")
             }
         }
