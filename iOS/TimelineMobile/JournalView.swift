@@ -3,7 +3,8 @@ import SwiftUI
 import TimelineCore
 import UIKit
 
-/// 日记：一天一页，左右滑动翻页。顶部是日期和一天的节奏条，下面是当天的日志时间线。
+/// 日记：顶部是可以横向滑动的日期条，下面只显示选中的那一天；在内容上左右划动换到前后一天。
+/// 只渲染当前这一天（不用分页视图一次挂上所有页面），前后两天的 Markdown 在后台预先解析，换天时不卡。
 struct JournalView: View {
     @ObservedObject var store: JournalStore
     @ObservedObject var sync: SyncModel
@@ -11,19 +12,17 @@ struct JournalView: View {
     @State private var picking = false
     @State private var composing = false
     @State private var query = ""
-
-    /// 有日志的日子，再加上今天。
-    private var dayKeys: [String] {
-        var keys = Set(store.allLogs(includeFocus: true).map(\.key))
-        keys.insert(JournalDates.key(Date()))
-        return keys.sorted()
-    }
+    @State private var direction: Edge = .trailing
 
     var body: some View {
+        let byDay = Dictionary(grouping: store.allLogs(includeFocus: true), by: \.key)
+        let keys = Set(byDay.keys).union([JournalDates.key(Date())]).sorted()
         NavigationStack {
-            Group {
+            VStack(spacing: 0) {
                 if query.isEmpty {
-                    pager
+                    DateStrip(keys: keys, counts: byDay.mapValues(\.count), selection: selection) { go(to: $0, keys: keys) }
+                    Divider().overlay(Palette.line.opacity(0.6))
+                    page(byDay[selection] ?? [], keys: keys)
                 } else {
                     JournalSearchResults(store: store, query: query)
                 }
@@ -38,7 +37,7 @@ struct JournalView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if selection != JournalDates.key(Date()) {
-                        Button("今天") { withAnimation { selection = JournalDates.key(Date()) } }
+                        Button("今天") { go(to: JournalDates.key(Date()), keys: keys) }
                     }
                 }
             }
@@ -59,49 +58,120 @@ struct JournalView: View {
                 ComposeSheet(store: store) { selection = JournalDates.key(Date()) }
             }
             .sheet(isPresented: $picking) {
-                DayPicker(days: Set(dayKeys), selection: $selection)
+                DayPicker(days: Set(keys), selection: Binding(get: { selection }, set: { go(to: $0, keys: keys) }))
             }
+            .onAppear { prewarm(around: selection, keys: keys, byDay: byDay) }
+            .onChange(of: selection) { _, key in prewarm(around: key, keys: keys, byDay: byDay) }
         }
     }
 
-    private var pager: some View {
-        let keys = dayKeys
-        return TabView(selection: $selection) {
-            ForEach(keys, id: \.self) { key in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        DayHeader(store: store, key: key, previous: neighbor(of: key, in: keys, by: -1), next: neighbor(of: key, in: keys, by: 1)) { target in
-                            withAnimation { selection = target }
-                        }
-                        DayContent(store: store, key: key)
+    private func page(_ logs: [JournalStore.LoggedLog], keys: [String]) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    DayHeader(store: store, key: selection, logs: logs.map(\.log),
+                              previous: neighbor(of: selection, in: keys, by: -1), next: neighbor(of: selection, in: keys, by: 1)) {
+                        go(to: $0, keys: keys)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 100)
+                    DayContent(store: store, key: selection, logs: logs)
                 }
-                .refreshable { await sync.syncNow() }
-                .tag(key)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 100)
             }
+            .markdownScrolling(proxy)
+            .refreshable { await sync.syncNow() }
+            // 换一天就是一个新的滚动视图：从顶部开始，不沿用上一天的位置。
+            .id(selection)
+            .transition(.asymmetric(insertion: .move(edge: direction).combined(with: .opacity), removal: .opacity))
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 30).onEnded { value in
+                    let dx = value.translation.width, dy = value.translation.height
+                    guard abs(dx) > 70, abs(dx) > abs(dy) * 1.8 else { return }
+                    if let target = neighbor(of: selection, in: keys, by: dx < 0 ? 1 : -1) { go(to: target, keys: keys) }
+                }
+            )
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
+    }
+
+    private func go(to key: String, keys: [String]) {
+        guard key != selection else { return }
+        direction = key > selection ? .trailing : .leading
+        withAnimation(.easeOut(duration: 0.18)) { selection = key }
     }
 
     private func neighbor(of key: String, in keys: [String], by offset: Int) -> String? {
         guard let index = keys.firstIndex(of: key), keys.indices.contains(index + offset) else { return nil }
         return keys[index + offset]
     }
+
+    /// 前后两天的正文先在后台解析好。
+    private func prewarm(around key: String, keys: [String], byDay: [String: [JournalStore.LoggedLog]]) {
+        let near = [-2, -1, 1, 2].compactMap { neighbor(of: key, in: keys, by: $0) }
+        MarkdownBlock.prewarm(near.flatMap { byDay[$0] ?? [] }.map { LogStyle.body($0.log) }.filter { !$0.isEmpty })
+    }
 }
 
-/// 一天的标题：日期、星期、条数，左右箭头翻到前后有记录的日子；下面是节奏条。
+/// 日期条：有记录的日子排成一行，可以横向滑动，点一下跳过去；圆点多少表示那天记了多少。
+private struct DateStrip: View {
+    let keys: [String]
+    let counts: [String: Int]
+    let selection: String
+    let select: (String) -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 6) {
+                    ForEach(keys, id: \.self) { key in
+                        cell(key).id(key).onTapGesture { select(key) }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
+            .onAppear { proxy.scrollTo(selection, anchor: .center) }
+            .onChange(of: selection) { _, key in withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(key, anchor: .center) } }
+        }
+        .frame(height: 76)
+    }
+
+    private func cell(_ key: String) -> some View {
+        let date = JournalDates.date(for: key) ?? Date()
+        let selected = key == selection
+        let today = JournalDates.calendar.isDateInToday(date)
+        let day = JournalDates.calendar.component(.day, from: date)
+        let count = counts[key] ?? 0
+        return VStack(spacing: 3) {
+            Text(day == 1 || key == keys.first ? date.formatted(.dateTime.month(.abbreviated)) : date.formatted(.dateTime.weekday(.narrow)))
+                .font(.caption2)
+                .foregroundStyle(selected ? .white.opacity(0.85) : Palette.muted)
+            Text("\(day)")
+                .font(.system(size: 17, weight: selected || today ? .bold : .medium).monospacedDigit())
+                .foregroundStyle(selected ? .white : (today ? Palette.accent : Palette.ink))
+            HStack(spacing: 2) {
+                ForEach(0..<min(3, (count + 4) / 5), id: \.self) { _ in
+                    Circle().fill(selected ? .white : Palette.accent.opacity(0.7)).frame(width: 4, height: 4)
+                }
+            }
+            .frame(height: 4)
+        }
+        .frame(width: 42, height: 58)
+        .background(selected ? Palette.accent : (today ? Palette.soft : .clear), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(Rectangle())
+    }
+}
+
+/// 一天的标题：日期、星期、条数、专注时长，左右箭头翻到前后有记录的日子；下面是节奏条。
 private struct DayHeader: View {
     @ObservedObject var store: JournalStore
     let key: String
+    let logs: [DailyLogEntry]
     let previous: String?
     let next: String?
     let go: (String) -> Void
 
     var body: some View {
         let date = JournalDates.date(for: key) ?? Date()
-        let logs = store.entry(for: date).logs
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(date.formatted(.dateTime.year().month(.defaultDigits).day()))
@@ -122,7 +192,7 @@ private struct DayHeader: View {
             .foregroundStyle(Palette.muted)
             if !logs.isEmpty { RhythmStrip(logs: logs) }
         }
-        .padding(.top, 8)
+        .padding(.top, 12)
     }
 
     private func arrow(_ symbol: String, _ target: String?) -> some View {
@@ -190,10 +260,10 @@ struct RhythmStrip: View {
 private struct DayContent: View {
     @ObservedObject var store: JournalStore
     let key: String
+    let logs: [JournalStore.LoggedLog]
 
     var body: some View {
         let date = JournalDates.date(for: key) ?? Date()
-        let logs = store.allLogs(includeFocus: true).filter { $0.key == key }
         VStack(alignment: .leading, spacing: 14) {
             if let summary = store.entry(for: date).summary.nilIfEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -224,13 +294,16 @@ private struct JournalSearchResults: View {
             $0.log.searchableText.localizedStandardContains(query) || ($0.log.taskTitle ?? "").localizedStandardContains(query)
                 || $0.log.tags.contains { $0.localizedStandardContains(query) }
         }
-        ScrollView {
-            if matches.isEmpty {
-                ContentUnavailableView.search(text: query).padding(.top, 60)
-            } else {
-                LogTimeline(store: store, logs: Array(matches.suffix(200)), groupByDay: true, newestFirst: true)
-                    .padding(.horizontal, 16).padding(.vertical, 12)
+        ScrollViewReader { proxy in
+            ScrollView {
+                if matches.isEmpty {
+                    ContentUnavailableView.search(text: query).padding(.top, 60)
+                } else {
+                    LogTimeline(store: store, logs: Array(matches.suffix(100)), groupByDay: true, newestFirst: true)
+                        .padding(.horizontal, 16).padding(.vertical, 12)
+                }
             }
+            .markdownScrolling(proxy)
         }
     }
 }

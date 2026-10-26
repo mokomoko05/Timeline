@@ -114,7 +114,8 @@ struct TasksView: View {
 
     private var timeline: some View {
         let rows = rows
-        return LazyVStack(alignment: .leading, spacing: 0) {
+        // 不用 LazyVStack：按真实高度滚动，滚动条不会错位。
+        return VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                 rowView(row, hasPrevious: index > 0, hasNext: index < rows.count - 1)
             }

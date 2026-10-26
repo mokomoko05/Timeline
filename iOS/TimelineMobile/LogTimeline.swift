@@ -79,7 +79,8 @@ struct LogTimeline: View {
 
     var body: some View {
         let rows = rows
-        LazyVStack(alignment: .leading, spacing: 0) {
+        // 不用 LazyVStack：行高差别很大（长日志），按估算高度滚动时右边的滚动条会跳。
+        VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                 switch row {
                 case .day(_, let date, let count):
@@ -105,9 +106,7 @@ struct LogTimeline: View {
                         EmptyView()
                     } content: {
                         FocusRoundCard(round: round, collapsed: collapsedRounds.contains(round.id)) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                if collapsedRounds.contains(round.id) { collapsedRounds.remove(round.id) } else { collapsedRounds.insert(round.id) }
-                            }
+                            if collapsedRounds.contains(round.id) { collapsedRounds.remove(round.id) } else { collapsedRounds.insert(round.id) }
                         }
                         .padding(.bottom, 12)
                     }
@@ -220,6 +219,7 @@ private struct FocusRoundCard: View {
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.down").font(.caption.weight(.bold)).foregroundStyle(Palette.accent)
                     .rotationEffect(.degrees(collapsed ? -90 : 0))
+                    .animation(.easeOut(duration: 0.15), value: collapsed)
             }
             .padding(12)
             .card(highlighted: true)

@@ -3,9 +3,34 @@ import SwiftUI
 import TimelineCore
 import UIKit
 
+/// 页面把滚动交给 Markdown：长段落末尾的「收起」要把标题滚回视野里。
+private struct ScrollToKey: EnvironmentKey {
+    static let defaultValue: ((String) -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var scrollToMarkdownAnchor: ((String) -> Void)? {
+        get { self[ScrollToKey.self] }
+        set { self[ScrollToKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// 放在 `ScrollViewReader` 里：Markdown 的标题可以被滚动到顶部。
+    func markdownScrolling(_ proxy: ScrollViewProxy) -> some View {
+        environment(\.scrollToMarkdownAnchor) { id in
+            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .top) }
+        }
+    }
+}
+
 /// Markdown 正文（CommonMark/GFM，和 Mac 用同一个解析器）。
 /// 标题下面有内容时可以点标题收起，收起到下一个同级或更高级标题为止；`foldScope` 不为 nil 时记住收起状态。
+/// 展开的长段落末尾有一个「收起」，收起后滚回标题，不用往回翻找。
 /// `toggleTask` 不为 nil 时任务勾选可以点（参数是源码里的行号，从 1 开始）。
+///
+/// 折叠不做布局动画：长文本整段跟着动画重排很卡，只让箭头转一下。每个块用它在全文里的序号做标识，
+/// 折叠时其余的块原样保留，不重新排版。
 struct MarkdownView: View {
     let source: String
     var foldScope: String?
@@ -13,30 +38,46 @@ struct MarkdownView: View {
     var toggleTask: ((Int) -> Void)?
     @State private var folded: Set<String> = []
     @State private var loaded = false
+    @Environment(\.scrollToMarkdownAnchor) private var scrollTo
 
     var body: some View {
-        let blocks = MarkdownBlock.parse(source)
+        let document = MarkdownBlock.parse(source)
         VStack(alignment: .leading, spacing: size * 0.55) {
-            ForEach(Array(visible(blocks).enumerated()), id: \.offset) { _, item in
-                if case .heading(let level, let text, let key, _) = item.block, item.foldable {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.18)) { toggleFold(key) }
-                    } label: {
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: size * 0.6, weight: .bold))
-                                .foregroundStyle(Palette.muted)
-                                .rotationEffect(.degrees(folded.contains(key) ? 0 : 90))
-                                .frame(width: size * 0.7)
-                            headingText(level, text)
-                            if folded.contains(key) { Text("⋯").font(.system(size: size, weight: .bold)).foregroundStyle(Palette.muted) }
+            ForEach(visible(document), id: \.id) { item in
+                switch item.kind {
+                case .block(let block):
+                    if case .heading(let level, let text, let key, _) = block, document.sections[item.index] != nil {
+                        Button { toggleFold(key) } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: size * 0.6, weight: .bold))
+                                    .foregroundStyle(Palette.muted)
+                                    .rotationEffect(.degrees(folded.contains(key) ? 0 : 90))
+                                    .animation(.easeOut(duration: 0.15), value: folded.contains(key))
+                                    .frame(width: size * 0.7)
+                                headingText(level, text)
+                                if folded.contains(key) { Text("⋯").font(.system(size: size, weight: .bold)).foregroundStyle(Palette.muted) }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
+                        .id(anchor(key))
+                    } else {
+                        BlockView(block: block, size: size, toggleTask: toggleTask)
+                    }
+                case .collapse(let key, let title):
+                    Button {
+                        toggleFold(key)
+                        let id = anchor(key)
+                        DispatchQueue.main.async { scrollTo?(id) }
+                    } label: {
+                        Label("收起「\(title)」", systemImage: "chevron.up")
+                            .font(.system(size: size * 0.8))
+                            .foregroundStyle(Palette.accent)
+                            .lineLimit(1)
                     }
                     .buttonStyle(.plain)
-                } else {
-                    BlockView(block: item.block, size: size, toggleTask: toggleTask)
                 }
             }
         }
@@ -50,24 +91,38 @@ struct MarkdownView: View {
             .padding(.top, level <= 2 ? size * 0.3 : 0)
     }
 
-    private struct Visible {
-        let block: MarkdownBlock
-        let foldable: Bool
+    private func anchor(_ key: String) -> String { (foldScope ?? String(source.hashValue)) + "|" + key }
+
+    private struct Visible: Identifiable {
+        enum Kind { case block(MarkdownBlock), collapse(key: String, title: String) }
+        let id: String
+        let index: Int
+        let kind: Kind
     }
 
-    /// 顶层块里去掉收起的标题下面的内容。
-    private func visible(_ blocks: [MarkdownBlock]) -> [Visible] {
+    /// 顶层块里去掉收起的标题下面的内容；展开的长段落末尾补一个「收起」。
+    private func visible(_ document: MarkdownDocument) -> [Visible] {
         var result: [Visible] = []
+        var pending: [(end: Int, key: String, title: String)] = []
         var index = 0
-        while index < blocks.count {
-            let block = blocks[index]
-            index += 1
-            guard case .heading(let level, _, let key, _) = block else { result.append(Visible(block: block, foldable: false)); continue }
-            var end = index
-            while end < blocks.count, (blocks[end].headingLevel ?? 7) > level { end += 1 }
-            result.append(Visible(block: block, foldable: end > index))
-            if end > index, folded.contains(key) { index = end }
+        let blocks = document.blocks
+        func closeSections(at position: Int) {
+            while let last = pending.last, last.end <= position {
+                result.append(Visible(id: "collapse-\(last.key)", index: -1, kind: .collapse(key: last.key, title: last.title)))
+                pending.removeLast()
+            }
         }
+        while index < blocks.count {
+            closeSections(at: index)
+            let block = blocks[index]
+            result.append(Visible(id: "\(index)", index: index, kind: .block(block)))
+            if case .heading(_, let text, let key, _) = block, let section = document.sections[index] {
+                if folded.contains(key) { index = section.end; continue }
+                if section.long { pending.append((section.end, key, String(text.characters))) }
+            }
+            index += 1
+        }
+        closeSections(at: Int.max)
         return result
     }
 
@@ -83,6 +138,13 @@ struct MarkdownView: View {
         if folded.contains(key) { folded.remove(key) } else { folded.insert(key) }
         if let defaultsKey { UserDefaults.standard.set(Array(folded), forKey: defaultsKey) }
     }
+}
+
+/// 解析结果：顶层块，以及每个可以收起的标题管到哪里、内容长不长。
+struct MarkdownDocument {
+    let blocks: [MarkdownBlock]
+    /// 标题序号 → 它的段落结束位置（不含），和段落是否够长（需要末尾的「收起」）。
+    let sections: [Int: (end: Int, long: Bool)]
 }
 
 /// 解析后的块。
@@ -107,15 +169,50 @@ indirect enum MarkdownBlock {
         return nil
     }
 
-    private static var cache: [String: [MarkdownBlock]] = [:]
+    /// 大致的文字量，用来判断一段算不算长。
+    var weight: Int {
+        switch self {
+        case .heading(_, let text, _, _), .paragraph(let text): return text.characters.count + 40
+        case .list(let items, _): return items.reduce(0) { $0 + $1.blocks.reduce(30) { $0 + $1.weight } }
+        case .quote(let blocks): return blocks.reduce(0) { $0 + $1.weight }
+        case .code(_, let code): return code.count + code.filter { $0 == "\n" }.count * 40
+        case .table(_, let rows): return rows.count * 80
+        case .rule: return 20
+        case .html(let text): return text.count
+        }
+    }
 
-    static func parse(_ source: String) -> [MarkdownBlock] {
-        if let cached = cache[source] { return cached }
+    // 解析结果按原文缓存；预读（后台）和显示（主线程）都会用到，所以加锁。
+    private static var cache: [String: MarkdownDocument] = [:]
+    private static let lock = NSLock()
+
+    static func parse(_ source: String) -> MarkdownDocument {
+        lock.lock()
+        let cached = cache[source]
+        lock.unlock()
+        if let cached { return cached }
         var seen: [String: Int] = [:]
-        let result = blocks(Document(parsing: source), seen: &seen)
-        if cache.count > 400 { cache.removeAll() }
-        cache[source] = result
-        return result
+        let blocks = blocks(Document(parsing: source), seen: &seen)
+        var sections: [Int: (end: Int, long: Bool)] = [:]
+        for (index, block) in blocks.enumerated() {
+            guard let level = block.headingLevel else { continue }
+            var end = index + 1
+            var weight = 0
+            while end < blocks.count, (blocks[end].headingLevel ?? 7) > level { weight += blocks[end].weight; end += 1 }
+            if end > index + 1 { sections[index] = (end, weight > 900) }
+        }
+        let document = MarkdownDocument(blocks: blocks, sections: sections)
+        lock.lock()
+        if cache.count > 600 { cache.removeAll() }
+        cache[source] = document
+        lock.unlock()
+        return document
+    }
+
+    /// 在后台先解析好，翻到时直接用。
+    static func prewarm(_ sources: [String]) {
+        guard !sources.isEmpty else { return }
+        Task.detached(priority: .utility) { for source in sources { _ = parse(source) } }
     }
 
     private static func blocks(_ node: Markup, seen: inout [String: Int]) -> [MarkdownBlock] {

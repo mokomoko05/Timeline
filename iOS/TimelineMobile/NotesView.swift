@@ -97,6 +97,7 @@ struct TaskPage: View {
         let item = store.locate(id)
         let topic = store.noteTopic(for: id)
         let notes = store.notes(for: id)
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header(item: item, topic: topic, noteCount: notes.count)
@@ -112,6 +113,8 @@ struct TaskPage: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 40)
+        }
+        .markdownScrolling(proxy)
         }
         .background(Palette.background)
         .navigationBarTitleDisplayMode(.inline)
@@ -185,6 +188,7 @@ struct TagPage: View {
         let tasks = store.tasks(taggedWith: name)
         let open = TaskSortMode.deadline.sorted(tasks.filter { !$0.task.completed })
         let notes = store.notes(forTag: name)
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -223,6 +227,8 @@ struct TagPage: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 40)
+        }
+        .markdownScrolling(proxy)
         }
         .background(Palette.background)
         .navigationBarTitleDisplayMode(.inline)

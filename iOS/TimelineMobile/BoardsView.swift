@@ -81,6 +81,7 @@ struct BoardPage: View {
                     .padding(.horizontal, 12)
                     .onChange(of: text) { _, value in store.setBoardMarkdown(value, for: id) }
             } else {
+                ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         if let board {
@@ -96,6 +97,8 @@ struct BoardPage: View {
                     }
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .markdownScrolling(proxy)
                 }
             }
         }
