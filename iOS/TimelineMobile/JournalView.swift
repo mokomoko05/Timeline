@@ -68,6 +68,9 @@ struct JournalView: View {
             .onChange(of: selection) { _, key in prewarm(around: key, keys: keys, byDay: byDay) }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { if $0.object as? String == "compose" { composing = true } }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openCalendar)) { _ in calendar.isOpen = true }
+            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.revealLog)) { note in
+                if let index = note.object as? Int, let logs = byDay[selection], logs.indices.contains(index) { jump = logs[index].log.id }
+            }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.previousDay)) { _ in
                 if let target = neighbor(of: selection, in: keys, by: -1) { go(to: target, keys: keys) }
             }
@@ -122,7 +125,7 @@ struct JournalView: View {
         let logs = (byDay[key] ?? []).map(\.log)
         Task {
             await Task.detached(priority: .userInitiated) {
-                for log in logs { let body = LogStyle.body(log); if !body.isEmpty { _ = MarkdownBlock.parse(body) } }
+                for log in logs { let body = LogStyle.body(log); if !body.isEmpty { MarkdownBlock.warm(body) } }
             }.value
             go(to: key, keys: keys)
         }
@@ -143,7 +146,7 @@ struct JournalView: View {
         let logs = keys.flatMap { byDay[$0] ?? [] }.map(\.log)
         guard !logs.isEmpty else { return }
         Task.detached(priority: .utility) {
-            for log in logs { let body = LogStyle.body(log); if !body.isEmpty { _ = MarkdownBlock.parse(body) } }
+            for log in logs { let body = LogStyle.body(log); if !body.isEmpty { MarkdownBlock.warm(body) } }
         }
     }
 }

@@ -12,6 +12,8 @@ enum PerfProbe {
     static let previousDay = Notification.Name("PerfProbePreviousDay")
     static let openCalendar = Notification.Name("PerfProbeOpenCalendar")
     static let pickDay = Notification.Name("PerfProbePickDay")
+    /// 截图检查用：滚到当天第几条日志。
+    static let revealLog = Notification.Name("PerfProbeRevealLog")
     private static var label = "launch"
     private static var marked = CACurrentMediaTime()
     private static var monitor: FrameMonitor?
@@ -39,9 +41,20 @@ enum PerfProbe {
     /// 主线程上现解析 Markdown 花的时间，卡顿时一起报出来。
     static func parsed(_ seconds: CFTimeInterval) { if enabled { parsing += seconds } }
 
+    private static var typesetting: CFTimeInterval = 0
+    private static var drawing: CFTimeInterval = 0
+
+    /// 主线程上现排 / 画 `RichText` 花的时间。
+    static func typeset(_ seconds: CFTimeInterval) { if enabled { typesetting += seconds } }
+    static func drew(_ seconds: CFTimeInterval) { if enabled { drawing += seconds } }
+
     fileprivate static func hitch(_ milliseconds: Int) {
         if parsing > 0.001 { print("[perf]   其中主线程解析 Markdown \(Int(parsing * 1000)) ms") }
         parsing = 0
+        if typesetting > 0.001 { print("[perf]   其中主线程排正文 \(Int(typesetting * 1000)) ms") }
+        if drawing > 0.001 { print("[perf]   其中画正文 \(Int(drawing * 1000)) ms") }
+        typesetting = 0
+        drawing = 0
         let since = Int((CACurrentMediaTime() - marked) * 1000)
         print("[perf] hitch \(milliseconds) ms · \(since) ms after「\(label)」")
     }
@@ -105,6 +118,7 @@ enum PerfProbe {
             (3, "点选日期", { NotificationCenter.default.post(name: pickDay, object: day(-3)) }),
             (3, "再打开日历", { NotificationCenter.default.post(name: openCalendar, object: nil) }),
             (3, "再点选日期", { NotificationCenter.default.post(name: pickDay, object: day(-10)) }),
+            (3, "滚到第九条", { NotificationCenter.default.post(name: revealLog, object: 8) }),
             (3, "结束", {}),
         ] : [
             (3, "切到日记", { switchTab(.journal) }),

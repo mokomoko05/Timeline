@@ -72,6 +72,8 @@ struct MarkdownView: View {
                     } else {
                         BlockView(block: block, size: size, toggleTask: toggleTask)
                     }
+                case .flow(let run):
+                    RichTextView(text: RichText.make(document, run: run, source: source, size: size), size: size)
                 case .collapse(let key, let title):
                     Button {
                         toggleFold(key)
@@ -109,7 +111,7 @@ struct MarkdownView: View {
     private func anchor(_ key: String) -> String { (foldScope ?? String(source.hashValue)) + "|" + key }
 
     private struct Visible: Identifiable {
-        enum Kind { case block(MarkdownBlock), collapse(key: String, title: String) }
+        enum Kind { case block(MarkdownBlock), flow(Range<Int>), collapse(key: String, title: String) }
         let id: String
         let index: Int
         let kind: Kind
@@ -130,7 +132,10 @@ struct MarkdownView: View {
             }
             let hidden = open.contains { $0.folded }
             let kept = open.allSatisfy { !$0.folded || opened.contains($0.key) }
-            if kept { result.append(Visible(id: "\(index)", index: index, kind: .block(block), hidden: hidden)) }
+            if kept, !document.inRun.contains(index) {
+                let kind: Visible.Kind = document.runs[index].map { .flow($0) } ?? .block(block)
+                result.append(Visible(id: "\(index)", index: index, kind: kind, hidden: hidden))
+            }
             if case .heading(_, let text, let key, _) = block, let section = document.sections[index] {
                 open.append((section.end, key, String(text.characters), folded.contains(key), section.long, hidden))
             }
@@ -161,6 +166,33 @@ struct MarkdownDocument {
     let blocks: [MarkdownBlock]
     /// 标题序号 → 它的段落结束位置（不含），和段落是否够长（需要末尾的「收起」）。
     let sections: [Int: (end: Int, long: Bool)]
+    /// 连着的、能拼成一段 `RichText` 的块：起点 → 范围。标题不在里面，所以一段不会跨过收起的边界。
+    /// 太长的一串切成几段（每段不超过一两屏），画的时候不用一次铺一整张大图。
+    let runs: [Int: Range<Int>]
+    /// 在某段里、但不是起点的块。
+    let inRun: Set<Int>
+
+    init(blocks: [MarkdownBlock], sections: [Int: (end: Int, long: Bool)]) {
+        self.blocks = blocks
+        self.sections = sections
+        var runs: [Int: Range<Int>] = [:]
+        var start: Int?
+        var weight = 0
+        func close(_ end: Int) {
+            if let first = start { runs[first] = first..<end }
+            start = nil
+            weight = 0
+        }
+        for (index, block) in blocks.enumerated() {
+            guard block.flows else { close(index); continue }
+            if start != nil, weight > 1200 { close(index) }
+            if start == nil { start = index }
+            weight += block.weight
+        }
+        close(blocks.count)
+        self.runs = runs
+        inRun = Set(runs.values.flatMap { $0.dropFirst() })
+    }
 }
 
 /// 解析后的块。
@@ -227,10 +259,14 @@ indirect enum MarkdownBlock {
         return document
     }
 
-    /// 在后台先解析好，翻到时直接用。
-    static func prewarm(_ sources: [String]) {
+    /// 在后台先解析好、把正文按上次的宽度排好版，翻到时直接用（日记里的正文是 15 号字）。
+    static func prewarm(_ sources: [String], size: CGFloat = 15) {
         guard !sources.isEmpty else { return }
-        Task.detached(priority: .utility) { for source in sources { _ = parse(source) } }
+        Task.detached(priority: .utility) { for source in sources { warm(source, size: size) } }
+    }
+
+    static func warm(_ source: String, size: CGFloat = 15) {
+        RichText.prewarm(parse(source), source: source, size: size)
     }
 
     private static func blocks(_ node: Markup, seen: inout [String: Int]) -> [MarkdownBlock] {
