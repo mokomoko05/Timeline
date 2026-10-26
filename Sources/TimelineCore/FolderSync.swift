@@ -61,6 +61,8 @@ public final class FolderSync: ObservableObject {
     @Published public private(set) var lastSync: Date?
     @Published public private(set) var lastError: String?
     @Published public private(set) var devices: [Device] = []
+    /// 其他设备的文件在 iCloud 上有更新、本机还没下载到：已经请系统下载，几秒后再看。
+    @Published public private(set) var waitingForDownload = false
     /// 测试里可以替换「现在」。
     var now: () -> Date = Date.init
 
@@ -69,6 +71,8 @@ public final class FolderSync: ObservableObject {
     private var rerun = false
     /// 本机状态变了还没成功导出：导出失败时下一轮接着导。
     private var needsExport = true
+    /// 连续等下载的轮数：iCloud 一直没下载下来时别无限地每几秒查一次。
+    private var downloadWaits = 0
     private var automatic: AnyCancellable?
     private var timer: Timer?
 
@@ -131,6 +135,7 @@ public final class FolderSync: ObservableObject {
         defer {
             isSyncing = false
             if rerun { rerun = false; syncSoon(after: 2) }
+            else if waitingForDownload, downloadWaits < 40 { downloadWaits += 1; syncSoon(after: 3) }
         }
         do {
             let changed = try await runOnce()
@@ -149,6 +154,7 @@ public final class FolderSync: ObservableObject {
         var stateChanged: Bool
         var devices: [Device]
         var firstMerge: Bool
+        var pendingDownload = false
     }
 
     private func runOnce() async throws -> Bool {
@@ -171,6 +177,8 @@ public final class FolderSync: ObservableObject {
         syncedContent = store.syncContent
         state = outcome.state
         devices = outcome.devices
+        if waitingForDownload != outcome.pendingDownload { waitingForDownload = outcome.pendingDownload }
+        if !outcome.pendingDownload { downloadWaits = 0 }
         if applied { store.save() }
         if outcome.stateChanged { needsExport = true }
         let images = store.imagesDirectory, stateURL = self.stateURL, snapshotState = outcome.state, names = outcome.content.imageNames
@@ -200,12 +208,21 @@ public final class FolderSync: ObservableObject {
         let hadRemote = !previous.remote.isEmpty
         var devices: [Device] = []
         var mergedRemote = false
+        var pendingDownload = false
         try accessing(folder) {
             try FileManager.default.createDirectory(at: folder.appendingPathComponent(devicesFolder), withIntermediateDirectories: true)
-            for file in try remoteFiles(in: folder, excluding: state.device) {
-                let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            let (files, placeholders) = try remoteFiles(in: folder, excluding: state.device)
+            pendingDownload = placeholders
+            for file in files {
+                let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey, .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
                 let mark = SyncState.RemoteMark(modified: values?.contentModificationDate ?? .distantPast, size: values?.fileSize ?? 0)
                 let id = file.deletingPathExtension().lastPathComponent
+                // iCloud 云盘不会主动把别的设备更新过的文件拉到本机（iOS 上尤其如此）：本机这份不是最新的，
+                // 就请系统下载，这一轮先用手上的，下载完修改时间变了再合并。
+                if values?.isUbiquitousItem == true, let status = values?.ubiquitousItemDownloadingStatus, status != .current {
+                    try? FileManager.default.startDownloadingUbiquitousItem(at: file)
+                    pendingDownload = true
+                }
                 if state.remote[id] == mark, let name = state.names[id] {
                     devices.append(Device(id: id, name: name, exportedAt: mark.modified))
                     continue
@@ -222,7 +239,8 @@ public final class FolderSync: ObservableObject {
             }
         }
         guard localChanged || mergedRemote || state.records != previous.records else {
-            return Outcome(state: state, content: content, stateChanged: false, devices: devices.sorted { $0.name < $1.name }, firstMerge: false)
+            return Outcome(state: state, content: content, stateChanged: false, devices: devices.sorted { $0.name < $1.name }, firstMerge: false,
+                           pendingDownload: pendingDownload)
         }
         // 合并结果还原成内容；改编号之类的整理算本机的新修改。
         var merged = content.applying(state.records)
@@ -230,27 +248,31 @@ public final class FolderSync: ObservableObject {
         merged.nextTaskNumber = max(merged.nextTaskNumber, content.nextTaskNumber)
         let changed = state.records != previous.records
         return Outcome(state: state, content: merged, stateChanged: changed, devices: devices.sorted { $0.name < $1.name },
-                       firstMerge: mergedRemote && !hadRemote && !content.days.isEmpty && merged != content)
+                       firstMerge: mergedRemote && !hadRemote && !content.days.isEmpty && merged != content, pendingDownload: pendingDownload)
     }
 
     nonisolated static func snapshotURL(_ folder: URL, _ device: String) -> URL {
         folder.appendingPathComponent(devicesFolder).appendingPathComponent(device + ".json")
     }
 
-    /// 其他设备的快照文件。iCloud 还没下载的文件在旧系统上显示为 `.名字.icloud`：先触发下载，这一轮跳过。
-    nonisolated private static func remoteFiles(in folder: URL, excluding device: String) throws -> [URL] {
+    /// 其他设备的快照文件。iCloud 还没下载的文件在旧系统上显示为 `.名字.icloud`：先触发下载，这一轮跳过（第二个返回值为 true）。
+    nonisolated private static func remoteFiles(in folder: URL, excluding device: String) throws -> ([URL], Bool) {
         let directory = folder.appendingPathComponent(devicesFolder)
         let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
         var files: [URL] = []
+        var placeholders = false
         for name in names {
             if let real = placeholderTarget(name) {
-                if real.hasSuffix(".json") { try? FileManager.default.startDownloadingUbiquitousItem(at: directory.appendingPathComponent(real)) }
+                if real.hasSuffix(".json"), real != device + ".json" {
+                    try? FileManager.default.startDownloadingUbiquitousItem(at: directory.appendingPathComponent(real))
+                    placeholders = true
+                }
                 continue
             }
             guard name.hasSuffix(".json"), !name.hasPrefix("."), name != device + ".json" else { continue }
             files.append(directory.appendingPathComponent(name))
         }
-        return files.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        return (files.sorted { $0.lastPathComponent < $1.lastPathComponent }, placeholders)
     }
 
     nonisolated private static func placeholderTarget(_ name: String) -> String? {

@@ -141,7 +141,7 @@ struct LogEntryRow: View {
                 if log.focusEvent == .start, let goal = log.focusGoal?.nilIfEmpty {
                     Label(goal, systemImage: "flag").font(.subheadline).foregroundStyle(Palette.ink)
                 }
-                if !log.images.isEmpty { ImageStrip(store: store, names: log.images) }
+                if !log.images.isEmpty { ImageStrip(store: store, names: log.images, texts: log.imageText) }
             }
             .padding(.bottom, 18)
         }
@@ -242,19 +242,29 @@ private struct FocusRoundCard: View {
 struct ImageStrip: View {
     @ObservedObject var store: JournalStore
     let names: [String]
+    /// 图片里识别出的文字（来自 Mac 端），有的话可以直接复制。
+    var texts: [String: String] = [:]
     @State private var shown: String?
+    @StateObject private var toast = Toast()
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(names, id: \.self) { name in
-                    Thumbnail(url: store.imageURL(name))
-                        .onTapGesture { shown = name }
+                    Button { shown = name } label: { Thumbnail(url: store.imageURL(name)) }
+                        .buttonStyle(PressableStyle())
+                        .contextMenu {
+                            ImageActionButtons(url: store.imageURL(name), text: texts[name], toast: toast)
+                        } preview: {
+                            ImagePreview(url: store.imageURL(name))
+                        }
                 }
             }
         }
+        .sensoryFeedback(.impact(weight: .light), trigger: shown) { _, new in new != nil }
+        .overlay(alignment: .bottom) { ToastView(toast: toast) }
         .fullScreenCover(item: Binding(get: { shown.map(ShownImage.init) }, set: { shown = $0?.id })) { item in
-            ImageViewer(store: store, names: names, selection: item.id)
+            ImageViewer(store: store, names: names, texts: texts, selection: item.id)
         }
     }
 
@@ -279,10 +289,120 @@ private struct Thumbnail: View {
     }
 }
 
+/// 按下时缩一点、变暗一点：点缩略图有手感。
+private struct PressableStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .brightness(configuration.isPressed ? -0.08 : 0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
+/// 长按缩略图时的大图预览。
+private struct ImagePreview: View {
+    let url: URL
+
+    var body: some View {
+        if let image = UIImage(contentsOfFile: url.path) {
+            Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: 360, maxHeight: 480)
+        } else {
+            Image(systemName: "icloud.and.arrow.down").font(.largeTitle).padding(40)
+        }
+    }
+}
+
+/// 对一张图片能做的事：复制、分享、存到照片、复制图中文字。长按菜单和全屏查看共用。
+private struct ImageActionButtons: View {
+    let url: URL
+    let text: String?
+    let toast: Toast
+
+    var body: some View {
+        Button { copyImage() } label: { Label("复制图片", systemImage: "doc.on.doc") }
+        if let text = text?.nilIfEmpty {
+            Button {
+                UIPasteboard.general.string = text
+                toast.show("已复制图中文字")
+            } label: { Label("复制图中文字", systemImage: "text.viewfinder") }
+        }
+        Button { saveToPhotos() } label: { Label("存储到照片", systemImage: "square.and.arrow.down") }
+        ShareLink(item: url) { Label("分享…", systemImage: "square.and.arrow.up") }
+    }
+
+    private func copyImage() {
+        guard let image = UIImage(contentsOfFile: url.path) else { toast.show("图片还没下载好"); return }
+        UIPasteboard.general.image = image
+        toast.show("已复制图片")
+    }
+
+    private func saveToPhotos() {
+        guard let image = UIImage(contentsOfFile: url.path) else { toast.show("图片还没下载好"); return }
+        PhotoSaver.save(image) { error in
+            toast.show(error == nil ? "已存储到照片" : "没能存到照片：请在设置里允许 Timeline 添加照片")
+        }
+    }
+}
+
+/// `UIImageWriteToSavedPhotosAlbum` 只接受 Objective-C 的回调方法，包一层。
+private final class PhotoSaver: NSObject {
+    private let done: (Error?) -> Void
+    private static var pending: Set<PhotoSaver> = []
+
+    private init(done: @escaping (Error?) -> Void) { self.done = done }
+
+    static func save(_ image: UIImage, done: @escaping (Error?) -> Void) {
+        let saver = PhotoSaver(done: done)
+        pending.insert(saver)
+        UIImageWriteToSavedPhotosAlbum(image, saver, #selector(finished(_:error:context:)), nil)
+    }
+
+    @objc private func finished(_ image: UIImage, error: Error?, context: UnsafeMutableRawPointer?) {
+        DispatchQueue.main.async {
+            self.done(error)
+            PhotoSaver.pending.remove(self)
+        }
+    }
+}
+
+/// 操作完成后底部短暂出现的一句提示。
+@MainActor final class Toast: ObservableObject {
+    @Published private(set) var message: String?
+    private var hide: DispatchWorkItem?
+
+    func show(_ text: String) {
+        withAnimation(.snappy) { message = text }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        hide?.cancel()
+        let work = DispatchWorkItem { [weak self] in withAnimation(.easeOut) { self?.message = nil } }
+        hide = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: work)
+    }
+}
+
+struct ToastView: View {
+    @ObservedObject var toast: Toast
+
+    var body: some View {
+        if let message = toast.message {
+            Text(message)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(.black.opacity(0.75), in: Capsule())
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .padding(.bottom, 8)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
 private struct ImageViewer: View {
     @ObservedObject var store: JournalStore
     let names: [String]
+    let texts: [String: String]
     @State var selection: String
+    @StateObject private var toast = Toast()
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -299,6 +419,31 @@ private struct ImageViewer: View {
             }
             .padding()
         }
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 10) {
+                ToastView(toast: toast)
+                HStack(spacing: 0) {
+                    ImageActionButtons(url: store.imageURL(selection), text: texts[selection], toast: toast)
+                        .labelStyle(ViewerActionLabel())
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white)
+                .padding(.bottom, names.count > 1 ? 24 : 4)
+            }
+        }
+    }
+}
+
+/// 全屏查看底部的操作：图标在上、字在下。
+private struct ViewerActionLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(spacing: 4) {
+            configuration.icon.font(.title3)
+            configuration.title.font(.caption2)
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
     }
 }
 

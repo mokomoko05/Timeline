@@ -29,8 +29,9 @@ extension View {
 /// 展开的长段落末尾有一个「收起」，收起后滚回标题，不用往回翻找。
 /// `toggleTask` 不为 nil 时任务勾选可以点（参数是源码里的行号，从 1 开始）。
 ///
-/// 折叠不做布局动画：长文本整段跟着动画重排很卡，只让箭头转一下。每个块用它在全文里的序号做标识，
-/// 折叠时其余的块原样保留，不重新排版。
+/// 折叠不做布局动画：长文本整段跟着动画重排很卡，只让箭头转一下。每个块用它在全文里的序号做标识。
+/// 展开过的块收起时不从视图里拿掉，只把高度压成 0：再展开时文字不用重新排版（长段落排一次要好几帧）。
+/// 块之间的间距放在每块自己的上边距里，压成 0 的块不留空隙。
 struct MarkdownView: View {
     let source: String
     var foldScope: String?
@@ -38,12 +39,15 @@ struct MarkdownView: View {
     var toggleTask: ((Int) -> Void)?
     @State private var folded: Set<String> = []
     @State private var loaded = false
+    /// 这次显示期间展开过的标题：它们下面的块已经排过版，收起后留在视图里。
+    @State private var opened: Set<String> = []
     @Environment(\.scrollToMarkdownAnchor) private var scrollTo
 
     var body: some View {
         let document = MarkdownBlock.parse(source)
-        VStack(alignment: .leading, spacing: size * 0.55) {
+        VStack(alignment: .leading, spacing: 0) {
             ForEach(visible(document), id: \.id) { item in
+                Group {
                 switch item.kind {
                 case .block(let block):
                     if case .heading(let level, let text, let key, _) = block, document.sections[item.index] != nil {
@@ -79,6 +83,15 @@ struct MarkdownView: View {
                     }
                     .buttonStyle(.plain)
                 }
+                }
+                .padding(.top, item.index == 0 ? 0 : size * 0.55)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(height: item.hidden ? 0 : nil, alignment: .top)
+                .clipped()
+                .opacity(item.hidden ? 0 : 1)
+                .allowsHitTesting(!item.hidden)
+                .accessibilityHidden(item.hidden)
             }
         }
         .onAppear(perform: loadFolds)
@@ -98,31 +111,31 @@ struct MarkdownView: View {
         let id: String
         let index: Int
         let kind: Kind
+        /// 在收起的标题下面、但之前展开过：留着排好的版，只是不显示。
+        var hidden = false
     }
 
-    /// 顶层块里去掉收起的标题下面的内容；展开的长段落末尾补一个「收起」。
+    /// 要放进视图的块：收起的标题下面没展开过的内容不放；展开过的标成隐藏；展开的长段落末尾补一个「收起」。
     private func visible(_ document: MarkdownDocument) -> [Visible] {
         var result: [Visible] = []
-        var pending: [(end: Int, key: String, title: String)] = []
-        var index = 0
-        let blocks = document.blocks
-        func closeSections(at position: Int) {
-            while let last = pending.last, last.end <= position {
-                result.append(Visible(id: "collapse-\(last.key)", index: -1, kind: .collapse(key: last.key, title: last.title)))
-                pending.removeLast()
+        var open: [(end: Int, key: String, title: String, folded: Bool, long: Bool, hidden: Bool)] = []
+        for (index, block) in document.blocks.enumerated() {
+            while let last = open.last, last.end <= index {
+                if !last.folded, last.long, !last.hidden {
+                    result.append(Visible(id: "collapse-\(last.key)", index: -1, kind: .collapse(key: last.key, title: last.title)))
+                }
+                open.removeLast()
             }
-        }
-        while index < blocks.count {
-            closeSections(at: index)
-            let block = blocks[index]
-            result.append(Visible(id: "\(index)", index: index, kind: .block(block)))
+            let hidden = open.contains { $0.folded }
+            let kept = open.allSatisfy { !$0.folded || opened.contains($0.key) }
+            if kept { result.append(Visible(id: "\(index)", index: index, kind: .block(block), hidden: hidden)) }
             if case .heading(_, let text, let key, _) = block, let section = document.sections[index] {
-                if folded.contains(key) { index = section.end; continue }
-                if section.long { pending.append((section.end, key, String(text.characters))) }
+                open.append((section.end, key, String(text.characters), folded.contains(key), section.long, hidden))
             }
-            index += 1
         }
-        closeSections(at: Int.max)
+        for last in open.reversed() where !last.folded && last.long && !last.hidden {
+            result.append(Visible(id: "collapse-\(last.key)", index: -1, kind: .collapse(key: last.key, title: last.title)))
+        }
         return result
     }
 
@@ -135,6 +148,7 @@ struct MarkdownView: View {
     }
 
     private func toggleFold(_ key: String) {
+        opened.insert(key)
         if folded.contains(key) { folded.remove(key) } else { folded.insert(key) }
         if let defaultsKey { UserDefaults.standard.set(Array(folded), forKey: defaultsKey) }
     }
