@@ -8,6 +8,8 @@ struct TimelineMobileApp: App {
     @StateObject private var focus: FocusTimer
     @StateObject private var reminders: ReminderScheduler
     @StateObject private var languages = LanguageStore()
+    @StateObject private var quickEntry = QuickEntry.shared
+    @UIApplicationDelegateAdaptor(QuickEntryAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -23,6 +25,8 @@ struct TimelineMobileApp: App {
             RootView(store: store, sync: sync)
                 .environmentObject(focus)
                 .environmentObject(reminders)
+                .environmentObject(quickEntry)
+                .onOpenURL { quickEntry.open($0) }
                 .environmentObject(languages)
                 // 换语言：整个界面按新语言重建（拼出来的字符串也要重新算）。
                 .environment(\.locale, languages.language.locale)
@@ -96,7 +100,17 @@ struct RootView: View {
         }
         .tint(Palette.accent)
         .onReceive(NotificationCenter.default.publisher(for: ReminderScheduler.revealTask)) { _ in tab = .tasks }
+        .onReceive(QuickEntry.shared.$request) { kind in
+            switch kind {
+            case .log: tab = .journal
+            case .task: tab = .tasks
+            case nil: break
+            }
+        }
         .onAppear {
+            QuickEntry.installHomeScreenActions()
+            // 截图检查用：`-quickEntry log|task` 和点小组件一样直接进到输入框。
+            if let kind = UserDefaults.standard.string(forKey: "quickEntry").flatMap(QuickEntry.Kind.init(rawValue:)) { QuickEntry.shared.request = kind }
             // 截图检查用：启动参数 `-startTab journal` 直接打开某个标签页。
             if let start = UserDefaults.standard.string(forKey: "startTab").flatMap(Tab.init(rawValue:)) { tab = start }
             else if !sync.isConfigured { tab = .settings }

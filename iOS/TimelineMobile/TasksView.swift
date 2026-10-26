@@ -41,6 +41,9 @@ struct TasksView: View {
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { note in
                 if note.object as? String == "task" { adding = true }
             }
+            .onReceive(QuickEntry.shared.$request) { _ in
+                if QuickEntry.shared.take(.task) { path = []; adding = true }
+            }
             .onReceive(NotificationCenter.default.publisher(for: ReminderScheduler.revealTask)) { note in
                 if let id = note.object as? UUID, store.locate(id) != nil { path = [id] }
             }

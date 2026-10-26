@@ -44,6 +44,15 @@ struct SyncSettingsView: View {
                 } footer: {
                     Text("在 Mac 或 iPhone 上给待办设的提醒，都会在这台 iPhone 上响。应用在后台时会不定时同步一次，新设的提醒也能排上。")
                 }
+                Section {
+                    Label("主屏 / 锁屏小组件「快速记录」", systemImage: "square.grid.2x2")
+                    Label("控制中心按钮「Timeline 写日志」", systemImage: "switch.2")
+                    Label("快捷指令与 Siri：「写日志」「添加待办」", systemImage: "square.stack.3d.up")
+                } header: {
+                    Text("应用外快速记录")
+                } footer: {
+                    Text("想从其他应用分享到日记：在「快捷指令」里新建一个快捷指令，加入 Timeline 的「写日志」动作，把内容设为「快捷指令输入」，再在详细信息里打开「在共享表单中显示」。文字、链接和图片都能分享进来。")
+                }
                 if let message = store.errorMessage {
                     Section("数据") { Text(message).foregroundStyle(.red) }
                 }

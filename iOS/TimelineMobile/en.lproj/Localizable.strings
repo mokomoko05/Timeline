@@ -246,3 +246,22 @@
 "事项提醒" = "Reminder";
 "推迟 10 分钟" = "Snooze 10 minutes";
 "推迟 1 小时" = "Snooze 1 hour";
+
+/* 快捷指令与快速记录 */
+"写日志" = "New Log";
+"添加待办" = "Add Task";
+"内容" = "Text";
+"要记什么？" = "What would you like to log?";
+"已记下" = "Logged";
+"已添加：%@" = "Added: %@";
+"打开写日志" = "Open New Log";
+"要做什么？" = "What needs doing?";
+"在 Timeline 的今天记一条日志，可以带图片。" = "Add an entry to today's journal in Timeline, optionally with images.";
+"在 Timeline 里添加一条待办，识别日期、时间、提醒和标签。" = "Add a task in Timeline; dates, times, reminders and tags are recognized.";
+"在 Timeline 记下 ${text}" = "Log ${text} in Timeline";
+"在 Timeline 添加待办 ${text}" = "Add task ${text} in Timeline";
+"主屏 / 锁屏小组件「快速记录」" = "Home / Lock Screen widget “Quick Capture”";
+"控制中心按钮「Timeline 写日志」" = "Control Center button “Timeline New Log”";
+"快捷指令与 Siri：「写日志」「添加待办」" = "Shortcuts & Siri: “New Log”, “Add Task”";
+"应用外快速记录" = "Capture From Anywhere";
+"想从其他应用分享到日记：在「快捷指令」里新建一个快捷指令，加入 Timeline 的「写日志」动作，把内容设为「快捷指令输入」，再在详细信息里打开「在共享表单中显示」。文字、链接和图片都能分享进来。" = "To share from other apps: in Shortcuts, create a shortcut with Timeline's “New Log” action, set its text to “Shortcut Input”, and turn on “Show in Share Sheet” in its details. Text, links and images can then be shared into your journal.";

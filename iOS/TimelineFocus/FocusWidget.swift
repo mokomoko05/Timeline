@@ -4,7 +4,14 @@ import WidgetKit
 
 @main
 struct FocusWidgets: WidgetBundle {
-    var body: some Widget { FocusLiveActivity() }
+    var body: some Widget {
+        FocusLiveActivity()
+        QuickCaptureWidget()
+        if #available(iOS 18.0, *) {
+            QuickLogControl()
+            QuickTaskControl()
+        }
+    }
 }
 
 /// 专注倒计时：锁屏上一张卡片，灵动岛上左边图标、右边剩余时间，展开后是任务名和进度。

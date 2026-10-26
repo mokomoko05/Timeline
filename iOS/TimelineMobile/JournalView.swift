@@ -67,6 +67,9 @@ struct JournalView: View {
             .onAppear { prewarm(around: selection, keys: keys, byDay: byDay) }
             .onChange(of: selection) { _, key in prewarm(around: key, keys: keys, byDay: byDay) }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { if $0.object as? String == "compose" { composing = true } }
+            .onReceive(QuickEntry.shared.$request) { _ in
+                if QuickEntry.shared.take(.log) { selection = JournalDates.key(Date()); composing = true }
+            }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openCalendar)) { _ in calendar.isOpen = true }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.revealLog)) { note in
                 if let index = note.object as? Int, let logs = byDay[selection], logs.indices.contains(index) { jump = logs[index].log.id }
@@ -649,7 +652,7 @@ private struct TagChoiceMenu: View {
     }
 }
 
-private extension UIImage {
+extension UIImage {
     /// 手机照片很大，长边缩到 2048 再存。
     func scaledForLog(maxSide: CGFloat = 2048) -> UIImage {
         let longest = max(size.width, size.height)
