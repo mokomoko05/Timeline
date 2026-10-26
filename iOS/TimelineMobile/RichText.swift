@@ -115,7 +115,17 @@ final class RichText: @unchecked Sendable {
 
     // MARK: 拼字
 
-    private static func build(_ blocks: ArraySlice<MarkdownBlock>, size: CGFloat) -> NSAttributedString {
+    /// 整篇正文拼成一段可选中的文字（「选择文字」页）：标题、引用、代码、表格也拼进来，链接换成系统的 `.link`。
+    static func selectable(_ source: String, size: CGFloat) -> NSAttributedString {
+        let document = MarkdownBlock.parse(source)
+        let text = NSMutableAttributedString(attributedString: build(document.blocks[...], size: size, complete: true))
+        text.enumerateAttribute(linkKey, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+            if let url = value as? URL { text.addAttribute(.link, value: url, range: range) }
+        }
+        return text
+    }
+
+    private static func build(_ blocks: ArraySlice<MarkdownBlock>, size: CGFloat, complete: Bool = false) -> NSAttributedString {
         let result = NSMutableAttributedString()
         let ink = UIColor(Palette.ink), muted = UIColor(Palette.muted)
         let body = UIFont.systemFont(ofSize: size)
@@ -172,15 +182,53 @@ final class RichText: @unchecked Sendable {
                                attributes: [.font: UIFont.monospacedSystemFont(ofSize: size * 0.9, weight: .regular), .foregroundColor: muted])
         }
 
-        for block in blocks {
-            let spacing = size * 0.55
-            switch block {
-            case .paragraph(let text): paragraph(inline(text, size: size, color: ink), indent: 0, head: 0, spacing: spacing, marker: nil)
-            case .list(let items, let start): list(items, start: start, indent: 0, spacing: spacing)
-            case .html(let raw): paragraph(html(raw), indent: 0, head: 0, spacing: spacing, marker: nil)
-            default: break
+        func restyled(_ text: NSAttributedString, font: UIFont? = nil, color: UIColor? = nil) -> NSAttributedString {
+            let copy = NSMutableAttributedString(attributedString: text)
+            let range = NSRange(location: 0, length: copy.length)
+            if let font { copy.addAttribute(.font, value: font, range: range) }
+            if let color { copy.addAttribute(.foregroundColor, value: color, range: range) }
+            return copy
+        }
+
+        // 平时只拼段落、列表和 HTML（标题、引用、代码、表格由 `MarkdownView` 单独画）；`complete` 时全部拼成一段。
+        func add(_ blocks: ArraySlice<MarkdownBlock>, indent: CGFloat, color: UIColor) {
+            for block in blocks {
+                let spacing = size * 0.55
+                switch block {
+                case .paragraph(let text): paragraph(restyled(inline(text, size: size, color: ink), color: color == ink ? nil : color),
+                                                     indent: indent, head: indent, spacing: spacing, marker: nil)
+                case .list(let items, let start): list(items, start: start, indent: indent, spacing: spacing)
+                case .html(let raw): paragraph(html(raw), indent: indent, head: indent, spacing: spacing, marker: nil)
+                case .heading(let level, let text, _, _) where complete:
+                    let scale: CGFloat = level == 1 ? 1.35 : (level == 2 ? 1.2 : 1.08)
+                    paragraph(restyled(inline(text, size: size, color: ink), font: .systemFont(ofSize: size * scale, weight: .bold)),
+                              indent: indent, head: indent, spacing: size * 0.8, marker: nil)
+                case .quote(let children) where complete:
+                    add(children[...], indent: indent + 14, color: muted)
+                case .code(_, let code) where complete:
+                    let text = NSAttributedString(string: code.replacingOccurrences(of: "\n", with: "\u{2028}"),
+                                                  attributes: [.font: UIFont.monospacedSystemFont(ofSize: size * 0.9, weight: .regular),
+                                                               .foregroundColor: ink, .backgroundColor: muted.withAlphaComponent(0.12)])
+                    paragraph(text, indent: indent, head: indent, spacing: spacing, marker: nil)
+                case .table(let header, let rows) where complete:
+                    for (index, row) in ([header] + rows).enumerated() {
+                        let line = NSMutableAttributedString()
+                        for (column, cell) in row.enumerated() {
+                            if column > 0 { line.append(NSAttributedString(string: "  ·  ", attributes: [.font: body, .foregroundColor: muted])) }
+                            let text = inline(cell, size: size, color: ink)
+                            line.append(index == 0 ? restyled(text, font: .systemFont(ofSize: size, weight: .semibold)) : text)
+                        }
+                        paragraph(line, indent: indent, head: indent, spacing: index == 0 ? spacing : size * 0.3, marker: nil)
+                    }
+                case .rule where complete:
+                    paragraph(NSAttributedString(string: "———", attributes: [.font: body, .foregroundColor: muted]),
+                              indent: indent, head: indent, spacing: spacing, marker: nil)
+                default: break
+                }
             }
         }
+
+        add(blocks, indent: 0, color: ink)
         return result
     }
 

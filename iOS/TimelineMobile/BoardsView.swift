@@ -81,14 +81,19 @@ private struct BoardOutline: View {
 struct BoardPage: View {
     @ObservedObject var store: JournalStore
     let id: UUID
+    /// 从搜索结果打开：跳到这一行（从 1 开始）并高亮 `query`。
+    var revealLine: Int?
+    var query = ""
     @StateObject private var session: BoardWebSession
     @State private var showingHistory = false
     @AppStorage("boardSourceMode") private var sourceMode = false
     @Environment(\.scenePhase) private var scenePhase
 
-    init(store: JournalStore, id: UUID) {
+    init(store: JournalStore, id: UUID, revealLine: Int? = nil, query: String = "") {
         self.store = store
         self.id = id
+        self.revealLine = revealLine
+        self.query = query
         _session = StateObject(wrappedValue: BoardWebSession(store: store, boardID: id))
     }
 
@@ -112,6 +117,7 @@ struct BoardPage: View {
             .sheet(isPresented: $showingHistory) { BoardHistoryView(store: store, boardID: id) }
             .onChange(of: scenePhase) { _, phase in if phase != .active { session.commit() } }
             .onAppear {
+                if let revealLine { session.reveal(line: revealLine, query: query) }
                 if PerfProbe.typing == "board" {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) { session.runTypingTest(PerfProbe.typingText) }
                 }

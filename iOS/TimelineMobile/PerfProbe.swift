@@ -114,6 +114,7 @@ enum PerfProbe {
             ("打开笔记多的待办", { switchTab(.tasks); send("openNotedTask") }),
             ("节奏条放大镜", { send("railLoupe") }),
             ("收起放大镜", { send("railLoupeEnd") }),
+            ("选择文字", { switchTab(.journal); send("selectText") }),
         ]
         // 走两遍：第一遍含第一次建界面的开销，第二遍是平时的样子。`-perfSteps 切到日记,切到待办 -perfRounds 6` 只走其中几步。
         let only = UserDefaults.standard.string(forKey: "perfSteps")?.components(separatedBy: ",")

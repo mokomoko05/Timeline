@@ -10,11 +10,13 @@ final class LogActions: ObservableObject {
     enum Sheet: Identifiable {
         case tags(JournalStore.LoggedLog)
         case link(JournalStore.LoggedLog)
+        case select(JournalStore.LoggedLog)
 
         var id: String {
             switch self {
             case .tags(let logged): return "tags-" + logged.id.uuidString
             case .link(let logged): return "link-" + logged.id.uuidString
+            case .select(let logged): return "select-" + logged.id.uuidString
             }
         }
     }
@@ -64,9 +66,15 @@ private struct LogActionsHost: ViewModifier {
                 switch sheet {
                 case .tags(let logged): LogTagsSheet(store: store, logged: logged)
                 case .link(let logged): LogLinkSheet(store: store, logged: logged)
+                case .select(let logged): LogSelectSheet(logged: logged)
                 }
             }
             .floatingEditor(item: $actions.editing) { LogEditSheet(store: store, logged: $0) }
+            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+                // 性能 / 截图检查：打开最近一条较长日志的「选择文字」。
+                if note.object as? String == "selectText", actions.sheet == nil,
+                   let logged = store.allLogs().last(where: { $0.log.text.count > 300 }) { actions.sheet = .select(logged) }
+            }
             .confirmationDialog("删除这条日志？", isPresented: Binding(get: { actions.deleting != nil }, set: { if !$0 { actions.deleting = nil } }),
                                 titleVisibility: .visible, presenting: actions.deleting) { logged in
                 Button("删除", role: .destructive) {
@@ -92,6 +100,8 @@ struct LogMenuItems: View {
     var body: some View {
         let log = logged.log
         Button { actions.copy(log) } label: { Label(log.images.isEmpty ? "复制文字" : "复制文字（不含图片）", systemImage: "doc.on.doc") }
+            .disabled(log.copyText == nil)
+        Button { actions.sheet = .select(logged) } label: { Label("选择文字", systemImage: "character.cursor.ibeam") }
             .disabled(log.copyText == nil)
         if !store.isReadOnly {
             Button { actions.editing = logged } label: { Label("编辑", systemImage: "pencil") }
@@ -135,6 +145,59 @@ private struct LogEditSheet: View {
             }
             AutoFocusTextView(text: $text, placeholder: "", minLines: 4, maxLines: 10)
         }
+    }
+}
+
+/// 「选择文字」：整条日志放进一个只读、可选中的文本框，拖动选择手柄复制其中一段。
+/// 默认显示排好版的样子（复制出来是排版后的文字，粘到备忘录之类还带着加粗）；右上角可以换成 Markdown 原文。
+private struct LogSelectSheet: View {
+    let logged: JournalStore.LoggedLog
+    @Environment(\.dismiss) private var dismiss
+    @State private var source = false
+
+    var body: some View {
+        let text = logged.log.copyText ?? ""
+        NavigationStack {
+            SelectableTextView(text: source ? Self.plain(text) : RichText.selectable(text, size: 17))
+                .ignoresSafeArea(.container, edges: .bottom)
+                .background(Palette.background)
+                .navigationTitle("选择文字")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button(source ? "显示排版" : "显示原文") { source.toggle() }
+                    }
+                }
+        }
+        .presentationDetents([.large])
+    }
+
+    private static func plain(_ text: String) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [.font: UIFont.monospacedSystemFont(ofSize: 15, weight: .regular),
+                                                       .foregroundColor: UIColor(Palette.ink)])
+    }
+}
+
+/// 只读、可选中的文本框：系统的选择手柄、放大镜、拷贝 / 全选 / 查询。
+private struct SelectableTextView: UIViewRepresentable {
+    let text: NSAttributedString
+
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.isEditable = false
+        view.isSelectable = true
+        view.backgroundColor = .clear
+        view.textContainerInset = UIEdgeInsets(top: 16, left: 16, bottom: 40, right: 16)
+        view.alwaysBounceVertical = true
+        view.linkTextAttributes = [.foregroundColor: UIColor(Palette.accent)]
+        return view
+    }
+
+    func updateUIView(_ view: UITextView, context: Context) {
+        guard view.attributedText != text else { return }
+        view.attributedText = text
+        view.selectedRange = NSRange(location: 0, length: 0)
     }
 }
 

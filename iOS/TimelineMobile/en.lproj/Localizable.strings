@@ -288,3 +288,30 @@
 "缩进" = "Indent";
 "取消缩进" = "Outdent";
 "收起键盘" = "Hide Keyboard";
+
+/* 全局搜索 */
+"全部" = "All";
+"日志与笔记" = "Entries & Notes";
+"图片文字" = "Image Text";
+"图片里的文字" = "Text in Images";
+"每日小结" = "Daily Summary";
+"没有找到「%@」" = "No results for “%@”";
+"在全部结果中查看（%lld）" = "See all results (%lld)";
+"只列出前 %lld 条，再多打几个字缩小范围" = "Showing the first %lld. Type more to narrow it down.";
+"搜索待办、工作板、日志、图片里的文字" = "Search tasks, boards, entries, image text";
+"待办的标题、标签" = "Task titles and tags";
+"工作板正文，点开跳到那一行" = "Board text — opens at that line";
+"日志与笔记，点开定位到那一条" = "Entries and notes — opens at that entry";
+"截图、照片里的文字" = "Text in screenshots and photos";
+"输入 #标签 只看带这个标签的" = "Type #tag to see just that tag";
+"%@ · 第 %lld 行" = "%@ · line %lld";
+"%@ · 每日小结" = "%@ · Daily Summary";
+"图片中的文字 · %@" = "Text in image · %@";
+"这一天没有日志" = "No entries this day";
+"%@ · %lld 条" = "%@ · %lld entries";
+"在日记中打开" = "Open in Journal";
+
+/* 选择文字 */
+"选择文字" = "Select Text";
+"显示排版" = "Show Formatted";
+"显示原文" = "Show Markdown";

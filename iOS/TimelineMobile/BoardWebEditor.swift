@@ -84,6 +84,8 @@ final class BoardWebSession: NSObject, ObservableObject {
     private var sourceNeedsSynchronization = true
     private var pendingWrite: DispatchWorkItem?
     private var focusWhenReady = false
+    /// 搜索结果打开时要跳到的行（从 1 开始）和要高亮的词：编辑器配置好以后再跳。
+    private var pendingReveal: (line: Int, query: String)?
     /// 停顿多久才把文字写进数据。
     private static let writeDelay: TimeInterval = 0.8
 
@@ -188,9 +190,28 @@ final class BoardWebSession: NSObject, ObservableObject {
         lastConfiguration = data
         sourceNeedsSynchronization = false
         webView.evaluateJavaScript("window.boardEditor.configure(\(String(decoding: data, as: UTF8.self))); 0") { [weak self] _, _ in
-            guard let self, self.focusWhenReady else { return }
+            guard let self else { return }
+            self.performPendingReveal()
+            guard self.focusWhenReady else { return }
             self.focusWhenReady = false
             self.beginEditing()
+        }
+    }
+
+    /// 跳到第 `line` 行：展开包住它的标题和折叠块，滚到中间并高亮命中的文字（和 Mac 的搜索结果一样）。
+    func reveal(line: Int, query: String) {
+        pendingReveal = (line, query)
+        performPendingReveal()
+    }
+
+    private func performPendingReveal() {
+        guard ready, Self.owner === self, lastConfiguration != nil, let target = pendingReveal, let webView,
+              let data = try? JSONSerialization.data(withJSONObject: [target.query]) else { return }
+        pendingReveal = nil
+        let query = String(decoding: data, as: UTF8.self).dropFirst().dropLast()
+        // 等这一轮排版完、网页知道自己多高再滚。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            webView.evaluateJavaScript("window.boardEditor.reveal(\(target.line), \(query)); 0")
         }
     }
 
