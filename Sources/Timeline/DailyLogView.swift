@@ -683,7 +683,7 @@ private struct DailyLogRow: View {
                 .help(expanded ? AppLocalized("收起图片") : AppLocalizedFormat("点击查看 %lld 张图片", log.images.count))
                 .accessibilityLabel(expanded ? AppLocalized("收起图片") : AppLocalizedFormat("查看 %lld 张图片", log.images.count))
             }
-            if log.showsTimelineTags, !log.tags.isEmpty { TaskTagLine(tags: log.tags).padding(.top, 2) }
+            if log.showsTimelineTags, !log.tags.isEmpty { TaskTagLine(tags: log.tags, log: log.id).padding(.top, 2) }
         }
     }
 

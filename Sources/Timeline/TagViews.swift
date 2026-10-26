@@ -57,11 +57,15 @@ struct TaskTagLine: View {
     @Environment(\.typography) private var typography
     let tags: [String]
     var fontSize: CGFloat = 10
+    /// 标签挂在一条日志上：点开笔记本后滚到这一条。
+    var log: UUID?
 
     var body: some View {
         HStack(spacing: 4) {
             ForEach(tags, id: \.self) { tag in
-                Button { NotificationCenter.default.post(name: .timelineOpenTag, object: tag) } label: {
+                Button {
+                    NotificationCenter.default.post(name: .timelineOpenTag, object: tag, userInfo: log.map { ["log": $0] })
+                } label: {
                     Text("#" + tag).font(.system(size: typography.pt(fontSize))).lineLimit(1)
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(Palette.soft, in: RoundedRectangle(cornerRadius: 4))

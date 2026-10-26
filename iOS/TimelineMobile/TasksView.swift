@@ -38,6 +38,9 @@ struct TasksView: View {
                 }
             }
             .sheet(isPresented: $adding) { AddTaskSheet(store: store) }
+            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { note in
+                if note.object as? String == "task" { adding = true }
+            }
             .syncOnRefresh(sync)
             .safeAreaInset(edge: .bottom) { FocusBar() }
         }

@@ -15,6 +15,8 @@ struct JournalView: View {
     @State private var direction: Edge = .trailing
     /// 在底部节奏条上点了某个时刻：滚到那条日志。
     @State private var jump: UUID?
+    /// 右下角跳到顶部 / 底部的按钮（不订阅：滚动时只刷新按钮）。
+    @State private var edges = ScrollEdges()
 
     var body: some View {
         let byDay = Dictionary(grouping: store.allLogs(includeFocus: true), by: \.key)
@@ -31,6 +33,8 @@ struct JournalView: View {
             }
             .background(Palette.background)
             .searchable(text: $query, prompt: "搜索日志")
+            .notesDestinations(store)
+            .logActionsHost(store)
             .navigationTitle("日记")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -44,17 +48,7 @@ struct JournalView: View {
                 }
             }
             .overlay(alignment: .bottomTrailing) {
-                if query.isEmpty {
-                    Button { composing = true } label: {
-                        Image(systemName: "square.and.pencil")
-                            .font(.title2.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 56, height: 56)
-                            .background(Palette.accent, in: Circle())
-                            .shadow(color: .black.opacity(0.2), radius: 8, y: 3)
-                    }
-                    .padding(20)
-                }
+                if query.isEmpty { FloatingButtons(edges: edges) { composing = true } }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
@@ -72,6 +66,7 @@ struct JournalView: View {
             }
             .onAppear { prewarm(around: selection, keys: keys, byDay: byDay) }
             .onChange(of: selection) { _, key in prewarm(around: key, keys: keys, byDay: byDay) }
+            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { if $0.object as? String == "compose" { composing = true } }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.previousDay)) { _ in
                 if let target = neighbor(of: selection, in: keys, by: -1) { go(to: target, keys: keys) }
             }
@@ -81,17 +76,22 @@ struct JournalView: View {
     private func page(_ logs: [JournalStore.LoggedLog], keys: [String]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    DayHeader(store: store, key: selection, logs: logs.map(\.log),
-                              previous: neighbor(of: selection, in: keys, by: -1), next: neighbor(of: selection, in: keys, by: 1)) {
-                        go(to: $0, keys: keys)
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: 0).scrollEdgeMarker(.top)
+                    VStack(alignment: .leading, spacing: 16) {
+                        DayHeader(store: store, key: selection, logs: logs.map(\.log),
+                                  previous: neighbor(of: selection, in: keys, by: -1), next: neighbor(of: selection, in: keys, by: 1)) {
+                            go(to: $0, keys: keys)
+                        }
+                        DayContent(store: store, key: selection, logs: logs)
                     }
-                    DayContent(store: store, key: selection, logs: logs)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 100)
+                    Color.clear.frame(height: 0).scrollEdgeMarker(.bottom)
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 100)
             }
             .markdownScrolling(proxy)
+            .trackScrollEdges(edges, proxy: proxy)
             .onChange(of: jump) { _, id in
                 guard let id else { return }
                 withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(id.uuidString, anchor: .top) }
@@ -392,21 +392,22 @@ private struct DayPicker: View {
 }
 
 /// 写一条日志：可关联待办、加 #标签、配图。
+///
+/// 打字时只有这一页跟着刷新，所以这一页的正文要便宜：可关联的待办在打开时整理一次，菜单放在单独的视图里。
 struct ComposeSheet: View {
     @ObservedObject var store: JournalStore
     var taskID: UUID?
+    /// 固定加上的标签（在标签笔记本里写）。
+    var tags: [String] = []
     var sent: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
     @State private var linked: UUID?
+    @State private var choices: [TaskChoice] = []
     @State private var images: [String] = []
     @State private var picked: [PhotosPickerItem] = []
     @State private var error: String?
     @FocusState private var focused: Bool
-
-    private var openTasks: [ScheduledTask] {
-        TaskSortMode.deadline.sorted(store.tasks().filter { !$0.task.completed })
-    }
 
     var body: some View {
         NavigationStack {
@@ -415,17 +416,13 @@ struct ComposeSheet: View {
                     .lineLimit(4...14)
                     .focused($focused)
                     .font(.body)
+                if !tags.isEmpty {
+                    HStack(spacing: 6) { ForEach(tags, id: \.self) { Chip(text: "#" + $0, color: Palette.note) } }
+                }
                 if !images.isEmpty { ImageStrip(store: store, names: images) }
                 if let error { Text(error).font(.caption).foregroundStyle(Palette.danger) }
                 HStack(spacing: 16) {
-                    Menu {
-                        Button("不关联") { linked = nil }
-                        ForEach(openTasks.prefix(40)) { item in
-                            Button((item.task.number.map { "#\($0) " } ?? "") + String(TaskText.rendered(item.task.title).characters)) { linked = item.id }
-                        }
-                    } label: {
-                        Label(linkedTitle ?? L("关联待办"), systemImage: "at").lineLimit(1)
-                    }
+                    TaskChoiceMenu(choices: choices, linked: $linked)
                     PhotosPicker(selection: $picked, maxSelectionCount: 6, matching: .images) {
                         Label("图片", systemImage: "photo")
                     }
@@ -443,7 +440,11 @@ struct ComposeSheet: View {
                     Button("保存", action: send).disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty)
                 }
             }
-            .onAppear { linked = taskID; focused = true }
+            .onAppear {
+                linked = taskID
+                focused = true
+                choices = TaskChoice.open(in: store, including: taskID)
+            }
             .onChange(of: picked) { _, items in
                 guard !items.isEmpty else { return }
                 picked = []
@@ -451,10 +452,6 @@ struct ComposeSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
-    }
-
-    private var linkedTitle: String? {
-        linked.flatMap(store.locate).map { ($0.task.number.map { "#\($0) " } ?? "") + String(TaskText.rendered($0.task.title).characters) }
     }
 
     private func attach(_ items: [PhotosPickerItem]) async {
@@ -469,13 +466,41 @@ struct ComposeSheet: View {
     private func send() {
         let parsed = TagText.extract(from: text)
         do {
-            try store.quickLog(parsed.title, images: images, taskID: linked, linkDefault: false, tags: parsed.tags,
+            try store.quickLog(parsed.title, images: images, taskID: linked, linkDefault: false, tags: TagText.merge(tags, parsed.tags),
                                allowInlineTaskReference: linked == nil, on: Date())
             store.save()
             sent()
             dismiss()
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+}
+
+/// 可以关联的待办：标题先排好版存成纯文字，菜单不用每次重算。
+struct TaskChoice: Identifiable, Equatable {
+    let id: UUID
+    let title: String
+
+    /// 未完成的待办（按截止日期），加上已经关联着的那个（哪怕它完成了）。
+    @MainActor static func open(in store: JournalStore, including current: UUID? = nil, limit: Int = 60) -> [TaskChoice] {
+        var items = Array(TaskSortMode.deadline.sorted(store.tasks().filter { !$0.task.completed }).prefix(limit))
+        if let current, !items.contains(where: { $0.id == current }), let located = store.locate(current) { items.insert(located, at: 0) }
+        return items.map { TaskChoice(id: $0.id, title: ($0.task.number.map { "#\($0) " } ?? "") + String(TaskText.rendered($0.task.title).characters)) }
+    }
+}
+
+/// 「关联待办」菜单：单独一个视图，输入文字时不重建。
+private struct TaskChoiceMenu: View {
+    let choices: [TaskChoice]
+    @Binding var linked: UUID?
+
+    var body: some View {
+        Menu {
+            Button("不关联") { linked = nil }
+            ForEach(choices) { choice in Button(choice.title) { linked = choice.id } }
+        } label: {
+            Label(choices.first { $0.id == linked }?.title ?? L("关联待办"), systemImage: "at").lineLimit(1)
         }
     }
 }

@@ -75,6 +75,7 @@ struct RootView: View {
             PerfProbe.start()
             prewarmJournal()
             PerfProbe.runScript { tab = $0 }
+            PerfProbe.runTyping { tab = $0 }
             PerfProbe.demoFocus(focus)
         }
     }

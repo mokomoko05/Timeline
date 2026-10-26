@@ -91,7 +91,7 @@ final class SyncModel: ObservableObject {
             sync.stopAutomaticSync()
             let background = BackgroundTask()
             Task {
-                _ = try? await sync.sync()
+                await sync.syncUntilExported()
                 background.end()
             }
         }

@@ -1,5 +1,6 @@
 import QuartzCore
 import SwiftUI
+import UIKit
 import TimelineCore
 
 /// 卡顿探针（启动参数 `-perfProbe YES` 时才工作）：盯着每一帧，主线程被占住超过两帧就打印卡了多久、
@@ -46,6 +47,45 @@ enum PerfProbe {
         }
     }
 
+    /// 打字测试（`-perfTyping compose|task|board`）：打开对应的输入框，往里一个个字地输入，报每个字从按下到画出来的时间。
+    static let typing = UserDefaults.standard.string(forKey: "perfTyping")
+    static let openEditor = Notification.Name("PerfProbeOpenEditor")
+    private static var keyDown: CFTimeInterval?
+    private static var latencies: [Double] = []
+
+    fileprivate static func frameDrawn(at time: CFTimeInterval) {
+        guard let start = keyDown else { return }
+        latencies.append((time - start) * 1000)
+        keyDown = nil
+    }
+
+    static func runTyping(switchTab: @escaping (RootView.Tab) -> Void) {
+        guard enabled, let typing else { return }
+        switchTab(typing == "compose" ? .journal : (typing == "board" ? .boards : .tasks))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            mark("打开输入框 " + typing)
+            NotificationCenter.default.post(name: openEditor, object: typing)
+        }
+        let text: [Character] = Array("今天把同步的问题查清楚了 fix the board export when backgrounding 再测一下输入延迟")
+        for (index, character) in text.enumerated() {
+            let delay: Double = 6 + Double(index) * 0.1
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                if index == 0 { mark("开始输入") }
+                keyDown = CACurrentMediaTime()
+                UIApplication.shared.sendAction(#selector(UIKeyInput.insertText(_:)), to: nil, from: String(character), for: nil)
+            }
+        }
+        let end: Double = 7 + Double(text.count) * 0.1
+        DispatchQueue.main.asyncAfter(deadline: .now() + end) {
+            let sorted: [Double] = latencies.sorted()
+            guard let slowest = sorted.last else { print("[perf] 没有输入（没找到输入框）"); return }
+            let total: Double = sorted.reduce(0, +)
+            let average = total / Double(sorted.count)
+            let median = sorted[sorted.count / 2]
+            print(String(format: "[perf] 输入 %d 个字：平均 %.1f ms · 中位 %.1f ms · 最慢 %.1f ms", sorted.count, average, median, slowest))
+        }
+    }
+
     /// 自动操作脚本：每一步之间留足时间让上一步的卡顿结束。
     static func runScript(switchTab: @escaping (RootView.Tab) -> Void) {
         guard scripted else { return }
@@ -77,6 +117,7 @@ private final class FrameMonitor: NSObject {
 
     @objc private func frame(_ link: CADisplayLink) {
         defer { last = link.timestamp }
+        MainActor.assumeIsolated { PerfProbe.frameDrawn(at: CACurrentMediaTime()) }
         guard last > 0 else { return }
         let gap = link.timestamp - last
         if gap > 0.034 { MainActor.assumeIsolated { PerfProbe.hitch(Int(gap * 1000)) } }

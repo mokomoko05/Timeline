@@ -10,8 +10,11 @@ struct LogTimeline: View {
     var groupByDay = false
     var showsTask = true
     var newestFirst = false
+    /// 打开时要滚到并闪一下的那条（从日记里点标签过来）：先把它前面的行都排上。
+    var reveal: UUID?
     @State private var collapsedRounds: Set<UUID> = []
     @State private var shown = 6
+    @State private var flash: UUID?
 
     private enum Row: Identifiable {
         case day(String, Date, Int)
@@ -102,7 +105,7 @@ struct LogTimeline: View {
                     .padding(.top, index > 0 ? 10 : 0)
                 case .log(let logged, let inFocus):
                     LogEntryRow(store: store, logged: logged, showsTask: showsTask,
-                                hasPrevious: index > 0, hasNext: index < rows.count - 1, focus: inFocus)
+                                hasPrevious: index > 0, hasNext: index < rows.count - 1, focus: inFocus, highlighted: flash == logged.id)
                 case .round(let round):
                     RailRow(hasPrevious: index > 0, hasNext: index < rows.count - 1, nodeY: 22) {
                         EmptyView()
@@ -114,6 +117,16 @@ struct LogTimeline: View {
                     }
                 }
             }
+        }
+        .onAppear {
+            guard let reveal, let index = rows.firstIndex(where: { $0.id == reveal.uuidString }) else { return }
+            shown = max(shown, index + 4)
+            flash = reveal
+        }
+        .task(id: flash) {
+            guard flash != nil else { return }
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            withAnimation(.easeOut(duration: 0.5)) { flash = nil }
         }
         .task(id: rows.count) {
             while shown < rows.count {
@@ -132,6 +145,8 @@ struct LogEntryRow: View {
     var hasPrevious = true
     var hasNext = true
     var focus: (before: Bool, after: Bool) = (false, false)
+    var highlighted = false
+    @Environment(\.logActions) private var actions
 
     private var log: DailyLogEntry { logged.log }
 
@@ -140,18 +155,34 @@ struct LogEntryRow: View {
                 lineColor: Palette.line, nodeY: 10) {
             node
         } content: {
+            let body = LogStyle.body(log).nilIfEmpty
+            let hasText = body != nil || hasHeader || (log.focusEvent == .start && log.focusGoal?.nilIfEmpty != nil)
             VStack(alignment: .leading, spacing: 6) {
-                header
-                if let body = LogStyle.body(log).nilIfEmpty {
-                    MarkdownView(source: body, foldScope: "log." + log.id.uuidString, size: 15)
-                        .opacity(log.isFocusMarker && log.focusMarker != "REVIEW" ? 0.75 : 1)
+                if hasText {
+                    // 文字部分长按浮起来、弹出菜单；图片有自己的菜单。
+                    VStack(alignment: .leading, spacing: 6) {
+                        header
+                        if let body {
+                            MarkdownView(source: body, foldScope: "log." + log.id.uuidString, size: 15)
+                                .opacity(log.isFocusMarker && log.focusMarker != "REVIEW" ? 0.75 : 1)
+                        }
+                        if log.focusEvent == .start, let goal = log.focusGoal?.nilIfEmpty {
+                            Label(goal, systemImage: "flag").font(.subheadline).foregroundStyle(Palette.ink)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .logContextMenu(store: store, logged: logged, actions: actions, long: (body?.count ?? 0) > 1200)
                 }
-                if log.focusEvent == .start, let goal = log.focusGoal?.nilIfEmpty {
-                    Label(goal, systemImage: "flag").font(.subheadline).foregroundStyle(Palette.ink)
+                if !log.images.isEmpty {
+                    ImageStrip(store: store, names: log.images, texts: log.imageText, logged: hasText ? nil : logged)
                 }
-                if !log.images.isEmpty { ImageStrip(store: store, names: log.images, texts: log.imageText) }
             }
             .padding(.bottom, 18)
+            .background {
+                if highlighted {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Palette.accent.opacity(0.12)).padding(-6).padding(.bottom, 12)
+                }
+            }
         }
         .overlay(alignment: .topLeading) {
             // 专注中的那一段竖线用强调色。
@@ -180,6 +211,10 @@ struct LogEntryRow: View {
         }
     }
 
+    private var hasHeader: Bool {
+        LogStyle.label(log) != nil || (showsTask && (log.taskID != nil || log.taskTitle != nil)) || !log.tags.isEmpty
+    }
+
     @ViewBuilder private var header: some View {
         let label = LogStyle.label(log)
         let task = showsTask ? log.taskID.flatMap(store.locate) : nil
@@ -191,7 +226,15 @@ struct LogEntryRow: View {
                     Text(((task?.task.number ?? log.taskNumber).map { "#\($0) " } ?? "") + taskTitle)
                         .foregroundStyle(Palette.accent).lineLimit(1)
                 }
-                ForEach(log.tags, id: \.self) { Text("#" + $0).foregroundStyle(Palette.note) }
+                // 点标签：打开这个标签的笔记本，停在这一条。
+                ForEach(log.tags, id: \.self) { tag in
+                    NavigationLink(value: NotesView.Destination.tag(tag, reveal: log.id)) {
+                        Text("#" + tag).foregroundStyle(Palette.note)
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .font(.footnote)
         }
@@ -252,8 +295,11 @@ struct ImageStrip: View {
     let names: [String]
     /// 图片里识别出的文字（来自 Mac 端），有的话可以直接复制。
     var texts: [String: String] = [:]
+    /// 只有图片、没有文字的日志：日志自己的操作（编辑、标签、删除…）也放进图片的长按菜单。
+    var logged: JournalStore.LoggedLog?
     @State private var shown: String?
     @StateObject private var toast = Toast()
+    @Environment(\.logActions) private var actions
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -263,6 +309,9 @@ struct ImageStrip: View {
                         .buttonStyle(PressableStyle())
                         .contextMenu {
                             ImageActionButtons(url: store.imageURL(name), text: texts[name], toast: toast)
+                            if let logged, let actions {
+                                Section { LogMenuItems(store: store, logged: logged, actions: actions) }
+                            }
                         } preview: {
                             ImagePreview(url: store.imageURL(name))
                         }
@@ -503,5 +552,32 @@ enum ImageCache {
             : image.preparingForDisplay() ?? image
         cache.setObject(thumbnail, forKey: url as NSURL)
         return thumbnail
+    }
+}
+
+private extension View {
+    /// 长按文字：文字块浮起来，弹出日志操作。很长的日志浮起整块太大，换成前几百字的预览。
+    @ViewBuilder
+    func logContextMenu(store: JournalStore, logged: JournalStore.LoggedLog, actions: LogActions?, long: Bool) -> some View {
+        if let actions {
+            let shaped = contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 10, style: .continuous).inset(by: -6))
+                .background(Palette.background)
+            if long {
+                shaped.contextMenu {
+                    LogMenuItems(store: store, logged: logged, actions: actions)
+                } preview: {
+                    Text(String(LogStyle.body(logged.log).prefix(600)) + "…")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Palette.ink)
+                        .padding(14)
+                        .frame(width: 340, alignment: .leading)
+                        .background(Palette.card)
+                }
+            } else {
+                shaped.contextMenu { LogMenuItems(store: store, logged: logged, actions: actions) }
+            }
+        } else {
+            self
+        }
     }
 }

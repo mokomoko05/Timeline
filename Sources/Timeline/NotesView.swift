@@ -140,6 +140,13 @@ struct NotesView: View {
         }
         // 全局搜索跳过来：等切换任务时的默认滚动（到工作板或末尾）做完，再滚到那条笔记并闪一下。
         .onReceive(nav.$revealNote.compactMap { $0 }) { id in
+            // 标签页按待办分章时，那条笔记所在的章可能折叠着：先展开。
+            if let tag = tagSelection, chapterView,
+               let chapter = store.chapters(notes: store.notes(forTag: tag), tasks: store.tasks(taggedWith: tag))
+                   .first(where: { $0.notes.contains { $0.id == id } }),
+               nav.isCollapsed(tag: tag, chapter: chapter.id) {
+                nav.setCollapsed(false, tag: tag, chapter: chapter.id)
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                 guard nav.revealNote == id else { return }
                 nav.revealNote = nil
@@ -597,7 +604,7 @@ struct NotesView: View {
                 }
                 .buttonStyle(.plain).foregroundStyle(Palette.accent).help("查看这个待办的全部笔记")
             }
-            if !log.tags.isEmpty { TaskTagLine(tags: log.tags) }
+            if !log.tags.isEmpty { TaskTagLine(tags: log.tags, log: log.id) }
         } content: {
             if editingNoteID == log.id {
                 VStack(alignment: .leading, spacing: 4) {

@@ -165,7 +165,12 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .timelineNavigate)) { if let date = $0.object as? Date { select(date) } }
         .onReceive(NotificationCenter.default.publisher(for: .timelineReveal)) { if let id = $0.object as? UUID { reveal(date: store.locate(id)?.task.dueDate, taskID: id) } }
-        .onReceive(NotificationCenter.default.publisher(for: .timelineOpenTag)) { if let tag = $0.object as? String { showNotes(tag: tag) } }
+        .onReceive(NotificationCenter.default.publisher(for: .timelineOpenTag)) { note in
+            guard let tag = note.object as? String else { return }
+            showNotes(tag: tag)
+            // 从日志上的标签点进来：笔记本切过去之后再滚到那一条（展开章节时要按新的标签找）。
+            if let log = note.userInfo?["log"] as? UUID { notesWindow.nav.revealNote = log }
+        }
         .onReceive(commands.subject) { handle($0) }
     }
 

@@ -9,7 +9,8 @@ struct NotesView: View {
 
     enum Destination: Hashable {
         case task(UUID)
-        case tag(String)
+        /// `reveal`：打开后滚到这条笔记并闪一下（在日记里点了日志的标签）。
+        case tag(String, reveal: UUID? = nil)
     }
 
     var body: some View {
@@ -67,12 +68,7 @@ struct NotesView: View {
             .overlay { if store.noteTopics().isEmpty && store.allTags().isEmpty { ContentUnavailableView("还没有笔记", systemImage: "text.bubble") } }
             .searchable(text: $query, prompt: "搜索任务或 #标签")
             .navigationTitle("笔记")
-            .navigationDestination(for: Destination.self) { destination in
-                switch destination {
-                case .task(let id): TaskPage(store: store, id: id)
-                case .tag(let name): TagPage(store: store, name: name)
-                }
-            }
+            .notesDestinations(store)
             .syncOnRefresh(sync)
         }
     }
@@ -86,12 +82,25 @@ struct NotesView: View {
     }
 }
 
+extension View {
+    /// 笔记里的任务页、标签页：笔记页和日记页（点日志的标签）都能推进来。
+    func notesDestinations(_ store: JournalStore) -> some View {
+        navigationDestination(for: NotesView.Destination.self) { destination in
+            switch destination {
+            case .task(let id): TaskPage(store: store, id: id)
+            case .tag(let name, let reveal): TagPage(store: store, name: name, reveal: reveal)
+            }
+        }
+    }
+}
+
 /// 一个任务的页面：标题、截止、专注、笔记数和标签，操作按钮，下面是它的笔记时间线。
 struct TaskPage: View {
     @ObservedObject var store: JournalStore
     let id: UUID
     @State private var editing = false
     @State private var composing = false
+    @State private var edges = ScrollEdges()
 
     var body: some View {
         let item = store.locate(id)
@@ -99,6 +108,7 @@ struct TaskPage: View {
         let notes = store.notes(for: id)
         ScrollViewReader { proxy in
         ScrollView {
+            Color.clear.frame(height: 0).scrollEdgeMarker(.top)
             VStack(alignment: .leading, spacing: 18) {
                 header(item: item, topic: topic, noteCount: notes.count)
                 if let board = store.board(for: .task(id)), board.hasContent {
@@ -112,20 +122,25 @@ struct TaskPage: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 40)
+            .padding(.bottom, 100)
+            Color.clear.frame(height: 0).scrollEdgeMarker(.bottom)
         }
         .markdownScrolling(proxy)
+        .trackScrollEdges(edges, proxy: proxy)
         }
         .background(Palette.background)
+        .overlay(alignment: .bottomTrailing) {
+            FloatingButtons(edges: edges, compose: item == nil ? nil : { composing = true })
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if item != nil {
-                    Button { composing = true } label: { Image(systemName: "square.and.pencil") }
                     Button { editing = true } label: { Image(systemName: "slider.horizontal.3") }
                 }
             }
         }
+        .logActionsHost(store)
         .sheet(isPresented: $editing) { TaskEditSheet(store: store, id: id) }
         .sheet(isPresented: $composing) { ComposeSheet(store: store, taskID: id) }
     }
@@ -183,6 +198,9 @@ struct TaskPage: View {
 struct TagPage: View {
     @ObservedObject var store: JournalStore
     let name: String
+    var reveal: UUID?
+    @State private var composing = false
+    @State private var edges = ScrollEdges()
 
     var body: some View {
         let tasks = store.tasks(taggedWith: name)
@@ -190,6 +208,7 @@ struct TagPage: View {
         let notes = store.notes(forTag: name)
         ScrollViewReader { proxy in
         ScrollView {
+            Color.clear.frame(height: 0).scrollEdgeMarker(.top)
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("#" + name).font(.title2.weight(.bold)).foregroundStyle(Palette.accent)
@@ -222,16 +241,27 @@ struct TagPage: View {
                     }
                 }
                 if !notes.isEmpty {
-                    LogTimeline(store: store, logs: notes, groupByDay: true, newestFirst: true)
+                    LogTimeline(store: store, logs: notes, groupByDay: true, newestFirst: true, reveal: reveal)
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 40)
+            .padding(.bottom, 100)
+            Color.clear.frame(height: 0).scrollEdgeMarker(.bottom)
         }
         .markdownScrolling(proxy)
+        .trackScrollEdges(edges, proxy: proxy)
+        .task {
+            // 从日记里点标签进来：等那条笔记排进来，再滚过去。
+            guard let reveal else { return }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(reveal.uuidString, anchor: .center) }
+        }
         }
         .background(Palette.background)
+        .overlay(alignment: .bottomTrailing) { FloatingButtons(edges: edges) { composing = true } }
         .navigationBarTitleDisplayMode(.inline)
+        .logActionsHost(store)
+        .sheet(isPresented: $composing) { ComposeSheet(store: store, tags: [name]) }
     }
 }
 

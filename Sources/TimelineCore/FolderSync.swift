@@ -148,6 +148,19 @@ public final class FolderSync: ObservableObject {
         }
     }
 
+    /// 进后台前用：`sync()` 遇上正在进行的一轮会直接返回、等之后补一轮，可应用挂起后那一轮就不会来了。
+    /// 这里等手上那一轮结束，再同步到本机的最新内容确实导出为止（最多等 `timeout` 秒）。
+    public func syncUntilExported(timeout: TimeInterval = 20) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !isSyncing {
+                do { _ = try await sync() } catch { return }
+                if !needsExport, syncedContent == store.syncContent { return }
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+
     private struct Outcome: @unchecked Sendable {
         var state: SyncState
         var content: SyncContent

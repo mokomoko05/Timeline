@@ -370,12 +370,7 @@ struct UnifiedJournalView: View {
     private var detail: some View {
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
-                HStack(alignment: .top) {
-                    header
-                    GoToBottomButton { proxy.scrollTo("journal-bottom", anchor: .bottom) }
-                        .disabled(entry.logs.isEmpty)
-                        .padding(.trailing, 20).padding(.top, 14)
-                }
+                header
                 if !entry.logs.isEmpty {
                     DayRhythmStrip(logs: entry.logsInTimeOrder, date: date) { id in
                         withAnimation(Motion.quick) { proxy.scrollTo(id, anchor: .center) }
@@ -387,6 +382,7 @@ struct UnifiedJournalView: View {
                 ScrollView {
                     // 一天的日志不多时整列排好，滚动条按真实高度算（长日志也不会让它跳）。
                     NotesStack(lazy: entry.logs.count > NotesView.lazyThreshold, spacing: 0) {
+                        Color.clear.frame(height: 1).id("journal-top").notesScrollEdge(.top)
                         if entry.logsInTimeOrder.isEmpty {
                             VStack(spacing: 8) {
                                 Image(systemName: "book.pages").font(.system(size: 30, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
@@ -416,9 +412,15 @@ struct UnifiedJournalView: View {
                                 }
                             }
                         }
-                        Color.clear.frame(height: 1).id("journal-bottom")
+                        Color.clear.frame(height: 1).id("journal-bottom").notesScrollEdge(.bottom)
                     }
                     .padding(20)
+                }
+                // 和笔记页同一套「回到顶部」「跳到最新」：离开顶部 / 底部一段距离才出现在右下角。
+                .notesScrollButtons { edge in
+                    withAnimation(Motion.quick) {
+                        proxy.scrollTo(edge == .top ? "journal-top" : "journal-bottom", anchor: edge == .top ? .top : .bottom)
+                    }
                 }
                 .id(JournalDates.key(date))
                 .contentShape(Rectangle())
@@ -489,7 +491,7 @@ struct UnifiedJournalView: View {
             if log.showsTimelineContext || !hasPrevious, let label = LogTaskLabel.saved(log, store: store, logDate: date) {
                 Text(label).foregroundStyle(Palette.accent).lineLimit(1)
             }
-            if log.showsTimelineTags, !log.tags.isEmpty { TaskTagLine(tags: log.tags) }
+            if log.showsTimelineTags, !log.tags.isEmpty { TaskTagLine(tags: log.tags, log: log.id) }
         } content: {
             if editing {
                 TaskInput(text: $editText, focused: $editFocused, fontSize: 13,

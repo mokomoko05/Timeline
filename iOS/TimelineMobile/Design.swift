@@ -126,8 +126,19 @@ enum DayText {
         date.formatted(.dateTime.weekday(.wide))
     }
 
-    static func time(_ date: Date) -> String {
-        date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
+    /// 时刻一律 24 小时制（13:05），不跟系统的 12 小时制设置走。
+    static func time(_ date: Date) -> String { clock.string(from: date) }
+
+    static func timeWithSeconds(_ date: Date) -> String { clockWithSeconds.string(from: date) }
+
+    private static let clock = fixedFormatter("HH:mm")
+    private static let clockWithSeconds = fixedFormatter("HH:mm:ss")
+
+    private static func fixedFormatter(_ format: String) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = format
+        return formatter
     }
 }
 

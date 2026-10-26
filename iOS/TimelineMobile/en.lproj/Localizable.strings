@@ -185,3 +185,20 @@
 "立即同步" = "Sync Now";
 "无法记住这个文件夹：%@" = "Couldn't remember this folder: %@";
 "找不到之前选的同步文件夹，请重新选择。" = "The sync folder can't be found. Please choose it again.";
+
+/* 跳转按钮、日志长按菜单 */
+"回到顶部" = "Back to top";
+"跳到底部" = "Jump to bottom";
+"已复制文字" = "Text copied";
+"删除这条日志？" = "Delete this entry?";
+"已删除" = "Deleted";
+"复制文字" = "Copy Text";
+"复制文字（不含图片）" = "Copy Text (without images)";
+"加标签…" = "Add Tags…";
+"标签…" = "Tags…";
+"关联待办…" = "Link to Task…";
+"更改关联待办…" = "Change Linked Task…";
+"打开「%@」的笔记" = "Open Notes for “%@”";
+"编辑日志" = "Edit Entry";
+"新标签" = "New tag";
+"搜索待办" = "Search tasks";

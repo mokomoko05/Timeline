@@ -476,7 +476,7 @@ struct LongParagraph: View {
         case plain(String)
         case styled(AttributedString)
     }
-    @State private var shown = 4
+    @State private var shown = 1
 
     init(text: AttributedString, size: CGFloat) {
         // 带格式（加粗、链接）的部分按原样切开，每行保留自己的属性。
@@ -501,18 +501,32 @@ struct LongParagraph: View {
         self.size = size
     }
 
+    /// 每块几行：一行一个视图的话，几百行的段落每补一批都要把已经排好的几百个视图重新量一遍，越往后越卡；
+    /// 几行拼成一个 `Text`，视图数少一个数量级。
+    private static let linesPerChunk = 12
+
     var body: some View {
+        let chunks = (lines.count + Self.linesPerChunk - 1) / Self.linesPerChunk
         VStack(alignment: .leading, spacing: size * 0.25) {
-            ForEach(0..<min(shown, lines.count), id: \.self) { index in
-                text(lines[index]).font(.system(size: size)).foregroundStyle(Palette.ink).lineSpacing(size * 0.25)
+            ForEach(0..<min(shown, chunks), id: \.self) { index in
+                chunk(index).font(.system(size: size)).foregroundStyle(Palette.ink).lineSpacing(size * 0.25)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
         .task {
-            while shown < lines.count {
+            while shown < chunks {
                 try? await Task.sleep(nanoseconds: 16_000_000)
-                shown += 6
+                shown += 1
             }
+        }
+    }
+
+    private func chunk(_ index: Int) -> SwiftUI.Text {
+        let part = lines[(index * Self.linesPerChunk)..<min(lines.count, (index + 1) * Self.linesPerChunk)]
+        let plain = part.compactMap { line -> String? in if case .plain(let value) = line { return value } else { return nil } }
+        if plain.count == part.count { return Text(verbatim: plain.joined(separator: "\n")) }
+        return part.enumerated().reduce(Text(verbatim: "")) { result, item in
+            (item.offset == 0 ? result : result + Text(verbatim: "\n")) + text(item.element)
         }
     }
 

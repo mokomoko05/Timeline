@@ -169,6 +169,24 @@ final class FolderSyncTests: XCTestCase {
         XCTAssertEqual(mac.store.boards.first { $0.id == board.id }!.markdown, "三")
     }
 
+    /// 进后台时正好有一轮同步在跑：`syncUntilExported` 要等它结束，再把之后的修改也导出去。
+    func testSyncUntilExportedWaitsForTheRunningRound() async throws {
+        let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
+        let board = mac.store.ensureBoard(for: .tag("读书"))!
+        mac.store.setBoardMarkdown("一", for: board.id)
+        try await sync(mac, phone)
+        clock += 1
+        let running = Task { try await phone.sync() }
+        while !phone.isSyncing { await Task.yield() }
+        phone.store.setBoardMarkdown("二", for: board.id)
+        // 直接再同步一次只会登记「稍后补一轮」，什么也没导出。
+        _ = try await phone.sync()
+        await phone.syncUntilExported()
+        _ = try? await running.value
+        try await sync(mac)
+        XCTAssertEqual(mac.store.boards.first { $0.id == board.id }!.markdown, "二")
+    }
+
     func testDraftsStayOnTheirDevice() async throws {
         let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
         let day = clock

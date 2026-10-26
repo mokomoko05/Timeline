@@ -59,7 +59,7 @@ private struct SyncStatusRows: View {
         } else if let error = state.lastError {
             Text(error).foregroundStyle(.red)
         } else if let date = state.lastSync {
-            LabeledContent("上次同步", value: date.formatted(.dateTime.hour().minute().second()))
+            LabeledContent("上次同步", value: DayText.timeWithSeconds(date))
         }
         if !state.devices.isEmpty {
             LabeledContent("其他设备", value: state.devices.map(\.name).joined(separator: "、"))
