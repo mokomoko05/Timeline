@@ -85,17 +85,33 @@ final class SyncModel: ObservableObject {
             sync.startAutomaticSync(interval: 15)
         } else {
             sync.stopAutomaticSync()
-            let application = UIApplication.shared
-            var task = UIBackgroundTaskIdentifier.invalid
-            task = application.beginBackgroundTask(withName: "Timeline sync") { application.endBackgroundTask(task) }
+            let background = BackgroundTask()
             Task {
                 _ = try? await sync.sync()
-                application.endBackgroundTask(task)
+                background.end()
             }
         }
     }
 
     func syncNow() async {
         _ = try? await sync?.sync()
+    }
+}
+
+/// 进后台后向系统多要一点时间把同步做完；做完或系统收回时间时结束，只结束一次。
+@MainActor
+private final class BackgroundTask {
+    private var identifier = UIBackgroundTaskIdentifier.invalid
+
+    init() {
+        identifier = UIApplication.shared.beginBackgroundTask(withName: "Timeline sync") { [weak self] in
+            MainActor.assumeIsolated { self?.end() }
+        }
+    }
+
+    func end() {
+        guard identifier != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(identifier)
+        identifier = .invalid
     }
 }

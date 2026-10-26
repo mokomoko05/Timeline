@@ -79,7 +79,12 @@ teams.sort(key=lambda t: not t.get("isFreeProvisioningTeam", False))
 print(teams[0]["teamID"] if teams else "")
 ')"
 fi
-[ -n "$TEAM" ] || fail "找不到签名团队。请打开 Xcode › 设置 › 账户，点左下角 + 用 Apple ID 登录后重试（或设置 TIMELINE_TEAM_ID）。"
+# 偏好里没有时，从钥匙串里的 Apple Development 证书读团队 ID（证书主题的 OU）。
+if [ -z "$TEAM" ]; then
+    TEAM="$(security find-certificate -a -c "Apple Development" -p 2>/dev/null | openssl x509 -noout -subject 2>/dev/null \
+        | sed -n 's/.*OU *= *\([A-Z0-9]\{10\}\).*/\1/p' | head -1 || true)"
+fi
+[ -n "$TEAM" ] || fail "找不到签名团队。请打开 Xcode › 设置 › 账户，用 Apple ID 登录，选中账户后点「Manage Certificates…」› + › Apple Development 创建证书，再重试（或设置 TIMELINE_TEAM_ID）。"
 
 # 免费团队的 Bundle ID 在全苹果范围内必须唯一：带上团队 ID。
 BUNDLE_ID="${TIMELINE_BUNDLE_ID:-local.timeline.mobile.$(echo "$TEAM" | tr '[:upper:]' '[:lower:]')}"
@@ -115,7 +120,7 @@ if [ -z "$DEVICE" ]; then
     [ "$MODE" = "--auto" ] && { echo "手机不在线，稍后再试。"; exit 0; }
     fail "找不到可用的 iPhone。请用数据线连接 iPhone 并在手机上点「信任」；首次还需在 Xcode › Window › Devices and Simulators 里配对，并勾选「Connect via network」以便之后无线安装。"
 fi
-echo "→ 设备：${NAME//_/ }（$UDID），团队：$TEAM，Bundle ID：$BUNDLE_ID"
+echo "→ 设备：${NAME//_/ }（${UDID}），团队：${TEAM}，Bundle ID：${BUNDLE_ID}"
 
 BUILD="$ROOT/.build/ios"
 echo "→ 构建并签名…"
