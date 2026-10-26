@@ -16,8 +16,6 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
     static let limit = 60
 
     @Published private(set) var authorization: UNAuthorizationStatus = .notDetermined
-    /// 点了某条提醒：切到待办页并打开这个任务（object 是任务 id）。
-    static let revealTask = Notification.Name("TimelineRevealTask")
     private let store: JournalStore
     private let center = UNUserNotificationCenter.current()
     private var changes: AnyCancellable?
@@ -133,7 +131,7 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
                     identifier: "timeline-snooze.\(taskID?.uuidString ?? UUID().uuidString)", content: snoozed,
                     trigger: UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)))
             case UNNotificationDefaultActionIdentifier:
-                if let taskID { NotificationCenter.default.post(name: Self.revealTask, object: taskID) }
+                if let taskID { Navigator.shared.open(.task(taskID)) }
             default: break
             }
         }

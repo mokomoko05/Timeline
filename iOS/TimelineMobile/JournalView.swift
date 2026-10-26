@@ -71,6 +71,18 @@ struct JournalView: View {
                 if QuickEntry.shared.take(.log) { selection = JournalDates.key(Date()); composing = true }
             }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openCalendar)) { _ in calendar.isOpen = true }
+            .onReceive(Navigator.shared.$target) { _ in
+                if let key = Navigator.shared.take({ if case .day(let key) = $0 { key } else { nil } }) {
+                    query = ""
+                    selection = key
+                } else if let id = Navigator.shared.take({ if case .log(let id) = $0 { id } else { nil } }),
+                          let key = byDay.first(where: { $0.value.contains { $0.log.id == id } })?.key {
+                    query = ""
+                    selection = key
+                    // 换天后滚动视图是新建的，等它出现再滚过去。
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { jump = id }
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.revealLog)) { note in
                 if let index = note.object as? Int, let logs = byDay[selection], logs.indices.contains(index) { jump = logs[index].log.id }
             }

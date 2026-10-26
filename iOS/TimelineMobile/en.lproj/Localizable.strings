@@ -265,3 +265,13 @@
 "快捷指令与 Siri：「写日志」「添加待办」" = "Shortcuts & Siri: “New Log”, “Add Task”";
 "应用外快速记录" = "Capture From Anywhere";
 "想从其他应用分享到日记：在「快捷指令」里新建一个快捷指令，加入 Timeline 的「写日志」动作，把内容设为「快捷指令输入」，再在详细信息里打开「在共享表单中显示」。文字、链接和图片都能分享进来。" = "To share from other apps: in Shortcuts, create a shortcut with Timeline's “New Log” action, set its text to “Shortcut Input”, and turn on “Show in Share Sheet” in its details. Text, links and images can then be shared into your journal.";
+
+/* 全局搜索 */
+"搜索" = "Search";
+"待办 · %lld" = "Tasks · %lld";
+"工作板 · %lld" = "Boards · %lld";
+"日志与笔记 · %lld" = "Entries & Notes · %lld";
+"每日小结 · %lld" = "Daily Summaries · %lld";
+"搜索全部内容" = "Search Everything";
+"待办、工作板正文、日志与笔记、每日小结。输入 #标签 只看这个标签。" = "Tasks, board text, entries, notes and daily summaries. Type #tag to see just that tag.";
+"搜索待办、工作板、日志" = "Search tasks, boards, entries";

@@ -8,6 +8,9 @@ struct SyncSettingsView: View {
     @EnvironmentObject private var languages: LanguageStore
     @EnvironmentObject private var reminders: ReminderScheduler
     @State private var choosing = false
+    /// 作为弹出的页面显示（iOS 18 起设置不在标签栏里）：右上角有「完成」。
+    var presented = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
@@ -68,6 +71,9 @@ struct SyncSettingsView: View {
                 }
             }
             .navigationTitle("设置")
+            .toolbar {
+                if presented { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+            }
             .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
                 if case .success(let url) = result { sync.choose(url) }
             }

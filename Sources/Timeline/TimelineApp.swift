@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import CoreSpotlight
 import SwiftUI
 import TimelineCore
 
@@ -85,6 +86,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// 主窗口隐藏半小时以上就释放界面，下次显示前重建。
     private var mainContent: HiddenContentReleaser?
     private var cloudSync: CloudSyncController?
+    /// 让日志、待办和工作板出现在系统 Spotlight 里。
+    private var spotlight: SpotlightIndexer?
+
+    /// 点开了 Spotlight 里的结果：跳到那条日志、那个待办或那页工作板。
+    func application(_ application: NSApplication, continue userActivity: NSUserActivity,
+                     restorationHandler: @escaping ([NSUserActivityRestoring]) -> Void) -> Bool {
+        guard userActivity.activityType == CSSearchableItemActionType,
+              let identifier = userActivity.userInfo?[CSSearchableItemActivityIdentifier] as? String,
+              let (kind, id) = SpotlightItem.parse(identifier) else { return false }
+        switch kind {
+        case .task:
+            guard store.locate(id) != nil else { return false }
+            AppRouter.presentMain()
+            NotificationCenter.default.post(name: .timelineReveal, object: id)
+        case .log:
+            guard let found = store.allLogs(includeFocus: true).first(where: { $0.log.id == id }) else { return false }
+            if let taskID = found.log.taskID, store.locate(taskID) != nil {
+                NotesWindowController.shared.nav.revealNote = id
+                AppRouter.openNotes(taskID)
+            } else {
+                AppRouter.openLog(JournalDates.date(for: found.key) ?? found.log.createdAt, id)
+            }
+        case .board:
+            guard let board = store.boards.first(where: { $0.id == id }) else { return false }
+            BoardWindowController.shared.show(store: store, owner: board.owner)
+        }
+        return true
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
@@ -161,6 +190,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if CommandLine.arguments.contains("--enable-login") { loginItem.setEnabled(true) }
         if !snapshotRun {
             ImageIndexer.run(store: store)
+            spotlight = SpotlightIndexer(store: store)
+            spotlight?.start()
             // 启动稍后清理不再被任何数据或备份引用的图片，不拖慢启动。
             Task { @MainActor [weak store] in
                 try? await Task.sleep(for: .seconds(8))

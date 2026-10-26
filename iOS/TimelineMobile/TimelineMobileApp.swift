@@ -1,3 +1,4 @@
+import CoreSpotlight
 import SwiftUI
 import TimelineCore
 
@@ -61,6 +62,7 @@ final class AppServices {
     let sync: SyncModel
     let focus: FocusTimer
     let reminders: ReminderScheduler
+    let spotlight: SpotlightIndexer
 
     private init() {
         let store = JournalStore()
@@ -69,6 +71,8 @@ final class AppServices {
         sync = SyncModel(store: store)
         focus = FocusTimer(store: store)
         reminders = ReminderScheduler(store: store)
+        spotlight = SpotlightIndexer(store: store)
+        spotlight.start()
     }
 }
 
@@ -77,29 +81,22 @@ struct RootView: View {
     @ObservedObject var sync: SyncModel
     @EnvironmentObject private var focus: FocusTimer
     @SceneStorage("rootTab") private var tab = Tab.tasks
+    @State private var showingSettings = false
 
-    enum Tab: String { case tasks, journal, notes, boards, settings }
+    enum Tab: String { case tasks, journal, notes, boards, settings, search }
 
     var body: some View {
-        TabView(selection: $tab) {
-            TasksView(store: store, sync: sync)
-                .tabItem { Label("待办", systemImage: "checklist") }
-                .tag(Tab.tasks)
-            JournalView(store: store, sync: sync)
-                .tabItem { Label("日记", systemImage: "book") }
-                .tag(Tab.journal)
-            NotesView(store: store, sync: sync)
-                .tabItem { Label("笔记", systemImage: "text.bubble") }
-                .tag(Tab.notes)
-            BoardsView(store: store)
-                .tabItem { Label("工作板", systemImage: "doc.text") }
-                .tag(Tab.boards)
-            SyncSettingsView(store: store, sync: sync)
-                .tabItem { Label("设置", systemImage: sync.isConfigured ? "gearshape" : "exclamationmark.icloud") }
-                .tag(Tab.settings)
-        }
+        tabs
         .tint(Palette.accent)
-        .onReceive(NotificationCenter.default.publisher(for: ReminderScheduler.revealTask)) { _ in tab = .tasks }
+        .onContinueUserActivity(CSSearchableItemActionType) { Navigator.shared.open($0) }
+        .onReceive(Navigator.shared.$target) { target in
+            switch target {
+            case .task: tab = .tasks
+            case .log, .day: tab = .journal
+            case .board: tab = .boards
+            case nil: break
+            }
+        }
         .onReceive(QuickEntry.shared.$request) { kind in
             switch kind {
             case .log: tab = .journal
@@ -114,6 +111,7 @@ struct RootView: View {
             // 截图检查用：启动参数 `-startTab journal` 直接打开某个标签页。
             if let start = UserDefaults.standard.string(forKey: "startTab").flatMap(Tab.init(rawValue:)) { tab = start }
             else if !sync.isConfigured { tab = .settings }
+            if #available(iOS 18.0, *), tab == .settings { tab = .tasks; showingSettings = true }
             PerfProbe.start()
             prewarmJournal()
             PerfProbe.runScript { tab = $0 }
@@ -124,12 +122,66 @@ struct RootView: View {
 }
 
 extension RootView {
+    /// iOS 18 起搜索是标签栏里单独的一个（iOS 26 上是右边单独的圆钮）；更早的系统没有全局搜索标签。
+    @ViewBuilder var tabs: some View {
+        if #available(iOS 18.0, *) {
+            TabView(selection: $tab) {
+                SwiftUI.Tab("待办", systemImage: "checklist", value: Tab.tasks) { TasksView(store: store, sync: sync) }
+                SwiftUI.Tab("日记", systemImage: "book", value: Tab.journal) { JournalView(store: store, sync: sync) }
+                SwiftUI.Tab("笔记", systemImage: "text.bubble", value: Tab.notes) { NotesView(store: store, sync: sync) }
+                SwiftUI.Tab("工作板", systemImage: "doc.text", value: Tab.boards) { BoardsView(store: store) }
+                SwiftUI.Tab(value: Tab.search, role: .search) { GlobalSearchView(store: store) }
+            }
+            // 标签栏最多 5 格：设置收进待办页左上角的齿轮，腾出位置给搜索。
+            .environment(\.openSettings, OpenSettingsAction { showingSettings = true })
+            .sheet(isPresented: $showingSettings) { SyncSettingsView(store: store, sync: sync, presented: true) }
+            .onChange(of: tab) { _, value in
+                if value == .settings { tab = .tasks; showingSettings = true }
+            }
+        } else {
+            TabView(selection: $tab) {
+                TasksView(store: store, sync: sync)
+                    .tabItem { Label("待办", systemImage: "checklist") }
+                    .tag(Tab.tasks)
+                JournalView(store: store, sync: sync)
+                    .tabItem { Label("日记", systemImage: "book") }
+                    .tag(Tab.journal)
+                NotesView(store: store, sync: sync)
+                    .tabItem { Label("笔记", systemImage: "text.bubble") }
+                    .tag(Tab.notes)
+                BoardsView(store: store)
+                    .tabItem { Label("工作板", systemImage: "doc.text") }
+                    .tag(Tab.boards)
+                SyncSettingsView(store: store, sync: sync)
+                    .tabItem { Label("设置", systemImage: sync.isConfigured ? "gearshape" : "exclamationmark.icloud") }
+                    .tag(Tab.settings)
+            }
+        }
+    }
+
     /// 日记页第一次打开时要显示今天：今天和昨天的正文先在后台解析好。
     func prewarmJournal() {
         let calendar = JournalDates.calendar
         let keys = [Date(), calendar.date(byAdding: .day, value: -1, to: Date()) ?? Date()].map(JournalDates.key)
         let sources = store.allLogs(includeFocus: true).suffix(200).filter { keys.contains($0.key) }.map { LogStyle.body($0.log) }
         MarkdownBlock.prewarm(sources.filter { !$0.isEmpty })
+    }
+}
+
+/// 打开设置：iOS 18 起设置不在标签栏里，待办页左上角的齿轮用它弹出设置。没有时（iOS 17）不显示齿轮。
+struct OpenSettingsAction {
+    let open: () -> Void
+    func callAsFunction() { open() }
+}
+
+private struct OpenSettingsKey: EnvironmentKey {
+    static let defaultValue: OpenSettingsAction? = nil
+}
+
+extension EnvironmentValues {
+    var openSettings: OpenSettingsAction? {
+        get { self[OpenSettingsKey.self] }
+        set { self[OpenSettingsKey.self] = newValue }
     }
 }
 

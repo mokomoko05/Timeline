@@ -13,6 +13,7 @@ struct TasksView: View {
     @State private var path: [UUID] = []
     @State private var frames = RowFrames()
     @GestureState private var drag: TaskDrag?
+    @Environment(\.openSettings) private var openSettings
 
     private static let space = "taskTimeline"
 
@@ -33,6 +34,14 @@ struct TasksView: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: UUID.self) { TaskPage(store: store, id: $0) }
             .toolbar {
+                if let openSettings {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { openSettings() } label: {
+                            Image(systemName: sync.isConfigured ? "gearshape" : "exclamationmark.icloud")
+                        }
+                        .accessibilityLabel("设置")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { adding = true } label: { Image(systemName: "plus") }
                 }
@@ -44,8 +53,8 @@ struct TasksView: View {
             .onReceive(QuickEntry.shared.$request) { _ in
                 if QuickEntry.shared.take(.task) { path = []; adding = true }
             }
-            .onReceive(NotificationCenter.default.publisher(for: ReminderScheduler.revealTask)) { note in
-                if let id = note.object as? UUID, store.locate(id) != nil { path = [id] }
+            .onReceive(Navigator.shared.$target) { _ in
+                if let id = Navigator.shared.take({ if case .task(let id) = $0 { id } else { nil } }), store.locate(id) != nil { path = [id] }
             }
             .syncOnRefresh(sync)
             .safeAreaInset(edge: .bottom) { FocusBar() }

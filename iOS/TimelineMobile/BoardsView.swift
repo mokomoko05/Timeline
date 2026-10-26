@@ -42,6 +42,10 @@ struct BoardsView: View {
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { note in
                 if note.object as? String == "board", let first = boards.first { path = [first.id] }
             }
+            .onReceive(Navigator.shared.$target) { _ in
+                if let id = Navigator.shared.take({ if case .board(let id) = $0 { id } else { nil } }),
+                   store.boards.contains(where: { $0.id == id }) { path = [id] }
+            }
         }
     }
 }
