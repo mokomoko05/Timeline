@@ -4,8 +4,10 @@ import UIKit
 
 /// 日志时间线：每条记录一个节点，左边是时刻。专注从开始到结束的一轮用强调色连起来，开头是一张可以收起整轮的摘要卡。
 /// `groupByDay` 时每天先有一个日期节点（笔记页用）；日记页只显示一天，不分组。
+///
+/// 不订阅数据：日志由外面传进来，没变就不重算；每一行也只在自己的内容变了时重算。
 struct LogTimeline: View {
-    @ObservedObject var store: JournalStore
+    let store: JournalStore
     let logs: [JournalStore.LoggedLog]
     var groupByDay = false
     var showsTask = true
@@ -13,7 +15,6 @@ struct LogTimeline: View {
     /// 打开时要滚到并闪一下的那条（从日记里点标签过来）：先把它前面的行都排上。
     var reveal: UUID?
     @State private var collapsedRounds: Set<UUID> = []
-    @State private var shown = 6
     @State private var flash: UUID?
 
     private enum Row: Identifiable {
@@ -89,10 +90,10 @@ struct LogTimeline: View {
 
     var body: some View {
         let rows = rows
-        // 不用 LazyVStack：行高差别很大（长日志），按估算高度滚动时右边的滚动条会跳。
-        // 但也不一次排完：先排前几行让页面马上出来，其余每帧补几行（一天几十条长日志一次排版要好几百毫秒）。
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(rows.prefix(shown).enumerated()), id: \.element.id) { index, row in
+        // 用 LazyVStack：只排屏幕上看得到的几行。整列一起排的话，每次切回这一页、开关面板都要把几十条长日志重新量一遍，
+        // 要好几百毫秒；代价是长日志多时右边的滚动条按估算高度走，会有点跳。
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                 switch row {
                 case .day(_, let date, let count):
                     RailRow(label: "", hasPrevious: index > 0, hasNext: index < rows.count - 1, nodeY: 14) {
@@ -110,8 +111,9 @@ struct LogTimeline: View {
                     }
                     .padding(.top, index > 0 ? 10 : 0)
                 case .log(let logged, let inFocus):
-                    LogEntryRow(store: store, logged: logged, showsTask: showsTask,
+                    LogEntryRow(store: store, logged: logged, showsTask: showsTask, task: showsTask ? logged.log.taskID.flatMap(store.locate) : nil,
                                 hasPrevious: index > 0, hasNext: index < rows.count - 1, focus: inFocus, highlighted: flash == logged.id)
+                        .equatable()
                 case .round(let round):
                     RailRow(hasPrevious: index > 0, hasNext: index < rows.count - 1, nodeY: 22) {
                         EmptyView()
@@ -125,8 +127,7 @@ struct LogTimeline: View {
             }
         }
         .onAppear {
-            guard let reveal, let index = rows.firstIndex(where: { $0.id == reveal.uuidString }) else { return }
-            shown = max(shown, index + 4)
+            guard let reveal, rows.contains(where: { $0.id == reveal.uuidString }) else { return }
             flash = reveal
         }
         .task(id: flash) {
@@ -134,20 +135,16 @@ struct LogTimeline: View {
             try? await Task.sleep(nanoseconds: 1_600_000_000)
             withAnimation(.easeOut(duration: 0.5)) { flash = nil }
         }
-        .task(id: rows.count) {
-            while shown < rows.count {
-                try? await Task.sleep(nanoseconds: 16_000_000)
-                shown += 3
-            }
-        }
     }
 }
 
 /// 一条日志：时刻、类型、关联的待办、标签，Markdown 正文和图片。
-struct LogEntryRow: View {
-    @ObservedObject var store: JournalStore
+struct LogEntryRow: View, Equatable {
+    let store: JournalStore
     let logged: JournalStore.LoggedLog
     var showsTask = true
+    /// 关联的待办（`showsTask` 时由外面查好传进来）。
+    var task: ScheduledTask?
     var hasPrevious = true
     var hasNext = true
     var focus: (before: Bool, after: Bool) = (false, false)
@@ -155,6 +152,11 @@ struct LogEntryRow: View {
     @Environment(\.logActions) private var actions
 
     private var log: DailyLogEntry { logged.log }
+
+    static func == (a: LogEntryRow, b: LogEntryRow) -> Bool {
+        a.logged.log == b.logged.log && a.logged.key == b.logged.key && a.showsTask == b.showsTask && a.task == b.task
+            && a.hasPrevious == b.hasPrevious && a.hasNext == b.hasNext && a.focus == b.focus && a.highlighted == b.highlighted
+    }
 
     var body: some View {
         RailRow(label: DayText.time(log.createdAt), hasPrevious: hasPrevious, hasNext: hasNext,
@@ -192,15 +194,13 @@ struct LogEntryRow: View {
         }
         .overlay(alignment: .topLeading) {
             // 专注中的那一段竖线用强调色。
-            GeometryReader { geometry in
-                Path { path in
-                    let x = RailRow<EmptyView, EmptyView>.labelWidth + 6 + 10
-                    if focus.before, hasPrevious { path.move(to: CGPoint(x: x, y: 0)); path.addLine(to: CGPoint(x: x, y: 10)) }
-                    if focus.after, hasNext { path.move(to: CGPoint(x: x, y: 10)); path.addLine(to: CGPoint(x: x, y: geometry.size.height)) }
-                }
-                .stroke(Palette.accent.opacity(0.8), lineWidth: 2)
+            let top: CGFloat = focus.before && hasPrevious ? 0 : 10
+            let bottom: CGFloat? = focus.after && hasNext ? nil : 10
+            if top < 10 || bottom == nil {
+                RailSegment(x: RailRow<EmptyView, EmptyView>.labelWidth + 6 + 10, top: top, bottom: bottom, width: 2)
+                    .fill(Palette.accent.opacity(0.8))
+                    .allowsHitTesting(false)
             }
-            .allowsHitTesting(false)
         }
     }
 
@@ -223,7 +223,6 @@ struct LogEntryRow: View {
 
     @ViewBuilder private var header: some View {
         let label = LogStyle.label(log)
-        let task = showsTask ? log.taskID.flatMap(store.locate) : nil
         let taskTitle = task.map { String(TaskText.rendered($0.task.title).characters) } ?? (showsTask ? log.taskTitle : nil)
         if label != nil || taskTitle != nil || !log.tags.isEmpty {
             HStack(spacing: 6) {
@@ -306,7 +305,7 @@ private struct FocusRoundCard: View {
 
 /// 一排图片缩略图，点开全屏，可以左右翻、双指缩放。
 struct ImageStrip: View {
-    @ObservedObject var store: JournalStore
+    let store: JournalStore
     let names: [String]
     /// 图片里识别出的文字（来自 Mac 端），有的话可以直接复制。
     var texts: [String: String] = [:]

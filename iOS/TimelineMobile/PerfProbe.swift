@@ -75,9 +75,58 @@ enum PerfProbe {
     private static var latencies: [Double] = []
 
     fileprivate static func frameDrawn(at time: CFTimeInterval) {
+        if let (name, start) = pendingAction {
+            pendingAction = nil
+            print("[perf] 「\(name)」到下一帧 \(Int((time - start) * 1000)) ms")
+        }
         guard let start = keyDown else { return }
         latencies.append((time - start) * 1000)
         keyDown = nil
+    }
+
+    /// 按钮测试（`-perfActions YES`）：依次模拟点常用的按钮（和按钮做的事一样），报每一下从按下到画出下一帧的时间。
+    static let action = Notification.Name("PerfProbeAction")
+    private static var pendingAction: (String, CFTimeInterval)?
+
+    static func runActions(switchTab: @escaping (RootView.Tab) -> Void) {
+        guard enabled, UserDefaults.standard.bool(forKey: "perfActions") else { return }
+        let store = AppServices.shared.store
+        let send = { (name: String) in NotificationCenter.default.post(name: action, object: name) }
+        let firstOpen = { TaskSortMode.deadline.sorted(store.tasks()).first { !$0.task.completed } }
+        var toggled: ScheduledTask?
+        let steps: [(String, () -> Void)] = [
+            ("完成一个待办", { toggled = firstOpen(); if let item = toggled { store.toggleTodo(item.id, on: item.date) } }),
+            ("取消完成", { if let item = toggled { store.toggleTodo(item.id, on: item.date) } }),
+            ("打开待办笔记页", { send("openTask") }),
+            ("任务设置", { send("editTask") }),
+            ("关掉任务设置", { send("closeSheet") }),
+            ("返回待办", { send("popTask") }),
+            ("新建待办", { send("addTask") }),
+            ("关掉新建待办", { send("closeSheet") }),
+            ("切到日记", { switchTab(.journal) }),
+            ("记一笔", { send("compose") }),
+            ("关掉记一笔", { send("closeSheet") }),
+            ("切到笔记", { switchTab(.notes) }),
+            ("切到工作板", { switchTab(.boards) }),
+            ("打开工作板", { send("openBoard") }),
+            ("编辑工作板", { send("editBoard") }),
+            ("完成编辑", { send("editBoard") }),
+            ("切到待办", { switchTab(.tasks) }),
+        ]
+        // 走两遍：第一遍含第一次建界面的开销，第二遍是平时的样子。`-perfSteps 切到日记,切到待办 -perfRounds 6` 只走其中几步。
+        let only = UserDefaults.standard.string(forKey: "perfSteps")?.components(separatedBy: ",")
+        let selected = only.map { names in steps.filter { names.contains($0.0) } } ?? steps
+        let rounds = max(1, UserDefaults.standard.integer(forKey: "perfRounds"))
+        for round in 0..<(UserDefaults.standard.object(forKey: "perfRounds") == nil ? 2 : rounds) {
+            for (index, (name, step)) in selected.enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4 + Double(round * selected.count + index) * 1.5) {
+                    let label = "\(round + 1)·" + name
+                    mark(label)
+                    pendingAction = (label, CACurrentMediaTime())
+                    step()
+                }
+            }
+        }
     }
 
     static func runTyping(switchTab: @escaping (RootView.Tab) -> Void) {

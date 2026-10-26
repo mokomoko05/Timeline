@@ -1,3 +1,4 @@
+import Combine
 import CoreSpotlight
 import SwiftUI
 import TimelineCore
@@ -77,11 +78,12 @@ final class AppServices {
 }
 
 struct RootView: View {
-    @ObservedObject var store: JournalStore
+    let store: JournalStore
     @ObservedObject var sync: SyncModel
     @EnvironmentObject private var focus: FocusTimer
     @SceneStorage("rootTab") private var tab = Tab.tasks
     @State private var showingSettings = false
+    @State private var feeds = TabFeeds(store: AppServices.shared.store)
 
     enum Tab: String { case tasks, journal, notes, boards, settings, search }
 
@@ -104,6 +106,7 @@ struct RootView: View {
             case nil: break
             }
         }
+        .onChange(of: tab, initial: true) { _, value in feeds.show(value) }
         .onAppear {
             QuickEntry.installHomeScreenActions()
             // 截图检查用：`-quickEntry log|task` 和点小组件一样直接进到输入框。
@@ -116,6 +119,7 @@ struct RootView: View {
             prewarmJournal()
             PerfProbe.runScript { tab = $0 }
             PerfProbe.runTyping { tab = $0 }
+            PerfProbe.runActions { tab = $0 }
             PerfProbe.demoFocus(focus)
         }
     }
@@ -126,10 +130,10 @@ extension RootView {
     @ViewBuilder var tabs: some View {
         if #available(iOS 18.0, *) {
             TabView(selection: $tab) {
-                SwiftUI.Tab("待办", systemImage: "checklist", value: Tab.tasks) { TasksView(store: store, sync: sync) }
-                SwiftUI.Tab("日记", systemImage: "book", value: Tab.journal) { JournalView(store: store, sync: sync) }
-                SwiftUI.Tab("笔记", systemImage: "text.bubble", value: Tab.notes) { NotesView(store: store, sync: sync) }
-                SwiftUI.Tab("工作板", systemImage: "doc.text", value: Tab.boards) { BoardsView(store: store) }
+                SwiftUI.Tab("待办", systemImage: "checklist", value: Tab.tasks) { TasksView(store: store, feed: feeds[.tasks], sync: sync) }
+                SwiftUI.Tab("日记", systemImage: "book", value: Tab.journal) { JournalView(store: store, feed: feeds[.journal], sync: sync) }
+                SwiftUI.Tab("笔记", systemImage: "text.bubble", value: Tab.notes) { NotesView(store: store, feed: feeds[.notes], sync: sync) }
+                SwiftUI.Tab("工作板", systemImage: "doc.text", value: Tab.boards) { BoardsView(store: store, feed: feeds[.boards]) }
                 SwiftUI.Tab(value: Tab.search, role: .search) { GlobalSearchView(store: store) }
             }
             // 标签栏最多 5 格：设置收进待办页左上角的齿轮，腾出位置给搜索。
@@ -140,16 +144,16 @@ extension RootView {
             }
         } else {
             TabView(selection: $tab) {
-                TasksView(store: store, sync: sync)
+                TasksView(store: store, feed: feeds[.tasks], sync: sync)
                     .tabItem { Label("待办", systemImage: "checklist") }
                     .tag(Tab.tasks)
-                JournalView(store: store, sync: sync)
+                JournalView(store: store, feed: feeds[.journal], sync: sync)
                     .tabItem { Label("日记", systemImage: "book") }
                     .tag(Tab.journal)
-                NotesView(store: store, sync: sync)
+                NotesView(store: store, feed: feeds[.notes], sync: sync)
                     .tabItem { Label("笔记", systemImage: "text.bubble") }
                     .tag(Tab.notes)
-                BoardsView(store: store)
+                BoardsView(store: store, feed: feeds[.boards])
                     .tabItem { Label("工作板", systemImage: "doc.text") }
                     .tag(Tab.boards)
                 SyncSettingsView(store: store, sync: sync)
@@ -165,6 +169,45 @@ extension RootView {
         let keys = [Date(), calendar.date(byAdding: .day, value: -1, to: Date()) ?? Date()].map(JournalDates.key)
         let sources = store.allLogs(includeFocus: true).suffix(200).filter { keys.contains($0.key) }.map { LogStyle.body($0.log) }
         MarkdownBlock.prewarm(sources.filter { !$0.isEmpty })
+    }
+}
+
+/// 标签页什么时候跟着数据刷新：只有正在显示的那页随改随刷；藏在后面的只记下「变过」，切回来时刷新一次。
+/// 标签页切过一次就一直挂着，以前勾一个待办，四页连同每一行都要重算一遍。
+@MainActor final class TabFeed: ObservableObject {
+    fileprivate var visible = false
+    private var stale = false
+
+    fileprivate func storeWillChange() {
+        if visible { objectWillChange.send() } else { stale = true }
+    }
+
+    fileprivate func setVisible(_ value: Bool) {
+        visible = value
+        if value, stale { stale = false; objectWillChange.send() }
+    }
+}
+
+@MainActor final class TabFeeds {
+    private var feeds: [RootView.Tab: TabFeed] = [:]
+    private var subscription: AnyCancellable?
+
+    init(store: JournalStore) {
+        subscription = store.objectWillChange.sink { [weak self] _ in
+            self?.feeds.values.forEach { $0.storeWillChange() }
+        }
+    }
+
+    subscript(tab: RootView.Tab) -> TabFeed {
+        if let feed = feeds[tab] { return feed }
+        let feed = TabFeed()
+        feeds[tab] = feed
+        return feed
+    }
+
+    func show(_ tab: RootView.Tab) {
+        feeds.forEach { $0.value.setVisible($0.key == tab) }
+        self[tab].setVisible(true)
     }
 }
 

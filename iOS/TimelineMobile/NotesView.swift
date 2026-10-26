@@ -3,7 +3,8 @@ import TimelineCore
 
 /// 笔记：标签（笔记本）和有笔记的任务，和 Mac 笔记窗口的左栏一致。
 struct NotesView: View {
-    @ObservedObject var store: JournalStore
+    let store: JournalStore
+    @ObservedObject var feed: TabFeed
     let sync: SyncModel
     @State private var query = ""
 
@@ -154,6 +155,10 @@ struct TaskPage: View {
         .logActionsHost(store)
         .sheet(isPresented: $editing) { TaskEditSheet(store: store, id: id) }
         .sheet(isPresented: $composing) { ComposeSheet(store: store, taskID: id) }
+        .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+            if note.object as? String == "editTask" { editing = true }
+            if note.object as? String == "closeSheet" { editing = false }
+        }
     }
 
     @ViewBuilder private func header(item: ScheduledTask?, topic: JournalStore.NoteTopic?, noteCount: Int) -> some View {

@@ -4,7 +4,8 @@ import TimelineCore
 
 /// 工作板列表：每个任务或标签一页 Markdown，最近改过的在前。
 struct BoardsView: View {
-    @ObservedObject var store: JournalStore
+    let store: JournalStore
+    @ObservedObject var feed: TabFeed
     @State private var path: [UUID] = []
 
     private var boards: [Board] {
@@ -41,6 +42,9 @@ struct BoardsView: View {
             .navigationDestination(for: UUID.self) { BoardPage(store: store, id: $0) }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { note in
                 if note.object as? String == "board", let first = boards.first { path = [first.id] }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+                if note.object as? String == "openBoard", let first = boards.first { path = [first.id] }
             }
             .onReceive(Navigator.shared.$target) { _ in
                 if let id = Navigator.shared.take({ if case .board(let id) = $0 { id } else { nil } }),
@@ -127,6 +131,9 @@ struct BoardPage: View {
         .sheet(isPresented: $showingHistory) { BoardHistoryView(store: store, boardID: id) }
         .onChange(of: scenePhase) { _, phase in if phase != .active { flush() } }
         .onAppear { if PerfProbe.typing == "board" { editing = true } }
+        .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+            if note.object as? String == "editBoard" { if editing { flush() }; editing.toggle() }
+        }
         .onDisappear { flush() }
     }
 

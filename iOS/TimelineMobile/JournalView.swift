@@ -6,7 +6,8 @@ import UIKit
 /// 日记：只显示选中的那一天；左上角日历跳到任意一天，在内容上左右划动换到前后一天。
 /// 只渲染当前这一天（不用分页视图一次挂上所有页面），前后两天的 Markdown 在后台预先解析，换天时不卡。
 struct JournalView: View {
-    @ObservedObject var store: JournalStore
+    let store: JournalStore
+    @ObservedObject var feed: TabFeed
     let sync: SyncModel
     @State private var selection = JournalDates.key(Date())
     @State private var composing = false
@@ -17,10 +18,10 @@ struct JournalView: View {
     @State private var edges = ScrollEdges()
     /// 左上角日历开没开（不订阅：开关日历不重算整页）。
     @State private var calendar = CalendarToggle()
+    @State private var index = DayIndex()
 
     var body: some View {
-        let byDay = Dictionary(grouping: store.allLogs(includeFocus: true), by: \.key)
-        let keys = Set(byDay.keys).union([JournalDates.key(Date())]).sorted()
+        let (byDay, keys) = index.update(store.allLogs(includeFocus: true), tasks: store.tasks())
         NavigationStack {
             VStack(spacing: 0) {
                 if query.isEmpty {
@@ -67,6 +68,10 @@ struct JournalView: View {
             .onAppear { prewarm(around: selection, keys: keys, byDay: byDay) }
             .onChange(of: selection) { _, key in prewarm(around: key, keys: keys, byDay: byDay) }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { if $0.object as? String == "compose" { composing = true } }
+            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+                if note.object as? String == "compose" { composing = true }
+                if note.object as? String == "closeSheet" { composing = false }
+            }
             .onReceive(QuickEntry.shared.$request) { _ in
                 if QuickEntry.shared.take(.log) { selection = JournalDates.key(Date()); composing = true }
             }
@@ -98,11 +103,11 @@ struct JournalView: View {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: 0).scrollEdgeMarker(.top)
                     VStack(alignment: .leading, spacing: 16) {
-                        DayHeader(store: store, key: selection, logs: logs.map(\.log),
+                        DayHeader(key: selection, logs: logs.map(\.log), focusSeconds: store.focusSeconds(on: JournalDates.date(for: selection) ?? Date()),
                                   previous: neighbor(of: selection, in: keys, by: -1), next: neighbor(of: selection, in: keys, by: 1)) {
                             go(to: $0, keys: keys)
                         }
-                        DayContent(store: store, key: selection, logs: logs)
+                        DayContent(store: store, key: selection, summary: store.entry(for: JournalDates.date(for: selection) ?? Date()).summary, logs: logs)
                     }
                     .padding(.horizontal, 16)
                     .padding(.bottom, 100)
@@ -166,11 +171,37 @@ struct JournalView: View {
     }
 }
 
+/// 按天分好的日志。全部日志没变（数据层缓存的还是同一份）时直接用上次的结果：
+/// 开关「记一笔」、换天这类只动页面状态的操作不用把几千条日志重新分组，下面的行也因为输入没变而不重算。
+/// 待办变了（改名）也重新分一次：行里显示着关联待办的标题。
+private final class DayIndex {
+    /// 留着上次那两份（也让它们的存储不被释放、地址不会被新数组复用），比较是不是同一份。
+    private var source: [JournalStore.LoggedLog]?
+    private var tasks: [ScheduledTask]?
+    private var today = ""
+    private var result: ([String: [JournalStore.LoggedLog]], [String]) = ([:], [])
+
+    func update(_ logs: [JournalStore.LoggedLog], tasks current: [ScheduledTask]) -> ([String: [JournalStore.LoggedLog]], [String]) {
+        let now = JournalDates.key(Date())
+        if let source, let tasks, now == today, same(source, logs), same(tasks, current) { return result }
+        tasks = current
+        let byDay = Dictionary(grouping: logs, by: \.key)
+        result = (byDay, Set(byDay.keys).union([now]).sorted())
+        source = logs
+        today = now
+        return result
+    }
+
+    private func same<T>(_ a: [T], _ b: [T]) -> Bool {
+        a.count == b.count && a.withUnsafeBufferPointer { old in b.withUnsafeBufferPointer { $0.baseAddress == old.baseAddress } }
+    }
+}
+
 /// 一天的标题：日期、星期、条数、专注时长，左右箭头翻到前后有记录的日子；下面是节奏条。
 private struct DayHeader: View {
-    @ObservedObject var store: JournalStore
     let key: String
     let logs: [DailyLogEntry]
+    let focusSeconds: TimeInterval
     let previous: String?
     let next: String?
     let go: (String) -> Void
@@ -190,8 +221,7 @@ private struct DayHeader: View {
                 if let relative = DayText.relative(date) { Chip(text: relative) }
                 Text(DayText.weekday(date))
                 Text("\(logs.count) 条日志")
-                let focus = store.focusSeconds(on: date)
-                if focus >= 60 { Label(Duration.brief(focus), systemImage: "timer") }
+                if focusSeconds >= 60 { Label(Duration.brief(focusSeconds), systemImage: "timer") }
             }
             .font(.subheadline)
             .foregroundStyle(Palette.muted)
@@ -297,14 +327,14 @@ struct RhythmStrip: View {
 
 /// 一天的内容：小结 + 日志时间线。
 private struct DayContent: View {
-    @ObservedObject var store: JournalStore
+    let store: JournalStore
     let key: String
+    let summary: String
     let logs: [JournalStore.LoggedLog]
 
     var body: some View {
-        let date = JournalDates.date(for: key) ?? Date()
         VStack(alignment: .leading, spacing: 14) {
-            if let summary = store.entry(for: date).summary.nilIfEmpty {
+            if let summary = summary.nilIfEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Label("小结", systemImage: "text.quote").font(.caption.weight(.semibold)).foregroundStyle(Palette.muted)
                     MarkdownView(source: summary, foldScope: "summary." + key, size: 15)

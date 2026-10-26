@@ -166,21 +166,36 @@ struct RailRow<Node: View, Content: View>: View {
                 .minimumScaleFactor(0.7)
                 .frame(width: Self.labelWidth, alignment: .trailing)
                 .padding(.top, nodeY - 8)
-            ZStack(alignment: .top) {
-                GeometryReader { geometry in
-                    Path { path in
-                        path.move(to: CGPoint(x: 10, y: hasPrevious ? 0 : nodeY))
-                        path.addLine(to: CGPoint(x: 10, y: hasNext ? geometry.size.height : nodeY))
-                    }
-                    .stroke(lineColor, lineWidth: 1.5)
-                }
-                node().frame(width: 20, height: 20).offset(y: nodeY - 10)
-            }
-            .frame(width: Self.railWidth)
-            .padding(.horizontal, 6)
+            node().frame(width: 20, height: 20).offset(y: nodeY - 10)
+                .frame(width: Self.railWidth, alignment: .top)
+                .padding(.horizontal, 6)
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // 竖线画在整行的背景里，跟着行高走，不用每行一个 GeometryReader。
+        .background(alignment: .topLeading) {
+            Self.segment(from: hasPrevious ? 0 : nodeY, to: hasNext ? nil : nodeY)
+                .fill(lineColor)
+        }
+    }
+
+    /// 竖线上从 `top` 到 `bottom`（nil 是到行底）的一段，x 在节点中心。
+    static func segment(from top: CGFloat, to bottom: CGFloat?) -> some Shape {
+        RailSegment(x: labelWidth + 6 + 10, top: top, bottom: bottom)
+    }
+}
+
+/// 竖线的一段：1.5 宽的矩形，按所在的整行高度裁出。
+struct RailSegment: Shape {
+    var x: CGFloat
+    var top: CGFloat
+    var bottom: CGFloat?
+    var width: CGFloat = 1.5
+
+    func path(in rect: CGRect) -> Path {
+        let end = min(bottom ?? rect.height, rect.height)
+        guard end > top else { return Path() }
+        return Path(CGRect(x: x - width / 2, y: top, width: width, height: end - top))
     }
 }
 

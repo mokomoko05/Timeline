@@ -502,76 +502,49 @@ private struct CodeBlockView: View {
 
 
 
-/// 很长、又按行断开的段落（整篇贴进来的文章）：拆成一行一个 `Text`，先排前几行，其余每帧补几行。
-/// 一整段一万多字交给一个 `Text` 排版要一秒多，主线程卡住；拆开后同样的字分摊到十几帧里，界面先出来、滚动不卡。
+/// 很长、又按行断开的段落（整篇贴进来的文章）：每几十行切成一块，先排第一块，其余每帧补一块。
+/// 每块交给 `RichText`（TextKit 排版、按宽度记住结果）：用 SwiftUI 的 `Text` 时，每次切回页面、开关面板都要把一万多字重新量一遍。
 struct LongParagraph: View {
     static let threshold = 600
     let size: CGFloat
-    /// 没有格式的行存成普通字符串：`Text(String)` 排版比 `Text(AttributedString)` 快得多。
-    private let lines: [Line]
-
-    private enum Line {
-        case plain(String)
-        case styled(AttributedString)
-    }
+    private let chunks: [AttributedString]
     @State private var shown = 1
 
+    private static let linesPerChunk = 24
+
     init(text: AttributedString, size: CGFloat) {
-        // 带格式（加粗、链接）的部分按原样切开，每行保留自己的属性。
-        var lines: [AttributedSubstring] = []
+        // 带格式（加粗、链接）的部分按原样切开，每块保留自己的属性。
+        var chunks: [AttributedString] = []
         var start = text.startIndex
         var index = text.startIndex
+        var lines = 0
         while index < text.endIndex {
             if text.characters[index] == "\n" {
-                lines.append(text[start..<index])
-                start = text.characters.index(after: index)
+                lines += 1
+                if lines == Self.linesPerChunk {
+                    chunks.append(AttributedString(text[start..<index]))
+                    start = text.characters.index(after: index)
+                    lines = 0
+                }
             }
             index = text.characters.index(after: index)
         }
-        lines.append(text[start..<text.endIndex])
-        self.lines = lines.map { line in
-            let runs = line.runs
-            if runs.count <= 1, runs.first.map({ $0.inlinePresentationIntent == nil && $0.link == nil && $0.backgroundColor == nil && $0.foregroundColor == nil }) ?? true {
-                return .plain(String(line.characters))
-            }
-            return .styled(AttributedString(line))
-        }
+        if start < text.endIndex || chunks.isEmpty { chunks.append(AttributedString(text[start..<text.endIndex])) }
+        self.chunks = chunks
         self.size = size
     }
 
-    /// 每块几行：一行一个视图的话，几百行的段落每补一批都要把已经排好的几百个视图重新量一遍，越往后越卡；
-    /// 几行拼成一个 `Text`，视图数少一个数量级。
-    private static let linesPerChunk = 12
-
     var body: some View {
-        let chunks = (lines.count + Self.linesPerChunk - 1) / Self.linesPerChunk
         VStack(alignment: .leading, spacing: size * 0.25) {
-            ForEach(0..<min(shown, chunks), id: \.self) { index in
-                chunk(index).font(.system(size: size)).foregroundStyle(Palette.ink).lineSpacing(size * 0.25)
-                    .fixedSize(horizontal: false, vertical: true)
+            ForEach(0..<min(shown, chunks.count), id: \.self) { index in
+                RichTextView(text: RichText.lines(chunks[index], size: size), size: size)
             }
         }
         .task {
-            while shown < chunks {
+            while shown < chunks.count {
                 try? await Task.sleep(nanoseconds: 16_000_000)
                 shown += 1
             }
-        }
-    }
-
-    private func chunk(_ index: Int) -> SwiftUI.Text {
-        let part = lines[(index * Self.linesPerChunk)..<min(lines.count, (index + 1) * Self.linesPerChunk)]
-        let plain = part.compactMap { line -> String? in if case .plain(let value) = line { return value } else { return nil } }
-        if plain.count == part.count { return Text(verbatim: plain.joined(separator: "\n")) }
-        return part.enumerated().reduce(Text(verbatim: "")) { result, item in
-            (item.offset == 0 ? result : result + Text(verbatim: "\n")) + text(item.element)
-        }
-    }
-
-    private func text(_ line: Line) -> SwiftUI.Text {
-        switch line {
-        case .plain(let value): return Text(verbatim: value)
-        case .styled(let value): return Text(value)
         }
     }
 }

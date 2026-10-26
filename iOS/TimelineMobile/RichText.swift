@@ -76,6 +76,22 @@ final class RichText: @unchecked Sendable {
         return text
     }
 
+    /// 长文章（`LongParagraph`）里的一块：几十行，行间距和普通段落一样。
+    static func lines(_ text: AttributedString, size: CGFloat) -> RichText {
+        let key = "\(size)|lines|\(text.runs.count)|" + String(text.characters)
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = cache[key] { return cached }
+        let string = NSMutableAttributedString(attributedString: inline(text, size: size, color: UIColor(Palette.ink)))
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = size * 0.25
+        string.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: string.length))
+        let result = RichText(string)
+        if cache.count > 800 { cache.removeAll() }
+        cache[key] = result
+        return result
+    }
+
     static func width(for size: CGFloat) -> CGFloat? {
         lock.lock()
         defer { lock.unlock() }

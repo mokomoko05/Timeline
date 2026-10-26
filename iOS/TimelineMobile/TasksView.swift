@@ -5,7 +5,8 @@ import TimelineCore
 /// 已完成的在当天收成一行，没有日期的排在最后。同一天里按手动顺序（和 Mac 共用），
 /// 按住左边的圆点可以拖动：在同一天里调整先后，拖到别的日期就改截止日期。
 struct TasksView: View {
-    @ObservedObject var store: JournalStore
+    let store: JournalStore
+    @ObservedObject var feed: TabFeed
     let sync: SyncModel
     @State private var adding = false
     @State private var query = ""
@@ -21,7 +22,7 @@ struct TasksView: View {
         NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    if query.isEmpty { TaskHeader(store: store) }
+                    if query.isEmpty { TaskHeader(tasks: store.tasks()) }
                     timeline
                 }
                 .padding(.horizontal, 16)
@@ -49,6 +50,15 @@ struct TasksView: View {
             .sheet(isPresented: $adding) { AddTaskSheet(store: store) }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { note in
                 if note.object as? String == "task" { adding = true }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+                switch note.object as? String {
+                case "addTask": adding = true
+                case "closeSheet": adding = false
+                case "openTask": if let item = TaskSortMode.deadline.sorted(store.tasks()).first(where: { !$0.task.completed }) { path = [item.id] }
+                case "popTask": path = []
+                default: break
+                }
             }
             .onReceive(QuickEntry.shared.$request) { _ in
                 if QuickEntry.shared.take(.task) { path = []; adding = true }
@@ -161,19 +171,13 @@ struct TasksView: View {
     private var timeline: some View {
         let rows = rows
         let plan = drag.flatMap { dropPlan($0, rows: rows) }
-        // 不用 LazyVStack：按真实高度滚动，滚动条不会错位。
-        return VStack(alignment: .leading, spacing: 0) {
+        // 用 LazyVStack：只排看得到的行。整列一起排时，每次切回这一页都要把所有卡片重新量一遍。
+        // 拖动排序只用得到屏幕上的行（拖动时不能滚动），没排出来的行没有位置也不影响。
+        return LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                 let dragged = drag?.id == row.openTask?.id && drag != nil
                 rowView(row, hasPrevious: index > 0, hasNext: index < rows.count - 1)
-                    .background {
-                        GeometryReader { geometry in
-                            let frame = geometry.frame(in: .named(Self.space))
-                            Color.clear
-                                .onAppear { frames.values[row.id] = frame }
-                                .onChange(of: frame) { _, value in frames.values[row.id] = value }
-                        }
-                    }
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: { frames.values[row.id] = $0 }
                     .offset(y: dragged ? drag!.translation : 0)
                     .scaleEffect(dragged ? 1.02 : 1)
                     .shadow(color: .black.opacity(dragged ? 0.18 : 0), radius: 10, y: 4)
@@ -224,7 +228,9 @@ struct TasksView: View {
                     ring: item.task.priority == .urgent || item.task.priority == .high)
                     .animation(.snappy, value: drag?.id == item.id)
             } content: {
-                TaskCard(store: store, item: item) { path.append(item.id) }
+                TaskCard(store: store, item: item, highlighted: store.focusTaskID == item.id, notes: store.noteCount(for: item.id),
+                         hasBoard: store.board(for: .task(item.id))?.hasContent == true) { path.append(item.id) }
+                    .equatable()
                     .padding(.bottom, 8)
             }
             .overlay(alignment: .topLeading) {
@@ -361,12 +367,11 @@ private final class RowFrames {
 
 /// 顶部：今天的日期、逾期 / 今天 / 未完成 / 未设日期的数量，和今天的完成进度。
 private struct TaskHeader: View {
-    @ObservedObject var store: JournalStore
+    let tasks: [ScheduledTask]
 
     var body: some View {
         let now = Date()
         let calendar = JournalDates.calendar
-        let tasks = store.tasks()
         let open = tasks.filter { !$0.task.completed }
         let overdue = open.filter { $0.task.effectiveDeadline.map { $0 < now } ?? false }.count
         let todayTasks = tasks.filter { $0.task.dueDate.map(calendar.isDateInToday) ?? false && !$0.task.isDropped }
@@ -407,9 +412,13 @@ private struct TaskHeader: View {
 }
 
 /// 时间轴上的一张待办卡片：点卡片打开笔记，点右边的圆圈完成，长按是完整的操作菜单。
-struct TaskCard: View {
-    @ObservedObject var store: JournalStore
+/// 不订阅数据：要显示的都从外面传进来，内容没变就不重算（勾一个待办只重画那一张）。
+struct TaskCard: View, Equatable {
+    let store: JournalStore
     let item: ScheduledTask
+    var highlighted = false
+    var notes = 0
+    var hasBoard = false
     let open: () -> Void
     @State private var sheet: TaskSheet?
 
@@ -422,7 +431,7 @@ struct TaskCard: View {
                     .foregroundStyle(task.completed ? Palette.muted : Palette.ink)
                     .strikethrough(task.completed, color: Palette.muted)
                     .multilineTextAlignment(.leading)
-                TaskMeta(store: store, task: task)
+                TaskMeta(task: task, notes: notes, hasBoard: hasBoard)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Button {
@@ -437,11 +446,15 @@ struct TaskCard: View {
             .buttonStyle(.plain)
         }
         .padding(.leading, 12).padding(.trailing, 4).padding(.vertical, 8)
-        .card(highlighted: store.focusTaskID == item.id)
+        .card(highlighted: highlighted)
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .onTapGesture(perform: open)
         .contextMenu { TaskActions(store: store, item: item) { sheet = $0 } }
         .sheet(item: $sheet) { TaskSheetView(store: store, id: item.id, sheet: $0) }
+    }
+
+    static func == (a: TaskCard, b: TaskCard) -> Bool {
+        a.item == b.item && a.highlighted == b.highlighted && a.notes == b.notes && a.hasBoard == b.hasBoard
     }
 }
 
@@ -467,12 +480,11 @@ struct TaskSheetView: View {
 }
 /// 标签、编号、笔记数、专注时长、重复。
 struct TaskMeta: View {
-    @ObservedObject var store: JournalStore
     let task: Todo
+    let notes: Int
+    let hasBoard: Bool
 
     var body: some View {
-        let notes = store.noteCount(for: task.id)
-        let hasBoard = store.board(for: .task(task.id))?.hasContent == true
         if !task.tags.isEmpty || notes > 0 || task.focusSeconds >= 60 || task.repeatRule != .none || hasBoard {
             HStack(spacing: 8) {
                 ForEach(task.tags, id: \.self) { Text("#" + $0).foregroundStyle(Palette.accent) }
