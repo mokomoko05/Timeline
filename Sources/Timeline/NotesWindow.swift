@@ -386,7 +386,7 @@ struct UnifiedJournalView: View {
                 header
                 if !entry.logs.isEmpty {
                     DayRhythmStrip(logs: entry.logsInTimeOrder, date: date) { id in
-                        withAnimation(Motion.quick) { proxy.scrollTo(id, anchor: .center) }
+                        proxy.scrollTo(id, anchor: .center)
                         highlightedID = id
                     }
                     .padding(.horizontal, 20).padding(.bottom, 8)
@@ -430,10 +430,9 @@ struct UnifiedJournalView: View {
                     .padding(20)
                 }
                 // 和笔记页同一套「回到顶部」「跳到最新」：离开顶部 / 底部一段距离才出现在右下角。
+                // 定位直接落到目标位置（和笔记页一致）：长日志的滚动动画一路排版，很卡。
                 .notesScrollButtons { edge in
-                    withAnimation(Motion.quick) {
-                        proxy.scrollTo(edge == .top ? "journal-top" : "journal-bottom", anchor: edge == .top ? .top : .bottom)
-                    }
+                    proxy.scrollTo(edge == .top ? "journal-top" : "journal-bottom", anchor: edge == .top ? .top : .bottom)
                 }
                 .id(JournalDates.key(date))
                 .contentShape(Rectangle())
@@ -452,7 +451,7 @@ struct UnifiedJournalView: View {
                 .onChange(of: revealID) { id in
                     guard let id else { return }
                     DispatchQueue.main.async {
-                        withAnimation(Motion.quick) { proxy.scrollTo(id, anchor: .center) }
+                        proxy.scrollTo(id, anchor: .center)
                         highlightedID = id
                         revealID = nil
                     }

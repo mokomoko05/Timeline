@@ -549,15 +549,8 @@ function decorations(state, details, expanded, headings, flash) {
       }
     }
   }});
-  // 连着的几段引用（中间只隔空行）合成一块：空行也铺上底色，只有整块的第一行、最后一行是圆角。
-  const merged = [];
-  for (const range of quotes) {
-    const previous = merged[merged.length - 1];
-    let blank = !!previous;
-    for (let number = previous ? previous[1] + 1 : 0; blank && number < range[0]; number++) blank = !state.doc.line(number).text.trim();
-    if (blank) previous[1] = range[1]; else merged.push([...range]);
-  }
-  for (const [first, last] of merged) {
+  // 一个引用的每一行都铺底色，只有第一行、最后一行是框的上下边；隔着空行的两段引用是两块，空行不铺。
+  for (const [first, last] of quotes) {
     for (let number = first; number <= last; number++) {
       const line = state.doc.line(number);
       if (concealed(line.from, line.to)) continue;

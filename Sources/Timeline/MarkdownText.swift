@@ -44,9 +44,6 @@ enum MarkdownText {
         var sourceLines: [String] = []
         var folds: Set<String>?
         var boardFolds: BoardFoldMarks?
-        /// 紧接在上一个引用后面（中间只隔空行）的引用沿用它的框，画成同一块。
-        private var lastQuote: NSTextBlock?
-        private var mergeQuote: NSTextBlock?
         init(color: NSColor, size: CGFloat, monospaced: Bool, lineSpacing: CGFloat, interactiveTasks: Bool) {
             self.color = color
             self.size = size
@@ -113,18 +110,14 @@ enum MarkdownText {
             var previousEnd: Int?
             var seen: [String: Int] = [:]
             var index = 0
-            var previousWasQuote = false
             while index < children.count {
                 let child = children[index]
-                let merging = previousWasQuote && child is BlockQuote
-                previousWasQuote = child is BlockQuote
-                mergeQuote = merging ? lastQuote : nil
                 if let marks, let start = child.range?.lowerBound.line, marks.hidden.contains(where: { $0.contains(start) }) {
                     previousEnd = child.range?.upperBound.line
                     index += 1
                     continue
                 }
-                if !merging, let end = previousEnd, let start = child.range?.lowerBound.line, start > end + 1 {
+                if let end = previousEnd, let start = child.range?.lowerBound.line, start > end + 1 {
                     let blankCount = sourceLines.dropFirst(end).prefix(start - end - 1)
                         .filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
                     for _ in 0..<blankCount { paragraph(text(""), style: style(indent: indent)) }
@@ -194,9 +187,8 @@ enum MarkdownText {
             case let list as UnorderedList:
                 renderList(list, start: nil, indent: indent)
             case let quote as BlockQuote:
-                // 灰底引用框（像论坛里的引用）：左边一道竖线；连着的几段引用合成一块。
-                let frame = mergeQuote ?? quoteBlock(indent: indent)
-                mergeQuote = nil
+                // 灰底引用框（像论坛里的引用）：左边一道竖线。连着的 > 行是一块，隔着空行就是两块。
+                let frame = quoteBlock(indent: indent)
                 let start = output.length
                 blocks(quote, indent: 0)
                 let range = NSRange(location: start, length: output.length - start)
@@ -206,7 +198,6 @@ enum MarkdownText {
                     style.textBlocks.insert(frame, at: 0)
                     output.addAttribute(.paragraphStyle, value: style, range: part)
                 }
-                lastQuote = frame
             case is ThematicBreak:
                 paragraph(text("────────────────"), style: style(indent: indent))
             case let html as HTMLBlock:

@@ -72,9 +72,8 @@ private struct ScrollEdgeTracker: ViewModifier {
             }
             .onAppear {
                 edges.scroll = { edge in
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        proxy.scrollTo(edge == .top ? ScrollEdges.topID : ScrollEdges.bottomID, anchor: edge == .top ? .top : .bottom)
-                    }
+                    // 直接落到目标位置：长时间线的滚动动画一路排版，很卡。
+                    proxy.scrollTo(edge == .top ? ScrollEdges.topID : ScrollEdges.bottomID, anchor: edge == .top ? .top : .bottom)
                 }
             }
     }

@@ -88,7 +88,7 @@ extension View {
         task {
             guard let reveal else { return }
             try? await Task.sleep(nanoseconds: 150_000_000)
-            withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(reveal.uuidString, anchor: .center) }
+            proxy.scrollTo(reveal.uuidString, anchor: .center)
         }
     }
 

@@ -13,17 +13,20 @@ final class MarkdownTextTests: XCTestCase {
         text.attributes(at: (text.string as NSString).range(of: word).location, effectiveRange: nil)
     }
 
-    /// 引用是灰底框；隔着空行的几段引用合成同一块，后面的正文不在框里。
-    func testAdjacentQuotesShareOneBackgroundBlock() {
+    /// 引用是灰底框：连着的 > 行是一块；隔着空行的两段引用是两块，空行留着、不在框里。
+    func testQuotesSeparatedByABlankLineAreTwoBlocks() {
         let text = render("> 第一段\n> 接着\n\n> 第二段\n\n正文")
         func blocks(_ word: String) -> [NSTextBlock] { (attributes(word, in: text)[.paragraphStyle] as? NSParagraphStyle)?.textBlocks ?? [] }
         let first = blocks("第一段"), second = blocks("第二段")
         XCTAssertEqual(first.count, 1)
         XCTAssertNotNil(first.first?.backgroundColor)
-        XCTAssertTrue(first.first === second.first, "隔着空行的引用画成一块")
+        XCTAssertEqual(second.count, 1)
+        XCTAssertFalse(first.first === second.first, "隔着空行的引用是两块")
         XCTAssertTrue(blocks("接着").first === first.first)
         XCTAssertTrue(blocks("正文").isEmpty)
-        XCTAssertTrue(text.string.contains("接着\n第二段"), "合并后中间不再留空段")
+        XCTAssertTrue(text.string.contains("接着\n\n第二段"), "两块之间的空行留着")
+        let blank = (text.string as NSString).range(of: "接着\n\n").location + 3
+        XCTAssertTrue(((text.attribute(.paragraphStyle, at: blank, effectiveRange: nil) as? NSParagraphStyle)?.textBlocks ?? []).isEmpty, "空行没有灰底")
         let separate = render("> 甲\n\n正文\n\n> 乙")
         XCTAssertFalse((separate.attributes(at: (separate.string as NSString).range(of: "甲").location, effectiveRange: nil)[.paragraphStyle] as? NSParagraphStyle)?.textBlocks.first
                        === (separate.attributes(at: (separate.string as NSString).range(of: "乙").location, effectiveRange: nil)[.paragraphStyle] as? NSParagraphStyle)?.textBlocks.first)

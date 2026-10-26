@@ -421,8 +421,8 @@ final class BoardLiveEditorTests: XCTestCase {
         }
     }
 
-    /// 引用是灰底框：每一行都在框里，隔着空行的几段合成一块（空行也铺底色），只有首尾两行是框的上下边。
-    func testQuotesMergeIntoOneBackgroundBlock() async throws {
+    /// 引用是灰底框：连着的 > 行都在框里；隔着空行的两段是两块，空行不铺底色。
+    func testQuoteLinesShareABlockButBlankLinesSplitThem() async throws {
         let fixture = try LiveFixture(source: "Intro\n\n> one\n> two\n\n> three\n\nAfter")
         defer { fixture.close() }
         try await waitForBoardEditor(fixture.webView)
@@ -430,9 +430,9 @@ final class BoardLiveEditorTests: XCTestCase {
         let lines = try await fixture.webView.evaluateJavaScript(
             "[...document.querySelectorAll('.cm-line')].map(e=>[e.textContent,e.className.includes('cm-quote'),e.className.includes('cm-quote-start'),e.className.includes('cm-quote-end'),getComputedStyle(e).backgroundColor])") as? [[Any]] ?? []
         let quoted = lines.filter { $0[1] as? Bool == true }.map { $0[0] as? String ?? "?" }
-        XCTAssertEqual(quoted, ["one", "two", "", "three"])
-        XCTAssertEqual(lines.filter { $0[2] as? Bool == true }.count, 1)
-        XCTAssertEqual(lines.filter { $0[3] as? Bool == true }.count, 1)
+        XCTAssertEqual(quoted, ["one", "two", "three"])
+        XCTAssertEqual(lines.filter { $0[2] as? Bool == true }.map { $0[0] as? String }, ["one", "three"])
+        XCTAssertEqual(lines.filter { $0[3] as? Bool == true }.map { $0[0] as? String }, ["two", "three"])
         let background = lines.first { $0[0] as? String == "one" }?[4] as? String
         XCTAssertNotEqual(background, "rgba(0, 0, 0, 0)")
     }

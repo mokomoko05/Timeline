@@ -37,7 +37,7 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 #editor .cm-line.cm-code-start { margin-top: 8px; border-top: 1px solid var(--line); border-radius: 9px 9px 0 0; padding-top: 4px; }
 #editor .cm-line.cm-code-end { margin-bottom: 8px; border-bottom: 1px solid var(--line); border-radius: 0 0 9px 9px; padding-bottom: 5px; }
 #editor .cm-line.cm-code-start.cm-code-end { border-radius: 9px; }
-/* 引用：灰底的引用框，左边一道竖线（像论坛里的引用）；连着的几行、隔着空行的几段引用合成一块。 */
+/* 引用：灰底的引用框，左边一道竖线（像论坛里的引用）；连着的几行 > 是一块，隔着空行就是两块。 */
 #editor .cm-line.cm-quote { margin: 0 12px; padding-left: 14px; padding-right: 10px; background: color-mix(in srgb, var(--ink) 7%, var(--background)); border-left: 4px solid color-mix(in srgb, var(--ink) 28%, var(--background)); color: color-mix(in srgb, var(--ink) 85%, var(--background)); }
 #editor .cm-line.cm-quote-start { margin-top: 4px; padding-top: 5px; border-top-right-radius: 6px; }
 #editor .cm-line.cm-quote-end { margin-bottom: 4px; padding-bottom: 5px; border-bottom-right-radius: 6px; }

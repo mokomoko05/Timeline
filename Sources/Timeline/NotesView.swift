@@ -564,7 +564,7 @@ struct NotesView: View {
     private func reveal(_ id: UUID?, proxy: ScrollViewProxy) {
         guard let id else { return }
         DispatchQueue.main.async {
-            withAnimation(Motion.quick) { proxy.scrollTo(id, anchor: .center) }
+            proxy.scrollTo(id, anchor: .center)
             flashNoteID = id
             revealNoteID = nil
         }

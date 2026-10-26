@@ -94,7 +94,7 @@ struct JournalView: View {
             .trackScrollEdges(edges, proxy: proxy)
             .onChange(of: jump) { _, id in
                 guard let id else { return }
-                withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(id.uuidString, anchor: .top) }
+                proxy.scrollTo(id.uuidString, anchor: .top)
                 jump = nil
             }
             .refreshable { await sync.syncNow() }
@@ -148,7 +148,7 @@ private struct DateStrip: View {
                 .padding(.vertical, 8)
             }
             .onAppear { proxy.scrollTo(selection, anchor: .center) }
-            .onChange(of: selection) { _, key in withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(key, anchor: .center) } }
+            .onChange(of: selection) { _, key in proxy.scrollTo(key, anchor: .center) }
         }
         .frame(height: 76)
     }
