@@ -4,7 +4,7 @@ import TimelineCore
 /// 笔记：标签（笔记本）和有笔记的任务，和 Mac 笔记窗口的左栏一致。
 struct NotesView: View {
     @ObservedObject var store: JournalStore
-    @ObservedObject var sync: SyncModel
+    let sync: SyncModel
     @State private var query = ""
 
     enum Destination: Hashable {
@@ -137,16 +137,16 @@ struct TaskPage: View {
                 if let number = task?.number ?? topic?.number {
                     Text("#\(number)").font(.title3.weight(.semibold).monospacedDigit()).foregroundStyle(Palette.accent)
                 }
-                Text(task.map { TaskText.rendered($0.title) } ?? AttributedString(topic?.title ?? "已删除的任务"))
+                Text(task.map { TaskText.rendered($0.title) } ?? AttributedString(topic?.title ?? L("已删除的任务")))
                     .font(.title2.weight(.bold))
                     .foregroundStyle(task?.completed == true ? Palette.muted : Palette.ink)
             }
             FlowLayout(spacing: 8) {
                 if let due = task?.dueDate {
-                    Label("截止 " + (DayText.relative(due) ?? DayText.short(due)) + (task!.dueHasTime ? " " + DayText.time(due) : ""), systemImage: "clock")
+                    Label(LF("截止 %@", (DayText.relative(due) ?? DayText.short(due)) + (task!.dueHasTime ? " " + DayText.time(due) : "")), systemImage: "clock")
                         .foregroundStyle(task!.effectiveDeadline.map { $0 < Date() } == true && !task!.completed ? Palette.deadline : Palette.muted)
                 }
-                if let seconds = task?.focusSeconds, seconds >= 60 { Label("已专注 " + Duration.brief(seconds), systemImage: "hourglass") }
+                if let seconds = task?.focusSeconds, seconds >= 60 { Label(LF("已专注 %@", Duration.brief(seconds)), systemImage: "hourglass") }
                 Text("\(noteCount) 条笔记")
                 if task?.isDone == true { Label("已完成", systemImage: "checkmark.circle.fill").foregroundStyle(Palette.success) }
                 if task?.isDropped == true { Label("已放弃", systemImage: "xmark.circle").foregroundStyle(Palette.muted) }
@@ -284,9 +284,9 @@ struct TaskEditSheet: View {
                         Picker("重复", selection: Binding(get: { item.task.repeatRule }, set: { rule in
                             store.updateTodo(id, scheduledDate: item.date, dueDate: item.task.dueDate ?? Date(), dueHasTime: item.task.dueHasTime,
                                              reminderMinutes: item.task.reminderMinutes, repeatRule: rule)
-                        })) { ForEach(RepeatRule.allCases) { Text($0.title).tag($0) } }
+                        })) { ForEach(RepeatRule.allCases) { Text(L($0.title)).tag($0) } }
                         Picker("优先级", selection: Binding(get: { item.task.priority }, set: { store.setPriority($0, for: id) })) {
-                            ForEach(TaskPriority.allCases) { Text($0.title).tag($0) }
+                            ForEach(TaskPriority.allCases) { Text(L($0.title)).tag($0) }
                         }
                     }
                     Section {

@@ -64,13 +64,13 @@ enum LogStyle {
     /// 类型名：普通记录不显示。
     static func label(_ log: DailyLogEntry) -> String? {
         switch log.focusMarker {
-        case "FOCUS": return "开始专注"
-        case "NOTE": return "专注笔记"
-        case "REVIEW": return "阶段反馈"
-        case "END": return log.focusMetMinimum == false ? "未达到最低专注时长" : "结束专注"
-        case "DONE": return "完成"
-        case "BLOCK": return "卡点"
-        case "PLAN": return "计划"
+        case "FOCUS": return L("开始专注")
+        case "NOTE": return L("专注笔记")
+        case "REVIEW": return L("阶段反馈")
+        case "END": return L(log.focusMetMinimum == false ? "未达到最低专注时长" : "结束专注")
+        case "DONE": return L("完成")
+        case "BLOCK": return L("卡点")
+        case "PLAN": return L("计划")
         default: return nil
         }
     }
@@ -78,14 +78,14 @@ enum LogStyle {
     /// 正文：去掉旧格式里重复的类型前缀，结束记录显示用时。
     static func body(_ log: DailyLogEntry) -> String {
         if log.focusMarker == "FOCUS" {
-            if log.text == "▶ 开始专注" { return log.focusPlannedSeconds.map { "计划 " + Duration.brief($0) } ?? "" }
+            if log.text == "▶ 开始专注" { return log.focusPlannedSeconds.map { LF("计划 %@", Duration.brief($0)) } ?? "" }
             if log.text.hasPrefix("▶ 开始专注 · ") { return String(log.text.dropFirst("▶ 开始专注 · ".count)) }
         }
         if log.focusMarker == "END", log.text.hasPrefix("■ 结束专注") {
             let parts = log.text.components(separatedBy: " · ")
             let duration = log.focusElapsedSeconds.map(Duration.full) ?? parts.first { $0.hasPrefix("用时 ") }.map { String($0.dropFirst(3)) }
-            let reason = log.focusEndReason ?? (parts.count > 3 ? parts.last : nil)
-            let summary = duration.map { "有效专注 " + $0 } ?? "结束专注"
+            let reason = (log.focusEndReason ?? (parts.count > 3 ? parts.last : nil)).map(L)
+            let summary = duration.map { LF("有效专注 %@", $0) } ?? L("结束专注")
             return reason.map { summary + " · " + $0 } ?? summary
         }
         if log.focusEvent == nil, log.focusMarker == "REVIEW" {
@@ -98,13 +98,13 @@ enum LogStyle {
 enum Duration {
     static func brief(_ seconds: TimeInterval) -> String {
         let minutes = Int((seconds / 60).rounded())
-        return minutes >= 60 ? "\(minutes / 60) h \(minutes % 60) min" : "\(minutes) 分钟"
+        return minutes >= 60 ? "\(minutes / 60) h \(minutes % 60) min" : LF("%lld 分钟", minutes)
     }
 
     static func full(_ seconds: TimeInterval) -> String {
         let total = Int(seconds.rounded())
-        if total >= 3600 { return "\(total / 3600) 小时 \(total % 3600 / 60) 分" }
-        return total % 60 == 0 ? "\(total / 60) 分钟" : "\(total / 60) 分 \(total % 60) 秒"
+        if total >= 3600 { return LF("%lld 小时 %lld 分", total / 3600, total % 3600 / 60) }
+        return total % 60 == 0 ? LF("%lld 分钟", total / 60) : LF("%lld 分 %lld 秒", total / 60, total % 60)
     }
 }
 
@@ -112,9 +112,9 @@ enum DayText {
     /// 「今天」「明天」「昨天」，其余为 nil。
     static func relative(_ date: Date) -> String? {
         let calendar = JournalDates.calendar
-        if calendar.isDateInToday(date) { return "今天" }
-        if calendar.isDateInTomorrow(date) { return "明天" }
-        if calendar.isDateInYesterday(date) { return "昨天" }
+        if calendar.isDateInToday(date) { return L("今天") }
+        if calendar.isDateInTomorrow(date) { return L("明天") }
+        if calendar.isDateInYesterday(date) { return L("昨天") }
         return nil
     }
 

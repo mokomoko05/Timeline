@@ -11,6 +11,7 @@ struct LogTimeline: View {
     var showsTask = true
     var newestFirst = false
     @State private var collapsedRounds: Set<UUID> = []
+    @State private var shown = 6
 
     private enum Row: Identifiable {
         case day(String, Date, Int)
@@ -80,8 +81,9 @@ struct LogTimeline: View {
     var body: some View {
         let rows = rows
         // 不用 LazyVStack：行高差别很大（长日志），按估算高度滚动时右边的滚动条会跳。
+        // 但也不一次排完：先排前几行让页面马上出来，其余每帧补几行（一天几十条长日志一次排版要好几百毫秒）。
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+            ForEach(Array(rows.prefix(shown).enumerated()), id: \.element.id) { index, row in
                 switch row {
                 case .day(_, let date, let count):
                     RailRow(label: "", hasPrevious: index > 0, hasNext: index < rows.count - 1, nodeY: 14) {
@@ -111,6 +113,12 @@ struct LogTimeline: View {
                         .padding(.bottom, 12)
                     }
                 }
+            }
+        }
+        .task(id: rows.count) {
+            while shown < rows.count {
+                try? await Task.sleep(nanoseconds: 16_000_000)
+                shown += 3
             }
         }
     }
@@ -228,9 +236,9 @@ private struct FocusRoundCard: View {
     }
 
     private var title: String {
-        if let seconds = round.end?.focusElapsedSeconds { return "专注 " + Duration.brief(seconds) }
-        if let end = round.end { return "专注 " + Duration.brief(end.createdAt.timeIntervalSince(round.start.createdAt)) }
-        return "专注中"
+        if let seconds = round.end?.focusElapsedSeconds { return LF("专注 %@", Duration.brief(seconds)) }
+        if let end = round.end { return LF("专注 %@", Duration.brief(end.createdAt.timeIntervalSince(round.start.createdAt))) }
+        return L("专注中")
     }
 
     private var span: String {
@@ -273,15 +281,26 @@ struct ImageStrip: View {
 
 private struct Thumbnail: View {
     let url: URL
+    @State private var image: UIImage?
+    @State private var missing = false
 
     var body: some View {
         Group {
-            if let image = ImageCache.thumbnail(url) {
+            if let image = image ?? ImageCache.cached(url) {
                 Image(uiImage: image).resizable().scaledToFill()
-            } else {
+            } else if missing {
                 // 还没从 iCloud 下载下来。
                 Palette.line.opacity(0.4).overlay { Image(systemName: "icloud.and.arrow.down").foregroundStyle(Palette.muted) }
+            } else {
+                Palette.line.opacity(0.25)
             }
+        }
+        .task(id: url) {
+            guard ImageCache.cached(url) == nil else { return }
+            // 解码大图放到后台：在主线程上一张照片要几十毫秒，一天几张就是明显的卡顿。
+            let loaded = await Task.detached(priority: .userInitiated) { [url] in ImageCache.thumbnail(url) }.value
+            image = loaded
+            missing = loaded == nil
         }
         .frame(width: 110, height: 110)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -323,7 +342,7 @@ private struct ImageActionButtons: View {
         if let text = text?.nilIfEmpty {
             Button {
                 UIPasteboard.general.string = text
-                toast.show("已复制图中文字")
+                toast.show(L("已复制图中文字"))
             } label: { Label("复制图中文字", systemImage: "text.viewfinder") }
         }
         Button { saveToPhotos() } label: { Label("存储到照片", systemImage: "square.and.arrow.down") }
@@ -331,15 +350,15 @@ private struct ImageActionButtons: View {
     }
 
     private func copyImage() {
-        guard let image = UIImage(contentsOfFile: url.path) else { toast.show("图片还没下载好"); return }
+        guard let image = UIImage(contentsOfFile: url.path) else { toast.show(L("图片还没下载好")); return }
         UIPasteboard.general.image = image
-        toast.show("已复制图片")
+        toast.show(L("已复制图片"))
     }
 
     private func saveToPhotos() {
-        guard let image = UIImage(contentsOfFile: url.path) else { toast.show("图片还没下载好"); return }
+        guard let image = UIImage(contentsOfFile: url.path) else { toast.show(L("图片还没下载好")); return }
         PhotoSaver.save(image) { error in
-            toast.show(error == nil ? "已存储到照片" : "没能存到照片：请在设置里允许 Timeline 添加照片")
+            toast.show(L(error == nil ? "已存储到照片" : "没能存到照片：请在设置里允许 Timeline 添加照片"))
         }
     }
 }
@@ -472,12 +491,16 @@ private struct ZoomableImage: View {
 enum ImageCache {
     private static let cache = NSCache<NSURL, UIImage>()
 
-    static func thumbnail(_ url: URL) -> UIImage? {
+    static func cached(_ url: URL) -> UIImage? { cache.object(forKey: url as NSURL) }
+
+    /// 读出并缩小一张图（可以在后台线程调用）。
+    nonisolated static func thumbnail(_ url: URL) -> UIImage? {
         if let cached = cache.object(forKey: url as NSURL) { return cached }
         guard let image = UIImage(contentsOfFile: url.path) else { return nil }
         let side: CGFloat = 330
         let scale = side / min(image.size.width, image.size.height)
-        let thumbnail = scale < 1 ? image.preparingThumbnail(of: CGSize(width: image.size.width * scale, height: image.size.height * scale)) ?? image : image
+        let thumbnail = scale < 1 ? image.preparingThumbnail(of: CGSize(width: image.size.width * scale, height: image.size.height * scale)) ?? image
+            : image.preparingForDisplay() ?? image
         cache.setObject(thumbnail, forKey: url as NSURL)
         return thumbnail
     }

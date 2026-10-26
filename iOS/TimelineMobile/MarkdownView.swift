@@ -1,3 +1,5 @@
+import QuartzCore
+import UIKit
 import Markdown
 import SwiftUI
 import TimelineCore
@@ -205,6 +207,8 @@ indirect enum MarkdownBlock {
         let cached = cache[source]
         lock.unlock()
         if let cached { return cached }
+        let started = CACurrentMediaTime()
+        defer { if Thread.isMainThread { MainActor.assumeIsolated { PerfProbe.parsed(CACurrentMediaTime() - started) } } }
         var seen: [String: Int] = [:]
         let blocks = blocks(Document(parsing: source), seen: &seen)
         var sections: [Int: (end: Int, long: Bool)] = [:]
@@ -346,8 +350,12 @@ private struct BlockView: View {
                 .font(.system(size: size + CGFloat(max(1, 7 - level)) * 1.6, weight: .bold))
                 .foregroundStyle(Palette.heading(level))
         case .paragraph(let text):
-            Text(text).font(.system(size: size)).foregroundStyle(Palette.ink).lineSpacing(size * 0.25)
-                .fixedSize(horizontal: false, vertical: true)
+            if text.characters.count > LongParagraph.threshold, text.characters.contains("\n") {
+                LongParagraph(text: text, size: size)
+            } else {
+                Text(text).font(.system(size: size)).foregroundStyle(Palette.ink).lineSpacing(size * 0.25)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         case .list(let items, let start):
             VStack(alignment: .leading, spacing: size * 0.35) {
                 ForEach(Array(items.enumerated()), id: \.offset) { index, item in
@@ -431,7 +439,7 @@ private struct CodeBlockView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(language ?? "代码").font(.caption2.weight(.semibold)).foregroundStyle(Palette.muted)
+                Text(language ?? L("代码")).font(.caption2.weight(.semibold)).foregroundStyle(Palette.muted)
                 Spacer()
                 Button {
                     UIPasteboard.general.string = code
@@ -450,5 +458,68 @@ private struct CodeBlockView: View {
             }
         }
         .background(Palette.muted.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+
+
+
+/// 很长、又按行断开的段落（整篇贴进来的文章）：拆成一行一个 `Text`，先排前几行，其余每帧补几行。
+/// 一整段一万多字交给一个 `Text` 排版要一秒多，主线程卡住；拆开后同样的字分摊到十几帧里，界面先出来、滚动不卡。
+struct LongParagraph: View {
+    static let threshold = 600
+    let size: CGFloat
+    /// 没有格式的行存成普通字符串：`Text(String)` 排版比 `Text(AttributedString)` 快得多。
+    private let lines: [Line]
+
+    private enum Line {
+        case plain(String)
+        case styled(AttributedString)
+    }
+    @State private var shown = 4
+
+    init(text: AttributedString, size: CGFloat) {
+        // 带格式（加粗、链接）的部分按原样切开，每行保留自己的属性。
+        var lines: [AttributedSubstring] = []
+        var start = text.startIndex
+        var index = text.startIndex
+        while index < text.endIndex {
+            if text.characters[index] == "\n" {
+                lines.append(text[start..<index])
+                start = text.characters.index(after: index)
+            }
+            index = text.characters.index(after: index)
+        }
+        lines.append(text[start..<text.endIndex])
+        self.lines = lines.map { line in
+            let runs = line.runs
+            if runs.count <= 1, runs.first.map({ $0.inlinePresentationIntent == nil && $0.link == nil && $0.backgroundColor == nil && $0.foregroundColor == nil }) ?? true {
+                return .plain(String(line.characters))
+            }
+            return .styled(AttributedString(line))
+        }
+        self.size = size
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: size * 0.25) {
+            ForEach(0..<min(shown, lines.count), id: \.self) { index in
+                text(lines[index]).font(.system(size: size)).foregroundStyle(Palette.ink).lineSpacing(size * 0.25)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .task {
+            while shown < lines.count {
+                try? await Task.sleep(nanoseconds: 16_000_000)
+                shown += 6
+            }
+        }
+    }
+
+    private func text(_ line: Line) -> SwiftUI.Text {
+        switch line {
+        case .plain(let value): return Text(verbatim: value)
+        case .styled(let value): return Text(value)
+        }
     }
 }

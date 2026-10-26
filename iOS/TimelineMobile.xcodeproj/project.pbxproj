@@ -9,14 +9,42 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* TimelineCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000020 /* TimelineCore */; };
 		A10000000000000000000022 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000023 /* Markdown */; };
+		B10000000000000000000001 /* TimelineFocus.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* TimelineFocus.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		B10000000000000000000003 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000011 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B10000000000000000000007;
+			remoteInfo = TimelineFocus;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		B10000000000000000000004 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				B10000000000000000000001 /* TimelineFocus.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		A10000000000000000000002 /* Timeline.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Timeline.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10000000000000000000002 /* TimelineFocus.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TimelineFocus.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A10000000000000000000003 /* TimelineMobile */ = {isa = PBXFileSystemSynchronizedRootGroup; path = TimelineMobile; sourceTree = "<group>"; };
+		B10000000000000000000005 /* TimelineFocus */ = {isa = PBXFileSystemSynchronizedRootGroup; path = TimelineFocus; sourceTree = "<group>"; };
+		B10000000000000000000006 /* Shared */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Shared; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -29,6 +57,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B10000000000000000000008 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -36,6 +71,8 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000003 /* TimelineMobile */,
+				B10000000000000000000006 /* Shared */,
+				B10000000000000000000005 /* TimelineFocus */,
 				A10000000000000000000006 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -44,6 +81,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000002 /* Timeline.app */,
+				B10000000000000000000002 /* TimelineFocus.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -58,13 +96,16 @@
 				A10000000000000000000008 /* Sources */,
 				A10000000000000000000004 /* Frameworks */,
 				A10000000000000000000009 /* Resources */,
+				B10000000000000000000004 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				B1000000000000000000000E /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				A10000000000000000000003 /* TimelineMobile */,
+				B10000000000000000000006 /* Shared */,
 			);
 			name = TimelineMobile;
 			packageProductDependencies = (
@@ -74,6 +115,27 @@
 			productName = TimelineMobile;
 			productReference = A10000000000000000000002 /* Timeline.app */;
 			productType = "com.apple.product-type.application";
+		};
+		B10000000000000000000007 /* TimelineFocus */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B10000000000000000000010 /* Build configuration list for PBXNativeTarget "TimelineFocus" */;
+			buildPhases = (
+				B10000000000000000000009 /* Sources */,
+				B10000000000000000000008 /* Frameworks */,
+				B1000000000000000000000A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				B10000000000000000000005 /* TimelineFocus */,
+				B10000000000000000000006 /* Shared */,
+			);
+			name = TimelineFocus;
+			productName = TimelineFocus;
+			productReference = B10000000000000000000002 /* TimelineFocus.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -105,12 +167,20 @@
 			projectRoot = "";
 			targets = (
 				A10000000000000000000007 /* TimelineMobile */,
+				B10000000000000000000007 /* TimelineFocus */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A10000000000000000000009 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B1000000000000000000000A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -127,7 +197,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B10000000000000000000009 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B1000000000000000000000E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B10000000000000000000007 /* TimelineFocus */;
+			targetProxy = B10000000000000000000003 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A10000000000000000000013 /* Debug */ = {
@@ -173,6 +258,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Timeline;
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "把日记里的图片存到照片。";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -203,6 +289,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Timeline;
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "把日记里的图片存到照片。";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -214,6 +301,56 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(TIMELINE_BUNDLE_ID)";
 				PRODUCT_NAME = Timeline;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TIMELINE_BUNDLE_ID = local.timeline.mobile;
+			};
+			name = Release;
+		};
+		B10000000000000000000015 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "TimelineFocus-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Timeline;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(TIMELINE_BUNDLE_ID).focus";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TIMELINE_BUNDLE_ID = local.timeline.mobile;
+			};
+			name = Debug;
+		};
+		B10000000000000000000016 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "TimelineFocus-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Timeline;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(TIMELINE_BUNDLE_ID).focus";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -238,6 +375,15 @@
 			buildConfigurations = (
 				A10000000000000000000013 /* Debug */,
 				A10000000000000000000014 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B10000000000000000000010 /* Build configuration list for PBXNativeTarget "TimelineFocus" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B10000000000000000000015 /* Debug */,
+				B10000000000000000000016 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -14,7 +14,6 @@ final class SyncModel: ObservableObject {
     @Published var setupError: String?
     let store: JournalStore
     private let defaults: UserDefaults
-    private var forward: AnyCancellable?
     private var active = false
 
     var isConfigured: Bool { sync != nil }
@@ -22,7 +21,12 @@ final class SyncModel: ObservableObject {
     init(store: JournalStore, defaults: UserDefaults = .standard) {
         self.store = store
         self.defaults = defaults
-        if let folder = resolveBookmark() { start(folder) }
+        if let path = defaults.string(forKey: "debugSyncFolder") {
+            // 模拟器测试用：直接指定一个同步文件夹（真机上用文件选择器）。
+            start(URL(fileURLWithPath: path))
+        } else if let folder = resolveBookmark() {
+            start(folder)
+        }
     }
 
     /// 文件选择器选中的文件夹：先声明访问再存书签，之后每次读写由 `FolderSync` 自己声明访问。
@@ -36,7 +40,7 @@ final class SyncModel: ObservableObject {
             stop()
             start(url)
         } catch {
-            setupError = "无法记住这个文件夹：\(error.localizedDescription)"
+            setupError = LF("无法记住这个文件夹：%@", error.localizedDescription)
         }
     }
 
@@ -49,7 +53,7 @@ final class SyncModel: ObservableObject {
         guard let data = defaults.data(forKey: Self.bookmarkKey) else { return nil }
         var stale = false
         guard let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) else {
-            setupError = "找不到之前选的同步文件夹，请重新选择。"
+            setupError = L("找不到之前选的同步文件夹，请重新选择。")
             return nil
         }
         if stale {
@@ -63,8 +67,9 @@ final class SyncModel: ObservableObject {
     }
 
     private func start(_ folder: URL) {
+        // 同步状态（进行中、上次时间）只有同步设置页关心：它直接观察 `FolderSync`。
+        // 这里不转发，否则每同步一轮，待办、日记、笔记几个页面都要整个重算一遍。
         let sync = FolderSync(store: store, folder: folder, deviceName: UIDevice.current.model)
-        forward = sync.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         self.sync = sync
         folderName = folder.lastPathComponent
         if active { sync.startAutomaticSync(interval: 15) } else { sync.syncSoon() }
@@ -72,7 +77,6 @@ final class SyncModel: ObservableObject {
 
     private func stop() {
         sync?.stopAutomaticSync()
-        forward = nil
         sync = nil
         folderName = nil
     }

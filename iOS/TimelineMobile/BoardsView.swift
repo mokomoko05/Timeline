@@ -86,7 +86,7 @@ struct BoardPage: View {
                     VStack(alignment: .leading, spacing: 12) {
                         if let board {
                             Text(store.boardTitle(board)).font(.title2.weight(.bold)).foregroundStyle(Palette.ink)
-                            Text("更新于 " + board.updatedAt.formatted(.relative(presentation: .named)))
+                            Text(LF("更新于 %@", board.updatedAt.formatted(.relative(presentation: .named))))
                                 .font(.caption).foregroundStyle(Palette.muted)
                             Divider().overlay(Palette.line)
                             MarkdownView(source: board.markdown, foldScope: "board." + id.uuidString) { line in

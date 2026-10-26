@@ -7,12 +7,14 @@ import UIKit
 /// 只渲染当前这一天（不用分页视图一次挂上所有页面），前后两天的 Markdown 在后台预先解析，换天时不卡。
 struct JournalView: View {
     @ObservedObject var store: JournalStore
-    @ObservedObject var sync: SyncModel
+    let sync: SyncModel
     @State private var selection = JournalDates.key(Date())
     @State private var picking = false
     @State private var composing = false
     @State private var query = ""
     @State private var direction: Edge = .trailing
+    /// 在底部节奏条上点了某个时刻：滚到那条日志。
+    @State private var jump: UUID?
 
     var body: some View {
         let byDay = Dictionary(grouping: store.allLogs(includeFocus: true), by: \.key)
@@ -54,6 +56,14 @@ struct JournalView: View {
                     .padding(20)
                 }
             }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    FocusBar()
+                    if query.isEmpty, let logs = byDay[selection], !logs.isEmpty {
+                        RhythmBar(logs: logs.map(\.log)) { jump = $0 }
+                    }
+                }
+            }
             .sheet(isPresented: $composing) {
                 ComposeSheet(store: store) { selection = JournalDates.key(Date()) }
             }
@@ -62,6 +72,9 @@ struct JournalView: View {
             }
             .onAppear { prewarm(around: selection, keys: keys, byDay: byDay) }
             .onChange(of: selection) { _, key in prewarm(around: key, keys: keys, byDay: byDay) }
+            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.previousDay)) { _ in
+                if let target = neighbor(of: selection, in: keys, by: -1) { go(to: target, keys: keys) }
+            }
         }
     }
 
@@ -79,6 +92,11 @@ struct JournalView: View {
                 .padding(.bottom, 100)
             }
             .markdownScrolling(proxy)
+            .onChange(of: jump) { _, id in
+                guard let id else { return }
+                withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(id.uuidString, anchor: .top) }
+                jump = nil
+            }
             .refreshable { await sync.syncNow() }
             // 换一天就是一个新的滚动视图：从顶部开始，不沿用上一天的位置。
             .id(selection)
@@ -190,7 +208,6 @@ private struct DayHeader: View {
             }
             .font(.subheadline)
             .foregroundStyle(Palette.muted)
-            if !logs.isEmpty { RhythmStrip(logs: logs) }
         }
         .padding(.top, 12)
     }
@@ -201,6 +218,41 @@ private struct DayHeader: View {
         }
         .disabled(target == nil)
         .foregroundStyle(target == nil ? Palette.line : Palette.accent)
+    }
+}
+
+/// 贴在日记页底部的节奏条：一直看得到这一天的节奏，点一下（或按住滑动）跳到那个时刻的日志。
+private struct RhythmBar: View {
+    let logs: [DailyLogEntry]
+    let select: (UUID) -> Void
+    @State private var picked: UUID?
+
+    var body: some View {
+        GeometryReader { geometry in
+            RhythmStrip(logs: logs)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                    pick(at: value.location.x / max(1, geometry.size.width))
+                })
+        }
+        .frame(height: 36)
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+        .sensoryFeedback(.selection, trigger: picked)
+    }
+
+    /// 离手指最近的一条日志。
+    private func pick(at fraction: CGFloat) {
+        guard let first = logs.first else { return }
+        let start = JournalDates.calendar.startOfDay(for: first.createdAt)
+        let time = start.addingTimeInterval(Double(min(1, max(0, fraction))) * 86_400)
+        guard let nearest = logs.min(by: { abs($0.createdAt.timeIntervalSince(time)) < abs($1.createdAt.timeIntervalSince(time)) }),
+              nearest.id != picked else { return }
+        picked = nearest.id
+        select(nearest.id)
     }
 }
 
@@ -372,7 +424,7 @@ struct ComposeSheet: View {
                             Button((item.task.number.map { "#\($0) " } ?? "") + String(TaskText.rendered(item.task.title).characters)) { linked = item.id }
                         }
                     } label: {
-                        Label(linkedTitle ?? "关联待办", systemImage: "at").lineLimit(1)
+                        Label(linkedTitle ?? L("关联待办"), systemImage: "at").lineLimit(1)
                     }
                     PhotosPicker(selection: $picked, maxSelectionCount: 6, matching: .images) {
                         Label("图片", systemImage: "photo")

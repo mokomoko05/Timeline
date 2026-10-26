@@ -1,0 +1,187 @@
+/* iPhone 界面的英文。中文原文是键，查不到时显示中文。 */
+
+/* 标签页 */
+"待办" = "Tasks";
+"日记" = "Journal";
+"笔记" = "Notes";
+"工作板" = "Boards";
+"设置" = "Settings";
+
+/* 通用 */
+"取消" = "Cancel";
+"完成" = "Done";
+"编辑" = "Edit";
+"保存" = "Save";
+"关闭" = "Close";
+"收起" = "Hide";
+"删除" = "Delete";
+"恢复" = "Restore";
+"开始" = "Start";
+"继续" = "Resume";
+"暂停" = "Pause";
+"结束" = "End";
+"前往" = "Go";
+"复制" = "Copy";
+"已复制" = "Copied";
+"代码" = "Code";
+"今天" = "Today";
+"明天" = "Tomorrow";
+"昨天" = "Yesterday";
+"日期" = "Date";
+"时间" = "Time";
+"标签" = "Tags";
+"任务" = "Tasks";
+"图片" = "Photos";
+"没有找到" = "No results";
+
+/* 待办 */
+"搜索待办或 #标签" = "Search tasks or #tags";
+"逾期" = "Overdue";
+"%lld 项" = "%lld items";
+"未设日期" = "No date";
+"全天" = "All day";
+"已完成 %lld 项" = "%lld completed";
+"今天没有待办" = "Nothing due today";
+"%lld 逾期" = "%lld overdue";
+"%lld 今天" = "%lld today";
+"%lld 未完成" = "%lld open";
+"%lld 未设日期" = "%lld undated";
+"今天 %lld/%lld" = "Today %lld/%lld";
+"取消完成" = "Mark as Not Done";
+"开始专注…" = "Start Focus…";
+"结束专注" = "End Focus";
+"截止日期" = "Due Date";
+"下周一" = "Next Monday";
+"推后一天" = "Postpone One Day";
+"选择日期和时间…" = "Choose Date & Time…";
+"清除截止日期" = "Clear Due Date";
+"优先级" = "Priority";
+"取消固定" = "Unpin";
+"固定为当前待办" = "Pin as Current Task";
+"写笔记" = "Write Note";
+"任务设置…" = "Task Settings…";
+"放弃（留着记录）" = "Drop (Keep Record)";
+"要做什么？可写「明天 下午3点」「#标签」" = "What needs doing? Try “tomorrow 3pm” or “#tag”";
+"新待办" = "New Task";
+"添加" = "Add";
+"指定时间" = "Set Time";
+"最高优先级" = "Highest Priority";
+"高优先级" = "High Priority";
+"普通优先级" = "Normal Priority";
+"较低优先级" = "Lower Priority";
+"低优先级" = "Low Priority";
+"不重复" = "Never";
+"每天" = "Daily";
+"工作日" = "Weekdays";
+"每周" = "Weekly";
+"每月" = "Monthly";
+
+/* 任务页 */
+"标题" = "Title";
+"标签（空格分隔）" = "Tags (separated by spaces)";
+"安排" = "Schedule";
+"重复" = "Repeat";
+"恢复待办" = "Restore Task";
+"放弃待办" = "Drop Task";
+"删除待办" = "Delete Task";
+"编辑待办" = "Edit Task";
+"待办已删除" = "Task deleted";
+"已删除的任务" = "Deleted task";
+"截止 %@" = "Due %@";
+"已专注 %@" = "Focused %@";
+"%lld 条笔记" = "%lld notes";
+"已完成" = "Done";
+"已放弃" = "Dropped";
+"任务已删除" = "Task deleted";
+"还没有笔记" = "No notes yet";
+"点右上角记一笔" = "Tap the button at the top right to write one";
+
+/* 笔记 */
+"搜索任务或 #标签" = "Search tasks or #tags";
+"%lld 个待办 · %lld 条笔记" = "%lld tasks · %lld notes";
+"%lld 条" = "%lld";
+"%lld 个待办 · %lld 未完成 · %lld 条笔记" = "%lld tasks · %lld open · %lld notes";
+
+/* 日记 */
+"搜索日志" = "Search logs";
+"%lld 条日志" = "%lld logs";
+"小结" = "Summary";
+"这天没有记录" = "Nothing recorded this day";
+"点右下角写一条" = "Tap the button at the bottom right to write one";
+"跳到日期" = "Go to Date";
+"写点什么… 支持 Markdown 和 #标签" = "Write something… Markdown and #tags work";
+"不关联" = "No Task";
+"关联待办" = "Link Task";
+"记一笔" = "New Log";
+"· %lld 条" = "· %lld";
+"已反馈" = "Reflected";
+"专注 %@" = "Focus %@";
+"开始专注" = "Start Focus";
+"专注笔记" = "Focus Note";
+"阶段反馈" = "Reflection";
+"未达到最低专注时长" = "Below minimum focus time";
+"卡点" = "Blocker";
+"计划" = "Plan";
+"计划 %@" = "Planned %@";
+"有效专注 %@" = "Focused %@";
+"%lld 分钟" = "%lld min";
+"%lld 小时 %lld 分" = "%lld h %lld min";
+"%lld 分 %lld 秒" = "%lld min %lld s";
+"收起「%@」" = "Collapse “%@”";
+
+/* 图片 */
+"复制图片" = "Copy Image";
+"复制图中文字" = "Copy Text in Image";
+"存储到照片" = "Save to Photos";
+"分享…" = "Share…";
+"已复制图片" = "Image copied";
+"已复制图中文字" = "Text copied";
+"已存储到照片" = "Saved to Photos";
+"图片还没下载好" = "The image hasn't downloaded yet";
+"没能存到照片：请在设置里允许 Timeline 添加照片" = "Couldn't save: allow Timeline to add photos in Settings";
+
+/* 工作板 */
+"没有工作板" = "No Boards";
+"在待办页面创建" = "Create one from a task";
+"更新于 %@" = "Updated %@";
+
+/* 专注 */
+"时长" = "Duration";
+"这一轮要做成什么？（可不写）" = "What do you want to get done? (optional)";
+"不到 5 分钟又没写目标的一轮不留日志，时长照样累加到任务上。" = "Sessions under 5 minutes without a goal leave no log; the time still counts toward the task.";
+"会先结束正在进行的专注。" = "The current focus session will end first.";
+"专注时间到" = "Focus time is up";
+"时间到" = "Time's up";
+"已暂停" = "Paused";
+"专注中" = "Focusing";
+"时间到 · 点开选择结束或加时" = "Time's up · tap to end or add time";
+"再 5 分钟" = "5 More Minutes";
+"+5 分钟" = "+5 min";
+"提前结束这一轮专注？" = "End this focus session early?";
+"没有进行中的专注" = "No focus session";
+"手动结束" = "Ended manually";
+"计时结束" = "Timer finished";
+"切换到了另一个任务" = "Switched to another task";
+"任务已完成" = "Task completed";
+"任务已放弃" = "Task dropped";
+"应用退出" = "App quit";
+
+/* 设置 */
+"语言" = "Language";
+"界面语言" = "Language";
+"跟随系统 / System" = "System";
+"iCloud 同步" = "iCloud Sync";
+"同步文件夹" = "Sync Folder";
+"更换文件夹" = "Change Folder";
+"停止同步" = "Stop Syncing";
+"选择 iCloud 云盘里的 Timeline 文件夹" = "Choose the Timeline folder in iCloud Drive";
+"先在 Mac 版 Timeline 的设置里打开「通过 iCloud Drive 与 iPhone 同步」，iCloud 云盘里会出现「Timeline」文件夹；再在这里选中它。草稿不同步。" = "First turn on “Sync with iPhone through iCloud Drive” in Timeline's settings on your Mac. A “Timeline” folder appears in iCloud Drive; choose it here. Drafts aren't synced.";
+"数据" = "Data";
+"本机数据" = "On This iPhone";
+"日志" = "Logs";
+"状态" = "Status";
+"上次同步" = "Last Sync";
+"其他设备" = "Other Devices";
+"立即同步" = "Sync Now";
+"无法记住这个文件夹：%@" = "Couldn't remember this folder: %@";
+"找不到之前选的同步文件夹，请重新选择。" = "The sync folder can't be found. Please choose it again.";
