@@ -101,7 +101,7 @@ struct MonthSwipeCatcher: NSViewRepresentable {
         }
 
         private func handle(_ event: NSEvent) {
-            guard let window, event.window === window, window.attachedSheet == nil, event.hasPreciseScrollingDeltas else { return }
+            guard let window, event.window === window, !isHiddenOrHasHiddenAncestor, window.attachedSheet == nil, event.hasPreciseScrollingDeltas else { return }
             if event.phase == .began || event.phase == .mayBegin { accumulated = 0; fired = false }
             guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
             if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 1.5 {

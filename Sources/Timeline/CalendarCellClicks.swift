@@ -36,7 +36,7 @@ final class CalendarClickView: NSView {
     func installMonitor() {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
-            guard let self, let window, event.window === window, window.attachedSheet == nil else { return event }
+            guard let self, let window, event.window === window, !isHiddenOrHasHiddenAncestor, window.attachedSheet == nil else { return event }
             track(event.type, at: convert(event.locationInWindow, from: nil), clickCount: event.clickCount)
             return event
         }

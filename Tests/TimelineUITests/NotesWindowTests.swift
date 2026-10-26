@@ -182,36 +182,43 @@ final class NotesWindowTests: XCTestCase {
         controller.close()
     }
 
-    /// 主窗口和笔记互斥：笔记出现前请主窗口收起；主窗口出现时笔记关掉，且不把焦点交还给之前的应用。
-    func testNotesAndMainWindowTakeTurns() throws {
+    /// 和主界面共用一个窗口：笔记页放进同一个窗口，两页互斥；切走再切回来，各页的键盘焦点还在原处。
+    func testNotesShareTheMainWindowAndTakeTurnsWithTheMainPage() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let store = JournalStore(directory: directory)
-        let main = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
-        main.isReleasedWhenClosed = false
-        main.orderFront(nil)
+        let host = FakeNotesHost()
+        let field = NSTextField(frame: NSRect(x: 20, y: 20, width: 200, height: 24))
+        let main = NSView(frame: .zero)
+        main.addSubview(field)
+        host.pages.setMain(main)
         let controller = NotesWindowController()
-        Self.keepAlive += [main, controller]
-        controller.willShow = { main.orderOut(nil) }
-        var handedOff = 0
-        controller.handoffWindow = { handedOff += 1; return nil }
+        controller.host = host
+        Self.keepAlive += [host, controller]
+        XCTAssertNil(controller.window, "还没打开过笔记")
+        XCTAssertTrue(host.window.makeFirstResponder(field))
 
         controller.show(store: store, taskID: nil, reveal: { _ in }, openDay: { _ in })
-        let window = try XCTUnwrap(controller.window)
-        XCTAssertTrue(window.isVisible)
-        XCTAssertFalse(main.isVisible, "笔记出现时主窗口收起")
+        XCTAssertTrue(controller.window === host.window, "笔记页在主窗口里，不另开窗口")
+        XCTAssertTrue(host.pages.showsNotes)
+        XCTAssertTrue(main.isHidden, "主界面藏起来")
+        XCTAssertTrue(controller.isVisible)
+        XCTAssertFalse((host.window.firstResponder as? NSView)?.isDescendant(of: main) == true, "打字不会落进藏起来的主界面")
 
-        main.orderFront(nil)
-        controller.closeForMain()
-        XCTAssertFalse(window.isVisible, "主窗口出现时笔记关掉")
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        XCTAssertEqual(handedOff, 0, "为主窗口让路时不交还焦点")
+        host.pages.show(notes: false)
+        XCTAssertFalse(controller.isVisible, "切回主界面后笔记不算开着")
+        XCTAssertFalse(controller.isKey)
+        let editor = host.window.firstResponder as? NSTextView
+        XCTAssertTrue(editor?.delegate === field, "主界面的焦点还在原来的文字框")
+        controller.close()
+        XCTAssertEqual(host.dismissed, 0, "笔记页不在前面时关笔记不收起窗口")
 
         controller.openTag("Work", log: nil)
-        XCTAssertTrue(window.isVisible, "已经建好的笔记窗口直接打开标签")
+        XCTAssertTrue(host.pages.showsNotes, "已经建好的笔记页直接切过来")
         XCTAssertEqual(controller.workspace.mode, .notes)
-        XCTAssertFalse(main.isVisible)
         controller.close()
+        XCTAssertEqual(host.dismissed, 1, "笔记页在前面时关笔记收起整个窗口")
+        host.window.orderOut(nil)
     }
 
     func testToggleOpensThenClosesAndKeepsSizeAcrossToggles() throws {
@@ -233,4 +240,24 @@ final class NotesWindowTests: XCTestCase {
         XCTAssertEqual(window.contentLayoutRect.width, 900, accuracy: 1, "重新打开时大小不变")
         controller.close()
     }
+}
+
+/// 测试用的主窗口：两页叠在一个隐藏窗口里。
+@MainActor
+private final class FakeNotesHost: NotesHost {
+    let pages = WorkspacePagesView()
+    let window: NSWindow
+    var dismissed = 0
+
+    init() {
+        window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = pages
+    }
+
+    var hostWindow: NSWindow { window }
+    var showsNotes: Bool { pages.showsNotes }
+    func installNotes(_ view: NSView) { pages.setNotes(view) }
+    func presentNotes() { pages.show(notes: true); window.orderFront(nil) }
+    func dismissNotes() { dismissed += 1 }
 }

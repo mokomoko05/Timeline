@@ -480,7 +480,7 @@ struct NotesView: View {
                 }
             }
             if !topic.deleted {
-                iconAction("list.bullet", "在清单中显示") { close(); reveal(topic.id) }
+                iconAction("list.bullet", "在清单中显示") { reveal(topic.id) }
             }
             iconAction("doc.on.doc", "复制为 Markdown") {
                 NSPasteboard.general.clearContents()

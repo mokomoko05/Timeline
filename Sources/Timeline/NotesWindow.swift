@@ -16,14 +16,33 @@ enum NotesHotKeyAction: Equatable {
     }
 }
 
-/// 笔记窗口：可以自由调整大小的独立窗口。它和主窗口、终端、快速记录窗口互不依赖：
-/// 各自用自己的快捷键开关，主窗口收起（⌃⌥D）时笔记照常留着；大小和位置会被记住。
+/// 和主界面共用一个窗口时，笔记 / 日记页的宿主（AppDelegate）：两页互斥，同一个窗口里切换。
+@MainActor
+protocol NotesHost: AnyObject {
+    var hostWindow: NSWindow { get }
+    /// 窗口里现在显示的是笔记 / 日记页。
+    var showsNotes: Bool { get }
+    /// 第一次打开时把笔记页放进窗口（先藏着）。
+    func installNotes(_ view: NSView)
+    /// 切到笔记页并把窗口带到前面。
+    func presentNotes()
+    /// 关掉笔记页：收起整个窗口，焦点回到之前的应用。
+    func dismissNotes()
+}
+
+/// 笔记 / 日记。应用里和主界面共用主窗口（`host`），切换时整页换掉，窗口位置大小不变；
+/// 没有宿主时（测试、截图）用一个独立的、可以自由调整大小的窗口。
 @MainActor
 final class NotesWindowController: NSObject, NSWindowDelegate {
     static let frameName = "TimelineNotesWindow"
-    /// 应用里唯一的笔记窗口：界面和全局快捷键共用同一个。
+    /// 应用里唯一的笔记页：界面和全局快捷键共用同一个。
     static let shared = NotesWindowController()
-    private(set) var window: NSWindow?
+    /// 共用的主窗口；设置后不再建独立窗口。
+    weak var host: NotesHost?
+    private var ownWindow: NSWindow?
+    private var hostedView: NSHostingView<AnyView>?
+    /// 笔记页所在的窗口（还没打开过就是 nil）。
+    var window: NSWindow? { host.map { hostedView == nil ? nil : $0.hostWindow } ?? ownWindow }
     /// 上次停留的位置，存进偏好；窗口关闭后视图和里面没发送的草稿也留着。
     let nav: NotesNavigation
     /// 合并窗口与页面共用当前模式和日期。
@@ -34,68 +53,68 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
         self.nav = nav ?? NotesNavigation(defaults: .standard)
         super.init()
     }
-    /// 笔记关闭后，Timeline 别的窗口（主窗口、终端）如果还开着，焦点交给它；由 AppDelegate 设置。
+    /// 独立窗口关闭后，Timeline 别的窗口（主窗口、终端）如果还开着，焦点交给它；由 AppDelegate 设置。
     var handoffWindow: () -> NSWindow? = { nil }
-    /// 笔记窗口出现在前面时调用：主窗口和笔记互斥，AppDelegate 在这里收起主窗口。
-    var willShow: () -> Void = {}
-    /// 主窗口要出现而关掉笔记时不交还焦点（焦点就在主窗口上）。
-    private var closingForMain = false
 
-    var isVisible: Bool { window?.isVisible == true }
+    /// 笔记页正显示着（共用窗口时还要求窗口当前是笔记页）。
+    var isVisible: Bool {
+        guard let window, window.isVisible else { return false }
+        return host?.showsNotes ?? true
+    }
+    var isKey: Bool { isVisible && window?.isKeyWindow == true }
 
-    /// 打开笔记窗口。指定 `taskID` 或 `tag` 就跳到那里；都不指定则保持上次关闭时的样子。已经开着就复用同一个窗口。
+    /// 打开笔记。指定 `taskID` 或 `tag` 就跳到那里；都不指定则保持上次关闭时的样子。已经开着就复用同一个页面。
     func show(store: JournalStore, taskID: UUID?, tag: String? = nil,
               reveal: @escaping (UUID) -> Void, openDay: @escaping (Date) -> Void) {
-        let window = self.window ?? makeWindow()
-        self.window = window
         if let taskID { nav.open(task: taskID) }
         if let tag { nav.open(tag: tag) }
         workspace.open(.notes)
-        let view = UnifiedNotesView(store: store, workspace: workspace, nav: nav,
-                                    close: { [weak self] in self?.close() },
-                                    reveal: reveal, openDay: openDay)
-        // 不再给视图换新的 id：保持同一个视图，里面的草稿、编辑状态和滚动位置都留着。
-        if let host = window.contentViewController as? NSHostingController<AnyView> {
-            host.rootView = AnyView(LocalizedRoot { view })
-        }
+        install(store: store, reveal: reveal, openDay: openDay)
         bringToFront()
     }
 
-    /// 打开合并窗口的日记模式。日期列表和右侧日志视图共用同一个窗口及窗口状态。
+    /// 打开日记模式。日期列表和右侧日志视图共用同一个页面及状态。
     func showJournal(store: JournalStore, date: Date, log: UUID? = nil,
                      reveal: @escaping (UUID) -> Void = { _ in }, openDay: @escaping (Date) -> Void = { _ in }) {
-        let window = self.window ?? makeWindow()
-        self.window = window
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
         workspace.open(.journal, date: date, log: log)
+        install(store: store, reveal: reveal, openDay: openDay)
+        bringToFront()
+    }
+
+    /// 不再给视图换新的 id：保持同一个视图，里面的草稿、编辑状态和滚动位置都留着。
+    private func install(store: JournalStore, reveal: @escaping (UUID) -> Void, openDay: @escaping (Date) -> Void) {
         let view = UnifiedNotesView(store: store, workspace: workspace, nav: nav,
                                     close: { [weak self] in self?.close() },
                                     reveal: reveal, openDay: openDay)
-        if let host = window.contentViewController as? NSHostingController<AnyView> {
-            host.rootView = AnyView(LocalizedRoot { view })
+        let root = AnyView(LocalizedRoot { view })
+        if let host {
+            if let hostedView { hostedView.rootView = root; return }
+            let hosting = NSHostingView(rootView: root)
+            hostedView = hosting
+            host.installNotes(hosting)
+        } else {
+            let window = ownWindow ?? makeWindow()
+            ownWindow = window
+            (window.contentViewController as? NSHostingController<AnyView>)?.rootView = root
         }
-        bringToFront()
     }
 
     /// 先把复用的窗口带到当前桌面，再激活应用，避免系统先切回窗口原来的桌面。
     func bringToFront() {
-        guard let window else { return }
+        if let host {
+            guard hostedView != nil else { return }
+            host.presentNotes()
+            return
+        }
+        guard let window = ownWindow else { return }
         if window.isMiniaturized { window.deminiaturize(nil) }
-        willShow()
         WindowFade.reset(window)
         window.makeKeyAndOrderFront(nil)
         Headless.activateApp()
     }
 
-    /// 主窗口出现时关掉笔记（两者互斥），焦点留在主窗口，不回到之前的应用。
-    func closeForMain() {
-        guard let window, window.isVisible else { return }
-        closingForMain = true
-        window.close()
-        closingForMain = false
-    }
-
-    /// 在已经建好的笔记窗口里打开一个标签的笔记本，停在 `log` 那一条。
+    /// 在已经建好的笔记页里打开一个标签的笔记本，停在 `log` 那一条。
     func openTag(_ tag: String, log: UUID?) {
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
         nav.open(tag: tag)
@@ -114,13 +133,13 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
         workspace.open(.journal, date: date)
     }
-    /// 在同一个窗口里切到日记的这一天，停在 `log` 那一条（从笔记的日期点过来）。
+    /// 在同一个页面里切到日记的这一天，停在 `log` 那一条（从笔记的日期点过来）。
     func openJournal(date: Date, log: UUID?) {
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
         workspace.open(.journal, date: date, log: log)
     }
 
-    /// 在同一个窗口里切到这个任务的笔记，滚到 `log` 那一条（从日记里点了日志关联的任务）。
+    /// 在同一个页面里切到这个任务的笔记，滚到 `log` 那一条（从日记里点了日志关联的任务）。
     func openTaskNotes(_ id: UUID, log: UUID?) {
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
         nav.open(task: id)
@@ -129,9 +148,15 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
         bringToFront()
     }
     func shift(_ days: Int) { setDate(JournalDates.calendar.date(byAdding: .day, value: days, to: journalDate) ?? journalDate) }
-    var isKey: Bool { window?.isKeyWindow == true }
 
-    func close() { window?.close() }
+    /// 关掉笔记：共用窗口时收起整个窗口（笔记页不在前面就什么都不做），独立窗口时关掉它。
+    func close() {
+        if let host {
+            if isVisible { host.dismissNotes() }
+        } else {
+            ownWindow?.close()
+        }
+    }
 
     /// 菜单切换：当前桌面开着就关，其他桌面开着就带到当前桌面。
     func toggle(store: JournalStore, taskID: UUID?,
@@ -165,9 +190,8 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
         return window
     }
 
-    /// 关闭后：Timeline 还有别的窗口开着就交给它，否则回到刚才在用的应用（和主窗口、终端的收起一致）。
+    /// 独立窗口关闭后：Timeline 还有别的窗口开着就交给它，否则回到刚才在用的应用（和主窗口、终端的收起一致）。
     func windowWillClose(_ notification: Notification) {
-        guard !closingForMain else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self, NSApplication.shared.isActive else { return }
             PreviousApp.restore(handoff: handoffWindow())

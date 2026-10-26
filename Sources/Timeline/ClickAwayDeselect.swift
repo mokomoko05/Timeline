@@ -68,7 +68,8 @@ struct ClickAwayDeselect: NSViewRepresentable {
 
         /// 按下时记下当时的选中项和点的位置；事件处理完之后再决定要不要取消选中。
         func handle(_ event: NSEvent) {
-            guard let window, event.window === window, let content = window.contentView, let regions else { return }
+            // 和笔记页共用窗口：这一页藏着时不管。
+            guard let window, event.window === window, !isHiddenOrHasHiddenAncestor, let content = window.contentView, let regions else { return }
             let point = content.convert(event.locationInWindow, from: nil)
             let flipped = content.isFlipped ? point : CGPoint(x: point.x, y: content.bounds.height - point.y)
             guard let before = selection(), !regions.containsRow(at: flipped) else { return }

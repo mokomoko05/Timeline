@@ -348,7 +348,7 @@ struct SearchKeyCatcher: NSViewRepresentable {
         func install() {
             guard monitor == nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self, let window, event.window === window,
+                guard let self, let window, event.window === window, !isHiddenOrHasHiddenAncestor,
                       event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
                       (window.firstResponder as? NSTextView)?.hasMarkedText() != true else { return event }
                 switch event.keyCode {
