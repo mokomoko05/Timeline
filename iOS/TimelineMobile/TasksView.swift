@@ -213,7 +213,9 @@ struct TasksView: View {
         switch row {
         case .day(_, _, let title, let subtitle, let kind):
             let color: Color = kind == .overdue ? Palette.deadline : (kind == .today ? Palette.accent : Palette.muted)
-            RailRow(label: kind == .undated ? "" : title, labelColor: color, hasPrevious: hasPrevious, hasNext: hasNext, nodeY: 14) {
+            // 和上一组之间的空隙放在行里面，竖线才会画过去，不在两组之间断开。
+            let gap: CGFloat = hasPrevious ? 14 : 0
+            RailRow(label: kind == .undated ? "" : title, labelColor: color, hasPrevious: hasPrevious, hasNext: hasNext, nodeY: 14 + gap) {
                 if kind == .today { Dot(color: color, size: 7, ring: true) }
                 else if kind == .undated { Rectangle().fill(Palette.line).frame(width: 12, height: 1.5).background(Palette.background) }
                 else { Circle().stroke(color, lineWidth: 1.5).frame(width: 9, height: 9).background(Circle().fill(Palette.background)) }
@@ -221,10 +223,9 @@ struct TasksView: View {
                 Text(subtitle)
                     .font(.subheadline.weight(kind == .today ? .semibold : .regular))
                     .foregroundStyle(color)
-                    .padding(.top, 4)
+                    .padding(.top, 4 + gap)
                     .padding(.bottom, 10)
             }
-            .padding(.top, hasPrevious ? 14 : 0)
         case .task(let item, _):
             RailRow(label: timeLabel(item.task), labelColor: item.task.dueHasTime ? Palette.accent : Palette.muted,
                     hasPrevious: hasPrevious, hasNext: hasNext, nodeY: 22) {

@@ -97,7 +97,8 @@ struct LogTimeline: View {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                 switch row {
                 case .day(_, let date, let count):
-                    RailRow(label: "", hasPrevious: index > 0, hasNext: index < rows.count - 1, nodeY: 14) {
+                    // 和上一天之间的空隙放在行里面，竖线画过去不断开。
+                    RailRow(label: "", hasPrevious: index > 0, hasNext: index < rows.count - 1, nodeY: index > 0 ? 24 : 14) {
                         Dot(color: JournalDates.calendar.isDateInToday(date) ? Palette.accent : Palette.muted, size: 8, ring: true)
                     } content: {
                         HStack(spacing: 8) {
@@ -108,9 +109,8 @@ struct LogTimeline: View {
                                 .font(.subheadline.monospacedDigit()).foregroundStyle(Palette.muted)
                             Text("· \(count) 条").font(.subheadline).foregroundStyle(Palette.muted)
                         }
-                        .padding(.top, 4).padding(.bottom, 12)
+                        .padding(.top, 4 + (index > 0 ? 10 : 0)).padding(.bottom, 12)
                     }
-                    .padding(.top, index > 0 ? 10 : 0)
                 case .log(let logged, let inFocus):
                     LogEntryRow(store: store, logged: logged, showsTask: showsTask, task: showsTask ? logged.log.taskID.flatMap(store.locate) : nil,
                                 hasPrevious: index > 0, hasNext: index < rows.count - 1, focus: inFocus, highlighted: flash == logged.id)
@@ -122,6 +122,8 @@ struct LogTimeline: View {
                         FocusRoundCard(round: round, collapsed: collapsedRounds.contains(round.id)) {
                             if collapsedRounds.contains(round.id) { collapsedRounds.remove(round.id) } else { collapsedRounds.insert(round.id) }
                         }
+                        // 专注小结卡往左伸，盖过竖线（这一行没有节点）。
+                        .padding(.leading, -(RailRow<EmptyView, EmptyView>.railWidth + 12))
                         .padding(.bottom, 12)
                     }
                 }

@@ -169,8 +169,10 @@ struct RailRow<Node: View, Content: View>: View {
                 .minimumScaleFactor(label.count > 5 ? 0.7 : 1)
                 .frame(width: Self.labelWidth, alignment: .trailing)
                 .padding(.top, nodeY - 8)
-            node().frame(width: 20, height: 20).offset(y: nodeY - 10)
-                .frame(width: Self.railWidth, alignment: .top)
+            // 节点放在固定大小的占位上：没有节点（`EmptyView`）的行也留出这一格，右边的内容和别的行对齐。
+            Color.clear.frame(width: Self.railWidth, height: 20)
+                .overlay { node() }
+                .offset(y: nodeY - 10)
                 .padding(.horizontal, 6)
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
