@@ -6,6 +6,7 @@ struct SyncSettingsView: View {
     @ObservedObject var store: JournalStore
     @ObservedObject var sync: SyncModel
     @EnvironmentObject private var languages: LanguageStore
+    @EnvironmentObject private var reminders: ReminderScheduler
     @State private var choosing = false
 
     var body: some View {
@@ -30,6 +31,18 @@ struct SyncSettingsView: View {
                     Text("iCloud 同步")
                 } footer: {
                     Text("先在 Mac 版 Timeline 的设置里打开「通过 iCloud Drive 与 iPhone 同步」，iCloud 云盘里会出现「Timeline」文件夹；再在这里选中它。草稿不同步。")
+                }
+                Section {
+                    Toggle("在 iPhone 上提醒待办", isOn: Binding(get: { reminders.isEnabled }, set: { reminders.isEnabled = $0 }))
+                    if reminders.isEnabled, reminders.authorization == .denied {
+                        Button("通知未开启，去设置里允许") {
+                            if let url = URL(string: UIApplication.openNotificationSettingsURLString) { UIApplication.shared.open(url) }
+                        }
+                    }
+                } header: {
+                    Text("提醒")
+                } footer: {
+                    Text("在 Mac 或 iPhone 上给待办设的提醒，都会在这台 iPhone 上响。应用在后台时会不定时同步一次，新设的提醒也能排上。")
                 }
                 if let message = store.errorMessage {
                     Section("数据") { Text(message).foregroundStyle(.red) }

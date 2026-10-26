@@ -41,6 +41,9 @@ struct TasksView: View {
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { note in
                 if note.object as? String == "task" { adding = true }
             }
+            .onReceive(NotificationCenter.default.publisher(for: ReminderScheduler.revealTask)) { note in
+                if let id = note.object as? UUID, store.locate(id) != nil { path = [id] }
+            }
             .syncOnRefresh(sync)
             .safeAreaInset(edge: .bottom) { FocusBar() }
         }
@@ -565,6 +568,8 @@ struct TaskDateSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var date = Date()
     @State private var hasTime = false
+    @State private var reminder = -1
+    @EnvironmentObject private var reminders: ReminderScheduler
 
     var body: some View {
         NavigationStack {
@@ -573,6 +578,13 @@ struct TaskDateSheet: View {
                     .datePickerStyle(.graphical)
                 Toggle("指定时间", isOn: $hasTime.animation())
                 if hasTime { DatePicker("时间", selection: $date, displayedComponents: .hourAndMinute) }
+                Section {
+                    ReminderPicker(minutes: $reminder, timed: hasTime)
+                } footer: {
+                    if reminder >= 0, reminders.authorization == .denied {
+                        Text("通知未开启：到 设置 › 通知 › Timeline 里允许通知，提醒才会响。")
+                    }
+                }
             }
             .navigationTitle("截止日期")
             .navigationBarTitleDisplayMode(.inline)
@@ -584,6 +596,7 @@ struct TaskDateSheet: View {
                 guard let task = store.locate(id)?.task else { return }
                 date = task.dueDate ?? Date()
                 hasTime = task.dueHasTime
+                reminder = task.reminderMinutes ?? -1
             }
         }
         .presentationDetents([.large])
@@ -594,7 +607,7 @@ struct TaskDateSheet: View {
         let calendar = JournalDates.calendar
         let due = hasTime ? calendar.date(bySetting: .second, value: 0, of: date) ?? date : calendar.startOfDay(for: date)
         store.updateTodo(id, scheduledDate: item.date, dueDate: due, dueHasTime: hasTime,
-                         reminderMinutes: item.task.reminderMinutes, repeatRule: item.task.repeatRule)
+                         reminderMinutes: reminder < 0 ? nil : reminder, repeatRule: item.task.repeatRule)
         store.save()
     }
 }

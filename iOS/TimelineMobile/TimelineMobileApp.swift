@@ -6,21 +6,23 @@ struct TimelineMobileApp: App {
     @StateObject private var store: JournalStore
     @StateObject private var sync: SyncModel
     @StateObject private var focus: FocusTimer
+    @StateObject private var reminders: ReminderScheduler
     @StateObject private var languages = LanguageStore()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
-        let store = JournalStore()
-        store.writesInBackground = true
-        _store = StateObject(wrappedValue: store)
-        _sync = StateObject(wrappedValue: SyncModel(store: store))
-        _focus = StateObject(wrappedValue: FocusTimer(store: store))
+        let services = AppServices.shared
+        _store = StateObject(wrappedValue: services.store)
+        _sync = StateObject(wrappedValue: services.sync)
+        _focus = StateObject(wrappedValue: services.focus)
+        _reminders = StateObject(wrappedValue: services.reminders)
     }
 
     var body: some Scene {
         WindowGroup {
             RootView(store: store, sync: sync)
                 .environmentObject(focus)
+                .environmentObject(reminders)
                 .environmentObject(languages)
                 // 换语言：整个界面按新语言重建（拼出来的字符串也要重新算）。
                 .environment(\.locale, languages.language.locale)
@@ -32,12 +34,37 @@ struct TimelineMobileApp: App {
             case .active:
                 sync.setActive(true)
                 focus.refresh()
+                reminders.refresh()
             case .background:
                 store.save()
                 sync.setActive(false)
+                BackgroundRefresh.schedule()
             default: break
             }
         }
+        .backgroundTask(.appRefresh(BackgroundRefresh.identifier)) {
+            await BackgroundRefresh.run(sync: AppServices.shared.sync, reminders: AppServices.shared.reminders)
+        }
+    }
+}
+
+/// 应用里只有一份的数据和服务。界面、快捷指令（App Intents）和后台刷新都从这里拿，
+/// 快捷指令在后台把应用拉起来时也不会建出第二份数据。
+@MainActor
+final class AppServices {
+    static let shared = AppServices()
+    let store: JournalStore
+    let sync: SyncModel
+    let focus: FocusTimer
+    let reminders: ReminderScheduler
+
+    private init() {
+        let store = JournalStore()
+        store.writesInBackground = true
+        self.store = store
+        sync = SyncModel(store: store)
+        focus = FocusTimer(store: store)
+        reminders = ReminderScheduler(store: store)
     }
 }
 
@@ -68,6 +95,7 @@ struct RootView: View {
                 .tag(Tab.settings)
         }
         .tint(Palette.accent)
+        .onReceive(NotificationCenter.default.publisher(for: ReminderScheduler.revealTask)) { _ in tab = .tasks }
         .onAppear {
             // 截图检查用：启动参数 `-startTab journal` 直接打开某个标签页。
             if let start = UserDefaults.standard.string(forKey: "startTab").flatMap(Tab.init(rawValue:)) { tab = start }

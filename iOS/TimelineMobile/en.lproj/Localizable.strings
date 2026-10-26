@@ -229,3 +229,20 @@
 "恢复工作板版本" = "Restore Board Version";
 "删除的日志、待办和工作板在本机保留 30 天，包括其他设备同步过来的删除。左滑恢复。" = "Deleted entries, tasks and boards stay on this device for 30 days, including deletions synced from other devices. Swipe right to restore.";
 "%@删除" = "Deleted %@";
+
+/* 待办提醒 */
+"提醒" = "Reminders";
+"在 iPhone 上提醒待办" = "Remind me on this iPhone";
+"通知未开启，去设置里允许" = "Notifications are off — allow them in Settings";
+"在 Mac 或 iPhone 上给待办设的提醒，都会在这台 iPhone 上响。应用在后台时会不定时同步一次，新设的提醒也能排上。" = "Reminders set on your Mac or iPhone will alert on this iPhone. The app syncs now and then in the background so new reminders get scheduled too.";
+"通知未开启：到 设置 › 通知 › Timeline 里允许通知，提醒才会响。" = "Notifications are off. Allow them in Settings › Notifications › Timeline for reminders to alert.";
+"不提醒" = "None";
+"截止时" = "At due time";
+"当天 09:00" = "9:00 on the day";
+"提前 15 分钟" = "15 minutes before";
+"提前 30 分钟" = "30 minutes before";
+"提前 1 小时" = "1 hour before";
+"提前 1 天" = "1 day before";
+"事项提醒" = "Reminder";
+"推迟 10 分钟" = "Snooze 10 minutes";
+"推迟 1 小时" = "Snooze 1 hour";
