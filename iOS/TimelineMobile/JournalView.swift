@@ -15,6 +15,8 @@ struct JournalView: View {
     @State private var jump: UUID?
     /// 右下角跳到顶部 / 底部的按钮（不订阅：滚动时只刷新按钮）。
     @State private var edges = ScrollEdges()
+    /// 左上角日历开没开（不订阅：开关日历不重算整页）。
+    @State private var calendar = CalendarToggle()
 
     var body: some View {
         let byDay = Dictionary(grouping: store.allLogs(includeFocus: true), by: \.key)
@@ -27,6 +29,11 @@ struct JournalView: View {
                     JournalSearchResults(store: store, query: query)
                 }
             }
+            .overlay {
+                CalendarOverlay(toggle: calendar, days: keys, selection: selection,
+                                prepare: { prewarm(keys: $0, byDay: byDay) },
+                                pick: { key in jump(to: key, keys: keys, byDay: byDay) })
+            }
             .background(Palette.background)
             .searchable(text: $query, prompt: "搜索日志")
             .notesDestinations(store)
@@ -35,7 +42,7 @@ struct JournalView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    CalendarButton(days: keys, selection: selection) { go(to: $0, keys: keys) }
+                    Button { calendar.isOpen.toggle() } label: { Image(systemName: "calendar") }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if selection != JournalDates.key(Date()) {
@@ -60,6 +67,7 @@ struct JournalView: View {
             .onAppear { prewarm(around: selection, keys: keys, byDay: byDay) }
             .onChange(of: selection) { _, key in prewarm(around: key, keys: keys, byDay: byDay) }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { if $0.object as? String == "compose" { composing = true } }
+            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openCalendar)) { _ in calendar.isOpen = true }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.previousDay)) { _ in
                 if let target = neighbor(of: selection, in: keys, by: -1) { go(to: target, keys: keys) }
             }
@@ -93,6 +101,7 @@ struct JournalView: View {
             .refreshable { await sync.syncNow() }
             // 换一天就是一个新的滚动视图：从顶部开始，不沿用上一天的位置。
             .id(selection)
+            .onAppear { PerfProbe.lap("这一天出现") }
             .simultaneousGesture(
                 DragGesture(minimumDistance: 30).onEnded { value in
                     let dx = value.translation.width, dy = value.translation.height
@@ -108,6 +117,17 @@ struct JournalView: View {
         selection = key
     }
 
+    /// 从日历跳过去：先在后台把那天的正文解析好（打开日历时多半已经预读过），再换天，换的那一下不在主线程上解析。
+    private func jump(to key: String, keys: [String], byDay: [String: [JournalStore.LoggedLog]]) {
+        let logs = (byDay[key] ?? []).map(\.log)
+        Task {
+            await Task.detached(priority: .userInitiated) {
+                for log in logs { let body = LogStyle.body(log); if !body.isEmpty { _ = MarkdownBlock.parse(body) } }
+            }.value
+            go(to: key, keys: keys)
+        }
+    }
+
     private func neighbor(of key: String, in keys: [String], by offset: Int) -> String? {
         guard let index = keys.firstIndex(of: key), keys.indices.contains(index + offset) else { return nil }
         return keys[index + offset]
@@ -115,8 +135,16 @@ struct JournalView: View {
 
     /// 前后两天的正文先在后台解析好。
     private func prewarm(around key: String, keys: [String], byDay: [String: [JournalStore.LoggedLog]]) {
-        let near = [-2, -1, 1, 2].compactMap { neighbor(of: key, in: keys, by: $0) }
-        MarkdownBlock.prewarm(near.flatMap { byDay[$0] ?? [] }.map { LogStyle.body($0.log) }.filter { !$0.isEmpty })
+        prewarm(keys: [-2, -1, 1, 2].compactMap { neighbor(of: key, in: keys, by: $0) }, byDay: byDay)
+    }
+
+    /// 正文的整理（去前缀、拼用时）也放到后台。
+    private func prewarm(keys: [String], byDay: [String: [JournalStore.LoggedLog]]) {
+        let logs = keys.flatMap { byDay[$0] ?? [] }.map(\.log)
+        guard !logs.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            for log in logs { let body = LogStyle.body(log); if !body.isEmpty { _ = MarkdownBlock.parse(body) } }
+        }
     }
 }
 
@@ -301,47 +329,156 @@ private struct JournalSearchResults: View {
     }
 }
 
-/// 左上角的日历按钮。弹出状态放在这个小视图里：点按钮只刷新它，不重算整页日记，弹得快。
-private struct CalendarButton: View {
+final class CalendarToggle: ObservableObject {
+    @Published var isOpen = false
+}
+
+/// 左上角日历弹出的面板：盖在日记上，点空白处收起。不用系统的日历控件（第一次建要一百多毫秒），也不走弹窗动画，点了就出来。
+private struct CalendarOverlay: View {
+    @ObservedObject var toggle: CalendarToggle
     let days: [String]
     let selection: String
-    let go: (String) -> Void
-    @State private var picking = false
+    let prepare: ([String]) -> Void
+    let pick: (String) -> Void
 
     var body: some View {
-        Button { picking = true } label: { Image(systemName: "calendar") }
-            .sheet(isPresented: $picking) {
-                DayPicker(days: Set(days), selection: selection) { key in
-                    picking = false
-                    go(key)
+        if toggle.isOpen {
+            ZStack(alignment: .top) {
+                Color.black.opacity(0.18).ignoresSafeArea().onTapGesture { toggle.isOpen = false }
+                MonthCalendar(days: Set(days), selection: selection, prepare: prepare) { key in
+                    toggle.isOpen = false
+                    pick(key)
                 }
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+                .onAppear { PerfProbe.lap("日历出现") }
             }
+        }
     }
 }
 
-/// 跳到某一天：点日历上的日子直接过去，下拉关掉就是取消。
-private struct DayPicker: View {
+/// 一个月的日历：有记录的日子下面一个点，点哪天直接跳过去；左右箭头或横划换月。
+/// 点到没记录的日子：去最近的、更早的一天。
+private struct MonthCalendar: View {
     let days: Set<String>
+    let selection: String
+    let prepare: ([String]) -> Void
     let pick: (String) -> Void
-    @State private var date: Date
+    @State private var month: Date
 
-    init(days: Set<String>, selection: String, pick: @escaping (String) -> Void) {
+    private var calendar: Calendar { JournalDates.calendar }
+
+    init(days: Set<String>, selection: String, prepare: @escaping ([String]) -> Void, pick: @escaping (String) -> Void) {
         self.days = days
+        self.selection = selection
+        self.prepare = prepare
         self.pick = pick
-        _date = State(initialValue: JournalDates.date(for: selection) ?? Date())
+        let date = JournalDates.date(for: selection) ?? Date()
+        _month = State(initialValue: JournalDates.calendar.dateInterval(of: .month, for: date)?.start ?? date)
     }
 
     var body: some View {
-        DatePicker("日期", selection: $date, in: ...Date(), displayedComponents: .date)
-            .datePickerStyle(.graphical)
-            .padding()
-            .onChange(of: date) { _, date in
-                let key = JournalDates.key(date)
-                // 没记录的日子：去最近的、更早的一天。
-                pick(days.contains(key) ? key : (days.filter { $0 <= key }.max() ?? days.min() ?? key))
+        let cells = self.cells
+        VStack(spacing: 8) {
+            HStack {
+                step(-1, "chevron.left")
+                Spacer()
+                Text(month.formatted(.dateTime.year().month(.wide))).font(.headline).foregroundStyle(Palette.ink)
+                Spacer()
+                step(1, "chevron.right").disabled(month >= thisMonth)
             }
-            .presentationDetents([.medium])
-            .presentationDragIndicator(.visible)
+            HStack(spacing: 0) {
+                ForEach(weekdays, id: \.self) { Text($0).frame(maxWidth: .infinity) }
+            }
+            .font(.caption)
+            .foregroundStyle(Palette.muted)
+            VStack(spacing: 2) {
+                ForEach(0..<cells.count / 7, id: \.self) { row in
+                    HStack(spacing: 0) {
+                        ForEach(0..<7, id: \.self) { column in cell(cells[row * 7 + column]) }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(Palette.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+        .gesture(DragGesture(minimumDistance: 20).onEnded { value in
+            let dx = value.translation.width
+            guard abs(dx) > 50, abs(dx) > abs(value.translation.height) else { return }
+            move(dx < 0 ? 1 : -1)
+        })
+        .onAppear { prepare(recorded(in: cells)) }
+        .onChange(of: month) { prepare(recorded(in: self.cells)) }
+        .onReceive(NotificationCenter.default.publisher(for: PerfProbe.pickDay)) { note in
+            if let key = note.object as? String { choose(key) }
+        }
+    }
+
+    private var thisMonth: Date { calendar.dateInterval(of: .month, for: Date())?.start ?? Date() }
+
+    /// 这个月的格子，前面用 nil 补齐到一周的第一天，后面补齐整周。
+    private var cells: [String?] {
+        let count = calendar.range(of: .day, in: .month, for: month)?.count ?? 30
+        let lead = (calendar.component(.weekday, from: month) - calendar.firstWeekday + 7) % 7
+        var result: [String?] = Array(repeating: nil, count: lead)
+        for day in 0..<count {
+            result.append(calendar.date(byAdding: .day, value: day, to: month).map(JournalDates.key))
+        }
+        while result.count % 7 != 0 { result.append(nil) }
+        return result
+    }
+
+    private var weekdays: [String] {
+        var calendar = calendar
+        calendar.locale = AppLanguage.current.locale
+        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        let first = calendar.firstWeekday - 1
+        return Array(symbols[first...] + symbols[..<first])
+    }
+
+    private func recorded(in cells: [String?]) -> [String] { cells.compactMap { $0 }.filter(days.contains) }
+
+    @ViewBuilder
+    private func cell(_ key: String?) -> some View {
+        if let key {
+            let today = JournalDates.key(Date())
+            let selected = key == selection
+            let future = key > today
+            let recorded = days.contains(key)
+            Button { choose(key) } label: {
+                VStack(spacing: 2) {
+                    Text(key.suffix(2).drop { $0 == "0" })
+                        .font(.system(size: 16, weight: selected || key == today ? .bold : .regular).monospacedDigit())
+                        .foregroundStyle(selected ? .white : (future ? Palette.line : (key == today ? Palette.accent : (recorded ? Palette.ink : Palette.muted))))
+                        .frame(width: 34, height: 34)
+                        .background(selected ? Palette.accent : .clear, in: Circle())
+                    Circle().fill(recorded && !selected ? Palette.accent : .clear).frame(width: 4, height: 4)
+                }
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(future)
+        } else {
+            Color.clear.frame(maxWidth: .infinity, maxHeight: 1)
+        }
+    }
+
+    private func step(_ offset: Int, _ symbol: String) -> some View {
+        Button { move(offset) } label: {
+            Image(systemName: symbol).font(.body.weight(.semibold)).frame(width: 40, height: 32)
+        }
+        .foregroundStyle(Palette.accent)
+    }
+
+    private func move(_ offset: Int) {
+        guard let next = calendar.date(byAdding: .month, value: offset, to: month), next <= thisMonth else { return }
+        month = next
+    }
+
+    private func choose(_ key: String) {
+        pick(days.contains(key) ? key : (days.filter { $0 <= key }.max() ?? days.min() ?? key))
     }
 }
 

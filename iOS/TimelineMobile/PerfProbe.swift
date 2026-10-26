@@ -10,6 +10,8 @@ enum PerfProbe {
     static let enabled = UserDefaults.standard.bool(forKey: "perfProbe")
     static let scripted = UserDefaults.standard.bool(forKey: "perfScript")
     static let previousDay = Notification.Name("PerfProbePreviousDay")
+    static let openCalendar = Notification.Name("PerfProbeOpenCalendar")
+    static let pickDay = Notification.Name("PerfProbePickDay")
     private static var label = "launch"
     private static var marked = CACurrentMediaTime()
     private static var monitor: FrameMonitor?
@@ -24,6 +26,12 @@ enum PerfProbe {
         label = text
         marked = CACurrentMediaTime()
         print("[perf] ▶ \(text)")
+    }
+
+    /// 某个操作走到哪一步了：打印距离上一次 `mark` 过了多久。
+    static func lap(_ text: String) {
+        guard enabled else { return }
+        print("[perf]   \(text) +\(Int((CACurrentMediaTime() - marked) * 1000)) ms")
     }
 
     private static var parsing: CFTimeInterval = 0
@@ -89,7 +97,16 @@ enum PerfProbe {
     /// 自动操作脚本：每一步之间留足时间让上一步的卡顿结束。
     static func runScript(switchTab: @escaping (RootView.Tab) -> Void) {
         guard scripted else { return }
-        let steps: [(Double, String, () -> Void)] = [
+        let calendar = UserDefaults.standard.bool(forKey: "perfCalendar")
+        let day = { (offset: Int) in JournalDates.key(JournalDates.calendar.date(byAdding: .day, value: offset, to: Date()) ?? Date()) }
+        let steps: [(Double, String, () -> Void)] = calendar ? [
+            (3, "切到日记", { switchTab(.journal) }),
+            (3, "打开日历", { NotificationCenter.default.post(name: openCalendar, object: nil) }),
+            (3, "点选日期", { NotificationCenter.default.post(name: pickDay, object: day(-3)) }),
+            (3, "再打开日历", { NotificationCenter.default.post(name: openCalendar, object: nil) }),
+            (3, "再点选日期", { NotificationCenter.default.post(name: pickDay, object: day(-10)) }),
+            (3, "结束", {}),
+        ] : [
             (3, "切到日记", { switchTab(.journal) }),
             (3, "前一天", { NotificationCenter.default.post(name: previousDay, object: nil) }),
             (3, "再前一天", { NotificationCenter.default.post(name: previousDay, object: nil) }),

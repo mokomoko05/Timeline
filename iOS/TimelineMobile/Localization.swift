@@ -24,10 +24,30 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         }
     }
 
-    var locale: Locale { Locale(identifier: identifier) }
+    var locale: Locale { Resolved.of(self).locale }
 
-    fileprivate var bundle: Bundle {
-        Bundle.main.path(forResource: identifier, ofType: "lproj").flatMap(Bundle.init(path:)) ?? .main
+    fileprivate var bundle: Bundle { Resolved.of(self).bundle }
+
+    /// 查表用的语言包和区域：每条日志、每个时间都要用，现算一次要查系统语言偏好、找语言包，
+    /// 换天时几百次加起来就卡；按所选语言记住（后台预读也会用，所以加锁）。
+    private struct Resolved {
+        let language: AppLanguage
+        let bundle: Bundle
+        let locale: Locale
+
+        nonisolated(unsafe) private static var cached: Resolved?
+        private static let lock = NSLock()
+
+        static func of(_ language: AppLanguage) -> Resolved {
+            lock.lock()
+            defer { lock.unlock() }
+            if let cached, cached.language == language { return cached }
+            let identifier = language.identifier
+            let bundle = Bundle.main.path(forResource: identifier, ofType: "lproj").flatMap(Bundle.init(path:)) ?? .main
+            let value = Resolved(language: language, bundle: bundle, locale: Locale(identifier: identifier))
+            cached = value
+            return value
+        }
     }
 }
 
