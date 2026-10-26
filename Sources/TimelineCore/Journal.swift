@@ -190,7 +190,7 @@ public struct ActionEvent: Equatable {
     public let name: String
 }
 
-private struct JournalDocument: Codable {
+struct JournalDocument: Codable {
     var version = 8
     var days: [String: DayEntry] = [:]
     var nextTaskNumber: Int?
@@ -1602,6 +1602,31 @@ public final class JournalStore: ObservableObject {
     private var documentSnapshot: JournalDocument {
         JournalDocument(days: days, nextTaskNumber: nextTaskNumber, tags: tagRegistry.isEmpty ? nil : tagRegistry,
                         pinnedTask: pinnedTaskID, boards: boards.isEmpty ? nil : boards)
+    }
+
+    /// 同步用的内容快照：值类型，可以交给后台线程整理。
+    var syncContent: SyncContent {
+        SyncContent(days: days, boards: boards, tags: tagRegistry, pinnedTask: pinnedTaskID, nextTaskNumber: nextTaskNumber)
+    }
+
+    /// 用合并了其他设备修改的内容整体替换当前数据。远端修改不进撤销栈，已有的撤销记录也作废，
+    /// 免得撤销时把别的设备刚同步过来的内容一起退回去。
+    func applySyncContent(_ content: SyncContent) {
+        guard !isReadOnly, content != syncContent else { return }
+        let tasksChanged = Set(days.keys).union(content.days.keys).contains { (days[$0]?.todos ?? []) != (content.days[$0]?.todos ?? []) }
+        let logsChanged = Set(days.keys).union(content.days.keys).contains { (days[$0]?.logs ?? []) != (content.days[$0]?.logs ?? []) }
+        undoManager.removeAllActions()
+        deletedTodo = nil
+        canUndoDelete = false
+        invalidateNotebookIndex(logsChanged: logsChanged, tasksChanged: tasksChanged)
+        days = content.days
+        if boards != content.boards { boards = content.boards; cachedTagSummaries = nil }
+        if tagRegistry != content.tags { tagRegistry = content.tags }
+        nextTaskNumber = max(nextTaskNumber, content.nextTaskNumber)
+        if pinnedTaskID != content.pinnedTask { pinnedTaskID = content.pinnedTask }
+        if tasksChanged { invalidateTaskIndex() }
+        hasPendingSave = true
+        persist()
     }
 
     func replaceBoards(_ updated: [Board], action: String, debounce: Bool = false) {

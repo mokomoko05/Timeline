@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var loginItem: LoginItem
+    var cloudSync: CloudSyncController?
     @ObservedObject private var themes = ThemeStore.shared
     @ObservedObject private var languages = LanguageStore.shared
     let failedHotKeys: () -> Set<HotKeyAction>?
@@ -45,6 +46,11 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(Palette.muted)
                 Text("暂停不计时，切换应用不影响专注。")
                     .font(.caption).foregroundStyle(Palette.muted)
+            }
+            if let cloudSync {
+                Section("iCloud 同步") {
+                    CloudSyncSettings(controller: cloudSync)
+                }
             }
             Section("通用") {
                 Picker("界面语言", selection: Binding(get: { languages.language }, set: { languages.set($0) })) {
@@ -189,10 +195,12 @@ final class SettingsWindowController {
     private(set) var window: NSWindow?
     private let loginItem: LoginItem
     private let failedHotKeys: () -> Set<HotKeyAction>?
+    private let cloudSync: CloudSyncController?
     private var languageObserver: NSObjectProtocol?
 
-    init(loginItem: LoginItem, failedHotKeys: @escaping () -> Set<HotKeyAction>?) {
+    init(loginItem: LoginItem, cloudSync: CloudSyncController? = nil, failedHotKeys: @escaping () -> Set<HotKeyAction>?) {
         self.loginItem = loginItem
+        self.cloudSync = cloudSync
         self.failedHotKeys = failedHotKeys
         languageObserver = NotificationCenter.default.addObserver(forName: .appLanguageDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.window?.title = AppLocalized("设置") }
@@ -207,9 +215,9 @@ final class SettingsWindowController {
                                   styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = AppLocalized("设置")
             window.isReleasedWhenClosed = false
-            let loginItem = loginItem, failedHotKeys = failedHotKeys
+            let loginItem = loginItem, failedHotKeys = failedHotKeys, cloudSync = cloudSync
             window.contentView = NSHostingView(rootView: LocalizedRoot {
-                SettingsView(loginItem: loginItem, failedHotKeys: failedHotKeys)
+                SettingsView(loginItem: loginItem, cloudSync: cloudSync, failedHotKeys: failedHotKeys)
             })
             window.center()
             self.window = window

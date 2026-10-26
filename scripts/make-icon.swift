@@ -4,7 +4,12 @@ let destination = CommandLine.arguments[1]
 let image = NSImage(size: NSSize(width: 1024, height: 1024))
 image.lockFocus()
 NSColor(srgbRed: 36.0 / 255, green: 41.0 / 255, blue: 47.0 / 255, alpha: 1).setFill()
-NSBezierPath(roundedRect: NSRect(x: 62, y: 62, width: 900, height: 900), xRadius: 205, yRadius: 205).fill()
+// iOS 图标由系统裁圆角，背景铺满整张画布：`--full-bleed`。
+if CommandLine.arguments.contains("--full-bleed") {
+    NSBezierPath(rect: NSRect(x: 0, y: 0, width: 1024, height: 1024)).fill()
+} else {
+    NSBezierPath(roundedRect: NSRect(x: 62, y: 62, width: 900, height: 900), xRadius: 205, yRadius: 205).fill()
+}
 let accent = NSColor(srgbRed: 83.0 / 255, green: 159.0 / 255, blue: 247.0 / 255, alpha: 1)
 let rail = NSBezierPath()
 rail.move(to: NSPoint(x: 318, y: 280))

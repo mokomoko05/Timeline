@@ -1033,3 +1033,11 @@
 "显示完整 Markdown 源码" = "Show full Markdown source";
 "保存并浏览 · ⌘↩" = "Save and browse · ⌘↩";
 "编辑（光标停在点过的位置） · ⌘↩" = "Edit (caret starts where you clicked) · ⌘↩";
+"iCloud 同步" = "iCloud sync";
+"通过 iCloud Drive 与 iPhone 同步" = "Sync with iPhone via iCloud Drive";
+"请先在系统设置的 Apple 账户 › iCloud 中打开 iCloud 云盘。" = "Turn on iCloud Drive in System Settings › Apple Account › iCloud first.";
+"立即同步" = "Sync now";
+"已连接：%@" = "Connected: %@";
+"数据放在 iCloud 云盘的「Timeline」文件夹，每台设备只写自己的文件，草稿不同步。" = "Data lives in the Timeline folder in iCloud Drive. Each device writes only its own file; drafts are not synced.";
+"正在同步…" = "Syncing…";
+"上次同步：%@" = "Last synced: %@";

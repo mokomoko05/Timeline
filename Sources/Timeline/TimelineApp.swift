@@ -82,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var memoryPressure: DispatchSourceMemoryPressure?
     /// 主窗口隐藏半小时以上就释放界面，下次显示前重建。
     private var mainContent: HiddenContentReleaser?
+    private var cloudSync: CloudSyncController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
@@ -93,7 +94,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         focus.store = store
         focusPanel = FocusPanelController(session: focus)
         loginItem = LoginItem()
-        settings = SettingsWindowController(loginItem: loginItem, failedHotKeys: { [weak self] in self?.failedHotKeys })
+        if !snapshotRun { cloudSync = CloudSyncController(store: store) }
+        settings = SettingsWindowController(loginItem: loginItem, cloudSync: cloudSync, failedHotKeys: { [weak self] in self?.failedHotKeys })
         // 切到别的应用就把工作窗口收起来；快速面板和专注计时窗口不在其中。
         autoHide = AutoHideOnResign(windows: { [weak self] in
             [self?.window, NotesWindowController.shared.window, ImageViewerController.shared.window, self?.settings.window]
