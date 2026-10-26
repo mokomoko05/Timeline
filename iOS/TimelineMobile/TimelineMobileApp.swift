@@ -35,7 +35,7 @@ struct RootView: View {
     @ObservedObject var sync: SyncModel
     @State private var tab = Tab.tasks
 
-    enum Tab { case tasks, journal, boards, settings }
+    enum Tab: String { case tasks, journal, notes, boards, settings }
 
     var body: some View {
         TabView(selection: $tab) {
@@ -45,6 +45,9 @@ struct RootView: View {
             JournalView(store: store, sync: sync)
                 .tabItem { Label("日记", systemImage: "book") }
                 .tag(Tab.journal)
+            NotesView(store: store, sync: sync)
+                .tabItem { Label("笔记", systemImage: "text.bubble") }
+                .tag(Tab.notes)
             BoardsView(store: store)
                 .tabItem { Label("工作板", systemImage: "doc.text") }
                 .tag(Tab.boards)
@@ -52,8 +55,12 @@ struct RootView: View {
                 .tabItem { Label("同步", systemImage: sync.isConfigured ? "icloud" : "icloud.slash") }
                 .tag(Tab.settings)
         }
-        .tint(.accentColor)
-        .onAppear { if !sync.isConfigured { tab = .settings } }
+        .tint(Palette.accent)
+        .onAppear {
+            // 截图检查用：启动参数 `-startTab journal` 直接打开某个标签页。
+            if let start = UserDefaults.standard.string(forKey: "startTab").flatMap(Tab.init(rawValue:)) { tab = start }
+            else if !sync.isConfigured { tab = .settings }
+        }
     }
 }
 

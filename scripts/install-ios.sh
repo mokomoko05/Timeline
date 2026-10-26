@@ -118,7 +118,7 @@ PY
 )
 if [ -z "$DEVICE" ]; then
     [ "$MODE" = "--auto" ] && { echo "手机不在线，稍后再试。"; exit 0; }
-    fail "找不到可用的 iPhone。请用数据线连接 iPhone 并在手机上点「信任」；首次还需在 Xcode › Window › Devices and Simulators 里配对，并勾选「Connect via network」以便之后无线安装。"
+    fail "找不到可用的 iPhone。请解锁手机，并连上数据线或与这台 Mac 连同一个 Wi-Fi；首次使用需用数据线连接并在手机上点「信任」。"
 fi
 echo "→ 设备：${NAME//_/ }（${UDID}），团队：${TEAM}，Bundle ID：${BUNDLE_ID}"
 

@@ -17,7 +17,7 @@ iPhone 版和 Mac 版共用数据层（`TimelineCore`），通过 **iCloud 云�
 2. **Xcode**：在 设置 › 账户 里用 Apple ID 登录（免费账号即可）。
 3. **iPhone**：
    - 用数据线连接 Mac，在手机上点「信任」。
-   - 在 Xcode › Window › Devices and Simulators 里勾选「Connect via network」，之后就能通过 Wi-Fi 安装。
+   - 配对一次后，手机和 Mac 在同一个 Wi-Fi 下时就能无线安装（新版 Xcode 自动开启，不再有「Connect via network」选项）。
    - 在手机上打开 设置 › 隐私与安全性 › 开发者模式（手机会重启）。
 4. 运行 `bash scripts/install-ios.sh`。
 5. 首次安装后，手机可能要求信任开发者：到 设置 › 通用 › VPN与设备管理 里信任你的 Apple ID。

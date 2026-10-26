@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* TimelineCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000020 /* TimelineCore */; };
+		A10000000000000000000022 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000023 /* Markdown */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +25,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000001 /* TimelineCore in Frameworks */,
+				A10000000000000000000022 /* Markdown in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -67,6 +69,7 @@
 			name = TimelineMobile;
 			packageProductDependencies = (
 				A10000000000000000000020 /* TimelineCore */,
+				A10000000000000000000023 /* Markdown */,
 			);
 			productName = TimelineMobile;
 			productReference = A10000000000000000000002 /* Timeline.app */;
@@ -94,6 +97,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A10000000000000000000021 /* XCLocalSwiftPackageReference ".." */,
+				A10000000000000000000024 /* XCRemoteSwiftPackageReference "swift-markdown" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A10000000000000000000006 /* Products */;
@@ -245,10 +249,26 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		A10000000000000000000024 /* XCRemoteSwiftPackageReference "swift-markdown" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swiftlang/swift-markdown.git";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 0.5.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		A10000000000000000000020 /* TimelineCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TimelineCore;
+		};
+		A10000000000000000000023 /* Markdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000024 /* XCRemoteSwiftPackageReference "swift-markdown" */;
+			productName = Markdown;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
