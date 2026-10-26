@@ -201,7 +201,7 @@ enum AppCommand {
     case toggleTasks, toggleDayLog, rollover
     case selectAdjacent(Int), toggleSelected, editSelected, deleteSelected, deselect
     case reveal(UUID)
-    case export, backups, settings, quickCapture, notes, toggleNotes
+    case export, backups, recentlyDeleted, settings, quickCapture, notes, toggleNotes
     /// 快捷键一览。
     case shortcuts
     /// 全局快捷键触发：只有笔记已在当前桌面前台时才关闭，否则在当前桌面唤起。

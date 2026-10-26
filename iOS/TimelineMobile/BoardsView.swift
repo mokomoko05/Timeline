@@ -75,6 +75,7 @@ struct BoardPage: View {
     let id: UUID
     @State private var editing = false
     @State private var editor = SourceEditor.Handle()
+    @State private var showingHistory = false
     @Environment(\.scenePhase) private var scenePhase
 
     private var board: Board? { store.boards.first { $0.id == id } }
@@ -109,11 +110,17 @@ struct BoardPage: View {
         .background(Palette.background)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if !editing {
+                Menu {
+                    Button { flush(); showingHistory = true } label: { Label("版本历史", systemImage: "clock.arrow.circlepath") }
+                } label: { Image(systemName: "ellipsis.circle") }
+            }
             Button(editing ? "完成" : "编辑") {
                 if editing { flush() }
                 editing.toggle()
             }
         }
+        .sheet(isPresented: $showingHistory) { BoardHistoryView(store: store, boardID: id) }
         .onChange(of: scenePhase) { _, phase in if phase != .active { flush() } }
         .onAppear { if PerfProbe.typing == "board" { editing = true } }
         .onDisappear { flush() }

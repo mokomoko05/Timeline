@@ -664,6 +664,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             menuItem("插入链接…    ⌘K", send(.insertLink)),
             .separator(),
             menuItem("导出为文件夹…", send(.export)),
+            menuItem("最近删除…", send(.recentlyDeleted)),
             menuItem("备份与恢复…", send(.backups)),
             menuItem("打开数据文件夹") { [weak self] in if let store = self?.store { NSWorkspace.shared.open(store.directory) } },
         ])

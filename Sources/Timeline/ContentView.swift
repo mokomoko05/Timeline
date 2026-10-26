@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var pendingLink: String?
     @State private var agenda: AgendaFilter?
     @State private var showingBackups = false
+    @State private var showingRecentlyDeleted = false
     @State private var showingShortcuts = false
     @State private var requestedEdit: UUID?
     @State private var showingMonthJumper = false
@@ -127,6 +128,7 @@ struct ContentView: View {
             }, openLog: { date, id in notesWindow.showJournal(store: store, date: date, log: id) }, filter: filter)
         }
         .sheet(isPresented: $showingBackups) { BackupRestoreView(store: store) }
+        .sheet(isPresented: $showingRecentlyDeleted) { RecentlyDeletedView(store: store) }
         .sheet(isPresented: $showingShortcuts) { ShortcutsView(close: { showingShortcuts = false }) }
         .alert("暂时无法完成操作", isPresented: Binding(
             get: { actionError != nil || loginItem.errorMessage != nil },
@@ -189,7 +191,7 @@ struct ContentView: View {
     /// 这些命令的结果在主窗口里（清单、日历、搜索面板……）：主窗口被收起了就先把它调出来，不然点了什么都看不到。
     private static func needsMainWindow(_ command: AppCommand) -> Bool {
         switch command {
-        case .newTodo, .agenda, .reveal, .backups, .export, .rollover, .toggleTasks, .shiftMonth, .today, .shiftDay,
+        case .newTodo, .agenda, .reveal, .backups, .recentlyDeleted, .export, .rollover, .toggleTasks, .shiftMonth, .today, .shiftDay,
              .selectAdjacent, .toggleSelected, .editSelected, .deleteSelected, .deadlineSelected, .tagsSelected, .shortcuts,
              .postponeSelected:
             return true
@@ -281,6 +283,7 @@ struct ContentView: View {
         case .reveal(let id): reveal(date: store.locate(id)?.task.dueDate, taskID: id)
         case .export: exportJournal()
         case .backups: showingBackups = true
+        case .recentlyDeleted: showingRecentlyDeleted = true
         case .shortcuts: showingShortcuts = true
         case .settings: AppRouter.showSettings()
         case .quickCapture: AppRouter.showQuickCapture()
@@ -352,6 +355,7 @@ struct ContentView: View {
             Toggle("单击日期时展开待办清单", isOn: $clickExpands)
             Divider()
             Button("导出为文件夹…", action: exportJournal).disabled(store.isReadOnly)
+            Button("最近删除…") { showingRecentlyDeleted = true }
             Button("备份与恢复…") { showingBackups = true }
             Button("设置…") { commands.send(.settings) }
         } label: {

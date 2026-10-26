@@ -292,6 +292,8 @@ struct BoardContentView: View {
         self.favorites = favorites
     }
 
+    @State private var showingHistory = false
+
     private var editing: Bool { navigation.sourceMode }
 
     private var markdown: Binding<String> {
@@ -338,6 +340,7 @@ struct BoardContentView: View {
             Divider()
             BoardEditorArea(store: store, navigation: navigation, board: board, markdown: markdown,
                             preview: { setEditing(false) })
+                .sheet(isPresented: $showingHistory) { BoardHistoryView(store: store, boardID: board.id) }
                 .id(board.id)
             relatedBoards
         }
@@ -373,12 +376,17 @@ struct BoardContentView: View {
                     Menu {
                         templateItem("论文阅读", systemImage: "book.closed", template: .paper)
                         templateItem("会议议程", systemImage: "list.bullet", template: .meeting)
+                        Divider()
+                        Button {
+                            // 编辑器里还没交出去的修改先存下，历史里的「当前内容」才是最新的。
+                            navigation.editorSession(for: board, store: store).commit { showingHistory = true }
+                        } label: { Label("版本历史…", systemImage: "clock.arrow.circlepath") }
                     } label: {
                         Image(systemName: "plus").frame(width: 26, height: 24).contentShape(Rectangle())
                     }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .tint(Palette.muted).foregroundStyle(Palette.muted)
-                    .help("插入模板").accessibilityLabel("插入模板")
+                    .help("插入模板、版本历史").accessibilityLabel("插入模板、版本历史")
                     // 编辑时 ⌘Enter 由编辑器自己处理（保存后回到浏览）；浏览时 ⌘Enter 进入编辑。
                     if editing {
                         headerButton("chevron.left.forwardslash.chevron.right",

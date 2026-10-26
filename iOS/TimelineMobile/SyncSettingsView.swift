@@ -38,6 +38,11 @@ struct SyncSettingsView: View {
                     LabeledContent("待办", value: "\(store.tasks().count)")
                     LabeledContent("日志", value: "\(store.allLogs(includeFocus: true).count)")
                     LabeledContent("工作板", value: "\(store.boards.count)")
+                    NavigationLink {
+                        RecentlyDeletedView(store: store)
+                    } label: {
+                        LabeledContent("最近删除", value: store.recentlyDeleted.isEmpty ? "" : "\(store.recentlyDeleted.count)")
+                    }
                 }
             }
             .navigationTitle("设置")

@@ -224,6 +224,10 @@ public final class JournalStore: ObservableObject {
     }
     /// 固定关联的待办（不计时）。读 `pinnedTask` 才会排除已删除、已完成的。
     @Published public internal(set) var pinnedTaskID: UUID?
+    /// 最近删除（本机保留 30 天，不同步），新删的在前。
+    @Published public internal(set) var recentlyDeleted: [DeletedItem] = []
+    /// 工作板的历史版本，存在 `BoardHistory/` 里，用到时才读。
+    lazy var boardHistory = BoardHistory(directory: directory.appendingPathComponent("BoardHistory", isDirectory: true), writesInBackground: writesInBackground)
     public let directory: URL
     /// 只供保存逻辑判断，界面不读；不发布，否则每次写盘完成清除标记时都会让所有窗口再重算一遍。
     public private(set) var hasPendingSave = false
@@ -370,7 +374,7 @@ public final class JournalStore: ObservableObject {
                 }
                 if assignMissingNumbers(in: &days) { hasPendingSave = true }
             }
-            if readOnlySnapshot { isReadOnly = true; hasPendingSave = false }
+            if readOnlySnapshot { isReadOnly = true; hasPendingSave = false } else { loadRecentlyDeleted() }
         } catch {
             isReadOnly = true
             errorMessage = "无法读取日记，已停止写入以保护原文件。请在数据文件夹中检查 journal.json 和备份。\n\(error.localizedDescription)"
@@ -378,7 +382,7 @@ public final class JournalStore: ObservableObject {
         if hasPendingSave, !isReadOnly { save() }
     }
 
-    private func allocate(_ todo: Todo) -> Todo {
+    func allocate(_ todo: Todo) -> Todo {
         var numbered = todo
         numbered.number = nextTaskNumber
         nextTaskNumber += 1
@@ -1194,7 +1198,7 @@ public final class JournalStore: ObservableObject {
     }
 
     private func referencedImageNames(in days: [String: DayEntry]) -> Set<String> {
-        Set(days.values.flatMap { $0.logs.flatMap(\.images) + $0.logDraftImages })
+        Set(days.values.flatMap { $0.logs.flatMap(\.images) + $0.logDraftImages }).union(imagesInRecentlyDeleted)
     }
 
     /// 删除不再被当前数据、每日快照和上次启动备份引用的图片，之后撤销或恢复备份仍然安全。
@@ -1566,6 +1570,7 @@ public final class JournalStore: ObservableObject {
         let tasksChanged = Set(days.keys).union(updated.keys).contains(where: { (days[$0]?.todos ?? []) != (updated[$0]?.todos ?? []) })
         let logsChanged = Set(days.keys).union(updated.keys).contains { (days[$0]?.logs ?? []) != (updated[$0]?.logs ?? []) }
         invalidateNotebookIndex(logsChanged: logsChanged, tasksChanged: tasksChanged)
+        if tasksChanged || logsChanged { trackDeletions(from: days, to: updated, keys: Set(days.keys).union(updated.keys)) }
         days = updated
         if tasksChanged { invalidateTaskIndex() }
         hasPendingSave = true
@@ -1582,7 +1587,9 @@ public final class JournalStore: ObservableObject {
         updated[key] = entry.hasContent ? entry : nil
         if !debounce { registerUndo(days, replacing: updated, action: action) }
         let tasksChanged = entry.todos != (days[key]?.todos ?? [])
-        invalidateNotebookIndex(logsChanged: entry.logs != (days[key]?.logs ?? []), tasksChanged: tasksChanged)
+        let logsChanged = entry.logs != (days[key]?.logs ?? [])
+        invalidateNotebookIndex(logsChanged: logsChanged, tasksChanged: tasksChanged)
+        if tasksChanged || logsChanged { trackDeletions(from: days, to: updated, keys: [key]) }
         days = updated
         if tasksChanged { invalidateTaskIndex() }
         hasPendingSave = true
@@ -1619,8 +1626,15 @@ public final class JournalStore: ObservableObject {
         deletedTodo = nil
         canUndoDelete = false
         invalidateNotebookIndex(logsChanged: logsChanged, tasksChanged: tasksChanged)
+        if tasksChanged || logsChanged { trackDeletions(from: days, to: content.days, keys: Set(days.keys).union(content.days.keys)) }
         days = content.days
-        if boards != content.boards { boards = content.boards; cachedTagSummaries = nil }
+        if boards != content.boards {
+            // 别的设备改过的工作板：先把本机这一版存进历史，冲突合并或覆盖后都能找回来。
+            recordBoardVersions(from: boards, to: content.boards, force: true)
+            trackBoardDeletions(from: boards, to: content.boards)
+            boards = content.boards
+            cachedTagSummaries = nil
+        }
         if tagRegistry != content.tags { tagRegistry = content.tags }
         nextTaskNumber = max(nextTaskNumber, content.nextTaskNumber)
         if pinnedTaskID != content.pinnedTask { pinnedTaskID = content.pinnedTask }
@@ -1637,6 +1651,8 @@ public final class JournalStore: ObservableObject {
         undoManager.registerUndo(withTarget: self) { store in store.replaceBoards(previous, action: action) }
         undoManager.setActionName(action)
         if grouping { undoManager.endUndoGrouping() }
+        recordBoardVersions(from: previous, to: updated)
+        trackBoardDeletions(from: previous, to: updated)
         boards = updated
         if previous.map(\.owner) != updated.map(\.owner) || previous.map(\.archived) != updated.map(\.archived) {
             cachedTagSummaries = nil

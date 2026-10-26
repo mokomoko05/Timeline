@@ -202,3 +202,30 @@
 "编辑日志" = "Edit Entry";
 "新标签" = "New tag";
 "搜索待办" = "Search tasks";
+
+/* 最近删除与工作板版本历史 */
+"最近删除…" = "Recently Deleted…";
+"最近删除" = "Recently Deleted";
+"清空…" = "Empty…";
+"删除的日志、待办和工作板在本机保留 30 天，包括其他设备同步过来的删除。" = "Deleted entries, tasks and boards stay on this device for 30 days, including deletions synced from other devices.";
+"没有最近删除的内容" = "Nothing recently deleted";
+"永久删除" = "Delete Permanently";
+"已选 %lld 项" = "%lld selected";
+"清空最近删除？" = "Empty Recently Deleted?";
+"清空" = "Empty";
+"清空后无法恢复。" = "This can't be undone.";
+"（无内容）" = "(empty)";
+"日志 · %@" = "Entry · %@";
+"待办 · %@" = "Task · %@";
+"版本历史" = "Version History";
+"版本历史…" = "Version History…";
+"开始一段编辑前、以及同步覆盖前，都会存下原来的内容。只保存在这台设备上。" = "The previous content is saved before each editing session and before sync replaces it. Kept on this device only.";
+"还没有历史版本" = "No earlier versions yet";
+"%lld 字" = "%lld characters";
+"换回这个版本" = "Restore This Version";
+"插入模板、版本历史" = "Templates and version history";
+"恢复日志" = "Restore Entry";
+"恢复工作板" = "Restore Board";
+"恢复工作板版本" = "Restore Board Version";
+"删除的日志、待办和工作板在本机保留 30 天，包括其他设备同步过来的删除。左滑恢复。" = "Deleted entries, tasks and boards stay on this device for 30 days, including deletions synced from other devices. Swipe right to restore.";
+"%@删除" = "Deleted %@";
