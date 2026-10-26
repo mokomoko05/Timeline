@@ -9,6 +9,7 @@ struct TasksView: View {
     @ObservedObject var feed: TabFeed
     let sync: SyncModel
     @State private var adding = false
+    @State private var noting: UUID?
     @State private var query = ""
     @State private var expandedDone: Set<String> = []
     @State private var path: [UUID] = []
@@ -69,7 +70,9 @@ struct TasksView: View {
             .syncOnRefresh(sync)
             .safeAreaInset(edge: .bottom) { FocusBar() }
         }
+        .environment(\.writeTaskNote, TaskNoteWriter { noting = $0 })
         .floatingEditor(isPresented: $adding) { AddTaskSheet(store: store) }
+        .floatingEditor(item: $noting) { ComposeSheet(store: store, taskID: $0) }
     }
 
     // MARK: 时间轴的行
@@ -422,6 +425,7 @@ struct TaskCard: View, Equatable {
     var hasBoard = false
     let open: () -> Void
     @State private var sheet: TaskSheet?
+    @Environment(\.writeTaskNote) private var writeTaskNote
 
     var body: some View {
         let task = item.task
@@ -450,7 +454,11 @@ struct TaskCard: View, Equatable {
         .card(highlighted: highlighted)
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .onTapGesture(perform: open)
-        .contextMenu { TaskActions(store: store, item: item) { sheet = $0 } }
+        .contextMenu {
+            TaskActions(store: store, item: item) {
+                if $0 == .note, let writeTaskNote { writeTaskNote(item.id) } else { sheet = $0 }
+            }
+        }
         .sheet(item: $sheet) { TaskSheetView(store: store, id: item.id, sheet: $0) }
     }
 

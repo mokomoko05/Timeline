@@ -8,13 +8,11 @@ import UIKit
 @MainActor
 final class LogActions: ObservableObject {
     enum Sheet: Identifiable {
-        case edit(JournalStore.LoggedLog)
         case tags(JournalStore.LoggedLog)
         case link(JournalStore.LoggedLog)
 
         var id: String {
             switch self {
-            case .edit(let logged): return "edit-" + logged.id.uuidString
             case .tags(let logged): return "tags-" + logged.id.uuidString
             case .link(let logged): return "link-" + logged.id.uuidString
             }
@@ -22,6 +20,8 @@ final class LogActions: ObservableObject {
     }
 
     @Published var sheet: Sheet?
+    /// 改正文用输入卡，不走面板。
+    @Published var editing: JournalStore.LoggedLog?
     @Published var deleting: JournalStore.LoggedLog?
     /// 「打开待办的笔记」：推进任务页。
     @Published var openTask: NotesView.Destination?
@@ -62,11 +62,11 @@ private struct LogActionsHost: ViewModifier {
             .overlay(alignment: .bottom) { ToastView(toast: actions.toast).padding(.bottom, 80) }
             .sheet(item: $actions.sheet) { sheet in
                 switch sheet {
-                case .edit(let logged): LogEditSheet(store: store, logged: logged)
                 case .tags(let logged): LogTagsSheet(store: store, logged: logged)
                 case .link(let logged): LogLinkSheet(store: store, logged: logged)
                 }
             }
+            .floatingEditor(item: $actions.editing) { LogEditSheet(store: store, logged: $0) }
             .confirmationDialog("删除这条日志？", isPresented: Binding(get: { actions.deleting != nil }, set: { if !$0 { actions.deleting = nil } }),
                                 titleVisibility: .visible, presenting: actions.deleting) { logged in
                 Button("删除", role: .destructive) {
@@ -94,7 +94,7 @@ struct LogMenuItems: View {
         Button { actions.copy(log) } label: { Label(log.images.isEmpty ? "复制文字" : "复制文字（不含图片）", systemImage: "doc.on.doc") }
             .disabled(log.copyText == nil)
         if !store.isReadOnly {
-            Button { actions.sheet = .edit(logged) } label: { Label("编辑", systemImage: "pencil") }
+            Button { actions.editing = logged } label: { Label("编辑", systemImage: "pencil") }
             Button { actions.sheet = .tags(logged) } label: { Label(log.tags.isEmpty ? "加标签…" : "标签…", systemImage: "tag") }
             Button { actions.sheet = .link(logged) } label: { Label(log.taskID == nil ? "关联待办…" : "更改关联待办…", systemImage: "link") }
         }
@@ -114,37 +114,26 @@ struct LogMenuItems: View {
 private struct LogEditSheet: View {
     @ObservedObject var store: JournalStore
     let logged: JournalStore.LoggedLog
-    @Environment(\.dismiss) private var dismiss
-    @State private var text = ""
-    @FocusState private var focused: Bool
+    @Environment(\.closeEditor) private var closeEditor
+    @State private var text: String
+
+    init(store: JournalStore, logged: JournalStore.LoggedLog) {
+        self.store = store
+        self.logged = logged
+        _text = State(initialValue: logged.log.text)
+    }
 
     var body: some View {
-        NavigationStack {
-            TextEditor(text: $text)
-                .focused($focused)
-                .font(.body)
-                .scrollContentBackground(.hidden)
-                .padding(.horizontal, 12)
-                .background(Palette.background)
-                .navigationTitle("编辑日志")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("保存") {
-                            if text != logged.log.text {
-                                store.updateLog(logged.id, text: text, on: logged.date)
-                                store.save()
-                            }
-                            dismiss()
-                        }
-                        .disabled(text.nilIfEmpty == nil && logged.log.images.isEmpty)
-                    }
+        VStack(alignment: .leading, spacing: 10) {
+            EditorCardHeader(title: "编辑日志", confirm: "保存", canConfirm: text.nilIfEmpty != nil || !logged.log.images.isEmpty,
+                             cancel: { closeEditor?() }) {
+                if text != logged.log.text {
+                    store.updateLog(logged.id, text: text, on: logged.date)
+                    store.save()
                 }
-                .onAppear {
-                    text = logged.log.text
-                    focused = true
-                }
+                closeEditor?()
+            }
+            AutoFocusTextView(text: $text, placeholder: "", minLines: 4, maxLines: 10)
         }
     }
 }

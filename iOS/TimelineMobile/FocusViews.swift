@@ -192,11 +192,13 @@ struct FocusSheet: View {
                 .confirmationDialog("提前结束这一轮专注？", isPresented: $confirmingStop, titleVisibility: .visible) {
                     Button("结束专注", role: .destructive) { finish("手动结束") }
                 }
-                .sheet(isPresented: $composing) { ComposeSheet(store: focus.store, taskID: session.taskID) }
             } else {
                 ContentUnavailableView("没有进行中的专注", systemImage: "timer")
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
             }
+        }
+        .floatingEditor(isPresented: $composing) {
+            if let session = focus.session { ComposeSheet(store: focus.store, taskID: session.taskID) }
         }
     }
 

@@ -223,7 +223,8 @@ struct LogEntryRow: View, Equatable {
             Image(systemName: log.focusMetMinimum == false ? "xmark.circle" : "checkmark.circle")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(LogStyle.color(log))
-                .background(Circle().fill(Palette.background))
+                // 底色缩进圆圈的描边里：线接到圆圈上，不留白缝。
+                .background(Circle().fill(Palette.background).padding(2))
         } else if log.focusMarker == "FOCUS" || log.focusMarker == "REVIEW" {
             Dot(color: LogStyle.color(log), size: 7, ring: true)
         } else {

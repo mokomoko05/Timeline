@@ -206,7 +206,7 @@ struct RailSegment: Shape {
     }
 }
 
-/// 小圆点节点。
+/// 小圆点节点。盖在竖线上面；底色只垫在圆环里面，不比节点大，线一直接到节点边上，看不出断开。
 struct Dot: View {
     var color: Color
     var size: CGFloat = 9
@@ -214,10 +214,12 @@ struct Dot: View {
 
     var body: some View {
         ZStack {
-            if ring { Circle().stroke(color, lineWidth: 1.5).frame(width: size + 7, height: size + 7) }
+            if ring {
+                Circle().fill(Palette.background).frame(width: size + 7, height: size + 7)
+                Circle().stroke(color, lineWidth: 1.5).frame(width: size + 7, height: size + 7)
+            }
             Circle().fill(color).frame(width: size, height: size)
         }
-        .background(Circle().fill(Palette.background).frame(width: size + 9, height: size + 9))
     }
 }
 
