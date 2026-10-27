@@ -118,3 +118,47 @@ html.inline .board-fold-more { display: none; }
 .cm-math-block { max-width: calc(100vw - 32px); scrollbar-width: none; }
 .cm-math-display::-webkit-scrollbar, .cm-math-block::-webkit-scrollbar { display: none; }
 .cm-math-display .katex-display, .cm-math-block .katex-display { width: max-content; margin-left: auto; margin-right: auto; }
+/* 就地编辑和渲染好的正文（MarkdownText）逐行对齐：行高、段距、标题、列表、代码块都用原生量出来的数（--m-line 等由原生层传入），
+   点进来编辑时文字不挪位置。原生的行距加在行下面、网页的行距上下各一半：整篇往上提半个行距（--m-shift）抵掉。 */
+html.inline { --m-line: 18px; --m-gap: 4px; --m-shift: 1px; --list-indent: 22px; }
+html.inline #editor .cm-scroller { line-height: var(--m-line); }
+html.inline #editor .cm-content { padding: 0 0 calc(var(--m-shift) + var(--m-tail, 0px)); margin-top: calc(-1 * var(--m-shift)); }
+html.inline #editor .cm-line { min-height: 0; line-height: var(--m-line); padding: 0 2px var(--m-gap); }
+html.inline #editor .cm-line[class*="cm-heading-"] { padding-top: 5px; font-weight: 700; }
+html.inline .cm-heading-1 { font-size: var(--m-h1); line-height: var(--m-h1-line) !important; }
+html.inline .cm-heading-2 { font-size: var(--m-h2); line-height: var(--m-h2-line) !important; }
+html.inline .cm-heading-3 { font-size: var(--m-h3); line-height: var(--m-h3-line) !important; }
+html.inline .cm-heading-4 { font-size: var(--m-h4); line-height: var(--m-h4-line) !important; }
+html.inline .cm-heading-5 { font-size: var(--m-h5); line-height: var(--m-h5-line) !important; }
+html.inline .cm-heading-6 { font-size: var(--m-h6); line-height: var(--m-h6-line) !important; }
+html.inline .cm-code { background: color-mix(in srgb, var(--ink) 8%, transparent); border-radius: 0; }
+/* 列表：「•」/「1.」占一个制表位宽，折行悬挂缩进到文字开头；段距比正文小。 */
+html.inline #editor .cm-line.cm-list-line { padding-left: calc(2px + var(--list-indent) * var(--list-depth, 1)); text-indent: calc(-1 * var(--list-indent)); padding-bottom: 3px; }
+html.inline .cm-bullet { display: inline-block; width: var(--list-indent); text-indent: 0; }
+html.inline .cm-list-line .board-check { width: calc(var(--font-size) + 2px); height: calc(var(--font-size) + 2px); margin: calc(1px + var(--m-shift)) calc(var(--list-indent) - var(--font-size) - 2px) 0 0; vertical-align: top; text-indent: 0; }
+/* 引用：和原生的 NSTextBlock 一样，上面留 9px、下面多 3px，左边 4px 竖线、12px 内边距，底色铺满整块（含上下的空）。 */
+html.inline #editor .cm-line.cm-quote { margin: 0; padding: 0 12px var(--m-gap) 18px; color: color-mix(in srgb, var(--ink) 85%, transparent); }
+html.inline #editor .cm-line.cm-quote::before { inset: 0 2px; background: color-mix(in srgb, var(--ink) 7%, transparent); border-left: 4px solid color-mix(in srgb, var(--ink) 28%, transparent); border-radius: 0; }
+html.inline #editor .cm-line.cm-quote.cm-quote-start { padding-top: 9px; }
+html.inline #editor .cm-line.cm-quote.cm-quote-start::before { top: var(--m-shift); }
+html.inline #editor .cm-line.cm-quote.cm-quote-end { padding-bottom: calc(var(--m-gap) + 3px); }
+html.inline #editor .cm-line.cm-quote.cm-quote-end::before { bottom: calc(-1 * var(--m-shift)); }
+/* 代码块：开头一行是语言名，块的上下各留 6px 和上下文隔开，底色和细边框画在行后面垫着的一层上。 */
+html.inline #editor .cm-line.cm-code { margin: 0; padding: 0 14px; background: none; font-family: ui-monospace, SFMono-Regular, monospace; font-size: var(--m-code-size); line-height: var(--m-code-line); padding-top: var(--m-code-pad); }
+html.inline #editor .cm-line.cm-code::before { inset: 0 2px; background: color-mix(in srgb, var(--ink) 6%, transparent); border: 0 solid color-mix(in srgb, var(--ink) 12%, transparent); border-width: 0 .5px; border-radius: 0; }
+html.inline #editor .cm-line.cm-code.cm-code-start { padding-top: calc(6px + var(--m-code-label-pad)); height: auto; font: 600 var(--m-code-label-size)/var(--m-code-label-line) -apple-system, BlinkMacSystemFont, sans-serif; color: color-mix(in srgb, var(--ink) 50%, transparent); }
+html.inline #editor .cm-line.cm-code.cm-code-start::before { top: calc(6px + var(--m-shift)); border-top-width: .5px; border-radius: 8px 8px 0 0; }
+html.inline #editor .cm-line.cm-code.cm-code-close { height: 16px; padding-top: 0; padding-bottom: 6px; font-size: var(--m-code-label-size); line-height: 10px; color: var(--muted); }
+html.inline #editor .cm-line.cm-code.cm-code-close::before { bottom: calc(6px - var(--m-shift)); border-bottom-width: .5px; border-radius: 0 0 8px 8px; }
+html.inline #editor .cm-line.cm-code.cm-code-start.cm-code-end::before { border-width: .5px; border-radius: 8px; }
+html.inline #editor .cm-line.cm-code-header .board-copy-code { position: absolute; top: calc(6px + (var(--m-code-label-line) + var(--m-code-label-pad) - 20px) / 2); right: 8px; z-index: 2; float: none; margin: 0; width: auto; height: 20px; padding: 0 6px; gap: 4px; font: 500 11px/20px -apple-system, sans-serif; color: color-mix(in srgb, var(--ink) 55%, transparent); border-color: transparent; background: transparent; }
+html.inline #editor .cm-line.cm-code-header .board-copy-code svg { width: 12px; height: 12px; }
+html.inline #editor .cm-line.cm-code-header .board-copy-code::after { content: attr(data-label); }
+html.inline #editor .cm-line.cm-code-header .board-copy-code:hover { color: color-mix(in srgb, var(--ink) 85%, transparent); background: color-mix(in srgb, var(--ink) 8%, transparent); }
+/* 代码高亮的颜色和原生（MarkdownText.codeColor）一样。 */
+html.inline .cm-tok-comment { color: #6e7781; } html.inline.dark .cm-tok-comment { color: #8b949e; }
+html.inline .cm-tok-string { color: #0a3069; } html.inline.dark .cm-tok-string { color: #a5d6ff; }
+html.inline .cm-tok-number, html.inline .cm-tok-attribute { color: #0550ae; } html.inline.dark .cm-tok-number, html.inline.dark .cm-tok-attribute { color: #79c0ff; }
+html.inline .cm-tok-keyword { color: #cf222e; } html.inline.dark .cm-tok-keyword { color: #ff7b72; }
+html.inline .cm-tok-type { color: #953800; } html.inline.dark .cm-tok-type { color: #ffa657; }
+html.inline .cm-tok-function { color: #8250df; } html.inline.dark .cm-tok-function { color: #d2a8ff; }

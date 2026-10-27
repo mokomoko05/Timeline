@@ -4,6 +4,7 @@ import {defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, undoDe
 import {markdown, markdownLanguage, markdownKeymap} from "@codemirror/lang-markdown";
 import {syntaxTree, syntaxHighlighting, HighlightStyle, indentOnInput, bracketMatching} from "@codemirror/language";
 import {tags} from "@lezer/highlight";
+import {codeTokens} from "./codeHighlight.js";
 
 const post = payload => window.webkit?.messageHandlers.boardEditor.postMessage(payload);
 const toggleDetails = StateEffect.define();
@@ -302,6 +303,29 @@ function codeBody(position) {
   const firstBody = line.number < state.doc.lines ? state.doc.line(line.number + 1).from : code.to;
   const end = code.closing != null ? state.doc.lineAt(code.closing).from : code.to;
   return state.doc.sliceString(firstBody, Math.max(firstBody, end));
+}
+
+// 就地编辑时代码块开头一行的语言名（和渲染好的正文一样；没写语言时显示「代码」）。
+class CodeLabelWidget extends WidgetType {
+  constructor(language) { super(); this.language = language; }
+  eq(other) { return other.language === this.language; }
+  toDOM() {
+    const label = document.createElement("span");
+    label.className = "cm-code-label";
+    label.textContent = this.language || labels.code || "代码";
+    return label;
+  }
+}
+
+class BulletWidget extends WidgetType {
+  constructor(text) { super(); this.text = text; }
+  eq(other) { return other.text === this.text; }
+  toDOM() {
+    const bullet = document.createElement("span");
+    bullet.className = "cm-bullet";
+    bullet.textContent = this.text;
+    return bullet;
+  }
 }
 
 class CopyCodeWidget extends WidgetType {
@@ -667,8 +691,10 @@ function structure(state, blocks, states, headings, flash) {
     if (concealed(code.from, code.to)) continue;
     const line = state.doc.lineAt(code.from);
     const lastLine = state.doc.lineAt(code.to).number;
+    const closingLine = code.closing != null ? state.doc.lineAt(code.closing).number : null;
     for (let number = line.number; number <= lastLine; number++) {
-      const classes = "cm-code" + (number === line.number ? " cm-code-start" : "") + (number === lastLine ? " cm-code-end" : "");
+      const classes = "cm-code" + (number === line.number ? " cm-code-start" : "") + (number === lastLine ? " cm-code-end" : "")
+        + (number === closingLine && number !== line.number ? " cm-code-close" : "");
       ranges.push(Decoration.line({class: classes}).range(state.doc.line(number).from));
     }
     if (code.name === "FencedCode") {
@@ -835,6 +861,22 @@ function inlineDecorations(view) {
         const touches = target => selection && selection.from <= target.to && selection.to >= target.from;
         const last = node.node.lastChild;
         const closing = last?.name === "CodeMark" && last.from > line.from ? state.doc.lineAt(last.from) : null;
+        const language = line.text.replace(/^\s*(`{3,}|~{3,})/, "").trim().split(/\s+/)[0] || "";
+        if (inline) {
+          // 就地编辑：和渲染好的正文一样，开头一行显示语言名（光标进来时露出围栏原文，行高不变），代码按语言着色。
+          if (!touches(line)) ranges.push(Decoration.replace({widget: new CodeLabelWidget(language), atomic: true}).range(line.from, line.to));
+          if (closing && !touches(closing)) hide(closing.from, closing.to);
+          if (line.number < state.doc.lines) {
+            const bodyFrom = state.doc.line(line.number + 1).from;
+            const bodyTo = closing ? Math.max(bodyFrom, closing.from - 1) : node.to;
+            if (bodyTo > bodyFrom) {
+              for (const [from, to, kind] of codeTokens(state.doc.sliceString(bodyFrom, bodyTo), language)) {
+                add(bodyFrom + from, bodyFrom + to, Decoration.mark({class: "cm-tok-" + kind}));
+              }
+            }
+          }
+          return false;
+        }
         if (!touches(line)) {
           if ((closing ? closing.number : lastLine + 1) - line.number - 1 > 0) {
             ranges.push(Decoration.line({class: "cm-code-header-concealed"}).range(line.from));
@@ -865,10 +907,29 @@ function inlineDecorations(view) {
         const line = state.doc.lineAt(node.from);
         const checked = /[xX]/.test(state.doc.sliceString(node.from, node.to));
         if (checked) add(node.to, line.to, Decoration.mark({class: "cm-task-done"}));
-        ranges.push(Decoration.replace({widget: new CheckWidget(checked, node.from + 1), atomic: true}).range(node.from, node.to));
+        // 就地编辑时后面的空格也收进勾选框（文字从制表位开始，和渲染好的正文一样）。
+        const to = inline && state.doc.sliceString(node.to, node.to + 1) === " " ? node.to + 1 : node.to;
+        ranges.push(Decoration.replace({widget: new CheckWidget(checked, node.from + 1), atomic: true}).range(node.from, to));
       } else if (name === "ListMark") {
         const line = state.doc.lineAt(node.from);
-        if (/^\s*[-+*]\s+\[[ xX]\]/.test(line.text)) hide(node.from, node.to + 1);
+        const task = /^\s*[-+*]\s+\[[ xX]\]/.test(line.text);
+        if (task) hide(node.from, node.to + 1);
+        if (inline) {
+          // 就地编辑：列表和渲染好的正文一样画成「•」/「1.」，文字从同一个制表位开始，折行悬挂缩进；
+          // 行首的缩进按列表层级换成固定宽度。标记整个是一个字符，在文字开头按退格就变回普通段落。
+          let depth = 0, ordered = false;
+          for (let parent = node.node.parent; parent; parent = parent.parent) {
+            if (parent.name === "BulletList" || parent.name === "OrderedList") {
+              if (depth === 0) ordered = parent.name === "OrderedList";
+              depth++;
+            }
+          }
+          const start = /^\s*$/.test(state.doc.sliceString(line.from, node.from)) ? line.from : node.from;
+          const end = state.doc.sliceString(node.to, node.to + 1) === " " ? node.to + 1 : node.to;
+          ranges.push(Decoration.line({class: "cm-list-line", attributes: {style: "--list-depth: " + Math.max(1, depth)}}).range(line.from));
+          if (!task) ranges.push(Decoration.replace({widget: new BulletWidget(ordered ? state.doc.sliceString(node.from, node.to) : "•"), atomic: true}).range(start, end));
+          else if (start < node.from) hide(start, node.from);
+        }
       } else if (name === "Link") {
         const destination = node.node.getChild("URL");
         const closing = node.node.getChildren("LinkMark").find(mark => state.doc.sliceString(mark.from, mark.to) === "]");
@@ -1078,6 +1139,11 @@ function switchBoard(config) {
 window.boardEditor = {
   configure(config) {
     if (config.labels) labels = config.labels;
+    // 就地编辑的网页只用来就地编辑：在建编辑器之前定下来，第一次排版就是就地编辑的样子。
+    if (!view && config.inline) inline = true;
+    document.documentElement.classList.toggle("dark", !!config.dark);
+    // 原生正文量出来的行高、段距等（px）：就地编辑时每一行和渲染好的正文落在同一个位置。
+    if (config.metrics) for (const [key, value] of Object.entries(config.metrics)) document.documentElement.style.setProperty("--m-" + key, value + "px");
     if (!view) {
       currentKey = config.key ?? null;
       loadFolds(config.folds);
@@ -1114,7 +1180,7 @@ window.boardEditor = {
     currentReadOnly = config.readOnly;
     currentSourceMode = config.sourceMode;
     if (measure !== !!config.measure) { measure = !!config.measure; lastHeight = 0; reportHeight(); }
-    if (inline !== !!config.inline) {
+    if (inline !== !!config.inline || (inline && !window.inlineObserver)) {
       inline = !!config.inline;
       document.documentElement.classList.toggle("inline", inline);
       lastHeight = 0;

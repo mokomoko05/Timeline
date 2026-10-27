@@ -155,6 +155,8 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
     }
 
     public var isFocusMarker: Bool { focusEvent != nil || ["FOCUS", "REVIEW", "END"].contains(focusMarker) }
+    /// 正文是用户自己写的、可以就地编辑：普通日志，以及专注期间记的笔记和结束时的反馈（旧格式带前缀的反馈除外）。
+    public var hasEditableText: Bool { !isFocusMarker || focusEvent == .note || focusEvent == .review }
     public var isNotebookEntry: Bool { !focus && !["FOCUS", "REVIEW", "END"].contains(focusMarker) }
     public var showsTimelineContext: Bool { !isFocusMarker || focusMarker == "FOCUS" }
     public var showsTimelineTags: Bool { !isFocusMarker }

@@ -194,7 +194,7 @@ struct LogEntryRow: View, Equatable {
                                 // 点一下正文就编辑（和工作板一样所见即所得），不用先找「编辑」。链接、折叠按钮照常响应自己的点按。
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    guard let actions, !store.isReadOnly, !log.isFocusMarker else { return }
+                                    guard let actions, !store.isReadOnly, log.hasEditableText else { return }
                                     actions.editing = logged
                                 }
                         }

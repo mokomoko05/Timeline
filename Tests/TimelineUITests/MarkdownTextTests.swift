@@ -49,8 +49,10 @@ final class MarkdownTextTests: XCTestCase {
         """)
         XCTAssertFalse(text.string.contains("# 标题"))
         XCTAssertTrue(text.string.contains("3.\t第三项"))
-        XCTAssertTrue(text.string.contains("☑\t完成"))
-        XCTAssertTrue(text.string.contains("☐\t待办"))
+        // 待办项和工作板、就地编辑器一样画成圆圈（附件），不能点的正文里不带行号。
+        XCTAssertTrue(text.string.contains("\u{FFFC}\t完成"))
+        XCTAssertTrue(text.string.contains("\u{FFFC}\t待办"))
+        XCTAssertNil(attributes("\u{FFFC}", in: text)[MarkdownText.taskLineKey])
         let heading = attributes("标题", in: text)[.font] as! NSFont
         XCTAssertGreaterThan(heading.pointSize, 13)
         XCTAssertTrue(NSFontManager.shared.traits(of: attributes("加粗", in: text)[.font] as! NSFont).contains(.boldFontMask))

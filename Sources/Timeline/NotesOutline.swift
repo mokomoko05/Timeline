@@ -217,69 +217,25 @@ private struct OutlineSurface: ViewModifier {
 
 // MARK: - 回到顶部 / 跳到最新
 
-/// 笔记列表首尾的两个标记，回报它们相对滚动区域的位置。
-private struct NotesScrollEdgeKey: PreferenceKey {
-    struct Value: Equatable { var top: CGFloat = -.infinity; var bottom: CGFloat = .infinity }
-    static var defaultValue = Value()
-    static func reduce(value: inout Value, nextValue: () -> Value) {
-        let next = nextValue()
-        if next.top != -.infinity { value.top = next.top }
-        if next.bottom != .infinity { value.bottom = next.bottom }
-    }
-}
-
 enum NotesScrollEdge { case top, bottom }
 
-extension View {
-    /// 放在笔记列表最上面 / 最下面的那个占位视图上。
-    func notesScrollEdge(_ edge: NotesScrollEdge) -> some View {
-        background(GeometryReader { proxy in
-            let frame = proxy.frame(in: .named(NotesScrollButtons.space))
-            Color.clear.preference(key: NotesScrollEdgeKey.self,
-                                   value: edge == .top ? .init(top: frame.minY) : .init(bottom: frame.maxY))
-        })
-    }
-
-    /// 滚动区域右下角的「回到顶部」「跳到最新」：离开顶部 / 底部一段距离才出现。
-    func notesScrollButtons(scroll: @escaping (NotesScrollEdge) -> Void) -> some View {
-        modifier(NotesScrollButtons(scroll: scroll))
-    }
-}
-
-/// 只有这一层持有按钮的显示状态：滚动时首尾标记的位置每帧都在变，但只在按钮出现 / 消失时刷新这一层，不重算整页笔记。
-struct NotesScrollButtons: ViewModifier {
-    static let space = "notes-scroll"
+/// 滚动区域右下角的「回到顶部」「跳到最新」：离开顶部 / 底部一段距离才出现。
+/// 只有这一层订阅滚动位置（`ScrollTracker` 直接听 NSScrollView）：滚动时整页笔记不重算。
+struct NotesScrollButtons: View {
+    @ObservedObject var tracker: ScrollTracker
     let scroll: (NotesScrollEdge) -> Void
-    @State private var showsTop = false
-    @State private var showsBottom = false
-    @State private var height: CGFloat = 0
 
-    func body(content: Content) -> some View {
-        content
-            .coordinateSpace(name: Self.space)
-            .background(GeometryReader { proxy in
-                Color.clear.onAppear { height = proxy.size.height }
-                    .onChange(of: proxy.size.height) { height = $0 }
-            })
-            .onPreferenceChange(NotesScrollEdgeKey.self) { value in
-                let top = value.top < -240
-                let bottom = value.bottom > height + 160
-                if top != showsTop { withAnimation(Motion.quick) { showsTop = top } }
-                if bottom != showsBottom { withAnimation(Motion.quick) { showsBottom = bottom } }
+    var body: some View {
+        VStack(spacing: 6) {
+            if tracker.showsTop {
+                button("arrow.up", "回到顶部") { scroll(.top) }
+                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
             }
-            .overlay(alignment: .bottomTrailing) {
-                VStack(spacing: 6) {
-                    if showsTop {
-                        button("arrow.up", "回到顶部") { scroll(.top) }
-                            .transition(.opacity.combined(with: .scale(scale: 0.85)))
-                    }
-                    if showsBottom {
-                        button("arrow.down", "跳到最新") { scroll(.bottom) }
-                            .transition(.opacity.combined(with: .scale(scale: 0.85)))
-                    }
-                }
-                .padding(.trailing, 16).padding(.bottom, 14)
+            if tracker.showsBottom {
+                button("arrow.down", "跳到最新") { scroll(.bottom) }
+                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
             }
+        }
     }
 
     private func button(_ symbol: String, _ title: String, action: @escaping () -> Void) -> some View {

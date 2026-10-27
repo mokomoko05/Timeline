@@ -16,18 +16,20 @@ final class JournalEditingTests: XCTestCase {
             windowNumber: window.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
     }
 
-    func testJournalDoubleClickStaysEditingThroughBlurAndSavesOnlyWithCommandReturn() async throws {
+    /// 日记里双击（和单击一样）正文：就地换成所见即所得的编辑器，编辑的是这一条。
+    func testJournalDoubleClickEditsTheEntryInPlace() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = JournalStore(directory: directory)
         let date = JournalDates.calendar.startOfDay(for: Date())
         _ = try store.quickLog("Journal edit original", linkDefault: false, on: date)
+        let log = try XCTUnwrap(store.entry(for: date).logs.first)
         let host = NSHostingView(rootView: UnifiedJournalView(store: store, date: .constant(date), navigationRequest: 0))
         let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.orderFront(nil)
-        defer { window.contentView = nil; window.close() }
+        defer { InlineMarkdownEditor.shared.finish(); window.contentView = nil; window.close() }
         try await Task.sleep(for: .milliseconds(100))
         host.layoutSubtreeIfNeeded()
         let label = try XCTUnwrap(descendants(host, of: InteractiveTaskText.self).first { $0.source == "Journal edit original" })
@@ -37,25 +39,7 @@ final class JournalEditingTests: XCTestCase {
         let doubleClick = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
             windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 2, pressure: 1))
         label.mouseDown(with: doubleClick)
-        try await Task.sleep(for: .milliseconds(100))
-        host.layoutSubtreeIfNeeded()
-        let editor = try XCTUnwrap(descendants(host, of: ImagePasteTextView.self).first { $0.string == "Journal edit original" })
-        XCTAssertTrue(window.makeFirstResponder(editor))
-        editor.insertText("Changed journal entry", replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
-        XCTAssertTrue(window.makeFirstResponder(nil))
-        NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
-        try await Task.sleep(for: .milliseconds(100))
-        host.layoutSubtreeIfNeeded()
-        XCTAssertTrue(descendants(host, of: ImagePasteTextView.self).contains { $0 === editor }, "点击别处不能关闭编辑框")
-        XCTAssertEqual(editor.string, "Changed journal entry")
-        XCTAssertEqual(store.entry(for: date).logs.first?.text, "Journal edit original", "失焦或切换面板不能保存")
-        XCTAssertTrue(window.makeFirstResponder(editor))
-        editor.keyDown(with: try commandReturn(window: window))
-        try await Task.sleep(for: .milliseconds(100))
-        host.layoutSubtreeIfNeeded()
-        XCTAssertEqual(store.entry(for: date).logs.first?.text, "Changed journal entry")
-        XCTAssertFalse(descendants(host, of: ImagePasteTextView.self).contains { $0 === editor })
-        XCTAssertEqual(JournalStore(directory: directory).entry(for: date).logs.first?.text, "Changed journal entry")
+        XCTAssertTrue(InlineMarkdownEditor.shared.isEditing(log.id), "双击正文就地编辑这一条")
     }
 
     func testTitleEditingIgnoresBlurAndPlainReturnButAcceptsCommandReturn() async throws {

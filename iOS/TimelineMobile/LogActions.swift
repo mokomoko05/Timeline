@@ -131,7 +131,7 @@ extension LogActions {
         ]
         if !store.isReadOnly {
             items += [
-                MenuItem(title: L("编辑"), symbol: "pencil") { [self] in editing = logged },
+                MenuItem(title: L("编辑"), symbol: "pencil", disabled: !log.hasEditableText) { [self] in editing = logged },
                 MenuItem(title: L(log.tags.isEmpty ? "加标签…" : "标签…"), symbol: "tag") { [self] in sheet = .tags(logged) },
                 MenuItem(title: L(log.taskID == nil ? "关联待办…" : "更改关联待办…"), symbol: "link") { [self] in sheet = .link(logged) },
             ]

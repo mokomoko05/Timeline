@@ -127,4 +127,15 @@ final class FocusLogTests: XCTestCase {
         XCTAssertEqual(store.galleryImages(around: review).map(\.name), ["review.png"])
         XCTAssertEqual(store.noteTopic(for: task.id)?.count, 0)
     }
+
+    func testFocusNotesAndReflectionsAreEditableButMarkersAreNot() {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertTrue(DailyLogEntry(createdAt: at, kind: .note, text: "普通笔记").hasEditableText)
+        XCTAssertTrue(DailyLogEntry(createdAt: at, kind: .note, text: "专注时记的", focus: true, focusEvent: .note).hasEditableText)
+        XCTAssertTrue(DailyLogEntry(createdAt: at, kind: .note, text: "这一段的反馈", focus: true, focusEvent: .review).hasEditableText)
+        XCTAssertFalse(DailyLogEntry(createdAt: at, kind: .note, text: "▶ 开始专注", focus: true, focusEvent: .start).hasEditableText)
+        XCTAssertFalse(DailyLogEntry(createdAt: at, kind: .note, text: "■ 结束专注", focus: true, focusEvent: .end).hasEditableText)
+        // 旧格式的反馈正文带着前缀，编辑会把前缀露出来：不就地编辑。
+        XCTAssertFalse(DailyLogEntry(createdAt: at, kind: .note, text: "阶段反馈 · 旧的").hasEditableText)
+    }
 }

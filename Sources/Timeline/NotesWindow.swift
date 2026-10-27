@@ -309,6 +309,8 @@ struct UnifiedJournalView: View {
     @State private var error: String?
     /// 从节奏条跳过去的那一条短暂高亮，便于在长日志里找到。
     @State private var highlightedID: UUID?
+    /// 滚动位置（页面不订阅，只有节奏条滑块和回到顶部按钮订阅）。
+    @State private var tracker = ScrollTracker()
     /// 收起的专注轮次（只在窗口打开期间保留）。
     @State private var foldedRuns: Set<UUID> = []
     /// 刚提交的那条日志：滚过去并高亮。
@@ -429,18 +431,16 @@ struct UnifiedJournalView: View {
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
                 header
-                if !entry.logs.isEmpty {
-                    DayRhythmStrip(logs: entry.logsInTimeOrder, date: date) { id in
-                        proxy.scrollTo(id, anchor: .center)
-                        highlightedID = id
-                    }
-                    .padding(.horizontal, 20).padding(.bottom, 8)
-                }
                 Divider()
+                let all = entry.logsInTimeOrder
+                let runs = FocusRun.runs(in: all)
+                // 折叠的一轮专注只留结束那一条和它的小结，中间的开始、笔记、反馈都收起来。
+                let hidden = Set(runs.filter { foldedRuns.contains($0.id) }.flatMap { [$0.start.id] + $0.inner.map(\.id) })
+                let logs = all.filter { !hidden.contains($0.id) }
                 ScrollView {
                     // 一天的日志不多时整列排好，滚动条按真实高度算（长日志也不会让它跳）。
                     NotesStack(lazy: entry.logs.count > NotesView.lazyThreshold, spacing: 0) {
-                        Color.clear.frame(height: 1).id("journal-top").notesScrollEdge(.top)
+                        Color.clear.frame(height: 1).id("journal-top")
                         if entry.logsInTimeOrder.isEmpty {
                             VStack(spacing: 8) {
                                 Image(systemName: "book.pages").font(.system(size: 30, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
@@ -448,11 +448,6 @@ struct UnifiedJournalView: View {
                             }
                             .frame(maxWidth: .infinity).padding(.vertical, 60)
                         } else {
-                            let all = entry.logsInTimeOrder
-                            let runs = FocusRun.runs(in: all)
-                            // 折叠的一轮专注只留结束那一条和它的小结，中间的开始、笔记、反馈都收起来。
-                            let hidden = Set(runs.filter { foldedRuns.contains($0.id) }.flatMap { [$0.start.id] + $0.inner.map(\.id) })
-                            let logs = all.filter { !hidden.contains($0.id) }
                             let summaries = Dictionary(uniqueKeysWithValues: runs.map { ($0.end.id, $0) })
                             let segments = store.timelineSegments()
                             ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
@@ -461,6 +456,7 @@ struct UnifiedJournalView: View {
                                 }
                                 journalRow(log, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id])
                                     .id(log.id)
+                                    .recordsScrollPosition(log.id, in: tracker)
                                 if let run = summaries[log.id] {
                                     FocusRunSummary(run: run, folded: foldedRuns.contains(run.id), continues: index < logs.count - 1) {
                                         withAnimation(Motion.quick) {
@@ -470,13 +466,16 @@ struct UnifiedJournalView: View {
                                 }
                             }
                         }
-                        Color.clear.frame(height: 1).id("journal-bottom").notesScrollEdge(.bottom)
+                        Color.clear.frame(height: 1).id("journal-bottom")
                     }
                     .padding(20)
+                    .padding(.trailing, logs.isEmpty ? 0 : EntryRail.width)
+                    .tracksScroll(tracker)
                 }
-                // 和笔记页同一套「回到顶部」「跳到最新」：离开顶部 / 底部一段距离才出现在右下角。
+                // 右边是这一天的节奏条（代替滚动条：按时刻排，点、拖都能跳到某一条）；右下角是「回到顶部」「跳到最新」。
                 // 定位直接落到目标位置（和笔记页一致）：长日志的滚动动画一路排版，很卡。
-                .notesScrollButtons { edge in
+                .entryRail(DayRhythm.marks(logs), spans: DayRhythm.spans(all, date: date), ticks: DayRhythm.ticks, tracker: tracker,
+                           select: { proxy.scrollTo($0, anchor: .top) }, settle: { highlightedID = $0 }) { edge in
                     proxy.scrollTo(edge == .top ? "journal-top" : "journal-bottom", anchor: edge == .top ? .top : .bottom)
                 }
                 .id(JournalDates.key(date))
@@ -489,6 +488,7 @@ struct UnifiedJournalView: View {
                 .onChange(of: revealLog) { id in if let id { revealID = id; revealLog = nil } }
                 // 带着要定位的那一条换日期时，不再按「打开这一天」滚到开头 / 末尾，免得把定位冲掉。
                 .onChange(of: date) { _ in
+                    tracker.reset()
                     DispatchQueue.main.async {
                         if revealID == nil && highlightedID == nil { openDay(proxy) } else { openedDay = JournalDates.key(date) }
                     }
@@ -560,7 +560,7 @@ struct UnifiedJournalView: View {
         } content: {
             if !LogEventStyle.body(log).isEmpty {
                 // 点一下正文就地编辑（和工作板一样所见即所得），点别处、Esc 或 ⌘↩ 保存。
-                EditableLogText(log: log, editable: !store.isReadOnly && !log.isFocusMarker, begin: { beginEdit(log, at: $0) }) { editAt in
+                EditableLogText(log: log, editable: !store.isReadOnly && log.hasEditableText, begin: { beginEdit(log, at: $0) }) { editAt in
                     TaskLinkText(source: LogEventStyle.body(log), completed: false, color: log.isFocusMarker ? Palette.muted : Palette.ink,
                                  fontSize: log.isFocusMarker ? 12 : 13,
                                  edit: { beginEdit(log, at: nil) }, open: SafariLinks.open, maxLines: 0,
@@ -647,8 +647,9 @@ struct UnifiedJournalView: View {
     }
 
     private func beginEdit(_ log: DailyLogEntry, at point: CGPoint?) {
-        guard !log.isFocusMarker else { return }
-        InlineMarkdownEditor.shared.begin(log, on: date, store: store, at: point, fontSize: typography.pt(13), dark: colorScheme == .dark)
+        guard log.hasEditableText else { return }
+        InlineMarkdownEditor.shared.begin(log, on: date, store: store, at: point, fontSize: typography.pt(log.isFocusMarker ? 12 : 13),
+                                          lineSpacing: typography.lineSpacing, dark: colorScheme == .dark, muted: log.isFocusMarker)
     }
 
 }

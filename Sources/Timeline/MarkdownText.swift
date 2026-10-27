@@ -196,6 +196,15 @@ enum MarkdownText {
             }
         }
 
+        /// 一块内容最后一行有字的行号：列表的范围会把后面的空行也算进去，按它数空行会少一行（编辑器里那一行还在）。
+        func lastLine(_ node: Markup) -> Int? {
+            guard let range = node.range else { return nil }
+            var line = range.upperBound.line
+            while line > range.lowerBound.line, line <= sourceLines.count,
+                  sourceLines[line - 1].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { line -= 1 }
+            return line
+        }
+
         func blocks(_ node: Markup, indent: CGFloat = 0) {
             let children = Array(node.children)
             let foldable = folds != nil && node is Document
@@ -206,7 +215,7 @@ enum MarkdownText {
             while index < children.count {
                 let child = children[index]
                 if let marks, let start = child.range?.lowerBound.line, marks.hidden.contains(where: { $0.contains(start) }) {
-                    previousEnd = child.range?.upperBound.line
+                    previousEnd = lastLine(child)
                     index += 1
                     continue
                 }
@@ -215,7 +224,7 @@ enum MarkdownText {
                         .filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
                     for _ in 0..<blankCount { paragraph(text(""), style: style(indent: indent)) }
                 }
-                previousEnd = child.range?.upperBound.line
+                previousEnd = lastLine(child)
                 index += 1
                 if let marks, let heading = child as? Heading, let line = heading.range?.lowerBound.line, let mark = marks.headings[line] {
                     renderHeading(heading, indent: indent, fold: (mark.key, mark.folded))
@@ -232,7 +241,7 @@ enum MarkdownText {
                 let folded = hasBody && folds?.contains(key) == true
                 renderHeading(heading, indent: indent, fold: hasBody ? (key, folded) : nil)
                 if folded {
-                    previousEnd = children[sectionEnd - 1].range?.upperBound.line
+                    previousEnd = lastLine(children[sectionEnd - 1])
                     index = sectionEnd
                 }
             }
@@ -360,8 +369,9 @@ enum MarkdownText {
                 for (blockIndex, child) in item.children.enumerated() {
                     if blockIndex == 0, child is Paragraph {
                         let content: NSMutableAttributedString
-                        if interactiveTasks, let checkbox = item.checkbox, let line = item.range?.lowerBound.line {
-                            content = taskCircle(checked: checkbox == .checked, line: line)
+                        // 待办项都画成和工作板、就地编辑器一样的圆圈；能点着勾选时才记下行号。
+                        if let checkbox = item.checkbox {
+                            content = taskCircle(checked: checkbox == .checked, line: interactiveTasks ? item.range?.lowerBound.line : nil)
                             content.append(text("\t"))
                         } else {
                             content = text(marker + "\t")
@@ -382,7 +392,7 @@ enum MarkdownText {
             }
         }
 
-        func taskCircle(checked: Bool, line: Int) -> NSMutableAttributedString {
+        func taskCircle(checked: Bool, line: Int?) -> NSMutableAttributedString {
             let side = size + 2
             let attachment = NSTextAttachment()
             let foreground = color
@@ -408,7 +418,7 @@ enum MarkdownText {
                 return true
             }
             let result = NSMutableAttributedString(attachment: attachment)
-            result.addAttribute(MarkdownText.taskLineKey, value: line, range: result.fullRange)
+            if let line { result.addAttribute(MarkdownText.taskLineKey, value: line, range: result.fullRange) }
             return result
         }
 

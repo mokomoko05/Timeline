@@ -85,6 +85,15 @@ final class LogScrollPerformanceProbe: XCTestCase {
         }
     }
 
+    /// 笔记窗口里的日记（`UnifiedJournalView`）：一天里很多条长日志。
+    func testJournalWindowScrolling() throws {
+        guard ProcessInfo.processInfo.environment["TIMELINE_SCROLL_PROBE"] != nil else { throw XCTSkip("probe only") }
+        for (count, longEvery) in [(30, 5), (90, 3)] {
+            let (store, day) = try Self.makeStore(logs: count, longEvery: longEvery)
+            try probe("notes journal \(count)", store: store, UnifiedJournalView(store: store, date: .constant(day), navigationRequest: 0))
+        }
+    }
+
     private func probe<V: View>(_ label: String, store: JournalStore, _ view: V) throws {
         let start = CACurrentMediaTime()
         let root = view.environmentObject(WorkspaceInteraction()).environmentObject(ToastCenter())

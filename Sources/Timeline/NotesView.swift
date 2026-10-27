@@ -32,6 +32,8 @@ struct NotesView: View {
     /// 右侧笔记区的宽度：够宽时目录是一栏，窄时浮在内容上面。
     @State private var detailWidth: CGFloat = 1000
     @State private var floatingOutline = false
+    /// 滚动位置（页面不订阅，只有节奏条滑块和回到顶部按钮订阅）。
+    @State private var tracker = ScrollTracker()
     /// 标签的右键操作：改名 / 合并、删除（内容保留）。
     @State private var renamingTag: String?
     @State private var renameText = ""
@@ -373,7 +375,7 @@ struct NotesView: View {
                     HStack(spacing: 0) {
                         ScrollView {
                             NotesStack(lazy: notes.count > Self.lazyThreshold) {
-                                Color.clear.frame(height: 1).id("top").notesScrollEdge(.top)
+                                Color.clear.frame(height: 1).id("top")
                                 BoardNotesSection(store: store, owner: .task(id)).id("board-start")
                                 if notes.isEmpty { NoteThreadEmpty(text: topic.deleted ? "这个任务没有留下笔记" : "还没有笔记 · 在下方写下第一条") }
                                 ForEach(Dictionary(grouping: notes, by: \.key).sorted { $0.key < $1.key }, id: \.key) { group in
@@ -381,12 +383,15 @@ struct NotesView: View {
                                               first: group.value.min { $0.log.createdAt < $1.log.createdAt }?.id)
                                     threadedRows(group.value)
                                 }
-                                Color.clear.frame(height: 1).id("end").notesScrollEdge(.bottom)
+                                Color.clear.frame(height: 1).id("end")
                             }
                             .readingColumn()
+                            .padding(.trailing, notes.isEmpty ? 0 : EntryRail.width)
+                            .tracksScroll(tracker)
                         }
                         .contentShape(Rectangle())
-                        .notesScrollButtons { scrollToEdge($0, proxy: proxy) }
+                        .entryRail(NotesRhythm.marks(Self.pageOrder(notes)), ticks: NotesRhythm.ticks(Self.pageOrder(notes)), tracker: tracker,
+                                   select: { proxy.scrollTo($0, anchor: .top) }, settle: { flash($0) }) { scrollToEdge($0, proxy: proxy) }
                         .onAppear {
                             if store.board(for: .task(id))?.hasContent == true { proxy.scrollTo("board-start", anchor: .top) }
                             else { proxy.scrollTo("end", anchor: .bottom) }
@@ -394,6 +399,7 @@ struct NotesView: View {
                         .onChange(of: revealNoteID) { reveal($0, proxy: proxy) }
                         .onChange(of: selection) { _ in
                             floatingOutline = false
+                            tracker.reset()
                             if store.board(for: .task(id))?.hasContent == true { proxy.scrollTo("board-start", anchor: .top) }
                             else { proxy.scrollTo("end", anchor: .bottom) }
                         }
@@ -577,6 +583,11 @@ struct NotesView: View {
             .id(NotesTimelineIndex.dayAnchor(key))
     }
 
+    /// 按日期排的页面上笔记的先后：先按天，一天里按时刻。
+    static func pageOrder(_ notes: [JournalStore.LoggedLog]) -> [JournalStore.LoggedLog] {
+        notes.sorted { $0.key == $1.key ? $0.log.createdAt < $1.log.createdAt : $0.key < $1.key }
+    }
+
     /// 一组笔记穿在同一根线上：第一条以上、最后一条以下不再延伸。
     private func threadedRows(_ items: [JournalStore.LoggedLog], showTask: Bool = false, showDate: Bool = false, tag: String? = nil) -> some View {
         ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
@@ -585,6 +596,7 @@ struct NotesView: View {
             }
             noteRow(item, showTask: showTask, showDate: showDate, tag: tag, hasPrevious: index > 0, hasNext: index < items.count - 1)
                 .id(item.id)
+                .recordsScrollPosition(item.id, in: tracker)
         }
     }
 
@@ -612,7 +624,7 @@ struct NotesView: View {
         } content: {
             if !log.text.isEmpty {
                 // 点一下正文就地编辑（和工作板一样所见即所得），点别处、Esc 或 ⌘↩ 保存。
-                EditableLogText(log: log, editable: !store.isReadOnly && !log.isFocusMarker, begin: { beginNoteEdit(item, at: $0) }) { editAt in
+                EditableLogText(log: log, editable: !store.isReadOnly && log.hasEditableText, begin: { beginNoteEdit(item, at: $0) }) { editAt in
                     TaskLinkText(source: LogEventStyle.body(log), completed: false, color: Palette.ink, fontSize: 13,
                                  edit: { beginNoteEdit(item, at: nil) }, open: SafariLinks.open,
                                  maxLines: 0, markdown: true, compactLines: true, editAt: editAt, foldID: "log.\(log.id.uuidString)")
@@ -658,9 +670,9 @@ struct NotesView: View {
     }
 
     private func beginNoteEdit(_ item: JournalStore.LoggedLog, at point: CGPoint?) {
-        guard !store.isReadOnly, !item.log.isFocusMarker else { return }
+        guard !store.isReadOnly, item.log.hasEditableText else { return }
         InlineMarkdownEditor.shared.begin(item.log, on: item.date, store: store, at: point,
-                                          fontSize: typography.pt(13), dark: colorScheme == .dark)
+                                          fontSize: typography.pt(13), lineSpacing: typography.lineSpacing, dark: colorScheme == .dark)
     }
 
     private func deleteNote(_ item: JournalStore.LoggedLog) {
@@ -689,6 +701,10 @@ struct NotesView: View {
         let tasks = store.tasks(taggedWith: tag)
         let notes = store.notes(forTag: tag)
         let chapters = chapterView ? store.chapters(notes: notes, tasks: tasks) : []
+        // 节奏条按页面上的先后：按待办分章时是各章（折叠的章不算）依次排，按日期看时按日期。
+        let railNotes = chapterView
+            ? chapters.filter { !nav.isCollapsed(tag: tag, chapter: $0.id) }.flatMap(\.notes)
+            : Self.pageOrder(notes)
         let hasBoardContent = store.board(for: .tag(tag))?.hasContent == true
             || tasks.contains { store.board(for: .task($0.id))?.hasContent == true }
         return VStack(spacing: 0) {
@@ -699,23 +715,26 @@ struct NotesView: View {
                 HStack(spacing: 0) {
                     ScrollView {
                         NotesStack(lazy: visibleNoteCount(chapters: chapters, notes: notes, tag: tag) > Self.lazyThreshold) {
-                            Color.clear.frame(height: 1).id("board-start").notesScrollEdge(.top)
+                            Color.clear.frame(height: 1).id("board-start")
                             BoardNotesSection(store: store, owner: .tag(tag))
                             if notes.isEmpty && tasks.isEmpty {
                                 NoteThreadEmpty(text: "还没有笔记 · 在下方写下第一条")
                             }
                             if chapterView { chapterList(tag, chapters) } else { dateList(notes, tag: tag) }
-                            Color.clear.frame(height: 1).id("end").notesScrollEdge(.bottom)
+                            Color.clear.frame(height: 1).id("end")
                         }
                         .readingColumn()
+                        .padding(.trailing, notes.isEmpty ? 0 : EntryRail.width)
+                        .tracksScroll(tracker)
                     }
                     .contentShape(Rectangle())
-                    .notesScrollButtons { edge in
+                    .entryRail(NotesRhythm.marks(railNotes), ticks: chapterView ? [] : NotesRhythm.ticks(railNotes), tracker: tracker,
+                               select: { proxy.scrollTo($0, anchor: .top) }, settle: { flash($0) }) { edge in
                         proxy.scrollTo(edge == .top ? "board-start" : "end", anchor: edge == .top ? .top : .bottom)
                     }
                     // 按日期看从最新处打开；按待办分章是从上往下读的目录，从顶部打开。
                     .onAppear { openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
-                    .onChange(of: tagSelection) { _ in floatingOutline = false; openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
+                    .onChange(of: tagSelection) { _ in floatingOutline = false; tracker.reset(); openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
                     .onChange(of: chapterView) { _ in openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
                     .onChange(of: revealNoteID) { reveal($0, proxy: proxy) }
                     .overlay(alignment: .topTrailing) {

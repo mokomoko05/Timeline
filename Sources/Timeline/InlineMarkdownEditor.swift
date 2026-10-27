@@ -45,7 +45,10 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     func isEditing(_ id: UUID) -> Bool { target?.logID == id }
 
     /// 开始编辑一条日志；`point` 是点在渲染好的正文上的位置（光标放到那里），nil 时放在末尾。
-    func begin(_ log: DailyLogEntry, on date: Date, store: JournalStore, at point: CGPoint?, fontSize: CGFloat, dark: Bool) {
+    /// `fontSize`、`lineSpacing` 和渲染好的正文一样（已乘界面缩放），编辑器按它们排版，每一行落在原来的位置上。
+    /// `muted`：正文是用淡色画的（日记里专注期间的笔记、反馈），编辑器也用淡色。
+    func begin(_ log: DailyLogEntry, on date: Date, store: JournalStore, at point: CGPoint?, fontSize: CGFloat, lineSpacing: CGFloat,
+               dark: Bool, muted: Bool = false) {
         guard !store.isReadOnly else { return }
         if target?.logID == log.id { return }
         finish()
@@ -54,11 +57,17 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         height = nil
         original = log.text
         source = log.text
-        caret = point
         configured = false
         let folds = HeadingFolds.folded(in: Self.foldID(log.id))
+        let metrics = InlineEditorMetrics.css(fontSize: fontSize, lineSpacing: lineSpacing)
+        // 点的位置相对正文的文字区；编辑器的文字区左边多 2px 内边距、整篇往上提了 shift。
+        caret = point.map { CGPoint(x: $0.x + 2, y: $0.y + (metrics["shift"] ?? 0)) }
+        var colors = BoardLiveEditorSession.colors(dark: dark)
+        if muted { colors["ink"] = colors["muted"] }
         settings = ["key": "log." + log.id.uuidString, "source": log.text, "inline": true, "readOnly": false, "sourceMode": false,
-                    "fontSize": fontSize, "colors": BoardLiveEditorSession.colors(dark: dark), "labels": BoardLiveEditorSession.labels,
+                    "fontSize": fontSize, "colors": colors, "dark": dark,
+                    "metrics": metrics.merging(["tail": InlineEditorMetrics.tail(log.text, fontSize: fontSize, lineSpacing: lineSpacing)]) { $1 },
+                    "labels": BoardLiveEditorSession.labels.merging(["copyCode": AppLocalized("复制"), "code": AppLocalized("代码")]) { $1 },
                     "folds": Dictionary(uniqueKeysWithValues: folds.map { ($0, true) })]
         _ = makeWebView()
         configure()
@@ -234,6 +243,84 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     }
 }
 
+/// 就地编辑器的版面数字：用和 `MarkdownText` 一样的字体、行距排一行量出来，传给网页做 CSS 变量（px）。
+/// 这样编辑器里每一行的高度、段距和渲染好的正文一致，点进来编辑时文字不挪位置。
+enum InlineEditorMetrics {
+    private static var cache: [String: [String: Double]] = [:]
+
+    @MainActor static func css(fontSize size: CGFloat, lineSpacing: CGFloat) -> [String: Double] {
+        let key = "\(size)/\(lineSpacing)"
+        if let cached = cache[key] { return cached }
+        let body = NSFont.systemFont(ofSize: size)
+        let (line, baseline) = measure(body, lineSpacing: lineSpacing)
+        // 网页把行距上下平分、原生全加在下面：算出两边基线的差，整篇往上提这么多。WebKit 排版时字体的上下伸取整。
+        let shift = max(0, cssBaseline(body, line: line) - baseline)
+        var result: [String: Double] = ["line": line, "gap": Double(max(2, lineSpacing * 2)), "shift": shift]
+        // 代码块的行（语言名那一行最明显：原生的最小行高把字压在行底）基线和正文不同：上面垫一点、行高减同样多，
+        // 行的总高不变，基线落到原生的位置。
+        func padded(_ name: String, _ font: NSFont, _ measured: (height: Double, baseline: Double)) {
+            let pad = max(0, min(measured.height - 1, 2 * (measured.baseline + shift - cssBaseline(font, line: measured.height))))
+            // WebKit 的行高取整数：零头放进上面垫的那一点里，总高仍是原生的行高。
+            let line = (measured.height - pad).rounded(.down)
+            result[name + "-line"] = line
+            result[name + "-pad"] = measured.height - line
+        }
+        for level in 1...6 {
+            let heading = size + CGFloat(7 - level) * 1.5
+            result["h\(level)"] = Double(heading)
+            result["h\(level)-line"] = measure(.systemFont(ofSize: heading, weight: .bold), lineSpacing: lineSpacing).height
+        }
+        result["code-size"] = Double(size * 0.92)
+        let mono = NSFont.monospacedSystemFont(ofSize: size * 0.92, weight: .regular)
+        padded("code", mono, measure(mono, lineSpacing: max(1, lineSpacing * 0.6)))
+        result["code-label-size"] = Double(size * 0.8)
+        let label = NSFont.systemFont(ofSize: size * 0.8, weight: .semibold)
+        padded("code-label", label, measure(label, lineSpacing: lineSpacing, minimum: size * 1.7))
+        cache[key] = result
+        return result
+    }
+
+    /// 渲染好的正文最后一个换行后面还有一个空的行片段（原生的高度算上了它）：量出它的高度，编辑器底下留同样的空，
+    /// 换成编辑器时下面的内容不往上跳。只和最后一段的样式有关（正文、代码、标题……），只排最后一段。
+    @MainActor static func tail(_ source: String, fontSize: CGFloat, lineSpacing: CGFloat) -> Double {
+        let rendered = MarkdownText.render(source, color: .labelColor, fontSize: fontSize, lineSpacing: lineSpacing, scale: 1)
+        guard rendered.length > 0 else { return 0 }
+        let string = rendered.string as NSString
+        let last = rendered.attributedSubstring(from: string.paragraphRange(for: NSRange(location: string.length - 1, length: 0)))
+        let storage = NSTextStorage(attributedString: last)
+        let manager = NSLayoutManager()
+        storage.addLayoutManager(manager)
+        let container = NSTextContainer(size: NSSize(width: 1000, height: CGFloat.greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        manager.addTextContainer(container)
+        manager.ensureLayout(for: container)
+        return Double(manager.extraLineFragmentUsedRect.height)
+    }
+
+    /// 网页里这一行的基线到行顶的距离：行高减去字体上下伸（WebKit 取整）后上下平分。
+    private static func cssBaseline(_ font: NSFont, line: Double) -> Double {
+        let ascent = Double(font.ascender.rounded()), descent = Double((-font.descender).rounded())
+        return (line - ascent - descent) / 2 + ascent
+    }
+
+    /// 一行字的高度（含行距）和基线到行顶的距离。
+    private static func measure(_ font: NSFont, lineSpacing: CGFloat, minimum: CGFloat = 0) -> (height: Double, baseline: Double) {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = lineSpacing
+        style.minimumLineHeight = minimum
+        // 两行：最后一行不加行距，量第一行。
+        let storage = NSTextStorage(string: "Hg\nHg", attributes: [.font: font, .paragraphStyle: style])
+        let manager = NSLayoutManager()
+        storage.addLayoutManager(manager)
+        let container = NSTextContainer(size: NSSize(width: 1000, height: CGFloat.greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        manager.addTextContainer(container)
+        manager.ensureLayout(for: container)
+        let used = manager.lineFragmentUsedRect(forGlyphAt: 0, effectiveRange: nil)
+        return (Double(used.height), Double(manager.location(forGlyphAt: 0).y))
+    }
+}
+
 /// 脚本消息处理器会被网页强引用：用弱引用转给编辑器，不形成循环。
 private final class WeakInlineHandler: NSObject, WKScriptMessageHandler {
     weak var editor: InlineMarkdownEditor?
@@ -313,16 +400,19 @@ struct EditableLogText<Content: View>: View {
 
     var body: some View {
         let editing = editor.isEditing(log.id)
-        if editing, let height = editor.height {
-            InlineEditorHost(editor: editor)
-                .frame(maxWidth: .infinity)
-                .frame(height: height)
-        } else {
-            // 编辑器还没排好：先在正文下面悄悄排版，量出高度再换过来。
-            content(editable ? { begin($0) } : nil)
-                .overlay {
-                    if editing { InlineEditorHost(editor: editor).opacity(0.01).allowsHitTesting(false) }
+        let shown = editing && editor.height != nil
+        // 编辑器一直是同一个视图：先在正文上面悄悄排版（几乎透明），量出高度后正文隐去、编辑器显出来，同一帧换过去。
+        // 不换视图层级（换了网页要重新挂到窗口上，会白一下；新旧两个容器同时在时还会把网页抢回旧的那个，整块不见）。
+        content(editable && !shown ? { begin($0) } : nil)
+            .opacity(shown ? 0 : 1)
+            .allowsHitTesting(!shown)
+            .frame(height: shown ? editor.height : nil, alignment: .top)
+            .overlay(alignment: .top) {
+                if editing {
+                    InlineEditorHost(editor: editor)
+                        .opacity(shown ? 1 : 0.01)
+                        .allowsHitTesting(shown)
                 }
-        }
+            }
     }
 }

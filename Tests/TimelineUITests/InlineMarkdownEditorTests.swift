@@ -33,7 +33,7 @@ final class InlineMarkdownEditorTests: XCTestCase {
 
         let root = VStack(alignment: .leading, spacing: 0) {
             EditableLogText(log: log, editable: true, begin: { point in
-                editor.begin(log, on: date, store: store, at: point, fontSize: 13, dark: true)
+                editor.begin(log, on: date, store: store, at: point, fontSize: 13, lineSpacing: 2, dark: true)
             }) { editAt in
                 TaskLinkText(source: log.text, completed: false, color: Palette.ink, fontSize: 13, edit: {}, open: { _ in },
                              maxLines: 0, markdown: true, compactLines: true, editAt: editAt)
@@ -50,7 +50,7 @@ final class InlineMarkdownEditorTests: XCTestCase {
         defer { editor.finish(); window.contentView = nil; window.close() }
 
         host.layoutSubtreeIfNeeded()
-        editor.begin(log, on: date, store: store, at: CGPoint(x: 30, y: 60), fontSize: 13, dark: true)
+        editor.begin(log, on: date, store: store, at: CGPoint(x: 30, y: 60), fontSize: 13, lineSpacing: 2, dark: true)
         XCTAssertTrue(editor.isEditing(log.id))
         try await wait { host.layoutSubtreeIfNeeded(); return editor.height != nil }
         let webView = try XCTUnwrap(editor.webView)
@@ -108,7 +108,7 @@ final class InlineMarkdownEditorTests: XCTestCase {
         window.contentView = host
         window.orderFront(nil)
         defer { editor.finish(); window.contentView = nil; window.close() }
-        editor.begin(log, on: date, store: store, at: nil, fontSize: 13, dark: false)
+        editor.begin(log, on: date, store: store, at: nil, fontSize: 13, lineSpacing: 2, dark: false)
         try await wait { host.layoutSubtreeIfNeeded(); return editor.height != nil }
         let webView = try XCTUnwrap(editor.webView)
         _ = try await webView.evaluateJavaScript("""
