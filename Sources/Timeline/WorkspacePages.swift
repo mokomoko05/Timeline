@@ -1,10 +1,76 @@
 import AppKit
 
 /// 主窗口：Esc 在笔记 / 日记页上收起窗口（没有文字框先处理它时），和原来独立的笔记窗口一致。
+/// 窗口钉在所在屏幕的中央，拖不动；拉边缘缩放时以中心为基准对称缩放，被拉的那条边始终跟着鼠标。
 final class MainWindow: NSWindow {
     var cancel: (() -> Bool)?
+    /// 开始拉边时的窗口和鼠标位置，以及拉的是哪几条边（-1 左 / 下，1 右 / 上，0 没拉）。
+    private var resizeStart: (frame: NSRect, mouse: NSPoint, edges: (x: CGFloat, y: CGFloat))?
+
+    override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
+        isMovable = false
+        isMovableByWindowBackground = false
+        NotificationCenter.default.addObserver(forName: NSWindow.willStartLiveResizeNotification, object: self, queue: nil) { [weak self] _ in
+            MainActor.assumeIsolated { self?.beginResize() }
+        }
+        NotificationCenter.default.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: self, queue: nil) { [weak self] _ in
+            MainActor.assumeIsolated { self?.resizeStart = nil }
+        }
+    }
+
     override func cancelOperation(_ sender: Any?) {
         if cancel?() != true { super.cancelOperation(sender) }
+    }
+
+    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+        super.setFrame(centered(frameRect), display: flag)
+    }
+
+    override func setFrame(_ frameRect: NSRect, display displayFlag: Bool, animate animateFlag: Bool) {
+        super.setFrame(centered(frameRect), display: displayFlag, animate: animateFlag)
+    }
+
+    override func setFrameOrigin(_ point: NSPoint) {
+        setFrame(NSRect(origin: point, size: frame.size), display: true)
+    }
+
+    override func setFrameTopLeftPoint(_ point: NSPoint) {
+        setFrame(NSRect(x: point.x, y: point.y - frame.height, width: frame.width, height: frame.height), display: true)
+    }
+
+    private func beginResize() {
+        let mouse = NSEvent.mouseLocation
+        let slop: CGFloat = 12
+        func edge(_ value: CGFloat, _ low: CGFloat, _ high: CGFloat) -> CGFloat {
+            abs(value - low) <= slop ? -1 : abs(value - high) <= slop ? 1 : 0
+        }
+        resizeStart = (frame, mouse, (edge(mouse.x, frame.minX, frame.maxX), edge(mouse.y, frame.minY, frame.maxY)))
+    }
+
+    /// 全屏时交给系统；否则把窗口放到它所在屏幕可用区域的中央。
+    private func centered(_ proposed: NSRect) -> NSRect {
+        guard !styleMask.contains(.fullScreen) else { return proposed }
+        let center = NSPoint(x: proposed.midX, y: proposed.midY)
+        guard let area = (NSScreen.screens.first { NSMouseInRect(center, $0.frame, false) } ?? screen ?? NSScreen.main)?.visibleFrame else { return proposed }
+        var size = proposed.size
+        if inLiveResize, let start = resizeStart {
+            size = Self.symmetricSize(start: start.frame.size, edges: start.edges, mouseDelta: NSPoint(x: NSEvent.mouseLocation.x - start.mouse.x, y: NSEvent.mouseLocation.y - start.mouse.y), proposed: proposed.size)
+        }
+        return Self.centeredFrame(size: size, in: area, minSize: minSize, maxSize: maxSize)
+    }
+
+    /// 拉一条边移动 d，宽（高）就变 2d：另一条边同时反向移动，中心不动。没拉的方向沿用系统给的尺寸。
+    static func symmetricSize(start: NSSize, edges: (x: CGFloat, y: CGFloat), mouseDelta: NSPoint, proposed: NSSize) -> NSSize {
+        NSSize(width: edges.x == 0 ? proposed.width : start.width + 2 * edges.x * mouseDelta.x,
+               height: edges.y == 0 ? proposed.height : start.height + 2 * edges.y * mouseDelta.y)
+    }
+
+    /// 尺寸夹在最小 / 最大尺寸和屏幕可用区域之间，再放到可用区域正中（取整到像素，避免模糊）。
+    static func centeredFrame(size: NSSize, in area: NSRect, minSize: NSSize, maxSize: NSSize) -> NSRect {
+        let width = min(max(size.width, minSize.width), maxSize.width, area.width).rounded()
+        let height = min(max(size.height, minSize.height), maxSize.height, area.height).rounded()
+        return NSRect(x: (area.midX - width / 2).rounded(), y: (area.midY - height / 2).rounded(), width: width, height: height)
     }
 }
 

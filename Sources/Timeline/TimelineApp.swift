@@ -347,11 +347,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if Motion.reduced { finish() } else { fadeWindow(to: 0, duration: 0.14, completion: finish) }
     }
 
-    /// 换页：笔记页整个窗口背景都可以拖动（它没有标题栏按钮）；窗口标题跟着页面走（任务切换、窗口菜单里看得到）。
+    /// 换页：窗口钉在屏幕中央，两页都不能拖动；窗口标题跟着页面走（任务切换、窗口菜单里看得到）。
     private func switchPage(notes: Bool) {
         if notes != pages.showsNotes { NotificationCenter.default.post(name: .timelineCommitEditing, object: nil) }
         pages.show(notes: notes)
-        window.isMovableByWindowBackground = pages.showsNotes
         window.title = AppLocalized(pages.showsNotes ? "笔记 / 日记" : "Timeline")
     }
 
