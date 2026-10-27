@@ -29,6 +29,8 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     private var composing = false
     private var ready = false
     private var configured = false
+    /// 编辑器的内容已经画到屏幕上了：这之后才把渲染好的正文换成编辑器（之前的高度消息不算）。
+    private var painted = false
     private var settings: [String: Any] = [:]
     private var caret: CGPoint?
     private var clickMonitor: Any?
@@ -58,6 +60,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         original = log.text
         source = log.text
         configured = false
+        painted = false
         let folds = HeadingFolds.folded(in: Self.foldID(log.id))
         let metrics = InlineEditorMetrics.css(fontSize: fontSize, lineSpacing: lineSpacing)
         // 点的位置相对正文的文字区；编辑器的文字区左边多 2px 内边距、整篇往上提了 shift。
@@ -109,6 +112,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         height = nil
         caret = nil
         configured = false
+        painted = false
         store = nil
     }
 
@@ -185,10 +189,26 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         webView.window?.makeFirstResponder(webView)
         let place = caret.map { "window.boardEditor.placeCaret(\($0.x), \($0.y))" }
             ?? "window.boardEditor.focus(); window.boardEditor.select(window.boardEditor.snapshot().source.length)"
-        webView.evaluateJavaScript("window.boardEditor.configure(\(json)); \(place); window.boardEditor.height()") { [weak self] result, _ in
-            guard let self, let value = result as? Double, value > 0, self.target != nil else { return }
-            self.height = CGFloat(value)
+        let target = self.target
+        webView.evaluateJavaScript("window.boardEditor.configure(\(json)); \(place); 0", completionHandler: nil)
+        // 网页画好了才换：原生正文一直显示到那一刻，中间不会空一帧。
+        webView.callAsyncJavaScript("return await window.boardEditor.painted()", arguments: [:], in: nil, in: .page) { [weak self] result in
+            guard let self, self.target == target, case .success(let value) = result, let value = value as? Double, value > 0 else { return }
+            self.reveal(CGFloat(value))
         }
+        // 网页迟迟不画（比如窗口在后台）：最多等半秒，照样换过去。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, self.target == target, self.configured, !self.painted else { return }
+            webView.evaluateJavaScript("window.boardEditor.height()") { result, _ in
+                guard self.target == target, !self.painted, let value = result as? Double, value > 0 else { return }
+                self.reveal(CGFloat(value))
+            }
+        }
+    }
+
+    private func reveal(_ value: CGFloat) {
+        painted = true
+        height = value
     }
 
     /// 编辑器挪进了这一条的位置（有窗口了）：拿键盘焦点，排好版。
@@ -208,7 +228,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
             source = text
             composing = body["composing"] as? Bool ?? false
         case "height":
-            guard target != nil, configured, let value = body["value"] as? Double, value > 0 else { return }
+            guard target != nil, configured, painted, let value = body["value"] as? Double, value > 0 else { return }
             height = CGFloat(value)
         case "done":
             finish()
@@ -239,6 +259,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         save()
         ready = false
         configured = false
+        painted = false
         webView.reload()
     }
 }

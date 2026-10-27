@@ -1246,6 +1246,16 @@ window.boardEditor = {
     return snapshot();
   },
   height() { lastHeight = 0; reportHeight(); return lastHeight; },
+  // 就地编辑：等这次配置后的内容真的画到屏幕上（第二个动画帧回调时，第一帧已经提交）再让原生层换过来，
+  // 不然原生正文先藏起来、网页还没画，中间会空一两帧（看起来就是闪一下）。返回那时的高度。
+  painted() {
+    return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => {
+      window.boardEditor.paintedFrames = (window.boardEditor.paintedFrames || 0) + 1;
+      lastHeight = 0;
+      reportHeight();
+      resolve(lastHeight);
+    })));
+  },
   escape() {
     const target = view.dom.contains(document.activeElement) ? document.activeElement : view.contentDOM;
     target.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", code: "Escape", bubbles: true, cancelable: true}));
