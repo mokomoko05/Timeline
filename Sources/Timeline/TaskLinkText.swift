@@ -75,8 +75,9 @@ struct TaskLinkText: NSViewRepresentable {
             let sourceChanged = view.source != source || view.displayName != displayName || view.markdown != markdown
             let selection = view.selectedRanges
             if sourceChanged {
-                view.markdownDocument = markdown ? Document(parsing: source) : nil
-                view.inlineText = markdown ? nil : NSAttributedString(TaskText.rendered(source, alias: displayName))
+                // 解析留到真要排版时（缓存里没有）再做：滚回来的行直接用缓存，不再解析。
+                view.markdownDocument = nil
+                view.inlineText = nil
             }
             view.source = source
             view.displayName = displayName
@@ -91,12 +92,26 @@ struct TaskLinkText: NSViewRepresentable {
             view.configuredLineSpacing = Double(typography.lineSpacing)
             view.foldedHeadings = folds
             view.boardFolds = boardFolds
-            let styled = markdown
-                ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced, lineSpacing: typography.lineSpacing, scale: typography.scale, document: view.markdownDocument, interactiveTasks: view.interactiveTasks, folds: folds, boardFolds: boardFolds)
-                : Self.styledText(source, completed: completed, color: foreground, fontSize: fontSize, displayName: displayName, monospaced: monospaced, compactLines: compactLines, lineSpacing: compactLines ? 0 : typography.lineSpacing, scale: typography.scale, rendered: view.inlineText)
-            view.textStorage?.setAttributedString(styled)
+            // 同样的正文和样式排出来的结果全局缓存：懒加载的列表滚回来时重新建行，不用再解析、排版、量高度。
+            let key = boardFolds == nil ? TextRenderCache.Key(source: source, displayName: displayName, markdown: markdown, completed: completed, foreground: foreground,
+                fontSize: fontSize, monospaced: monospaced, compactLines: compactLines, interactiveTasks: view.interactiveTasks, scale: typography.scale,
+                lineSpacing: typography.lineSpacing, folds: folds, maxLines: maxLines) : nil
+            let entry: TextRenderCache.Entry
+            if let key, let hit = TextRenderCache.shared.entry(for: key) {
+                entry = hit
+            } else {
+                if markdown, view.markdownDocument == nil { view.markdownDocument = Document(parsing: source) }
+                if !markdown, view.inlineText == nil { view.inlineText = NSAttributedString(TaskText.rendered(source, alias: displayName)) }
+                let styled = markdown
+                    ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced, lineSpacing: typography.lineSpacing, scale: typography.scale, document: view.markdownDocument, interactiveTasks: view.interactiveTasks, folds: folds, boardFolds: boardFolds)
+                    : Self.styledText(source, completed: completed, color: foreground, fontSize: fontSize, displayName: displayName, monospaced: monospaced, compactLines: compactLines, lineSpacing: compactLines ? 0 : typography.lineSpacing, scale: typography.scale, rendered: view.inlineText)
+                entry = TextRenderCache.Entry(styled)
+                if let key { TextRenderCache.shared.store(entry, for: key) }
+            }
+            view.textStorage?.setAttributedString(entry.styled)
             if !sourceChanged { view.selectedRanges = selection }
-            view.measurer.update(styled, maxLines: maxLines)
+            view.rendered = entry
+            view.measuredText = nil
             view.invalidateIntrinsicContentSize()
             view.needsDisplay = true
             view.window?.invalidateCursorRects(for: view)
@@ -108,7 +123,7 @@ struct TaskLinkText: NSViewRepresentable {
         // 用单独的排版栈测量，不碰视图自己的文本容器（SwiftUI 会用很多个宽度试探，缩放窗口时每帧都是新宽度；
         // 之前是改容器、排版、再还原重排，一次测量要排两遍中文）。同一个宽度的结果缓存起来。
         let textWidth = max(1, width - nsView.textContainerInset.width * 2)
-        let height = nsView.measurer.height(forWidth: textWidth)
+        let height = nsView.measuredHeight(forWidth: textWidth, maxLines: maxLines)
         return CGSize(width: width, height: max(typography.pt(fontSize) + 4, height) + nsView.textContainerInset.height * 2)
     }
 
@@ -128,6 +143,56 @@ struct TaskLinkText: NSViewRepresentable {
             }
         }
         return text
+    }
+}
+
+/// 排好版的正文，按正文和样式缓存（最多几百份，按开销自动淘汰）。日记、笔记里很长的条目滚出去再滚回来，
+/// 懒加载列表会重新建行；有缓存时不用再解析 Markdown、排版和量高度，滚动不掉帧，估算的行高也更快对上。
+@MainActor
+final class TextRenderCache {
+    static let shared = TextRenderCache()
+
+    struct Key: Hashable {
+        let source: String
+        let displayName: String?
+        let markdown: Bool
+        let completed: Bool
+        let foreground: NSColor
+        let fontSize: CGFloat
+        let monospaced: Bool
+        let compactLines: Bool
+        let interactiveTasks: Bool
+        let scale: CGFloat
+        let lineSpacing: CGFloat
+        let folds: Set<String>?
+        let maxLines: Int
+    }
+
+    final class Entry {
+        let styled: NSAttributedString
+        /// 宽度（半点为单位）→ 高度。
+        var heights: [Int: CGFloat] = [:]
+        init(_ styled: NSAttributedString) { self.styled = styled.copy() as? NSAttributedString ?? styled }
+    }
+
+    private final class Box: NSObject {
+        let key: Key
+        init(_ key: Key) { self.key = key }
+        override var hash: Int { key.hashValue }
+        override func isEqual(_ object: Any?) -> Bool { (object as? Box)?.key == key }
+    }
+
+    private let cache: NSCache<Box, Entry> = {
+        let cache = NSCache<Box, Entry>()
+        cache.countLimit = 600
+        cache.totalCostLimit = 24 * 1024 * 1024
+        return cache
+    }()
+
+    func entry(for key: Key) -> Entry? { cache.object(forKey: Box(key)) }
+
+    func store(_ entry: Entry, for key: Key) {
+        cache.setObject(entry, forKey: Box(key), cost: entry.styled.length * 16 + key.source.utf16.count * 2)
     }
 }
 
@@ -231,6 +296,24 @@ final class InteractiveTaskText: NSTextView {
 
     var markdownDocument: Document?
     var inlineText: NSAttributedString?
+    /// 现在显示的排版结果（和它在各个宽度下的高度，可能和别的行共用）。
+    var rendered: TextRenderCache.Entry?
+    /// 测量用的排版栈里现在放的是哪一份：换了正文才重新放进去，量过的宽度直接查缓存。
+    var measuredText: TextRenderCache.Entry?
+
+    func measuredHeight(forWidth width: CGFloat, maxLines: Int) -> CGFloat {
+        guard let rendered else { return measurer.height(forWidth: width) }
+        let key = Int((min(width, 100_000) * 2).rounded())
+        if let hit = rendered.heights[key] { return hit }
+        if measuredText !== rendered {
+            measurer.update(rendered.styled, maxLines: maxLines)
+            measuredText = rendered
+        }
+        let height = measurer.height(forWidth: width)
+        if rendered.heights.count > 32 { rendered.heights.removeAll() }
+        rendered.heights[key] = height
+        return height
+    }
     var markdown = false
     var interactiveTasks = false
     var onToggleMarkdownTask: ((Int) -> Void)?

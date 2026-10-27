@@ -37,7 +37,7 @@ struct TaskDragHandle: View {
     var body: some View {
         NativeTaskHandle(task: task, enabled: enabled, select: select, reorder: reorder)
             .frame(width: 30, height: 30)
-            .help("同一日期内上下排序；拖到日历修改日期")
+            .help("上下拖动排序，拖过哪个日期就改到哪天；横着拖出去可放到日历")
             .accessibilityLabel("排序任务或拖到日历修改日期")
     }
 }
@@ -161,10 +161,8 @@ final class TaskHandleView: NSView, NSDraggingSource {
     override func mouseDragged(with event: NSEvent) {
         if reordering {
             NSCursor.closedHand.set()
-            // 横向离开清单、或拖进左侧的日期一栏，就切换为改日期的拖放（可以放在日历或时间轴的日期结上）；
-            // 越过日期分组仍按组内排序。
-            if leftList(event.locationInWindow) || inDateGutter(event.locationInWindow)
-                || reorder?.escaped(translation(event.locationInWindow)) == true, let id = taskID {
+            // 横向离开清单就切换为拖到日历；上下拖（包括越过日期）一直是排序，经过的行让位。
+            if leftList(event.locationInWindow) || reorder?.escaped(translation(event.locationInWindow)) == true, let id = taskID {
                 endReorder(commit: false)
                 startNativeDrag(id, title, self, event)
                 return
@@ -175,7 +173,7 @@ final class TaskHandleView: NSView, NSDraggingSource {
         guard let id = taskID, let initial = initialEvent,
               hypot(event.locationInWindow.x - initial.locationInWindow.x,
                     event.locationInWindow.y - initial.locationInWindow.y) > 3 else { return }
-        if reorder == nil || leftList(event.locationInWindow) || inDateGutter(event.locationInWindow) {
+        if reorder == nil || leftList(event.locationInWindow) {
             initialEvent = nil
             startNativeDrag(id, title, self, event)
             return
@@ -228,13 +226,6 @@ final class TaskHandleView: NSView, NSDraggingSource {
         if commit { reorder?.end() } else { reorder?.cancel() }
         NSCursor.arrow.set()
         window?.invalidateCursorRects(for: self)
-    }
-
-    /// 指针进了时间轴左侧的日期一栏（轴线左边）。
-    private func inDateGutter(_ point: NSPoint) -> Bool {
-        guard let scroll = scrollView else { return false }
-        let frame = scroll.convert(scroll.bounds, to: nil)
-        return point.x < frame.minX + 46 * UIScale.factor && point.x >= frame.minX - 70
     }
 
     private func leftList(_ point: NSPoint) -> Bool {

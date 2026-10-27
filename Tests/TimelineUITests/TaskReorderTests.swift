@@ -56,6 +56,44 @@ final class TaskReorderTests: XCTestCase {
         XCTAssertEqual(ReorderMath.moved(["a", "b", "c", "d"], from: 3, to: 1), ["a", "d", "b", "c"])
     }
 
+    // MARK: - 时间轴落点
+
+    func testTimelineDropBelongsToTheNearestDateAboveIt() {
+        let calendar = JournalDates.calendar
+        let today = calendar.startOfDay(for: Date()), tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
+        let gap = TimelineSlots.id("test-gap-top", .fixed)
+        let dayA = TimelineSlots.id("test-marker-a", .day(today)), dayB = TimelineSlots.id("test-marker-b", .day(tomorrow))
+        let undated = TimelineSlots.id("test-marker-undated", .day(nil))
+        let now = TimelineSlots.id("test-now", .fixed)
+        let (a1, a2, b1, dragged) = (UUID(), UUID(), UUID(), UUID())
+        let intoB = TimelineSlots.placement(of: dragged, in: [gap, dayA, a1, now, a2, dayB, dragged, b1, undated])
+        XCTAssertEqual(intoB?.day, tomorrow, "落在明天的刻度下面就是明天")
+        XCTAssertEqual(intoB?.order, [dragged, b1], "只排那一天的任务，「现在」之类的不算")
+        let endOfA = TimelineSlots.placement(of: dragged, in: [gap, dayA, a1, now, a2, dragged, dayB, b1])
+        XCTAssertEqual(endOfA?.day, today, "放在下一个日期之前，算上一天的末尾")
+        XCTAssertEqual(endOfA?.order, [a1, a2, dragged])
+        let noDue = TimelineSlots.placement(of: dragged, in: [dayA, a1, undated, dragged])
+        XCTAssertNotNil(noDue)
+        XCTAssertNil(noDue?.day, "未设日期")
+        XCTAssertNil(TimelineSlots.placement(of: dragged, in: [gap, dragged, dayA, a1]), "最上面没有日期，放不下")
+    }
+
+    func testRejectedDropSlidesBackWithoutCommitting() async throws {
+        let ids = (0..<3).map { _ in UUID() }
+        let model = TaskReorderModel()
+        for (i, id) in ids.enumerated() { model.frames[id] = rect(i) }
+        model.groupProvider = { _ in ids }
+        var commits = 0
+        model.commit = { _ in commits += 1 }
+        model.accepts = { _ in false }
+        XCTAssertTrue(model.begin(ids[0]))
+        model.update(100)
+        model.finish()
+        XCTAssertEqual(commits, 0)
+        XCTAssertFalse(model.isActive)
+        XCTAssertEqual(model.returning, !Motion.reduced, "别的行带动画回原位")
+    }
+
     // MARK: - 状态模型
 
     func testModelCommitsAndResetsImmediatelyOnRelease() async throws {

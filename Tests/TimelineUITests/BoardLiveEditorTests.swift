@@ -80,6 +80,38 @@ final class BoardLiveEditorTests: XCTestCase {
         }
     }
 
+    /// 鼠标点在哪一行就落在哪一行：代码块、引用这些带上下间距的行后面，CodeMirror 量出的行高要和画出来的一致，
+    /// 否则越往下点，光标越偏到下一行。
+    func testClickingLandsOnTheLineUnderThePointerBelowCodeBlocksAndQuotes() async throws {
+        var parts: [String] = []
+        for index in 1...4 {
+            parts.append("Paragraph \(index)\n\n```\ncode \(index)\nmore \(index)\n```\n\n> quote \(index)\n> again \(index)\n")
+        }
+        let source = parts.joined(separator: "\n") + "\nLast line"
+        let fixture = try LiveFixture(source: source)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        for focused in [false, true] {
+            if focused { _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.focus();window.boardEditor.select(0)") }
+            try await Task.sleep(for: .milliseconds(80))
+            let misses = try await fixture.webView.evaluateJavaScript("""
+            (()=>{
+              const view=window.boardEditor.view();
+              const misses=[];
+              for (const line of view.contentDOM.querySelectorAll('.cm-line')) {
+                const rect=line.getBoundingClientRect();
+                if (rect.height<4 || !line.textContent.trim() || rect.top<0 || rect.bottom>innerHeight) continue;
+                const pos=view.posAtCoords({x:rect.left+30,y:rect.top+rect.height/2});
+                const doc=view.state.doc.lineAt(view.posAtDOM(line));
+                if (pos==null || pos<doc.from || pos>doc.to) misses.push(line.textContent+' → '+(pos==null?'null':view.state.doc.lineAt(pos).text));
+              }
+              return misses;
+            })()
+            """) as? [String]
+            XCTAssertEqual(misses, [], focused ? "编辑中" : "未聚焦（预览）")
+        }
+    }
+
     /// ⌘Enter：立即保存，继续编辑（没有单独的浏览模式）。
     func testCommandEnterSavesAndKeepsEditing() async throws {
         let fixture = try LiveFixture(source: "Before body")
@@ -157,7 +189,8 @@ final class BoardLiveEditorTests: XCTestCase {
             concealed:document.querySelectorAll('.cm-code-header-concealed').length};})()
         """) as? [String: Any]
         XCTAssertEqual(corner?["position"] as? String, "absolute")
-        XCTAssertLessThanOrEqual((corner?["height"] as? NSNumber)?.doubleValue ?? 99, 8)
+        // 6 点高的上沿，加上块上面 8 点的空隙（空隙算在行里，CodeMirror 才量得到）。
+        XCTAssertLessThanOrEqual((corner?["height"] as? NSNumber)?.doubleValue ?? 99, 14)
         XCTAssertEqual(corner?["concealed"] as? Int, 2, "空代码块保留按钮所在的那一行，另外两块的围栏收起")
         _ = try await fixture.webView.evaluateJavaScript("(()=>{const editor=window.boardEditor;const start=editor.snapshot().source.indexOf('1');editor.select(start,start+1);editor.replaceSelection('42')})()")
         let before = try await fixture.snapshot()
@@ -168,8 +201,8 @@ final class BoardLiveEditorTests: XCTestCase {
         XCTAssertEqual(feedback, "true")
         let style = try await fixture.webView.evaluateJavaScript("""
         (()=>{const button=document.querySelector('.board-copy-code');
-          return {label:button.dataset.label,top:getComputedStyle(document.querySelector('.cm-code-start')).borderTopLeftRadius,
-            bottom:getComputedStyle([...document.querySelectorAll('.cm-code-end')].at(-1)).borderBottomRightRadius};})()
+          return {label:button.dataset.label,top:getComputedStyle(document.querySelector('.cm-code-start'),'::before').borderTopLeftRadius,
+            bottom:getComputedStyle([...document.querySelectorAll('.cm-code-end')].at(-1),'::before').borderBottomRightRadius};})()
         """) as? [String: String]
         XCTAssertEqual(style?["label"], "已复制")
         XCTAssertEqual(style?["top"], "9px")
@@ -380,7 +413,7 @@ final class BoardLiveEditorTests: XCTestCase {
         try await waitForBoardEditor(fixture.webView)
         try await browse(fixture.session, fixture.webView)
         let lines = try await fixture.webView.evaluateJavaScript(
-            "[...document.querySelectorAll('.cm-line')].map(e=>[e.textContent,e.className.includes('cm-quote'),e.className.includes('cm-quote-start'),e.className.includes('cm-quote-end'),getComputedStyle(e).backgroundColor])") as? [[Any]] ?? []
+            "[...document.querySelectorAll('.cm-line')].map(e=>[e.textContent,e.className.includes('cm-quote'),e.className.includes('cm-quote-start'),e.className.includes('cm-quote-end'),getComputedStyle(e,'::before').backgroundColor])") as? [[Any]] ?? []
         let quoted = lines.filter { $0[1] as? Bool == true }.map { $0[0] as? String ?? "?" }
         XCTAssertEqual(quoted, ["one", "two", "three"])
         XCTAssertEqual(lines.filter { $0[2] as? Bool == true }.map { $0[0] as? String }, ["one", "three"])

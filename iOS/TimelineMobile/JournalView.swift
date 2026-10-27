@@ -466,6 +466,7 @@ private struct MonthCalendar: View {
 /// 写一条日志：可关联待办、加 #标签、配图。
 ///
 /// 打字时只有这一页跟着刷新，所以这一页的正文要便宜：可关联的待办在打开时整理一次，菜单放在单独的视图里。
+/// 没保存就收起（点暗处、取消、切走应用）时留草稿，下次从同一个地方打开时接着写。
 struct ComposeSheet: View {
     @ObservedObject var store: JournalStore
     var taskID: UUID?
@@ -473,28 +474,62 @@ struct ComposeSheet: View {
     var tags: [String] = []
     var sent: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
-    @State private var text = ""
+    @State private var text: String
+    /// 打开时恢复了草稿：显示一行提示，可以一键清空。
+    @State private var restored: Bool
+    /// 已经保存：收起时不再留草稿。
+    @State private var finished = false
     @State private var linked: UUID?
     /// 关联的待办的标题：选的时候记一次，打字时不用每次去找。
     @State private var linkedTitle = ""
     /// 用 `@` / `#` 列表选的标签（正文里写的 #标签 发送时另外解析）。
-    @State private var pickedTags: [String] = []
+    @State private var pickedTags: [String]
     /// 不订阅：只有列表订阅它，打字时这一页不会因为补全重算。
     @State private var mention = MentionModel()
-    @State private var images: [String] = []
+    @State private var images: [String]
     @State private var picked: [PhotosPickerItem] = []
     @State private var error: String?
     @Environment(\.closeEditor) private var closeEditor
 
+    init(store: JournalStore, taskID: UUID? = nil, tags: [String] = [], sent: @escaping () -> Void = {}) {
+        self.store = store
+        self.taskID = taskID
+        self.tags = tags
+        self.sent = sent
+        // 正文在建视图时就放进去：输入框一出现就是草稿，不会先空一帧。
+        let draft = ComposeDraft.load(ComposeDraft.key(taskID: taskID, tags: tags))
+        _text = State(initialValue: draft?.text ?? "")
+        _pickedTags = State(initialValue: draft?.tags ?? [])
+        _images = State(initialValue: draft?.images ?? [])
+        _restored = State(initialValue: draft != nil)
+        _linked = State(initialValue: draft?.linked ?? taskID)
+    }
+
+    private var draftKey: String { ComposeDraft.key(taskID: taskID, tags: tags) }
+
     var body: some View {
-        if let close = closeEditor {
-            VStack(alignment: .leading, spacing: 10) {
-                EditorCardHeader(title: "记一笔", confirm: "保存", canConfirm: canSend, cancel: close.close, action: send)
-                fields(maxLines: 8)
+        Group {
+            if let close = closeEditor {
+                VStack(alignment: .leading, spacing: 10) {
+                    EditorCardHeader(title: "记一笔", confirm: "保存", canConfirm: canSend, cancel: close.close, action: send)
+                    fields(maxLines: 8)
+                }
+            } else {
+                sheet
             }
-            .onAppear(perform: load)
-            .onChange(of: picked) { _, items in take(items) }
-        } else {
+        }
+        .onAppear(perform: load)
+        .onChange(of: picked) { _, items in take(items) }
+        // 草稿只在收起和退到后台时写一次，打字时不碰存储。
+        .onChange(of: text) { if restored { restored = false } }
+        .onDisappear { if !finished { saveDraft() } }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            if !finished { saveDraft() }
+        }
+    }
+
+    private var sheet: some View {
+        Group {
             NavigationStack {
                 VStack(alignment: .leading, spacing: 12) {
                     fields(maxLines: 14)
@@ -507,11 +542,24 @@ struct ComposeSheet: View {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) { Button("保存", action: send).disabled(!canSend) }
                 }
-                .onAppear(perform: load)
-                .onChange(of: picked) { _, items in take(items) }
             }
             .presentationDetents([.medium, .large])
         }
+    }
+
+    private func saveDraft() {
+        // 在待办里写时默认就关联着它，不算写了东西。
+        ComposeDraft.save(ComposeDraft(text: text, linked: linked == taskID ? nil : linked, tags: pickedTags, images: images), key: draftKey)
+    }
+
+    private func clearDraft() {
+        text = ""
+        pickedTags = []
+        images = []
+        linked = nil
+        if let taskID { link(taskID) }
+        restored = false
+        ComposeDraft.save(ComposeDraft(), key: draftKey)
     }
 
     private var canSend: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty }
@@ -539,6 +587,13 @@ struct ComposeSheet: View {
             }
         }
         if !images.isEmpty { ImageStrip(store: store, names: images) }
+        if restored {
+            HStack(spacing: 8) {
+                Label("草稿已恢复", systemImage: "arrow.uturn.backward.circle").foregroundStyle(Palette.muted)
+                Button("丢弃草稿", action: clearDraft).foregroundStyle(Palette.accent)
+            }
+            .font(.caption)
+        }
         if let error { Text(error).font(.caption).foregroundStyle(Palette.danger) }
         HStack(spacing: 16) {
             // 两个按钮在光标处插入 `@` / `#`：弹出同一个列表，接着打字就是搜索。
@@ -553,7 +608,7 @@ struct ComposeSheet: View {
     }
 
     private func load() {
-        if let taskID { link(taskID) }
+        if let linked { link(linked) }
         Task { await store.warmLinkMatching() }
         mention.provider = MentionProviders.make(store: store, chosenTags: { [tags, pickedTags = $pickedTags] in TagText.merge(tags, pickedTags.wrappedValue) })
         mention.onPick = { [link, pickedTags = $pickedTags] item in
@@ -591,11 +646,36 @@ struct ComposeSheet: View {
             try store.quickLog(parsed.title, images: images, taskID: linked, linkDefault: false, tags: TagText.merge(TagText.merge(tags, pickedTags), parsed.tags),
                                allowInlineTaskReference: linked == nil, on: Date())
             store.save()
+            finished = true
+            ComposeDraft.save(ComposeDraft(), key: draftKey)
             sent()
             if let closeEditor { closeEditor() } else { dismiss() }
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+/// 记一笔的草稿：每个入口（日记、某个待办、某个标签笔记本）一份，只存在这台手机上，不同步。
+struct ComposeDraft: Codable {
+    var text = ""
+    var linked: UUID?
+    var tags: [String] = []
+    var images: [String] = []
+
+    var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && linked == nil && tags.isEmpty && images.isEmpty }
+
+    static func key(taskID: UUID?, tags: [String]) -> String {
+        "composeDraft." + (taskID.map { "task." + $0.uuidString } ?? tags.first.map { "tag." + TagText.key($0) } ?? "journal")
+    }
+
+    static func load(_ key: String) -> ComposeDraft? {
+        UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(ComposeDraft.self, from: $0) }.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    static func save(_ draft: ComposeDraft, key: String) {
+        if draft.isEmpty { UserDefaults.standard.removeObject(forKey: key) }
+        else if let data = try? JSONEncoder().encode(draft) { UserDefaults.standard.set(data, forKey: key) }
     }
 }
 

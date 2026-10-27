@@ -35,9 +35,15 @@ final class TaskTimelineTests: XCTestCase {
             func handles(_ view: NSView) -> [TaskHandleView] {
                 (view as? TaskHandleView).map { [$0] } ?? view.subviews.flatMap(handles)
             }
-            func moveToBottom(_ id: UUID) throws {
+            func windowY(_ id: UUID) throws -> CGFloat {
+                let handle = try XCTUnwrap(handles(host).first { $0.taskID == id })
+                return handle.convert(NSPoint(x: handle.bounds.midX, y: handle.bounds.midY), to: nil).y
+            }
+            /// 拖到这一天最后一项稍下面（再往下就越过下一个日期，改到那天了）。
+            func moveToBottom(_ id: UUID, below last: UUID) throws {
                 let dot = try XCTUnwrap(handles(host).first { $0.taskID == id })
                 let start = dot.convert(NSPoint(x: dot.bounds.midX, y: dot.bounds.midY), to: nil)
+                let distance = start.y - (try windowY(last)) + 12
                 let hit = try XCTUnwrap(host.hitTest(host.superview?.convert(start, from: nil) ?? start))
                 XCTAssertTrue(hit === dot, "日历放置结束后，圆点必须能收到鼠标事件")
                 func event(_ type: NSEvent.EventType, delta: CGFloat = 0) throws -> NSEvent {
@@ -45,13 +51,16 @@ final class TaskTimelineTests: XCTestCase {
                         windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
                 }
                 window.sendEvent(try event(.leftMouseDown))
-                window.sendEvent(try event(.leftMouseDragged, delta: 1000))
+                window.sendEvent(try event(.leftMouseDragged, delta: distance))
                 XCTAssertTrue(dot.isReordering, "从日历摘下任务后，原组和目标组都应能立即拿起圆点")
-                window.sendEvent(try event(.leftMouseUp, delta: 1000))
+                window.sendEvent(try event(.leftMouseUp, delta: distance))
+                host.layoutSubtreeIfNeeded()
             }
-            try moveToBottom(source[1].id)
+            try moveToBottom(source[1].id, below: source[2].id)
             XCTAssertEqual(store.tasks().filter { $0.task.dueDate == today }.sorted(by: TaskTimelineSection.precedes).map(\.id), [source[2].id, source[1].id])
-            try moveToBottom(source[0].id)
+            try await Task.sleep(for: .milliseconds(300))
+            host.layoutSubtreeIfNeeded()
+            try moveToBottom(source[0].id, below: target[1].id)
             let expectedTarget = [target[0].id, target[1].id, source[0].id]
             let saved = JournalStore(directory: directory).tasks()
             XCTAssertEqual(saved.filter { $0.task.dueDate == destination }.sorted(by: TaskTimelineSection.precedes).map(\.id), expectedTarget)
@@ -317,14 +326,17 @@ final class TaskTimelineTests: XCTestCase {
             let start = dot.convert(NSPoint(x: dot.bounds.midX, y: dot.bounds.midY), to: nil)
             let hit = try XCTUnwrap(host.hitTest(host.superview?.convert(start, from: nil) ?? start))
             XCTAssertTrue(hit === dot, "圆点必须实际收到鼠标事件，当前命中：\(type(of: hit))")
-            let outside = NSPoint(x: start.x, y: start.y - 10_000)
+            let lastDot = try XCTUnwrap(handles(host).first { $0.taskID == items[2].id })
+            let lastY = lastDot.convert(NSPoint(x: lastDot.bounds.midX, y: lastDot.bounds.midY), to: nil).y
+            // 只拖到本组最后一项稍下面：再往下越过下一个日期，就是改到那天了（见下一个测试）。
+            let outside = NSPoint(x: start.x, y: lastY - 12)
             func mouse(_ type: NSEvent.EventType, at point: NSPoint) throws -> NSEvent {
                 try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
                     windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
             }
             window.sendEvent(try mouse(.leftMouseDown, at: start))
             window.sendEvent(try mouse(.leftMouseDragged, at: outside))
-            XCTAssertTrue(dot.isReordering, "Actual priority dot must stay in its date interval even outside the timeline")
+            XCTAssertTrue(dot.isReordering, "上下拖动是排序，不是拖到日历")
             window.sendEvent(try mouse(.leftMouseUp, at: outside))
             let saved = JournalStore(directory: directory).tasks().sorted(by: TaskTimelineSection.precedes)
             let ownGroup = saved.filter { item in items.contains { $0.id == item.id } }
@@ -337,6 +349,53 @@ final class TaskTimelineTests: XCTestCase {
             store.undo()
             XCTAssertEqual(store.tasks().sorted(by: TaskTimelineSection.precedes).map(\.id), originals.sorted(by: TaskTimelineSection.precedes).map(\.id))
         }
+    }
+
+    func testDraggingPastADateMovesTheTaskThereAndOtherRowsMakeRoom() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let tomorrow = try XCTUnwrap(JournalDates.calendar.date(byAdding: .day, value: 1, to: today))
+        let mine = try ["Moving", "Staying"].map { try XCTUnwrap(store.addParsedTodo($0, on: today)) }
+        for item in mine { store.setDeadline(item.id, to: today) }
+        let theirs = try ["Tomorrow first", "Tomorrow second"].map { try XCTUnwrap(store.addParsedTodo($0, on: today)) }
+        for item in theirs { store.setDeadline(item.id, to: tomorrow) }
+        let host = NSHostingView(rootView: LiveTaskTimeline(store: store, today: today))
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.contentView = nil; window.close() }
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
+        func handles(_ view: NSView) -> [TaskHandleView] {
+            (view as? TaskHandleView).map { [$0] } ?? view.subviews.flatMap(handles)
+        }
+        func center(_ id: UUID) throws -> NSPoint {
+            let handle = try XCTUnwrap(handles(host).first { $0.taskID == id })
+            return handle.convert(NSPoint(x: handle.bounds.midX, y: handle.bounds.midY), to: nil)
+        }
+        let start = try center(mine[0].id)
+        // 拖到明天两项之间：越过了「明天」这个日期和明天的第一项。
+        let between = (try center(theirs[0].id).y + (try center(theirs[1].id).y)) / 2
+        let staying = try center(mine[1].id).y
+        func mouse(_ type: NSEvent.EventType, y: CGFloat) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: start.x, y: y), modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        let dot = try XCTUnwrap(handles(host).first { $0.taskID == mine[0].id })
+        window.sendEvent(try mouse(.leftMouseDown, y: start.y))
+        window.sendEvent(try mouse(.leftMouseDragged, y: between))
+        XCTAssertTrue(dot.isReordering, "跨日期也是跟手排序，不切换成系统拖放")
+        // 不能在拖动中途等待：把手的自动滚动按真实鼠标的位置滚，测试里会把清单滚走。
+        host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(try center(mine[1].id).y, staying + 10, "经过的行往上让位（窗口坐标 y 向上）")
+        window.sendEvent(try mouse(.leftMouseUp, y: between))
+        let saved = JournalStore(directory: directory).tasks()
+        XCTAssertEqual(saved.first { $0.id == mine[0].id }?.task.dueDate.map(JournalDates.calendar.startOfDay), tomorrow, "落在明天下面就改到明天")
+        XCTAssertEqual(saved.filter { $0.task.dueDate.map(JournalDates.calendar.startOfDay) == tomorrow }.sorted(by: TaskTimelineSection.precedes).map(\.id),
+                       [theirs[0].id, mine[0].id, theirs[1].id])
+        XCTAssertEqual(saved.first { $0.id == mine[1].id }?.task.dueDate, today, "没拖的任务不变")
     }
 
     func testScrollingHasAFiniteTailWithVisibleUndatedTask() async throws {

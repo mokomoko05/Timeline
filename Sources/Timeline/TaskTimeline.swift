@@ -171,7 +171,57 @@ enum TaskTimelineLayout {
     static func cardInset(_ typography: AppTypography) -> CGFloat { timeWidth(typography) + 34 }
 }
 
+/// 时间轴上不能拖、但拖动时要跟着让位的东西（日期、空档、「现在」、已结束的一组）：
+/// 给它们一个固定的 id，和任务一起排进拖动的队列。日期还记着自己是哪一天，落点据此决定改到哪天。
+@MainActor
+enum TimelineSlots {
+    enum Kind: Equatable {
+        /// 日期刻度：下面直到下一个刻度的任务都属于这一天（nil 是未设日期）。
+        case day(Date?)
+        case fixed
+    }
+
+    private static var ids: [String: UUID] = [:]
+    private(set) static var kinds: [UUID: Kind] = [:]
+
+    static func id(_ key: String, _ kind: Kind) -> UUID {
+        if let id = ids[key] {
+            if kinds[id] != kind { kinds[id] = kind }
+            return id
+        }
+        let id = UUID()
+        ids[key] = id
+        kinds[id] = kind
+        return id
+    }
+
+    /// 被拖的任务放在 `order` 里的位置：上面最近的日期刻度是哪天，以及那一天里任务的新顺序。上面没有日期时放不下。
+    static func placement(of task: UUID, in order: [UUID]) -> (day: Date?, order: [UUID])? {
+        guard let at = order.firstIndex(of: task),
+              let start = order[..<at].lastIndex(where: { if case .day = kinds[$0] { return true } else { return false } }),
+              case .day(let day) = kinds[order[start]] else { return nil }
+        let rest = order[(start + 1)...]
+        let end = rest.firstIndex { if case .day = kinds[$0] { return true } else { return false } } ?? order.endIndex
+        return (day, order[(start + 1)..<end].filter { kinds[$0] == nil })
+    }
+}
+
+/// 时间轴上的一个让位块（不是任务）：拖动时按队列让位。
+struct TimelineSlotRow: ViewModifier {
+    let key: String
+    var kind: TimelineSlots.Kind = .fixed
+    @Environment(\.taskReorder) private var model
+    @Environment(\.timelineReorderSpace) private var space
+
+    func body(content: Content) -> some View {
+        if let model { content.taskReorderRow(id: TimelineSlots.id(key, kind), model: model, space: space) }
+        else { content }
+    }
+}
+
 /// 时间轴内容与主窗口分离，日期区间保留独立的轴线。
+/// 拖动排序在整条时间轴上进行（和 iPhone 一样）：被拖的任务跟着指针走，经过的任务、日期都让开位置，
+/// 松手时落在哪个日期下面就改到哪天。横向拖出时间轴才换成拖到日历。
 struct TaskTimelineView: View {
     @ObservedObject var store: JournalStore
     let tasks: [ScheduledTask]
@@ -182,6 +232,9 @@ struct TaskTimelineView: View {
     let navigate: (Date) -> Void
     var selectTask: () -> Void = {}
     var next: () -> Void = {}
+    /// 不订阅：拖动时只有让位的行重画，整条时间轴不重算。
+    @State private var reorder = TaskReorderModel()
+    static let reorderSpace = "timeline-order"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -194,6 +247,7 @@ struct TaskTimelineView: View {
                         .id(section.id)
                 case .gap(let before, let after):
                     TimelineGapView(before: before, after: after)
+                        .modifier(TimelineSlotRow(key: section.id))
                         .id(section.id)
                 case .undated(let items):
                     TimelineDayView(store: store, date: nil, tasks: items, selectedDate: selectedDate,
@@ -210,6 +264,32 @@ struct TaskTimelineView: View {
         }
         // 增删任务不再让整条时间轴插值移动（每一行的原生文本都要跟着重排，帧率很低）；新任务和放下的任务用落点高亮提示。
         .animation(Motion.quick, value: expanded)
+        .coordinateSpace(name: Self.reorderSpace)
+        .environment(\.taskReorder, store.isReadOnly ? nil : reorder)
+        .environment(\.timelineReorderSpace, Self.reorderSpace)
+        .onPreferenceChange(TaskRowFramesKey.self) { reorder.frames = $0 }
+        .onAppear(perform: configureReorder)
+    }
+
+    /// 队列就是时间轴上所有让位块（任务、日期、空档……）按位置从上到下；整条时间轴是一列，位置的先后就是显示的先后。
+    private func configureReorder() {
+        reorder.groupProvider = { [weak reorder] _ in
+            (reorder?.frames ?? [:]).sorted { $0.value.minY < $1.value.minY }.map(\.key)
+        }
+        reorder.accepts = { [weak reorder] order in
+            reorder?.activeID.flatMap { TimelineSlots.placement(of: $0, in: order) } != nil
+        }
+        reorder.commit = { [weak reorder, store] order in
+            guard let id = reorder?.activeID, let place = TimelineSlots.placement(of: id, in: order) else { return }
+            let calendar = JournalDates.calendar
+            let current = store.locate(id)?.task.dueDate.map { calendar.startOfDay(for: $0) }
+            NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
+            if current == place.day.map({ calendar.startOfDay(for: $0) }) {
+                store.reorderTasks(place.order)
+            } else {
+                store.moveTask(id, to: place.day, order: place.order)
+            }
+        }
     }
 }
 
@@ -229,7 +309,10 @@ struct TimelineDayView: View {
     /// 拖到这一天时插入线的位置（分组坐标）。
     @State private var insertionY: CGFloat?
     @ObservedObject private var dragSession = TaskDragSession.shared
-    @State private var reorder = TaskReorderModel()
+    @Environment(\.taskReorder) private var reorder
+    @Environment(\.timelineReorderSpace) private var reorderSpace
+    /// 这一天在时间轴里的位置：从日历拖进来时，把各行的位置换算到这一天里。只在拖放时读，不触发刷新。
+    @State private var origin = DayOrigin()
     /// 今天有定了时刻的事项时，「现在」画在第一个还没到点的未完成事项前面；都已过点时画在最后。
     private var nowMarkerTarget: UUID? {
         guard axisTone == .today, displayed.contains(where: { $0.task.dueHasTime && !$0.task.completed }) else { return nil }
@@ -247,21 +330,17 @@ struct TimelineDayView: View {
         if calendar.isDateInToday(date) { return .today }
         return date < calendar.startOfDay(for: Date()) ? .past : .future
     }
-    private var reorderSpace: String { "timeline-order-" + (date.map(TaskTimelineSection.dayID) ?? "undated") }
     private var displayed: [ScheduledTask] { tasks.sorted(by: TaskTimelineSection.precedes) }
     private var visibleIDs: [UUID] {
         if showsFinishedTasks { return displayed.map(\.id) }
         return TaskTimelineItem.items(for: displayed, expanded: expanded).filter { !$0.folded }.flatMap(\.tasks).map(\.id)
     }
-    private func configureReorder(_ ids: [UUID]) {
-        // onChange 直接传入新值；重新读取视图属性可能取得刷新前的分组快照。
-        reorder.groupProvider = { _ in ids }
-        reorder.commit = { store.reorderTasks($0) }
-    }
+    private var dayKey: String { date.map(TaskTimelineSection.dayID) ?? "undated" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             TimelineDateMarker(date: date, selectedDate: selectedDate, compact: true, navigate: navigate, store: store)
+                .modifier(TimelineSlotRow(key: "marker-" + dayKey, kind: .day(date)))
             // 刻度属于边界；任务始终位于边界之间。
             VStack(alignment: .leading, spacing: TaskTimelineLayout.spacing) {
                 if showsFinishedTasks {
@@ -269,7 +348,7 @@ struct TimelineDayView: View {
                 } else {
                     let nowBefore = nowMarkerTarget
                     ForEach(TaskTimelineItem.items(for: displayed, expanded: expanded)) { item in
-                        if item.id == nowBefore { TimelineNowMarker() }
+                        if item.id == nowBefore { TimelineNowMarker().modifier(TimelineSlotRow(key: "now")) }
                         if item.tasks.first?.task.completed == true {
                             FinishedTaskTimelineBlock(store: store, item: item, expanded: $expanded,
                                                       requestedEdit: $requestedEdit, selectTask: selectTask)
@@ -282,12 +361,10 @@ struct TimelineDayView: View {
             .padding(.bottom, displayed.isEmpty ? 4 : 10)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .coordinateSpace(name: reorderSpace)
-        .environment(\.taskReorder, store.isReadOnly ? nil : reorder)
-        .environment(\.timelineReorderSpace, reorderSpace)
-        .onPreferenceChange(TaskRowFramesKey.self) { reorder.frames = $0 }
-        .onAppear { configureReorder(visibleIDs) }
-        .onChange(of: visibleIDs) { ids in configureReorder(ids) }
+        .background(GeometryReader { proxy in
+            Color.clear.onAppear { origin.y = proxy.frame(in: .named(reorderSpace)).minY }
+                .onChange(of: proxy.frame(in: .named(reorderSpace)).minY) { origin.y = $0 }
+        })
         .background { TimelineAxisStroke(highlighted: false, dashed: date == nil, tone: axisTone) }
         .background {
             RoundedRectangle(cornerRadius: 6)
@@ -314,7 +391,7 @@ struct TimelineDayView: View {
         }
         .onDrop(of: [TaskDragPayload.type], delegate: TimelineDayDrop(
             store: store, destination: date, enabled: !showsFinishedTasks && !store.isReadOnly,
-            order: { visibleIDs }, frames: { reorder.frames },
+            order: { visibleIDs }, frames: { [origin] in (reorder?.frames ?? [:]).mapValues { $0.offsetBy(dx: 0, dy: -origin.y) } },
             targeted: $calendarDropTargeted, insertionY: $insertionY))
         .onChange(of: dragSession.activeID) { if $0 == nil { calendarDropTargeted = false; insertionY = nil } }
         .accessibilityElement(children: .contain)
@@ -325,7 +402,7 @@ struct TimelineDayView: View {
         ManagedTaskRow(store: store, date: item.date, task: item.task, requestedEdit: $requestedEdit,
                        timeline: true, next: next, select: selectTask)
             .id(item.id)
-            .taskReorderRow(id: item.id, model: reorder, space: reorderSpace)
+            .modifier(TimelineReorderRow(id: item.id, model: reorder))
             .background(GeometryReader { geometry in
                 Color.clear.preference(key: TaskRowGlobalFramesKey.self, value: [item.id: geometry.frame(in: .global)])
             })
@@ -363,6 +440,7 @@ struct FinishedTaskTimelineBlock: View {
             .buttonStyle(.plain)
             .padding(.leading, TaskTimelineLayout.cardInset(typography))
             .help(item.folded ? "展开已结束事项" : "收起这段已结束事项")
+            .modifier(TimelineSlotRow(key: "block-" + item.id.uuidString + (item.droppedGroup ? "-dropped" : "")))
             if !item.folded {
                 ForEach(item.tasks) { task in
                     ManagedTaskRow(store: store, date: task.date, task: task.task, requestedEdit: $requestedEdit,
@@ -376,6 +454,11 @@ struct FinishedTaskTimelineBlock: View {
             }
         }.id(item.id)
     }
+}
+
+/// 日期分组在时间轴里的纵向位置（引用类型，改它不刷新界面）。
+final class DayOrigin {
+    var y: CGFloat = 0
 }
 
 private struct TimelineReorderRow: ViewModifier {
@@ -439,11 +522,13 @@ struct FinishedTimelineDatesView: View {
             .padding(.vertical, 6)
             .help(isExpanded ? "收起这段已结束事项" : "展开已结束事项")
             .background { TimelineAxisStroke(highlighted: false) }
+            .modifier(TimelineSlotRow(key: "finished-" + JournalDates.key(dates[0])))
             if isExpanded {
                 ForEach(dates, id: \.self) { date in
                     if let index = dates.firstIndex(of: date), index > 0,
                        (JournalDates.calendar.dateComponents([.day], from: dates[index - 1], to: date).day ?? 0) > 1 {
                         TimelineGapView(before: dates[index - 1], after: date)
+                            .modifier(TimelineSlotRow(key: "gap-" + JournalDates.key(dates[index - 1]) + "-" + JournalDates.key(date)))
                     }
                     TimelineDayView(store: store, date: date,
                         tasks: tasks.filter { $0.task.dueDate.map { JournalDates.calendar.isDate($0, inSameDayAs: date) } == true },

@@ -141,9 +141,11 @@ enum PerfProbe {
         let only = UserDefaults.standard.string(forKey: "perfSteps")?.components(separatedBy: ",")
         let selected = only.map { names in steps.filter { names.contains($0.0) } } ?? steps
         let rounds = max(1, UserDefaults.standard.integer(forKey: "perfRounds"))
+        // `-perfStart 8`：第一步晚一点开始（比如等 `-perfTyping` 打完字）。
+        let start = UserDefaults.standard.object(forKey: "perfStart") == nil ? 4 : UserDefaults.standard.double(forKey: "perfStart")
         for round in 0..<(UserDefaults.standard.object(forKey: "perfRounds") == nil ? 2 : rounds) {
             for (index, (name, step)) in selected.enumerated() {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 4 + Double(round * selected.count + index) * 1.5) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + start + Double(round * selected.count + index) * 1.5) {
                     let label = "\(round + 1)·" + name
                     mark(label)
                     pendingAction = (label, CACurrentMediaTime())
@@ -165,7 +167,7 @@ enum PerfProbe {
             // 工作板的编辑器在网页里：工作板页自己跑测试（见 BoardWebSession.runTypingTest）。
             NotificationCenter.default.post(name: openEditor, object: typing == "mention" ? "compose" : typing)
         }
-        let text: [Character] = Array(typing == "mention" ? mentionText : typingText)
+        let text: [Character] = Array(typing == "mention" ? mentionText : (UserDefaults.standard.string(forKey: "perfTypingText") ?? typingText))
         for (index, character) in text.enumerated() where typing != "board" {
             let delay: Double = 6 + Double(index) * 0.1
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {

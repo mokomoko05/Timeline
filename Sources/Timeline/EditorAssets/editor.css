@@ -32,15 +32,22 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 .cm-emphasis { font-style: italic; }
 .cm-strike, .cm-task-done { text-decoration: line-through; color: var(--muted); }
 .cm-code { font-family: ui-monospace, SFMono-Regular, monospace; background: var(--soft); border-radius: 3px; }
-#editor .cm-line.cm-code { margin: 0 12px; padding-left: 12px; padding-right: 12px; background: color-mix(in srgb, var(--soft) 82%, var(--background)); border-left: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line)); border-right: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line)); }
-#editor .cm-line.cm-code { border-radius: 0; }
-#editor .cm-line.cm-code-start { margin-top: 8px; border-top: 1px solid var(--line); border-radius: 9px 9px 0 0; padding-top: 4px; }
-#editor .cm-line.cm-code-end { margin-bottom: 8px; border-bottom: 1px solid var(--line); border-radius: 0 0 9px 9px; padding-bottom: 5px; }
-#editor .cm-line.cm-code-start.cm-code-end { border-radius: 9px; }
+/* 行不能有上下外边距：CodeMirror 按每一行自己的盒子量行高，量不到外边距，越往下鼠标点的位置越偏到下一行。
+   块上下的空隙用内边距留出来，底色和边框画在垫在行后面的一层上，从空隙以下开始。 */
+#editor .cm-line.cm-code { position: relative; margin: 0 12px; padding-left: 13px; padding-right: 13px; background: none; border-radius: 0; }
+#editor .cm-line.cm-code::before { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: color-mix(in srgb, var(--soft) 82%, var(--background)); border-left: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line)); border-right: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line)); }
+#editor .cm-line.cm-code-start { padding-top: 12px; }
+#editor .cm-line.cm-code-start::before { top: 8px; border-top: 1px solid var(--line); border-radius: 9px 9px 0 0; }
+#editor .cm-line.cm-code-end { padding-bottom: 13px; }
+#editor .cm-line.cm-code-end::before { bottom: 8px; border-bottom: 1px solid var(--line); border-radius: 0 0 9px 9px; }
+#editor .cm-line.cm-code-start.cm-code-end::before { border-radius: 9px; }
 /* 引用：灰底的引用框，左边一道竖线（像论坛里的引用）；连着的几行 > 是一块，隔着空行就是两块。 */
-#editor .cm-line.cm-quote { margin: 0 12px; padding-left: 14px; padding-right: 10px; background: color-mix(in srgb, var(--ink) 7%, var(--background)); border-left: 4px solid color-mix(in srgb, var(--ink) 28%, var(--background)); color: color-mix(in srgb, var(--ink) 85%, var(--background)); }
-#editor .cm-line.cm-quote-start { margin-top: 4px; padding-top: 5px; border-top-right-radius: 6px; }
-#editor .cm-line.cm-quote-end { margin-bottom: 4px; padding-bottom: 5px; border-bottom-right-radius: 6px; }
+#editor .cm-line.cm-quote { position: relative; margin: 0 12px; padding-left: 18px; padding-right: 10px; color: color-mix(in srgb, var(--ink) 85%, var(--background)); }
+#editor .cm-line.cm-quote::before { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: color-mix(in srgb, var(--ink) 7%, var(--background)); border-left: 4px solid color-mix(in srgb, var(--ink) 28%, var(--background)); }
+#editor .cm-line.cm-quote-start { padding-top: 9px; }
+#editor .cm-line.cm-quote-start::before { top: 4px; border-top-right-radius: 6px; }
+#editor .cm-line.cm-quote-end { padding-bottom: 9px; }
+#editor .cm-line.cm-quote-end::before { bottom: 4px; border-bottom-right-radius: 6px; }
 .cm-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .board-open-link, .board-copy-code { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 4px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); vertical-align: middle; cursor: pointer; }
 .board-open-link { margin-left: 3px; }
@@ -67,7 +74,8 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 /* Preview: no separate row for the copy action. The fence line is only the block's top edge and the
    button sits in its top-right corner, icon only; the label appears briefly after copying. */
 #editor .cm-line.cm-code-header.cm-code-header-concealed { position: relative; height: 6px; min-height: 0; padding-top: 0; padding-bottom: 0; line-height: 0; font-size: 0; overflow: visible; }
-#editor .cm-code-header-concealed .board-copy-code { position: absolute; top: 5px; right: 6px; z-index: 2; float: none; margin: 0; min-width: 0; height: 22px; padding: 3px 5px; font-size: 11px; line-height: 14px; color: var(--muted); border-color: transparent; background: color-mix(in srgb, var(--soft) 70%, var(--background)); }
+#editor .cm-line.cm-code-start.cm-code-header-concealed { padding-top: 8px; height: 14px; }
+#editor .cm-code-header-concealed .board-copy-code { position: absolute; top: 13px; right: 6px; z-index: 2; float: none; margin: 0; min-width: 0; height: 22px; padding: 3px 5px; font-size: 11px; line-height: 14px; color: var(--muted); border-color: transparent; background: color-mix(in srgb, var(--soft) 70%, var(--background)); }
 #editor .cm-code-header-concealed .board-copy-code::after { content: none; }
 #editor .cm-code-header-concealed .board-copy-code[data-copied="true"]::after { content: attr(data-label); }
 #editor .cm-code-header-concealed .board-copy-code:hover { color: var(--accent); border-color: var(--line); }
