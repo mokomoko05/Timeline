@@ -8,6 +8,10 @@ enum MarkdownText {
     static let taskLineKey = NSAttributedString.Key("TimelineMarkdownTaskLine")
     /// 可折叠标题所在的整段：值是标题的折叠键（`h2:标题#0`，同名标题按出现次序编号，和工作板一致）。
     static let headingFoldKey = NSAttributedString.Key("TimelineMarkdownHeadingFold")
+    /// 可折叠标题现在是否收起（右侧按钮画成朝右还是朝下）。
+    static let headingFoldedKey = NSAttributedString.Key("TimelineMarkdownHeadingFolded")
+    /// 标题右侧收起 / 展开按钮的边长；标题文字在右边给它让出位置。
+    static func foldButtonSide(fontSize: CGFloat) -> CGFloat { (fontSize * 1.7).rounded() }
 
     /// 工作板正文的一段（笔记里的看板内容）怎么折叠：由整块工作板算好（标题的折叠范围可能跨过代码块、延伸到下一段），
     /// 这里只管画。行号是这一段里的行号，从 1 开始。
@@ -203,19 +207,10 @@ enum MarkdownText {
             let content = inline(heading, font: headingFont)
             content.addAttribute(.foregroundColor, value: MarkdownText.headingColor(heading.level), range: content.fullRange)
             if let fold {
-                // 和工作板一样：标题前一个箭头（展开朝下、收起朝右），收起后标题后面跟一个「⋯」。
-                let chevron = NSTextAttachment()
-                let side = (size * 0.95).rounded()
-                chevron.image = MarkdownText.chevron(folded: fold.folded, side: side, color: color.withAlphaComponent(0.55))
-                chevron.bounds = NSRect(x: 0, y: (headingFont.capHeight - side) / 2, width: side, height: side)
-                let prefix = NSMutableAttributedString(attachment: chevron)
-                prefix.append(text(" ", font: headingFont))
-                content.insert(prefix, at: 0)
-                if fold.folded {
-                    content.append(text("  ⋯", font: .systemFont(ofSize: size, weight: .bold)))
-                    content.addAttribute(.foregroundColor, value: color.withAlphaComponent(0.55), range: NSRange(location: content.length - 1, length: 1))
-                }
+                // 收起 / 展开按钮画在标题行的最右边（`InteractiveTaskText` 负责画和点），标题文字在右边给它让出位置。
+                paragraphStyle.tailIndent = -(MarkdownText.foldButtonSide(fontSize: size) + 6)
                 content.addAttribute(MarkdownText.headingFoldKey, value: fold.key, range: content.fullRange)
+                content.addAttribute(MarkdownText.headingFoldedKey, value: fold.folded, range: content.fullRange)
             }
             paragraph(content, style: paragraphStyle)
         }

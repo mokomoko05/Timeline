@@ -18,6 +18,8 @@ final class RichText: @unchecked Sendable {
         let height: CGFloat
         /// 第一行基线离顶边的距离：放在列表记号旁边时按它对齐。
         let firstBaseline: CGFloat
+        /// 太宽、要左右滑动的独立公式：占的位置和公式本身（画布在这些位置放滑动条）。
+        let scrollingMath: [(rect: CGRect, math: MathAttachment)]
 
         init(_ string: NSAttributedString, width: CGFloat) {
             storage = NSTextStorage(attributedString: string)
@@ -30,6 +32,21 @@ final class RichText: @unchecked Sendable {
             height = ceil(manager.usedRect(for: container).height)
             firstBaseline = storage.length == 0 ? 0
                 : manager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).minY + manager.location(forGlyphAt: 0).y
+            var scrolling: [(rect: CGRect, math: MathAttachment)] = []
+            storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { [manager, container] value, range, _ in
+                guard let math = value as? MathAttachment, math.formula.display else { return }
+                let glyph = manager.glyphIndexForCharacter(at: range.location)
+                let size = manager.attachmentSize(forGlyphAt: glyph)
+                guard math.scrolls(in: size) else { return }
+                let line = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+                let origin = manager.location(forGlyphAt: glyph)
+                let x = line.minX + origin.x
+                // 附件的底边在基线下面 `-bounds.minY`（按缩放比例算）处。
+                let scale = size.height / max(1, math.bounds.height)
+                let bottom = line.minY + origin.y - math.bounds.minY * scale
+                scrolling.append((CGRect(x: x, y: bottom - size.height, width: min(size.width, container.size.width - x), height: size.height), math))
+            }
+            scrollingMath = scrolling
         }
 
         func draw(_ rect: CGRect) {
@@ -331,6 +348,31 @@ final class RichTextCanvas: UIView, UIGestureRecognizerDelegate {
             guard text !== oldValue else { return }
             accessibilityLabel = text?.string.string
             setNeedsDisplay()
+            setNeedsLayout()
+        }
+    }
+    /// 太宽的独立公式：每个一条能左右滑动的条（只在有这种公式时才建）。
+    private var mathStrips: [UIScrollView] = []
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let scrolling = text.map { bounds.width > 0 ? $0.layout(width: bounds.width).scrollingMath : [] } ?? []
+        while mathStrips.count > scrolling.count { mathStrips.removeLast().removeFromSuperview() }
+        while mathStrips.count < scrolling.count {
+            let strip = UIScrollView()
+            strip.showsVerticalScrollIndicator = false
+            strip.alwaysBounceHorizontal = true
+            strip.addSubview(UIImageView())
+            addSubview(strip)
+            mathStrips.append(strip)
+        }
+        for (strip, item) in zip(mathStrips, scrolling) {
+            let size = CGSize(width: item.math.rendered.image.size.width * MathAttachment.minimumScale, height: item.rect.height)
+            strip.frame = item.rect
+            strip.contentSize = size
+            guard let image = strip.subviews.first as? UIImageView else { continue }
+            image.frame = CGRect(origin: .zero, size: size)
+            image.image = item.math.rendered.image(for: traitCollection, color: item.math.color)
         }
     }
     var open: OpenURLAction?
@@ -344,7 +386,10 @@ final class RichTextCanvas: UIView, UIGestureRecognizerDelegate {
         isAccessibilityElement = true
         accessibilityTraits = .staticText
         addGestureRecognizer(tap)
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: RichTextCanvas, _: UITraitCollection) in view.setNeedsDisplay() }
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: RichTextCanvas, _: UITraitCollection) in
+            view.setNeedsDisplay()
+            view.setNeedsLayout()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }

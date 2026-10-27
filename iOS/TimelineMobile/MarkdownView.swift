@@ -53,21 +53,25 @@ struct MarkdownView: View {
                 switch item.kind {
                 case .block(let block):
                     if case .heading(let level, let text, let key, _) = block, document.sections[item.index] != nil {
-                        Button { toggleFold(key) } label: {
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: size * 0.6, weight: .bold))
+                        // 标题文字是正文的一部分；收起 / 展开用标题右边的按钮。
+                        HStack(alignment: .center, spacing: 8) {
+                            headingText(level, text)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button { toggleFold(key) } label: {
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: size * 0.85, weight: .semibold))
                                     .foregroundStyle(Palette.muted)
-                                    .rotationEffect(.degrees(folded.contains(key) ? 0 : 90))
+                                    .rotationEffect(.degrees(folded.contains(key) ? -90 : 0))
                                     .animation(.easeOut(duration: 0.15), value: folded.contains(key))
-                                    .frame(width: size * 0.7)
-                                headingText(level, text)
-                                if folded.contains(key) { Text("⋯").font(.system(size: size, weight: .bold)).foregroundStyle(Palette.muted) }
+                                    .frame(width: size * 1.9, height: size * 1.9)
+                                    .background(Palette.muted.opacity(0.12), in: RoundedRectangle(cornerRadius: size * 0.55, style: .continuous))
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(folded.contains(key) ? "展开" : "收起")
+                            .padding(.vertical, -8)
                         }
-                        .buttonStyle(.plain)
                         .id(anchor(key))
                     } else {
                         BlockView(block: block, size: size, toggleTask: toggleTask)

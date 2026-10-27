@@ -67,7 +67,9 @@ enum PerfProbe {
         for (index, title) in titles.enumerated() {
             _ = store.addParsedTodo(title, on: Date(), priority: index % 4 == 0 ? .high : .normal)
         }
-        for text in ["今天把同步的问题查清楚了 #工作", "跑了 5 公里 #健康", "读书笔记：第二章讲的是排版 #学习", demoMath] {
+        // `-demoMarkdown "<正文>"`：换掉公式示例，放一条指定的日志（检查某段复制来的 Markdown 怎么显示）。
+        let sample = UserDefaults.standard.string(forKey: "demoMarkdown") ?? demoMath
+        for text in [sample, "今天把同步的问题查清楚了 #工作", "跑了 5 公里 #健康", "读书笔记：第二章讲的是排版 #学习"] {
             _ = try? store.quickLog(text, on: Date())
         }
         store.save()

@@ -4,7 +4,7 @@ import TimelineCore
 import XCTest
 @testable import Timeline
 
-/// 笔记里的 Markdown 标题和工作板一样可以折叠：收起到下一个同级或更高级标题为止，点整行标题切换，状态按笔记记住。
+/// 笔记里的 Markdown 标题和工作板一样可以折叠：收起到下一个同级或更高级标题为止，点标题右边的按钮切换，状态按笔记记住。
 @MainActor
 final class MarkdownHeadingFoldTests: XCTestCase {
     private let source = "# A\n\nalpha\n\n## A1\n\ninside\n\n# B\n\nbeta\n\n# Empty\n# A\n\nagain"
@@ -30,12 +30,12 @@ final class MarkdownHeadingFoldTests: XCTestCase {
         let folded = render(["h1:A#0"]).string
         XCTAssertFalse(folded.contains("alpha") || folded.contains("inside") || folded.contains("A1"), "A 下面（含 A1 一节）都收起")
         XCTAssertTrue(folded.contains("beta") && folded.contains("again"))
-        XCTAssertTrue(folded.contains("⋯"))
+        XCTAssertFalse(folded.contains("⋯"), "收起不再在标题后面加「⋯」，状态看右边的按钮")
         let inner = render(["h2:A1#0"]).string
         XCTAssertTrue(inner.contains("alpha") && !inner.contains("inside") && inner.contains("beta"))
     }
 
-    func testClickingAnywhereOnTheHeadingLineTogglesAndIsRememberedPerNote() {
+    func testTheButtonRightOfTheHeadingTogglesAndIsRememberedPerNote() {
         let defaults = InMemoryDefaults()
         let previous = HeadingFolds.defaults
         HeadingFolds.defaults = defaults
@@ -50,8 +50,10 @@ final class MarkdownHeadingFoldTests: XCTestCase {
         let first = try? XCTUnwrap(regions.first { $0.key == "h1:A#0" })
         XCTAssertNotNil(first)
         if let first {
-            XCTAssertGreaterThan(first.rect.width, 300, "整行都能点，不只是左边的箭头")
-            XCTAssertEqual(view.headingKey(at: NSPoint(x: first.rect.maxX - 10, y: first.rect.midY)), "h1:A#0")
+            XCTAssertGreaterThan(first.rect.width, 18, "按钮够大")
+            XCTAssertGreaterThan(first.rect.minX, 300, "按钮在标题行的最右边")
+            XCTAssertEqual(view.headingKey(at: NSPoint(x: first.rect.midX, y: first.rect.midY)), "h1:A#0")
+            XCTAssertNil(view.headingKey(at: NSPoint(x: 20, y: first.rect.midY)), "点标题文字不收起，留给选择和编辑")
         }
         if let path = ProcessInfo.processInfo.environment["TIMELINE_NOTE_FOLD_SNAPSHOT"] {
             view.textStorage?.setAttributedString(render(["h2:A1#0"]))
@@ -132,7 +134,7 @@ final class MarkdownHeadingFoldTests: XCTestCase {
         }
         var text = try await visibleText()
         XCTAssertFalse(text.contains("alpha") || text.contains("after code"), "工作板里收起的 A 在这里也收起（跨过代码块）")
-        XCTAssertTrue(text.contains("⋯") && text.contains("beta"))
+        XCTAssertTrue(text.contains("A") && text.contains("beta"))
         XCTAssertTrue(text.contains("hidden body"), "工作板里展开的折叠块在这里也展开")
 
         // 工作板那边展开 A：这里跟着展开。

@@ -341,6 +341,7 @@ final class InteractiveTaskText: NSTextView {
     var onSelect: (() -> Void)?
     var onClick: (() -> Void)?
     private var hoveredURL: URL?
+    private var hoveredHeading: String?
     private var tracking: NSTrackingArea?
 
     /// 有自定义操作时，右键菜单用它们；选中了文字就在最前面加「拷贝所选文字」。
@@ -360,6 +361,56 @@ final class InteractiveTaskText: NSTextView {
         let width = max(1, newSize.width - textContainerInset.width * 2)
         if let container = textContainer, abs(container.containerSize.width - width) > 0.5 {
             container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        }
+        needsLayout = true
+    }
+
+    /// 太宽的独立公式：每个一条能左右滑动的条（只在有这种公式时才建）。
+    private var mathStrips: [NSScrollView] = []
+
+    override func layout() {
+        super.layout()
+        layoutMathStrips()
+    }
+
+    func layoutMathStrips() {
+        var scrolling: [(rect: NSRect, cell: MathAttachment.Cell)] = []
+        if let storage = textStorage, let manager = layoutManager, let container = textContainer,
+           storage.length > 0, storage.string.contains("\u{FFFC}") {
+            manager.ensureLayout(for: container)
+            storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+                guard let cell = (value as? NSTextAttachment)?.attachmentCell as? MathAttachment.Cell, cell.display else { return }
+                let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+                let size = manager.attachmentSize(forGlyphAt: glyphs.location)
+                guard cell.scrolls(in: size.width) else { return }
+                let line = manager.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+                let origin = manager.location(forGlyphAt: glyphs.location)
+                let scale = size.height / max(1, cell.rendered.size.height)
+                let bottom = line.minY + origin.y + cell.rendered.baseline * scale
+                let x = line.minX + origin.x
+                scrolling.append((NSRect(x: x + textContainerOrigin.x, y: bottom - size.height + textContainerOrigin.y,
+                                         width: min(size.width, container.size.width - x), height: size.height), cell))
+            }
+        }
+        while mathStrips.count > scrolling.count { mathStrips.removeLast().removeFromSuperview() }
+        while mathStrips.count < scrolling.count {
+            let strip = NSScrollView()
+            strip.drawsBackground = false
+            strip.hasHorizontalScroller = true
+            strip.autohidesScrollers = true
+            strip.scrollerStyle = .overlay
+            strip.verticalScrollElasticity = .none
+            strip.horizontalScrollElasticity = .allowed
+            strip.documentView = MathStripContent()
+            addSubview(strip)
+            mathStrips.append(strip)
+        }
+        for (strip, item) in zip(mathStrips, scrolling) {
+            strip.frame = item.rect
+            guard let content = strip.documentView as? MathStripContent else { continue }
+            content.cell = item.cell
+            content.frame = NSRect(x: 0, y: 0, width: item.cell.rendered.size.width * MathAttachment.minimumScale, height: item.rect.height)
+            content.needsDisplay = true
         }
     }
 
@@ -406,24 +457,32 @@ final class InteractiveTaskText: NSTextView {
         return regions
     }
 
-    /// 可折叠标题占的整行（点这一行的任何地方都能收起 / 展开）。
-    func headingRegions() -> [(key: String, rect: NSRect)] {
+    /// 可折叠标题右边的收起 / 展开按钮（标题第一行的最右边；标题文字本身留给选择和编辑）。
+    func headingRegions() -> [(key: String, rect: NSRect, folded: Bool)] {
         guard onToggleHeading != nil, let storage = textStorage, let manager = layoutManager, let container = textContainer else { return [] }
         manager.ensureLayout(for: container)
-        var regions: [(key: String, rect: NSRect)] = []
+        var regions: [(key: String, rect: NSRect, folded: Bool)] = []
         storage.enumerateAttribute(MarkdownText.headingFoldKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
             guard let key = value as? String else { return }
+            let folded = storage.attribute(MarkdownText.headingFoldedKey, at: range.location, effectiveRange: nil) as? Bool ?? false
+            let tail = (storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle)?.tailIndent ?? 0
+            let side = max(16, -tail - 6)
             let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            manager.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, _, _ in
-                let line = rect.offsetBy(dx: self.textContainerOrigin.x, dy: self.textContainerOrigin.y).intersection(self.bounds)
-                if !line.isEmpty { regions.append((key, line)) }
+            var first: NSRect?
+            manager.enumerateLineFragments(forGlyphRange: glyphs) { _, used, _, _, stop in
+                first = used
+                stop.pointee = true
             }
+            guard let line = first else { return }
+            let right = self.textContainerOrigin.x + container.size.width - container.lineFragmentPadding
+            let rect = NSRect(x: right - side, y: self.textContainerOrigin.y + line.midY - side / 2, width: side, height: side)
+            if rect.intersects(self.bounds) { regions.append((key, rect, folded)) }
         }
         return regions
     }
 
     func headingKey(at point: NSPoint) -> String? {
-        headingRegions().first { $0.rect.contains(point) }?.key
+        headingRegions().first { $0.rect.insetBy(dx: -4, dy: -4).contains(point) }?.key
     }
 
     /// 收起 / 展开标题：标题留在滚动区域里原来的位置，内容在它下面展开、收起（滚到底时收起也不往下跳）。
@@ -445,6 +504,14 @@ final class InteractiveTaskText: NSTextView {
             path.stroke()
         }
         super.draw(dirtyRect)
+        // 标题右边的收起 / 展开按钮画在文字上面（文字已经给它让出了位置）。
+        for region in headingRegions() where region.rect.intersects(dirtyRect) {
+            let color = foreground ?? .labelColor
+            color.withAlphaComponent(hoveredHeading == region.key ? 0.14 : 0.07).setFill()
+            NSBezierPath(roundedRect: region.rect, xRadius: region.rect.width * 0.3, yRadius: region.rect.width * 0.3).fill()
+            MarkdownText.chevron(folded: region.folded, side: region.rect.width, color: color.withAlphaComponent(0.7))
+                .draw(in: region.rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
     }
 
     override func resetCursorRects() {
@@ -468,7 +535,11 @@ final class InteractiveTaskText: NSTextView {
 
     override func mouseMoved(with event: NSEvent) {
         let previous = hoveredURL
-        hoveredURL = interactionEnabled ? link(at: convert(event.locationInWindow, from: nil)) : nil
+        let previousHeading = hoveredHeading
+        let point = convert(event.locationInWindow, from: nil)
+        hoveredURL = interactionEnabled ? link(at: point) : nil
+        hoveredHeading = interactionEnabled && markdown ? headingKey(at: point) : nil
+        if previousHeading != hoveredHeading { needsDisplay = true }
         if interactionEnabled, dragTaskID != nil {
             (TaskDragSession.shared.activeID != nil ? NSCursor.closedHand : (hoveredURL == nil ? NSCursor.openHand : NSCursor.pointingHand)).set()
         }
@@ -478,6 +549,7 @@ final class InteractiveTaskText: NSTextView {
 
     override func mouseExited(with event: NSEvent) {
         hoveredURL = nil
+        hoveredHeading = nil
         needsDisplay = true
     }
 
@@ -498,8 +570,8 @@ final class InteractiveTaskText: NSTextView {
     override func mouseDown(with event: NSEvent) {
         if markdown {
             let point = convert(event.locationInWindow, from: nil)
-            // 标题上连续快点：每一下都收起 / 展开，不当成双击进入编辑或选词。
-            if event.clickCount > 1, let heading = headingKey(at: point) {
+            // 点标题右边的按钮：收起 / 展开；连续快点每一下都算，不当成双击进入编辑。
+            if let heading = headingKey(at: point) {
                 onSelect?()
                 toggleHeading(heading)
                 return
@@ -508,12 +580,9 @@ final class InteractiveTaskText: NSTextView {
                 activate(at: point, clickCount: event.clickCount)
                 return
             }
-            let heading = event.clickCount == 1 ? headingKey(at: point) : nil
             onSelect?()
             onClick?()
             super.mouseDown(with: event)
-            // 系统的选择跟踪在松开鼠标后才返回：点了标题、没有拖选文字，就收起 / 展开它。
-            if let heading, selectedRange().length == 0 { toggleHeading(heading) }
             return
         }
         mouseDownEvent = event
@@ -620,5 +689,16 @@ enum BottomSlack {
         }
         clip.automaticallyAdjustsContentInsets = false
         clip.contentInsets = insets
+    }
+}
+
+/// 左右滑动条里的公式：按 `MathAttachment.minimumScale` 画。
+final class MathStripContent: NSView {
+    var cell: MathAttachment.Cell?
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let cell else { return }
+        cell.rendered.draw(in: bounds, color: cell.color, flipped: true)
     }
 }

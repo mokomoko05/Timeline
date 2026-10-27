@@ -965,7 +965,8 @@ public struct MTMathListBuilder {
     }
     
     mutating func readCommand() -> String {
-        let singleChars = "{}$#%_| ,>;!\\"
+        // Timeline：加了 &（\& 是普通的 & 符号）。
+        let singleChars = "{}$#%_| ,>;!&\\"
         if self.hasCharacters {
             let char = self.getNextCharacter()
             if let _ = singleChars.firstIndex(of: char)  {

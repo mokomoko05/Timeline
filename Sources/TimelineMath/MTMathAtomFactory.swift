@@ -622,7 +622,14 @@ public class MTMathAtomFactory {
 			case _ where supportedAccentedCharacters.keys.contains(ch):
 				// support for áéíóúýàèìòùâêîôûäëïöüÿãñõçøåæœß'ÁÉÍÓÚÝÀÈÌÒÙÂÊÎÔÛÄËÏÖÜÃÑÕÇØÅÆŒ
 				return atom(fromAccentedCharacter: ch)
-            case _ where ch.utf32Char < 0x0021 || ch.utf32Char > 0x007E:
+            case _ where ch.utf32Char > 0x007E:
+                // Timeline：原版丢掉所有非 ASCII 字符（\text{否则} 里的中文、直接打的 ≤ × 都会消失）。
+                // 留下来：常见的数学符号按关系符 / 运算符排间距，其余（中文等）当普通字符，CoreText 会找系统字体来画。
+                if "≤≥≠≈≡∼≃≅∝∈∉∋⊂⊃⊆⊇⊊⊋→←↔⇒⇐⇔↦≺≻⪯⪰∣∤∥⊥⊨⊢≪≫≜≔".contains(ch) { return MTMathAtom(type: .relation, value: chStr) }
+                if "×÷±∓·∘∙⊕⊖⊗⊙∧∨∩∪∖⋅".contains(ch) { return MTMathAtom(type: .binaryOperator, value: chStr) }
+                if "∑∏∫∮⋃⋂".contains(ch) { return MTMathAtom(type: .largeOperator, value: chStr) }
+                return MTMathAtom(type: .ordinary, value: chStr)
+            case _ where ch.utf32Char < 0x0021:
                 return nil
             case "$", "%", "#", "&", "~", "\'", "^", "_", "{", "}", "\\":
                 return nil

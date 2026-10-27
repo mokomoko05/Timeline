@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import XCTest
 import TimelineCore
+import TimelineMath
 @testable import Timeline
 
 @MainActor
@@ -64,6 +65,37 @@ final class MarkdownMathRenderTests: XCTestCase {
         XCTAssertEqual(line, 5, "公式跨行后任务的行号不变")
         XCTAssertTrue(text.string.contains("$y$"), "代码块里的 $ 原样显示")
         XCTAssertEqual(attachments(text).count, 3)
+    }
+
+    /// AI 回答里常见、但 SwiftMath 原本不认识的写法：换成等价写法后都能排出来（一个不认识的命令会让整个公式退回原文）。
+    func testCommonAIAnswerLatexRenders() {
+        let formulas = [
+            // 一篇 DeepSeek 解释 MTP 的回答里的原样公式。
+            #"\tilde{e} = \text{RMSNorm}_{\text{enorm}}\big(E(t_{i+1})\big), \qquad \tilde{h} = \text{RMSNorm}_{\text{hnorm}}\big(h_i^{(0)}\big)"#,
+            #"u = \text{eh\_proj}\Big( \operatorname{concat}(\tilde{e}, \tilde{h}) \Big)"#,
+            #"z = \text{RMSNorm}_{\text{mtp\_norm}}\big(h_i^{(1)}\big), \qquad \text{logits}_{i+2} = \text{lm\_head}(z)"#,
+            #"\operatorname{Attention}(Q,K,V)=\operatorname{softmax}\left(\frac{QK^\top}{\sqrt{d_k}}\right)V"#,
+            #"\theta^* = \operatorname*{arg\,max}_{\theta} \sum_i \log p_\theta(x_i)"#,
+            #"\bigl( a \bigr) \Bigg| w \Bigg| \lVert x \rVert_2 \lvert y \rvert"#,
+            #"\boldsymbol{\alpha} + \bm{x} + \dfrac{a}{b} + \tfrac{c}{d} \implies \varnothing \dots"#,
+            #"\begin{align} a &= b \\ c &= d \tag{1} \end{align}"#,
+            #"\begin{equation} E = mc^2 \label{eq:1} \end{equation}"#,
+            #"\begin{array}{cc} 1 & 2 \\ 3 & 4 \end{array}"#,
+            #"\overset{\text{def}}{=} \underset{x}{\arg\min} \xrightarrow{f} \underbrace{a+b}_{n} \boxed{x=1}"#,
+            #"f(x) = \begin{cases} 1 & \text{如果 } x > 0 \\ 0 & \text{否则} \end{cases}"#,
+            #"50\% \text{ 的概率}, a \& b, x ≤ y × z"#,
+        ]
+        for latex in formulas {
+            var error: NSError?
+            XCTAssertNotNil(MTMathListBuilder.build(fromString: MathCompat.normalize(latex), error: &error), latex)
+            XCTAssertNil(error, "\(latex) → \(MathCompat.normalize(latex))")
+        }
+        // 换行 `\\` 不能被当成「反斜杠加空格」改掉。
+        XCTAssertEqual(MathCompat.normalize(#"a \\ b"#), #"a \\ b"#)
+        XCTAssertEqual(MathCompat.normalize(#"a\ b"#), #"a\;b"#)
+        // 中文不会被丢掉：排出来的公式比没有中文时宽。
+        let with = MathAttachment.rendered(.init(latex: #"\text{否则}"#, display: false), fontSize: 13)
+        XCTAssertGreaterThan(with?.size.width ?? 0, 20)
     }
 
     /// 渲染开销：一篇带 40 个公式的笔记第一次排和缓存后再排各要多久。
@@ -136,14 +168,32 @@ final class MarkdownMathRenderTests: XCTestCase {
 
         坏的公式 $\\frac{a$ 显示原文。
         """
-        for (name, text) in [("math", source)] {
+        let wide = """
+        稍宽（缩小）：
+
+        $$
+        \\tilde e = \\mathrm{RMSNorm}_{enorm}(E(t_{i+1})), \\quad \\tilde h = \\mathrm{RMSNorm}_{hnorm}(h_i^{(0)})
+        $$
+
+        特别长（左右滑动）：
+
+        $$
+        \\mathcal{L} = -\\frac{1}{T}\\sum_{i=2+k}^{T+1} \\log P_i^{(k)}[t_i] + \\lambda \\sum_{k=1}^{D} \\left( \\alpha_k \\|W_k\\|^2 + \\beta_k \\sum_{j=1}^{n} \\mathrm{KL}(p_j \\| q_j) \\right) + \\gamma \\int_0^1 f(x)\\,dx
+        $$
+
+        后文照常。
+        """
+        for (name, text) in [("math", source), ("wide", wide)] {
         for dark in [false, true] {
             let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
-            let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 560, height: 560))
+            let view = name == "wide" ? InteractiveTaskText(frame: NSRect(x: 0, y: 0, width: 360, height: 300))
+                : NSTextView(frame: NSRect(x: 0, y: 0, width: 560, height: 560))
+            view.drawsBackground = true
             view.appearance = appearance
             view.textContainerInset = NSSize(width: 16, height: 16)
             view.backgroundColor = dark ? NSColor(white: 0.12, alpha: 1) : .white
             view.textStorage?.setAttributedString(MarkdownText.render(text, color: .labelColor, fontSize: 13))
+            view.layoutSubtreeIfNeeded()
             let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
             appearance.performAsCurrentDrawingAppearance { view.cacheDisplay(in: view.bounds, to: bitmap) }
             let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))

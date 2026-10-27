@@ -19,7 +19,7 @@ final class MathAttachment: NSTextAttachment {
         private var tinted: [UIUserInterfaceStyle: UIImage] = [:]
 
         init?(formula: MarkdownMath.Formula, fontSize: CGFloat) {
-            var math = MathImage(latex: formula.latex, fontSize: fontSize, textColor: .black,
+            var math = MathImage(latex: MathCompat.normalize(formula.latex), fontSize: fontSize, textColor: .black,
                                  labelMode: formula.display ? .display : .text, textAlignment: .left)
             let (error, image, info) = math.asImage()
             guard error == nil, let image, let info, image.size.width > 0, image.size.height > 0 else { return nil }
@@ -99,9 +99,26 @@ final class MathAttachment: NSTextAttachment {
         }
     }
 
+    /// 宽公式最多缩到这么小；独立公式再宽就保持这个大小，在自己那一条里左右滑动（`RichText.Layout.scrollingMath`）。
+    static let minimumScale: CGFloat = 0.75
+
+    /// 比一行宽的公式（手机上很常见）按比例缩小到正好放得下；独立公式缩到 `minimumScale` 还放不下，就占满一行宽，
+    /// 画的地方空着，由外面放一条能左右滑动的公式。
+    override func attachmentBounds(for textContainer: NSTextContainer?, proposedLineFragment lineFrag: CGRect,
+                                   glyphPosition position: CGPoint, characterIndex charIndex: Int) -> CGRect {
+        let available = lineFrag.width - position.x - (textContainer?.lineFragmentPadding ?? 0)
+        guard available > 20, bounds.width > available else { return bounds }
+        let fit = available / bounds.width
+        let scale = formula.display ? max(fit, Self.minimumScale) : fit
+        return CGRect(x: 0, y: bounds.minY * scale, width: min(available, bounds.width * scale), height: bounds.height * scale)
+    }
+
+    /// 这个大小下放不下、要左右滑动：附件只占位，不画。
+    func scrolls(in size: CGSize) -> Bool { size.width < rendered.image.size.width * Self.minimumScale - 0.5 }
+
     /// 画的时候才按当时的深浅色取颜色。
     override func image(forBounds imageBounds: CGRect, textContainer: NSTextContainer?, characterIndex charIndex: Int) -> UIImage? {
-        rendered.image(for: UITraitCollection.current, color: color)
+        scrolls(in: imageBounds.size) ? UIImage() : rendered.image(for: UITraitCollection.current, color: color)
     }
 
     /// 公式附件；排不出来时返回 nil，调用方显示原文。

@@ -18,7 +18,7 @@ enum MathAttachment {
         let mask: CGImage
 
         init?(formula: MarkdownMath.Formula, fontSize: CGFloat) {
-            var math = MathImage(latex: formula.latex, fontSize: fontSize, textColor: .black,
+            var math = MathImage(latex: MathCompat.normalize(formula.latex), fontSize: fontSize, textColor: .black,
                                  labelMode: formula.display ? .display : .text, textAlignment: .left)
             let (error, image, info) = math.asImage()
             guard error == nil, let image, let info, image.size.width > 0, image.size.height > 0 else { return nil }
@@ -46,9 +46,13 @@ enum MathAttachment {
             baseline = (image.size.height - max(info.ascent + info.descent, fontSize / 2)) / 2 + info.descent
         }
 
-        func draw(in rect: NSRect, color: NSColor) {
+        func draw(in rect: NSRect, color: NSColor, flipped: Bool = false) {
             guard let context = NSGraphicsContext.current?.cgContext else { return }
             context.saveGState()
+            if flipped {
+                context.translateBy(x: 0, y: rect.minY + rect.maxY)
+                context.scaleBy(x: 1, y: -1)
+            }
             context.clip(to: rect, mask: mask)
             context.setFillColor(color.cgColor)
             context.fill(rect)
@@ -58,6 +62,51 @@ enum MathAttachment {
 
     private static var cache: [String: Rendered] = [:]
     private static var failed: Set<String> = []
+
+    /// 宽公式最多缩到这么小；独立公式再宽就保持这个大小，在自己那一条里左右滑动（`InteractiveTaskText` 放滑动条）。
+    static let minimumScale: CGFloat = 0.75
+
+    /// 画公式的格子：比一行宽的公式（窄窗口、侧栏）按比例缩小到正好放得下；独立公式缩到 `minimumScale` 还放不下，
+    /// 就占满一行宽、自己不画，由文字视图在这里放一条能左右滑动的公式。
+    final class Cell: NSTextAttachmentCell {
+        let rendered: Rendered
+        let color: NSColor
+        let display: Bool
+
+        init(_ rendered: Rendered, color: NSColor, display: Bool) {
+            self.rendered = rendered
+            self.color = color
+            self.display = display
+            super.init(imageCell: nil)
+        }
+
+        required init(coder: NSCoder) { fatalError() }
+
+        override func cellSize() -> NSSize { rendered.size }
+        override func cellBaselineOffset() -> NSPoint { NSPoint(x: 0, y: -rendered.baseline) }
+
+        override func cellFrame(for textContainer: NSTextContainer, proposedLineFragment lineFrag: NSRect,
+                                glyphPosition position: NSPoint, characterIndex charIndex: Int) -> NSRect {
+            let natural = NSRect(x: 0, y: -rendered.baseline, width: rendered.size.width, height: rendered.size.height)
+            let available = lineFrag.width - position.x - textContainer.lineFragmentPadding
+            guard available > 20, natural.width > available else { return natural }
+            let fit = available / natural.width
+            let scale = display ? max(fit, MathAttachment.minimumScale) : fit
+            return NSRect(x: 0, y: natural.minY * scale, width: min(available, natural.width * scale), height: natural.height * scale)
+        }
+
+        /// 这个宽度下放不下、要左右滑动。
+        func scrolls(in width: CGFloat) -> Bool { width < rendered.size.width * MathAttachment.minimumScale - 0.5 }
+
+        override func draw(withFrame cellFrame: NSRect, in controlView: NSView?) {
+            guard !scrolls(in: cellFrame.width) else { return }
+            rendered.draw(in: cellFrame, color: color, flipped: controlView?.isFlipped ?? true)
+        }
+
+        override func draw(withFrame cellFrame: NSRect, in controlView: NSView?, characterIndex charIndex: Int, layoutManager: NSLayoutManager) {
+            draw(withFrame: cellFrame, in: controlView)
+        }
+    }
 
     static func rendered(_ formula: MarkdownMath.Formula, fontSize: CGFloat) -> Rendered? {
         let size = (fontSize * fontScale * 2).rounded() / 2
@@ -78,13 +127,7 @@ enum MathAttachment {
         guard let rendered = rendered(formula, fontSize: fontSize) else { return nil }
         let attachment = NSTextAttachment()
         // 颜色在画的时候才取：动态颜色按当时的外观解析。
-        let image = NSImage(size: rendered.size, flipped: false) { rect in
-            rendered.draw(in: rect, color: color)
-            return true
-        }
-        image.cacheMode = .never
-        image.accessibilityDescription = formula.latex
-        attachment.image = image
+        attachment.attachmentCell = Cell(rendered, color: color, display: formula.display)
         attachment.bounds = NSRect(x: 0, y: -rendered.baseline, width: rendered.size.width, height: rendered.size.height)
         let result = NSMutableAttributedString(attachment: attachment)
         result.addAttributes([.font: font, .foregroundColor: color, .toolTip: formula.source], range: NSRange(location: 0, length: result.length))
