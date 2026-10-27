@@ -361,6 +361,7 @@ final class RichTextCanvas: UIView, UIGestureRecognizerDelegate {
         while mathStrips.count < scrolling.count {
             let strip = UIScrollView()
             strip.showsVerticalScrollIndicator = false
+            strip.showsHorizontalScrollIndicator = false
             strip.alwaysBounceHorizontal = true
             strip.addSubview(UIImageView())
             addSubview(strip)

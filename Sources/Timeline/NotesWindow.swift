@@ -288,6 +288,7 @@ struct UnifiedNotesView: View {
 struct UnifiedJournalView: View {
     @Environment(\.locale) private var locale
     @Environment(\.typography) private var typography
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var store: JournalStore
     @Binding var date: Date
     let navigationRequest: Int
@@ -306,7 +307,6 @@ struct UnifiedJournalView: View {
     @StateObject private var mention = MentionState()
     @State private var focused = false
     @State private var error: String?
-    @State private var editingID: UUID?
     /// 从节奏条跳过去的那一条短暂高亮，便于在长日志里找到。
     @State private var highlightedID: UUID?
     /// 收起的专注轮次（只在窗口打开期间保留）。
@@ -315,9 +315,6 @@ struct UnifiedJournalView: View {
     @State private var revealID: UUID?
     /// 已经按「打开这一天」定位过的日期：切到笔记再切回来时页面会重新出现，不能再把读到一半的位置拉走。
     @State private var openedDay: String?
-    @State private var editingDate: Date?
-    @State private var editText = ""
-    @State private var editFocused = false
     @State private var unlinked = false
     /// 日记侧栏和笔记侧栏共用同一套搜索入口；日期、星期和日志正文都可检索。
     @State private var query = ""
@@ -353,7 +350,7 @@ struct UnifiedJournalView: View {
         .frame(minWidth: 640, minHeight: 420)
         .background(Palette.background)
         .foregroundStyle(Palette.ink)
-        .onAppear { configureMention() }
+        .onAppear { configureMention(); InlineMarkdownEditor.shared.preload() }
         .onChange(of: date) { _ in unlinked = false; configureMention() }
         .onChange(of: navigationRequest) { _ in query = "" }
     }
@@ -545,7 +542,6 @@ struct UnifiedJournalView: View {
     }
 
     private func journalRow(_ log: DailyLogEntry, hasPrevious: Bool, hasNext: Bool, segment: LogTimelineSegment?) -> some View {
-        let editing = editingID == log.id
         return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext,
                              focusBefore: segment?.focusBefore == true, focusAfter: segment?.focusAfter == true,
                              highlighted: highlightedID == log.id) {
@@ -562,18 +558,15 @@ struct UnifiedJournalView: View {
             }
             if log.showsTimelineTags, !log.tags.isEmpty { TaskTagLine(tags: log.tags, log: log.id) }
         } content: {
-            if editing {
-                TaskInput(text: $editText, focused: $editFocused, fontSize: 13,
-                          submit: { saveEdit() }, cancel: { editingID = nil }, minHeight: 24, maxLines: 12)
-                    .padding(.horizontal, 8).padding(.vertical, 2)
-                    .inputFieldSurface(focused: true)
-                Text("⌘Enter 保存 · Esc 取消").font(.system(size: 10)).foregroundStyle(Palette.muted)
-            } else if !LogEventStyle.body(log).isEmpty {
-                TaskLinkText(source: LogEventStyle.body(log), completed: false, color: log.isFocusMarker ? Palette.muted : Palette.ink,
-                             fontSize: log.isFocusMarker ? 12 : 13,
-                             edit: { beginEdit(log) }, open: SafariLinks.open, maxLines: 0,
-                             markdown: true, compactLines: true, foldID: "log.\(log.id.uuidString)")
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if !LogEventStyle.body(log).isEmpty {
+                // 点一下正文就地编辑（和工作板一样所见即所得），点别处、Esc 或 ⌘↩ 保存。
+                EditableLogText(log: log, editable: !store.isReadOnly && !log.isFocusMarker, begin: { beginEdit(log, at: $0) }) { editAt in
+                    TaskLinkText(source: LogEventStyle.body(log), completed: false, color: log.isFocusMarker ? Palette.muted : Palette.ink,
+                                 fontSize: log.isFocusMarker ? 12 : 13,
+                                 edit: { beginEdit(log, at: nil) }, open: SafariLinks.open, maxLines: 0,
+                                 markdown: true, compactLines: true, editAt: editAt, foldID: "log.\(log.id.uuidString)")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
             if let detail = LogEventStyle.detail(log) {
                 Text(detail).font(.system(size: typography.pt(11))).monospacedDigit()
@@ -593,7 +586,6 @@ struct UnifiedJournalView: View {
             if !store.isReadOnly {
                 HStack(spacing: 0) {
                     EntryMetadataButtons(store: store, log: log, date: date)
-                    journalAction("pencil", "编辑这条日志") { beginEdit(log) }
                     journalAction("trash", "删除这条日志 · ⌘Z 撤销", destructive: true) {
                         store.deleteLog(log.id, on: date); error = "已删除这条日志，⌘Z 可撤销"
                     }
@@ -654,15 +646,9 @@ struct UnifiedJournalView: View {
         } catch let issue { error = AppErrorDescription(issue) }
     }
 
-    private func beginEdit(_ log: DailyLogEntry) {
-        guard editingID == nil else { return }
-        editingID = log.id; editingDate = date; editText = log.text; editFocused = true
-    }
-    private func saveEdit() {
-        guard let id = editingID else { return }
-        editingID = nil; editFocused = false
-        store.updateLog(id, text: editText, on: editingDate ?? date)
-        editingDate = nil
+    private func beginEdit(_ log: DailyLogEntry, at point: CGPoint?) {
+        guard !log.isFocusMarker else { return }
+        InlineMarkdownEditor.shared.begin(log, on: date, store: store, at: point, fontSize: typography.pt(13), dark: colorScheme == .dark)
     }
 
 }

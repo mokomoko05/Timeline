@@ -143,7 +143,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     }
 
     /// 所有编辑器共用一份不落盘的数据存储（编辑器不联网，也不需要互相隔离）。
-    private static let dataStore = WKWebsiteDataStore.nonPersistent()
+    static let dataStore = WKWebsiteDataStore.nonPersistent()
 
     /// 拿到共用的编辑器：所有工作板只有一个编辑器（一份 WebKit 网页进程）。上一个使用它的工作板先保存内容、交出来；
     /// 网页里按工作板分别存着正文、光标、撤销历史和滚动位置，换回来时原样恢复。
@@ -207,6 +207,12 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     func forget() {
         if Self.owner === self { detach() } else { flush() }
         Self.shared?.view.evaluateJavaScript("window.boardEditor.forget('\(boardID.uuidString)')")
+    }
+
+    static var editorDirectory: URL? {
+        let installed = Bundle.main.resourceURL?.appendingPathComponent("Timeline_Timeline.bundle")
+        let resources = installed.flatMap(Bundle.init(url:)) ?? Bundle.module
+        return resources.url(forResource: "EditorAssets", withExtension: nil)
     }
 
     private static func makeEditorView(handler: WeakBoardScriptHandler) -> WKWebView? {
@@ -274,6 +280,20 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     }
 
     func configure(fontSize: CGFloat, dark: Bool, sourceMode: Bool = false) {
+        settings = ["fontSize": fontSize, "readOnly": store.isReadOnly, "colors": Self.colors(dark: dark),
+                    "sourceMode": sourceMode, "folds": BoardFolds.load(boardID, defaults: defaults), "key": boardID.uuidString]
+        settings["labels"] = Self.labels
+        let current = store.boards.first { $0.id == boardID }?.markdown ?? storedSource
+        if current != storedSource {
+            storedSource = current
+            source = current
+            sourceNeedsSynchronization = true
+        }
+        applyConfiguration()
+    }
+
+    /// 编辑器网页用的配色（按应用的主题，深浅色分别算）。日志、笔记里就地编辑时也用它。
+    static func colors(dark: Bool) -> [String: String] {
         func css(_ color: Color) -> String {
             let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
             var result = ""
@@ -290,18 +310,13 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
                       "selection": css(Color(nsColor: .selectedTextBackgroundColor)),
                       "selection-ink": css(Color(nsColor: .selectedTextColor))]
         for level in 1...6 { colors["heading-\(level)"] = css(Color(nsColor: MarkdownText.headingColor(level))) }
-        settings = ["fontSize": fontSize, "readOnly": store.isReadOnly, "colors": colors,
-                    "sourceMode": sourceMode, "folds": BoardFolds.load(boardID, defaults: defaults), "key": boardID.uuidString]
-        settings["labels"] = ["openLink": AppLocalized("在 Safari 中打开"), "copyCode": AppLocalized("复制代码"),
-                              "copied": AppLocalized("已复制"), "copyFailed": AppLocalized("复制失败，请重试"),
-                              "expand": AppLocalized("展开标题下的内容"), "collapse": AppLocalized("收起标题下的内容")]
-        let current = store.boards.first { $0.id == boardID }?.markdown ?? storedSource
-        if current != storedSource {
-            storedSource = current
-            source = current
-            sourceNeedsSynchronization = true
-        }
-        applyConfiguration()
+        return colors
+    }
+
+    static var labels: [String: String] {
+        ["openLink": AppLocalized("在 Safari 中打开"), "copyCode": AppLocalized("复制代码"),
+         "copied": AppLocalized("已复制"), "copyFailed": AppLocalized("复制失败，请重试"),
+         "expand": AppLocalized("展开标题下的内容"), "collapse": AppLocalized("收起标题下的内容")]
     }
 
     /// 编辑完整源码（true）或所见即所得（false）。

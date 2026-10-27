@@ -22,8 +22,11 @@ final class LogActions: ObservableObject {
     }
 
     @Published var sheet: Sheet?
-    /// 改正文用输入卡，不走面板。
-    @Published var editing: JournalStore.LoggedLog?
+    /// 改正文用输入卡，不走面板。输入卡挂在整个应用最上层（盖住导航栏、搜索框和浮动按钮），见 `LogEditing`。
+    var editing: JournalStore.LoggedLog? {
+        get { LogEditing.shared.item }
+        set { LogEditing.shared.item = newValue }
+    }
     @Published var deleting: JournalStore.LoggedLog?
     /// 「打开待办的笔记」：推进任务页。
     @Published var openTask: NotesView.Destination?
@@ -69,11 +72,13 @@ private struct LogActionsHost: ViewModifier {
                 case .select(let logged): LogSelectSheet(logged: logged)
                 }
             }
-            .floatingEditor(item: $actions.editing) { LogEditSheet(store: store, logged: $0) }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
                 // 性能 / 截图检查：打开最长那条日志的「选择文字」。
                 if note.object as? String == "selectText", actions.sheet == nil,
                    let logged = store.allLogs().max(by: { $0.log.text.count < $1.log.text.count }) { actions.sheet = .select(logged) }
+                if note.object as? String == "editLog", actions.editing == nil,
+                   let logged = store.allLogs().max(by: { $0.log.text.count < $1.log.text.count }) { actions.editing = logged }
+                if note.object as? String == "closeLogEditor" { actions.editing = nil }
             }
             .confirmationDialog("删除这条日志？", isPresented: Binding(get: { actions.deleting != nil }, set: { if !$0 { actions.deleting = nil } }),
                                 titleVisibility: .visible, presenting: actions.deleting) { logged in
@@ -143,31 +148,62 @@ extension LogActions {
     }
 }
 
-/// 改一条日志的正文。
+/// 改一条日志的正文：和工作板一样所见即所得（只有光标所在的元素露出 Markdown 标记），输入卡按内容长高，太长就在里面滚动。
+/// 收起（点暗处、「完成」）时写回；「取消」放弃这次的修改。
+@MainActor
+final class LogEditing: ObservableObject {
+    static let shared = LogEditing()
+    @Published var item: JournalStore.LoggedLog?
+}
+
+extension View {
+    /// 改日志的输入卡：挂在整个应用最上层。
+    func logEditorHost(_ store: JournalStore) -> some View {
+        modifier(LogEditorHost(store: store))
+    }
+}
+
+private struct LogEditorHost: ViewModifier {
+    let store: JournalStore
+    @ObservedObject private var editing = LogEditing.shared
+
+    func body(content: Content) -> some View {
+        content.floatingEditor(item: $editing.item) { LogEditSheet(store: store, logged: $0).id($0.id) }
+    }
+}
+
 private struct LogEditSheet: View {
     @ObservedObject var store: JournalStore
     let logged: JournalStore.LoggedLog
     @Environment(\.closeEditor) private var closeEditor
-    @State private var text: String
+    @StateObject private var session: BoardWebSession
 
     init(store: JournalStore, logged: JournalStore.LoggedLog) {
         self.store = store
         self.logged = logged
-        _text = State(initialValue: logged.log.text)
+        _session = StateObject(wrappedValue: BoardWebSession(store: store, document: .log(id: logged.id, date: logged.date)))
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            EditorCardHeader(title: "编辑日志", confirm: "保存", canConfirm: text.nilIfEmpty != nil || !logged.log.images.isEmpty,
-                             cancel: { closeEditor?() }) {
-                if text != logged.log.text {
-                    store.updateLog(logged.id, text: text, on: logged.date)
-                    store.save()
-                }
+            EditorCardHeader(title: "编辑日志", confirm: "完成", canConfirm: true, cancel: {
+                session.discard()
+                closeEditor?()
+            }) {
+                session.commit()
                 closeEditor?()
             }
-            AutoFocusTextView(text: $text, placeholder: "", minLines: 4, maxLines: 10)
+            BoardWebEditor(session: session)
+                .frame(height: min(max(session.contentHeight ?? 120, 96), UIScreen.main.bounds.height * 0.32))
+                .animation(.snappy(duration: 0.15), value: session.contentHeight)
         }
+        .onAppear {
+            session.beginEditing()
+            if PerfProbe.typing == "log" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { session.runTypingTest(PerfProbe.typingText) }
+            }
+        }
+        .onDisappear { session.commit() }
     }
 }
 

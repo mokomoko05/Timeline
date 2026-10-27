@@ -20,6 +20,23 @@ const livePreview = new Compartment();
 let view;
 let composing = false;
 let currentReadOnly, currentSourceMode;
+// 嵌在日志、笔记里就地编辑（不是整块工作板）：编辑器跟着内容长高，不自己滚动；高度报给原生层。
+let inline = false;
+// 编辑器自己滚动，但原生层要按内容的高度给它定大小（iPhone 上改日志的输入卡，内容短就矮）。
+let measure = false;
+let lastHeight = 0;
+function reportHeight() {
+  if (!(inline || measure) || !view) return;
+  const height = Math.ceil(inline ? view.dom.getBoundingClientRect().height : view.contentHeight);
+  if (height === lastHeight) return;
+  lastHeight = height;
+  post({kind: "height", value: height});
+}
+// 就地编辑结束（Esc、⌘↩）：先把内容送过去，原生层收到 done 后换回渲染好的正文。
+function finishInline() {
+  commit();
+  post({kind: "done"});
+}
 let labels = {};
 let copyRequest = 0;
 const pendingCopies = new Map();
@@ -954,13 +971,14 @@ function editorExtensions(config) {
           // ⌘Enter 是全应用统一的保存键：立即保存，继续编辑。
           Prec.highest(keymap.of([{key: "Mod-Enter", run: view => {
             if (view.state.readOnly || composing || view.composing) return false;
-            commit();
+            if (inline) finishInline(); else commit();
             return true;
           }}])),
           keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
           Prec.lowest(EditorView.domEventHandlers({keydown(event) {
             if (event.key !== "Escape" || event.isComposing || composing || view.composing) return false;
             event.stopPropagation();
+            if (inline) finishInline();
             return true;
           }})),
           EditorView.contentAttributes.of(view => ({
@@ -969,6 +987,7 @@ function editorExtensions(config) {
           })),
           EditorView.updateListener.of(update => {
             if (update.transactions.length) reportHistory(update.state);
+            if (update.heightChanged || update.geometryChanged) reportHeight();
             if (update.docChanged && !update.transactions.some(transaction => transaction.annotation(external))) scheduleChange();
           }),
           EditorView.domEventHandlers({
@@ -1053,6 +1072,7 @@ function switchBoard(config) {
   view.requestMeasure({read: () => null, write: () => { view.scrollDOM.scrollTop = scroll; }});
   lastHistory = "";
   reportHistory(view.state);
+  lastHeight = 0;
 }
 
 window.boardEditor = {
@@ -1093,9 +1113,20 @@ window.boardEditor = {
     }
     currentReadOnly = config.readOnly;
     currentSourceMode = config.sourceMode;
+    if (measure !== !!config.measure) { measure = !!config.measure; lastHeight = 0; reportHeight(); }
+    if (inline !== !!config.inline) {
+      inline = !!config.inline;
+      document.documentElement.classList.toggle("inline", inline);
+      lastHeight = 0;
+      if (inline && !window.inlineObserver) {
+        window.inlineObserver = new ResizeObserver(reportHeight);
+        window.inlineObserver.observe(view.dom);
+      }
+    }
     view.dom.dataset.preview = String(!!config.readOnly);
     if (config.colors) for (const [key, value] of Object.entries(config.colors)) document.documentElement.style.setProperty("--" + key, value);
     if (config.fontSize) document.documentElement.style.setProperty("--font-size", config.fontSize + "px");
+    view.requestMeasure({read: () => null, write: reportHeight});
     return snapshot();
   },
   // iPhone 键盘上方的格式按钮：原生层按全文和选区算好替换，这里作为一次输入（进撤销历史）应用。
@@ -1138,6 +1169,17 @@ window.boardEditor = {
     }, 1600);
   },
   focus() { view.focus(); },
+  // 就地编辑：点在渲染好的正文哪里，光标就放到对应的位置（坐标相对编辑器左上角）。
+  placeCaret(x, y) {
+    if (currentReadOnly) return snapshot();
+    const box = view.contentDOM.getBoundingClientRect();
+    const position = view.posAtCoords({x: box.left + x, y: box.top + y}, false);
+    view.focus();
+    view.dispatch({selection: {anchor: position ?? view.state.doc.length}});
+    reportHeight();
+    return snapshot();
+  },
+  height() { lastHeight = 0; reportHeight(); return lastHeight; },
   escape() {
     const target = view.dom.contains(document.activeElement) ? document.activeElement : view.contentDOM;
     target.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", code: "Escape", bubbles: true, cancelable: true}));

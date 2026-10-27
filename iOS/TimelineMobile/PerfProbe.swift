@@ -136,6 +136,8 @@ enum PerfProbe {
             ("节奏条放大镜", { send("railLoupe") }),
             ("收起放大镜", { send("railLoupeEnd") }),
             ("选择文字", { switchTab(.journal); send("selectText") }),
+            ("点日志编辑", { switchTab(.journal); send("editLog") }),
+            ("收起日志编辑", { send("closeLogEditor") }),
             ("滚动全文", { scrollThrough() }),
             ("长按长文", { pressLongText() }),
             ("拖动排序", { switchTab(.tasks); send("dragTask") }),
@@ -168,13 +170,18 @@ enum PerfProbe {
 
     static func runTyping(switchTab: @escaping (RootView.Tab) -> Void) {
         guard enabled, let typing else { return }
-        switchTab(typing == "compose" || typing == "mention" ? .journal : (typing == "board" ? .boards : .tasks))
+        switchTab(typing == "compose" || typing == "mention" || typing == "log" ? .journal : (typing == "board" ? .boards : .tasks))
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             mark("打开输入框 " + typing)
             // 工作板的编辑器在网页里：工作板页自己跑测试（见 BoardWebSession.runTypingTest）。
             NotificationCenter.default.post(name: openEditor, object: typing == "mention" ? "compose" : typing)
         }
         let text: [Character] = Array(typing == "mention" ? mentionText : (UserDefaults.standard.string(forKey: "perfTypingText") ?? typingText))
+        if typing == "log" {
+            // 日志编辑器也在网页里：打开最长那条的编辑，由编辑卡自己跑测试。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { NotificationCenter.default.post(name: action, object: "editLog") }
+            return
+        }
         for (index, character) in text.enumerated() where typing != "board" {
             let delay: Double = 6 + Double(index) * 0.1
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {

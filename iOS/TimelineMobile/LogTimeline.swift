@@ -191,6 +191,12 @@ struct LogEntryRow: View, Equatable {
                         if let body {
                             MarkdownView(source: body, foldScope: "log." + log.id.uuidString, size: 15)
                                 .opacity(log.isFocusMarker && log.focusMarker != "REVIEW" ? 0.75 : 1)
+                                // 点一下正文就编辑（和工作板一样所见即所得），不用先找「编辑」。链接、折叠按钮照常响应自己的点按。
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    guard let actions, !store.isReadOnly, !log.isFocusMarker else { return }
+                                    actions.editing = logged
+                                }
                         }
                         if log.focusEvent == .start, let goal = log.focusGoal?.nilIfEmpty {
                             Label(goal, systemImage: "flag").font(.subheadline).foregroundStyle(Palette.ink)

@@ -89,6 +89,7 @@ struct RootView: View {
 
     var body: some View {
         tabs
+        .logEditorHost(store)
         .tint(Palette.accent)
         .onContinueUserActivity(CSSearchableItemActionType) { Navigator.shared.open($0) }
         .onReceive(Navigator.shared.$target) { target in

@@ -100,3 +100,21 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 .cm-math-display { display: inline-block; width: 100%; text-align: center; }
 .cm-math-display .katex-display, .cm-math-block .katex-display { margin: 0.35em 0; }
 .cm-math-block { padding: 0.15em 0; overflow-x: auto; overflow-y: hidden; text-align: center; }
+/* 就地编辑日志、笔记：透明底，跟着内容长高，不自己滚动；左右不留白，和渲染好的正文对齐。 */
+html.inline, html.inline body, html.inline #editor { height: auto; background: transparent; overflow: hidden; }
+html.inline .cm-editor { height: auto; }
+html.inline #editor .cm-scroller { overflow: visible; overscroll-behavior: auto; }
+html.inline #editor .cm-content { padding: 0 0 2px; }
+html.inline #editor .cm-line { padding: 0 2px; }
+/* 就地编辑时标题的收起 / 展开按钮和渲染好的正文一样：在标题行最右边，大一点，不显示「⋯」。 */
+html.inline #editor .cm-line.cm-foldable { padding-right: calc(var(--font-size) * 1.7 + 8px); }
+html.inline .board-heading-fold { left: auto; right: 0; top: 50%; bottom: auto; width: calc(var(--font-size) * 1.7); height: calc(var(--font-size) * 1.7); transform: translateY(-50%); border-radius: calc(var(--font-size) * 0.5); background: color-mix(in srgb, var(--ink) 7%, transparent); opacity: .85; }
+html.inline .board-heading-fold svg { width: calc(var(--font-size) * 0.95); height: calc(var(--font-size) * 0.95); }
+html.inline #editor .cm-line.cm-foldable:hover .board-heading-fold { background: color-mix(in srgb, var(--ink) 14%, transparent); }
+html.inline .board-fold-more { display: none; }
+/* 比一行宽的独立公式：在自己那一块里左右滑动（不显示滚动条），不把整页撑宽；放得下时居中。 */
+/* 宽度按窗口算（百分比在会被撑宽的行里不起作用），整页才不会被撑宽。 */
+.cm-math-display { display: block; width: auto; max-width: calc(100vw - 32px); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.cm-math-block { max-width: calc(100vw - 32px); scrollbar-width: none; }
+.cm-math-display::-webkit-scrollbar, .cm-math-block::-webkit-scrollbar { display: none; }
+.cm-math-display .katex-display, .cm-math-block .katex-display { width: max-content; margin-left: auto; margin-right: auto; }

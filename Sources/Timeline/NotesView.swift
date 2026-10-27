@@ -26,10 +26,7 @@ struct NotesView: View {
     /// 笔记输入的缓冲：按键只刷新输入行，停顿后再写进导航草稿（否则每个字都会重算整页笔记和章节）。
     @State private var tagText = NoteTextBuffer()
     @State private var taskText = NoteTextBuffer()
-    @State private var editingNoteID: UUID?
-    @State private var editingNoteDate: Date?
-    @State private var noteEditText = ""
-    @State private var noteEditFocused = false
+    @Environment(\.colorScheme) private var colorScheme
     @State private var focused = false
     @State private var error: String?
     /// 右侧笔记区的宽度：够宽时目录是一栏，窄时浮在内容上面。
@@ -133,6 +130,7 @@ struct NotesView: View {
             Text("只去掉这个标签（连同子标签），待办和笔记本身都保留。可以 ⌘Z 撤销。")
         }
         .onAppear {
+            InlineMarkdownEditor.shared.preload()
             if let initialTag { nav.open(tag: initialTag) }
             else if let initialSelection { nav.open(task: initialSelection) }
             nav.validate(in: store)
@@ -612,20 +610,14 @@ struct NotesView: View {
             }
             if !log.tags.isEmpty { TaskTagLine(tags: log.tags, log: log.id) }
         } content: {
-            if editingNoteID == log.id {
-                VStack(alignment: .leading, spacing: 4) {
-                    TaskInput(text: $noteEditText, focused: $noteEditFocused, fontSize: 13,
-                              submit: { saveNoteEdit(item) }, cancel: cancelNoteEdit, minHeight: 24, maxLines: 12)
-                        .padding(.horizontal, 8).padding(.vertical, 2)
-                        .inputFieldSurface(focused: true)
-                        .onAppear { noteEditFocused = true }
-                    Text("⌘Enter 保存 · Esc 取消").font(.system(size: 10)).foregroundStyle(Palette.muted)
+            if !log.text.isEmpty {
+                // 点一下正文就地编辑（和工作板一样所见即所得），点别处、Esc 或 ⌘↩ 保存。
+                EditableLogText(log: log, editable: !store.isReadOnly && !log.isFocusMarker, begin: { beginNoteEdit(item, at: $0) }) { editAt in
+                    TaskLinkText(source: LogEventStyle.body(log), completed: false, color: Palette.ink, fontSize: 13,
+                                 edit: { beginNoteEdit(item, at: nil) }, open: SafariLinks.open,
+                                 maxLines: 0, markdown: true, compactLines: true, editAt: editAt, foldID: "log.\(log.id.uuidString)")
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-            } else if !log.text.isEmpty {
-                TaskLinkText(source: LogEventStyle.body(log), completed: false, color: Palette.ink, fontSize: 13,
-                             edit: { guard !store.isReadOnly else { return }; beginNoteEdit(item) }, open: SafariLinks.open,
-                             maxLines: 0, markdown: true, compactLines: true, foldID: "log.\(log.id.uuidString)")
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             if !log.images.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -641,7 +633,6 @@ struct NotesView: View {
                 noteAction("doc.on.doc", log.copyText == nil ? "这条只有图片，没有文字可复制" : "复制这条的文字（不含图片）") { copy(log) }
                     .disabled(log.copyText == nil)
                 if !store.isReadOnly {
-                    noteAction("pencil", "编辑这条笔记") { beginNoteEdit(item) }
                     EntryMetadataButtons(store: store, log: log, date: item.date)
                     noteAction("trash", "删除这条笔记 · ⌘Z 撤销", destructive: true) { deleteNote(item) }
                 }
@@ -651,7 +642,7 @@ struct NotesView: View {
         .contextMenu {
             if log.copyText != nil { Button("复制文字") { copy(log) } }
             if !store.isReadOnly {
-                Button("编辑") { beginNoteEdit(item) }
+                Button("编辑") { beginNoteEdit(item, at: nil) }
                 Divider()
                 Button("删除 · ⌘Z 撤销", role: .destructive) { deleteNote(item) }
             }
@@ -666,29 +657,14 @@ struct NotesView: View {
         .help(LocalizedStringKey(help)).accessibilityLabel(LocalizedStringKey(help))
     }
 
-    private func beginNoteEdit(_ item: JournalStore.LoggedLog) {
-        guard editingNoteID == nil else { return }
-        editingNoteID = item.log.id
-        editingNoteDate = item.date
-        noteEditText = item.log.text
-        noteEditFocused = true
-    }
-
-    private func cancelNoteEdit() {
-        editingNoteID = nil
-        editingNoteDate = nil
-        noteEditFocused = false
-    }
-
-    private func saveNoteEdit(_ item: JournalStore.LoggedLog) {
-        guard editingNoteID == item.log.id else { return }
-        editingNoteID = nil
-        editingNoteDate = nil
-        store.updateLog(item.log.id, text: noteEditText, on: item.date)
+    private func beginNoteEdit(_ item: JournalStore.LoggedLog, at point: CGPoint?) {
+        guard !store.isReadOnly, !item.log.isFocusMarker else { return }
+        InlineMarkdownEditor.shared.begin(item.log, on: item.date, store: store, at: point,
+                                          fontSize: typography.pt(13), dark: colorScheme == .dark)
     }
 
     private func deleteNote(_ item: JournalStore.LoggedLog) {
-        if editingNoteID == item.log.id { editingNoteID = nil; editingNoteDate = nil }
+        if InlineMarkdownEditor.shared.isEditing(item.log.id) { InlineMarkdownEditor.shared.finish() }
         store.deleteLog(item.log.id, on: item.date)
         error = "已删除这条笔记，⌘Z 可撤销"
     }

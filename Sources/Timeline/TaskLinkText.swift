@@ -21,6 +21,8 @@ struct TaskLinkText: NSViewRepresentable {
     var select: () -> Void = {}
     /// 单击正文（非链接）时调用。
     var click: (() -> Void)?
+    /// 单击正文（没有拖选文字、不是链接 / 待办 / 折叠按钮）就地开始编辑，参数是点的位置（相对正文左上角）。
+    var editAt: ((CGPoint) -> Void)?
     /// 右键菜单里的操作（没有就用系统默认菜单）。
     var menuItems: [TextMenuItem] = []
     /// Markdown 标题可以折叠（点标题收起 / 展开），折叠状态按这个标识记住（比如某条笔记）。
@@ -60,6 +62,7 @@ struct TaskLinkText: NSViewRepresentable {
         view.onOpen = open
         view.onSelect = select
         view.onClick = click
+        view.onEditAt = editAt
         view.onToggleMarkdownTask = toggleMarkdownTask
         view.menuItems = menuItems
         view.interactionEnabled = enabled
@@ -340,6 +343,7 @@ final class InteractiveTaskText: NSTextView {
     var onOpen: ((URL) -> Void)?
     var onSelect: (() -> Void)?
     var onClick: (() -> Void)?
+    var onEditAt: ((CGPoint) -> Void)?
     private var hoveredURL: URL?
     private var hoveredHeading: String?
     private var tracking: NSTrackingArea?
@@ -396,9 +400,9 @@ final class InteractiveTaskText: NSTextView {
         while mathStrips.count < scrolling.count {
             let strip = NSScrollView()
             strip.drawsBackground = false
-            strip.hasHorizontalScroller = true
-            strip.autohidesScrollers = true
-            strip.scrollerStyle = .overlay
+            // 不显示滚动条：触控板 / 鼠标横向滑动就能左右移动。
+            strip.hasHorizontalScroller = false
+            strip.hasVerticalScroller = false
             strip.verticalScrollElasticity = .none
             strip.horizontalScrollElasticity = .allowed
             strip.documentView = MathStripContent()
@@ -583,6 +587,10 @@ final class InteractiveTaskText: NSTextView {
             onSelect?()
             onClick?()
             super.mouseDown(with: event)
+            // 系统的选择跟踪在松开鼠标后才返回：没有拖选文字就是点了一下，就地编辑。
+            if event.clickCount == 1, selectedRange().length == 0, let onEditAt, interactionEnabled {
+                onEditAt(NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y))
+            }
             return
         }
         mouseDownEvent = event
@@ -630,6 +638,12 @@ enum HeadingFolds {
     static func key(_ id: String) -> String { "markdown.folds.\(id)" }
 
     static func folded(in id: String) -> Set<String> { Set(defaults.stringArray(forKey: key(id)) ?? []) }
+
+    static func set(_ heading: String, folded: Bool, in id: String) {
+        var current = self.folded(in: id)
+        if folded { current.insert(heading) } else { current.remove(heading) }
+        if current.isEmpty { defaults.removeObject(forKey: key(id)) } else { defaults.set(current.sorted(), forKey: key(id)) }
+    }
 
     static func toggle(_ heading: String, in id: String) {
         var folded = folded(in: id)

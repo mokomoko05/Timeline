@@ -441,6 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 ImageTools.purgeThumbnails()
                 // 工作板窗口没开着：整个编辑器（一份网页进程）也释放，下次打开时重新加载。
                 if BoardWindowController.shared.panel?.isVisible != true { BoardLiveEditorSession.releaseSharedEditor() }
+                InlineMarkdownEditor.shared.release()
             }
         }
         source.resume()
@@ -452,6 +453,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var isEditingText: Bool {
         (NSApp.keyWindow?.firstResponder as? NSText)?.isEditable == true
             || BoardLiveEditorSession.active?.handlesTextCommands == true
+            || InlineMarkdownEditor.shared.handlesTextCommands
     }
 
     /// 没有文本框占用键盘时：方向键选择事项或切换日期，空格完成，回车编辑，Delete 删除。
@@ -466,7 +468,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func handleControlZ(_ event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         guard event.keyCode == 6, modifiers == .control || modifiers == [.control, .shift] else { return false }
-        let board = BoardLiveEditorSession.active.map { modifiers == .control ? $0.handlesUndo : $0.handlesRedo } ?? false
+        let board = (BoardLiveEditorSession.active.map { modifiers == .control ? $0.handlesUndo : $0.handlesRedo } ?? false)
+            || InlineMarkdownEditor.shared.handlesTextCommands
         guard board || (NSApp.keyWindow?.firstResponder as? NSText)?.isEditable == true else { return false }
         if modifiers == .control { undoAction(nil) } else { redoAction(nil) }
         return true
@@ -503,6 +506,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// ⌘Z：输入框里有能撤销的打字就撤销打字；没有（比如刚在日志窗口里删了日志，光标还在输入框里）就撤销上一步操作。
     @objc private func undoAction(_ sender: Any?) {
+        if InlineMarkdownEditor.shared.handlesTextCommands { InlineMarkdownEditor.shared.undo(); return }
         if let editor = BoardLiveEditorSession.active, editor.handlesUndo { editor.undo(); return }
         if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isEditable, editor.undoManager?.canUndo == true {
             editor.undoManager?.undo()
@@ -510,6 +514,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc private func redoAction(_ sender: Any?) {
+        if InlineMarkdownEditor.shared.handlesTextCommands { InlineMarkdownEditor.shared.redo(); return }
         if let editor = BoardLiveEditorSession.active, editor.handlesRedo { editor.redo(); return }
         if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isEditable, editor.undoManager?.canRedo == true {
             editor.undoManager?.redo()
