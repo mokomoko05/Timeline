@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* TimelineCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000020 /* TimelineCore */; };
 		A10000000000000000000022 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000023 /* Markdown */; };
+		A10000000000000000000025 /* TimelineMath in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000026 /* TimelineMath */; };
 		B10000000000000000000001 /* TimelineFocus.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* TimelineFocus.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A10000000000000000000031 /* EditorAssets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000030 /* EditorAssets */; };
 /* End PBXBuildFile section */
@@ -56,6 +57,7 @@
 			files = (
 				A10000000000000000000001 /* TimelineCore in Frameworks */,
 				A10000000000000000000022 /* Markdown in Frameworks */,
+				A10000000000000000000025 /* TimelineMath in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -114,6 +116,7 @@
 			packageProductDependencies = (
 				A10000000000000000000020 /* TimelineCore */,
 				A10000000000000000000023 /* Markdown */,
+				A10000000000000000000026 /* TimelineMath */,
 			);
 			productName = TimelineMobile;
 			productReference = A10000000000000000000002 /* Timeline.app */;
@@ -423,6 +426,10 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A10000000000000000000024 /* XCRemoteSwiftPackageReference "swift-markdown" */;
 			productName = Markdown;
+		};
+		A10000000000000000000026 /* TimelineMath */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TimelineMath;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

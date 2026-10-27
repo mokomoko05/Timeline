@@ -28,6 +28,223 @@ function editability(readOnly) {
   return [EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)];
 }
 
+// 公式：$…$、\(…\) 是行内公式，$$…$$、\[…\] 是独立公式（可以跨行）。光标碰到公式时露出源码，平时显示排好的公式。
+// KaTeX 很大（约 270 KB），工作板里真的出现公式时才加载，不拖慢没有公式的工作板。
+const mathLoaded = StateEffect.define();
+let katexState = "idle";
+function ensureKatex() {
+  if (katexState !== "idle") return;
+  katexState = "loading";
+  const style = document.createElement("link");
+  style.rel = "stylesheet";
+  style.href = "katex/katex.min.css";
+  document.head.append(style);
+  const script = document.createElement("script");
+  script.src = "katex/katex.min.js";
+  script.onload = () => {
+    katexState = "ready";
+    view?.dispatch({effects: mathLoaded.of(null)});
+  };
+  script.onerror = () => { katexState = "failed"; };
+  document.head.append(script);
+}
+
+// 排好的公式按源码缓存：滚动、移动光标时重建装饰不用重新排。排不出来的记成 null，显示源码。
+const mathCache = new Map();
+function renderMath(tex, display) {
+  const key = (display ? "D" : "I") + tex;
+  if (mathCache.has(key)) return mathCache.get(key);
+  let html = null;
+  try { html = window.katex.renderToString(tex, {displayMode: display, throwOnError: true, output: "html"}); } catch {}
+  if (mathCache.size > 500) mathCache.clear();
+  mathCache.set(key, html);
+  return html;
+}
+
+class MathWidget extends WidgetType {
+  constructor(tex, display, block, html, source) {
+    super();
+    this.tex = tex;
+    this.display = display;
+    this.block = block;
+    this.html = html;
+    this.source = source;
+  }
+  eq(other) { return other.tex === this.tex && other.display === this.display && other.block === this.block && other.source === this.source; }
+  toDOM(view) {
+    const element = document.createElement(this.block ? "div" : "span");
+    element.className = this.block ? "cm-math cm-math-block" : (this.display ? "cm-math cm-math-display" : "cm-math");
+    element.innerHTML = this.html;
+    element.title = this.display ? "$$" + this.tex + "$$" : "$" + this.tex + "$";
+    // 点公式：光标放进源码里（露出源码可以改）。只读时不拦，留给原生选区。
+    element.addEventListener("mousedown", event => {
+      if (view.state.readOnly || event.button !== 0) return;
+      event.preventDefault();
+      const position = view.posAtDOM(element);
+      view.focus();
+      view.dispatch({selection: {anchor: Math.min(view.state.doc.length, position + (this.display ? 2 : 1))}});
+    });
+    return element;
+  }
+  ignoreEvent() { return false; }
+}
+
+// 一行里的公式（和原生层 MarkdownMath 的规则一样）：$ 后面紧跟非空白，结束的 $ 前面不是空白、后面不是数字；行内代码、\$ 跳过。
+function inlineMath(text) {
+  const found = [];
+  let index = 0;
+  while (index < text.length) {
+    const character = text[index];
+    if (character === "\\") {
+      const next = text[index + 1];
+      if (next === "(" || next === "[") {
+        const close = text.indexOf(next === "(" ? "\\)" : "\\]", index + 2);
+        if (close > index + 2) {
+          found.push({from: index, to: close + 2, tex: text.slice(index + 2, close).trim(), display: next === "["});
+          index = close + 2;
+          continue;
+        }
+      }
+      index += 2;
+      continue;
+    }
+    if (character === "`") {
+      const run = /^`+/.exec(text.slice(index))[0];
+      const close = text.indexOf(run, index + run.length);
+      index = close < 0 ? index + run.length : close + run.length;
+      continue;
+    }
+    if (character === "$") {
+      if (text[index + 1] === "$") {
+        const close = text.indexOf("$$", index + 2);
+        if (close > index + 2 && text.slice(index + 2, close).trim()) {
+          found.push({from: index, to: close + 2, tex: text.slice(index + 2, close).trim(), display: true});
+          index = close + 2;
+        } else index += 2;
+        continue;
+      }
+      if (text[index + 1] && !/\s/.test(text[index + 1])) {
+        let end = index + 1;
+        while (end < text.length && text[end] !== "$") end += text[end] === "\\" ? 2 : 1;
+        if (end < text.length && end > index + 1 && text[end + 1] !== "$" && !/\s/.test(text[end - 1]) && !/[0-9]/.test(text[end + 1] ?? "")) {
+          found.push({from: index, to: end + 1, tex: text.slice(index + 1, end), display: false});
+          index = end + 1;
+          continue;
+        }
+      }
+    }
+    index += 1;
+  }
+  return found;
+}
+
+// 跨行的独立公式：一行以 $$（或 \[）开头、后面某行以 $$（或 \]）结尾。代码围栏里的不算；最多跨 200 行。
+function findMathBlocks(doc) {
+  const blocks = [];
+  let fence = null, open = null, position = 0, number = 0;
+  for (const text of doc.iterLines()) {
+    number += 1;
+    const from = position;
+    position += text.length + 1;
+    if (fence) {
+      if (text.trimStart().startsWith(fence)) fence = null;
+      continue;
+    }
+    if (open) {
+      const trimmed = text.trimEnd();
+      if (trimmed.endsWith(open.close)) {
+        open.parts.push(trimmed.slice(0, trimmed.length - open.close.length));
+        const tex = open.parts.join("\n").trim();
+        if (tex) blocks.push({from: open.from, to: from + text.length, tex});
+        open = null;
+      } else if (number - open.line > 200) open = null;
+      else open.parts.push(text);
+      continue;
+    }
+    if (!text.includes("$") && !text.includes("\\[") && !text.includes("`") && !text.includes("~")) continue;
+    const fenceMatch = /^\s*(`{3,}|~{3,})/.exec(text);
+    if (fenceMatch) {
+      fence = fenceMatch[1];
+      continue;
+    }
+    const start = /^\s*(\$\$|\\\[)/.exec(text);
+    if (!start) continue;
+    const close = start[1] === "$$" ? "$$" : "\\]";
+    const rest = text.slice(start[0].length);
+    if (rest.includes(close)) continue;
+    open = {from, line: number, close, parts: [rest]};
+  }
+  return blocks;
+}
+
+function mathBlockDecorations(state, blocks) {
+  if (!blocks.length) return Decoration.none;
+  ensureKatex();
+  if (katexState !== "ready") return Decoration.none;
+  const selection = revealSelection(state);
+  const ranges = [];
+  for (const block of blocks) {
+    if (selection && selection.from <= block.to && selection.to >= block.from) continue;
+    const html = renderMath(block.tex, true);
+    if (html) ranges.push(Decoration.replace({widget: new MathWidget(block.tex, true, true, html, ""), block: true}).range(block.from, block.to));
+  }
+  return Decoration.set(ranges);
+}
+
+// 光标碰到哪些块（露出源码）：选区移动但这个没变时不重建装饰。
+function revealedBlocks(state, blocks) {
+  const selection = revealSelection(state);
+  if (!selection) return "";
+  return blocks.filter(block => selection.from <= block.to && selection.to >= block.from).map(block => block.from).join(",");
+}
+
+const mathBlocks = StateField.define({
+  create(state) {
+    const blocks = findMathBlocks(state.doc);
+    return {blocks, key: revealedBlocks(state, blocks), decorations: mathBlockDecorations(state, blocks)};
+  },
+  update(value, transaction) {
+    const loaded = transaction.effects.some(effect => effect.is(mathLoaded));
+    const blocks = transaction.docChanged ? findMathBlocks(transaction.state.doc) : value.blocks;
+    if (!blocks.length && !value.blocks.length) return value;
+    const key = revealedBlocks(transaction.state, blocks);
+    if (!transaction.docChanged && !loaded && key === value.key && transaction.startState.readOnly === transaction.state.readOnly) return value;
+    return {blocks, key, decorations: mathBlockDecorations(transaction.state, blocks)};
+  },
+  provide: field => EditorView.decorations.from(field, value => value.decorations)
+});
+
+const codeNodes = new Set(["InlineCode", "FencedCode", "CodeBlock", "CodeText", "HTMLBlock", "CommentBlock"]);
+function inCode(tree, position) {
+  for (let node = tree.resolveInner(position, 1); node; node = node.parent) if (codeNodes.has(node.name)) return true;
+  return false;
+}
+
+function inlineMathDecorations(view, ranges, inside) {
+  const {state} = view;
+  const tree = syntaxTree(state);
+  const blocks = state.field(mathBlocks, false)?.blocks ?? [];
+  for (const visible of view.visibleRanges) {
+    let line = state.doc.lineAt(visible.from);
+    while (true) {
+      if ((line.text.includes("$") || line.text.includes("\\(") || line.text.includes("\\[")) && !blocks.some(block => block.from <= line.to && block.to >= line.from)) {
+        for (const math of inlineMath(line.text)) {
+          const from = line.from + math.from, to = line.from + math.to;
+          if (!math.tex || inCode(tree, from)) continue;
+          ensureKatex();
+          if (katexState !== "ready" || inside(from, to)) continue;
+          const html = renderMath(math.tex, math.display);
+          // 独占一行的 $$…$$ 居中显示。
+          const alone = math.display && !line.text.slice(0, math.from).trim() && !line.text.slice(math.to).trim();
+          if (html) ranges.push(Decoration.replace({widget: new MathWidget(math.tex, alone, false, html, line.text.slice(math.from, math.to))}).range(from, to));
+        }
+      }
+      if (line.to >= visible.to || line.number >= state.doc.lines) break;
+      line = state.doc.line(line.number + 1);
+    }
+  }
+}
+
 function actionButton(className, label, path) {
   const button = document.createElement("button");
   button.type = "button";
@@ -651,6 +868,8 @@ function inlineDecorations(view) {
       }
     }});
   }
+  // 公式：光标碰到（在它里面或者紧挨着）时露出源码。
+  inlineMathDecorations(view, ranges, (from, to) => selection && selection.from <= to && selection.to >= from);
   return Decoration.set(ranges, true);
 }
 
@@ -670,7 +889,7 @@ const inlinePreview = ViewPlugin.fromClass(class {
   provide: plugin => EditorView.atomicRanges.of(view => view.plugin(plugin)?.atomic ?? Decoration.none)
 });
 
-const livePreviewExtensions = [live, inlinePreview];
+const livePreviewExtensions = [live, mathBlocks, inlinePreview];
 
 const highlighting = HighlightStyle.define([
   {tag: tags.processingInstruction, class: "cm-syntax"},

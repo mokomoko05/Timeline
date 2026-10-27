@@ -541,6 +541,41 @@ final class BoardLiveEditorTests: XCTestCase {
         XCTAssertFalse(text.contains("# Title") || text.contains("**") || text.contains("]("), "离开编辑器后整页恢复渲染")
     }
 
+    /// 公式：出现公式时才加载 KaTeX；行内和跨行公式都排出来，光标碰到时露出源码，源码不被改动。
+    func testFormulasRenderWithKatexAndRevealSourceUnderTheCaret() async throws {
+        let source = "Inline $a^2+b^2$ and `$code$` costs $5 and $10\n\n$$\n\\frac{1}{2} \\\\ x_1\n$$\n\nAfter"
+        let fixture = try LiveFixture(source: source)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        func count() async throws -> [Int] {
+            try await fixture.webView.evaluateJavaScript("[document.querySelectorAll('.cm-math').length, document.querySelectorAll('.cm-math-block').length, document.querySelectorAll('.cm-math .katex').length]") as? [Int] ?? []
+        }
+        var counts: [Int] = []
+        for _ in 0..<150 {
+            counts = try await count()
+            if counts.first == 2 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(counts, [2, 1, 2], "一个行内公式、一个跨行公式；代码和金额不算")
+        var text = try await visibleText(fixture.webView)
+        XCTAssertTrue(text.contains("$code$") && text.contains("$5 and $10"), text)
+        XCTAssertFalse(text.contains("$a^2"), text)
+        // KaTeX 的字体能加载（内容安全策略放行了本地字体）。
+        let fonts = try await fixture.webView.callAsyncJavaScript(
+            "await document.fonts.ready; return [...document.fonts].filter(f => f.family.includes('KaTeX') && f.status === 'loaded').length",
+            contentWorld: .page) as? Int
+        XCTAssertGreaterThan(fonts ?? 0, 0)
+        let ns = source as NSString
+        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.focus();window.boardEditor.select(\(ns.range(of: "a^2").location))")
+        text = try await visibleText(fixture.webView)
+        XCTAssertTrue(text.contains("$a^2+b^2$"), "光标在行内公式里：露出源码")
+        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.select(\(ns.range(of: "x_1").location))")
+        text = try await visibleText(fixture.webView)
+        XCTAssertTrue(text.contains("x_1"), "光标在跨行公式里：露出源码")
+        let current = try await fixture.webView.evaluateJavaScript("window.boardEditor.view().state.doc.toString()") as? String
+        XCTAssertEqual(current, source)
+    }
+
     /// 别处改的折叠记忆传到编辑器；在收起的标题末尾回车，光标进了收起的那一节，展开它。
     func testRememberedFoldsApplyAndTypingIntoAFoldedSectionUnfoldsIt() async throws {
         let filler = (1...12).map { "Filler \($0)" }.joined(separator: "\n\n")

@@ -102,7 +102,7 @@ struct MarkdownView: View {
     }
 
     private func headingText(_ level: Int, _ text: AttributedString) -> some View {
-        Text(text)
+        Text(markdown: text, size: size + CGFloat(max(1, 7 - level)) * 1.6)
             .font(.system(size: size + CGFloat(max(1, 7 - level)) * 1.6, weight: .bold))
             .foregroundStyle(Palette.heading(level))
             .padding(.top, level <= 2 ? size * 0.3 : 0)
@@ -195,6 +195,16 @@ struct MarkdownDocument {
     }
 }
 
+/// 行内公式：这段文字是哪个公式（`RichText` 排版时换成公式图）。
+enum MathFormulaAttribute: AttributedStringKey {
+    typealias Value = MarkdownMath.Formula
+    static let name = "timeline.math"
+}
+
+extension AttributedString {
+    var containsMath: Bool { runs[MathFormulaAttribute.self].contains { $0.0 != nil } }
+}
+
 /// 解析后的块。
 indirect enum MarkdownBlock {
     case heading(Int, AttributedString, key: String, line: Int)
@@ -241,8 +251,10 @@ indirect enum MarkdownBlock {
         if let cached { return cached }
         let started = CACurrentMediaTime()
         defer { if Thread.isMainThread { MainActor.assumeIsolated { PerfProbe.parsed(CACurrentMediaTime() - started) } } }
-        var seen: [String: Int] = [:]
-        let blocks = blocks(Document(parsing: source), seen: &seen)
+        // 公式先换成占位符再解析（见 `MarkdownMath`），行内拼字时再换回来。
+        let math = MarkdownMath.extract(source)
+        var context = Context(seen: [:], formulas: math.formulas)
+        let blocks = blocks(Document(parsing: math.source), context: &context)
         var sections: [Int: (end: Int, long: Bool)] = [:]
         for (index, block) in blocks.enumerated() {
             guard let level = block.headingLevel else { continue }
@@ -269,46 +281,53 @@ indirect enum MarkdownBlock {
         RichText.prewarm(parse(source), source: source, size: size)
     }
 
-    private static func blocks(_ node: Markup, seen: inout [String: Int]) -> [MarkdownBlock] {
-        node.children.compactMap { block($0, seen: &seen) }
+    /// 解析时一路带着的东西：同名标题出现了几次（折叠键用），和这篇正文里的公式。
+    private struct Context {
+        var seen: [String: Int]
+        let formulas: [MarkdownMath.Formula]
     }
 
-    private static func block(_ node: Markup, seen: inout [String: Int]) -> MarkdownBlock? {
+    private static func blocks(_ node: Markup, context: inout Context) -> [MarkdownBlock] {
+        node.children.compactMap { block($0, context: &context) }
+    }
+
+    private static func block(_ node: Markup, context: inout Context) -> MarkdownBlock? {
+        let formulas = context.formulas
         switch node {
         case let heading as Heading:
             // 折叠键和 Mac 一样：级别 + 标题文字 + 同名标题的出现次序。
-            let name = "h\(heading.level):\(heading.plainText.trimmingCharacters(in: .whitespaces))"
-            let occurrence = seen[name, default: 0]
-            seen[name] = occurrence + 1
-            return .heading(heading.level, inline(heading), key: "\(name)#\(occurrence)", line: heading.range?.lowerBound.line ?? 0)
+            let name = "h\(heading.level):\(MarkdownMath.restore(heading.plainText, formulas: formulas).trimmingCharacters(in: .whitespaces))"
+            let occurrence = context.seen[name, default: 0]
+            context.seen[name] = occurrence + 1
+            return .heading(heading.level, inline(heading, formulas: formulas), key: "\(name)#\(occurrence)", line: heading.range?.lowerBound.line ?? 0)
         case let paragraph as Paragraph:
-            return .paragraph(inline(paragraph))
+            return .paragraph(inline(paragraph, formulas: formulas))
         case let list as OrderedList:
-            return .list(items(list, seen: &seen), start: Int(list.startIndex))
+            return .list(items(list, context: &context), start: Int(list.startIndex))
         case let list as UnorderedList:
-            return .list(items(list, seen: &seen), start: nil)
+            return .list(items(list, context: &context), start: nil)
         case let quote as BlockQuote:
-            return .quote(blocks(quote, seen: &seen))
+            return .quote(blocks(quote, context: &context))
         case let code as CodeBlock:
             return .code(language: code.language?.nilIfEmpty, code.code.hasSuffix("\n") ? String(code.code.dropLast()) : code.code)
         case let table as Markdown.Table:
-            let header = table.head.children.map { inline($0) }
-            let rows = table.body.children.map { row in row.children.map { inline($0) } }
+            let header = table.head.children.map { inline($0, formulas: formulas) }
+            let rows = table.body.children.map { row in row.children.map { inline($0, formulas: formulas) } }
             return .table(header: header, rows: rows)
         case is ThematicBreak:
             return .rule
         case let html as HTMLBlock:
             return .html(html.rawHTML)
         default:
-            let nested = blocks(node, seen: &seen)
+            let nested = blocks(node, context: &context)
             return nested.isEmpty ? nil : .quote(nested)
         }
     }
 
-    private static func items(_ list: Markup, seen: inout [String: Int]) -> [Item] {
+    private static func items(_ list: Markup, context: inout Context) -> [Item] {
         list.children.compactMap { child in
             guard let item = child as? ListItem else { return nil }
-            return Item(checkbox: item.checkbox.map { $0 == .checked }, line: item.range?.lowerBound.line ?? 0, blocks: blocks(item, seen: &seen))
+            return Item(checkbox: item.checkbox.map { $0 == .checked }, line: item.range?.lowerBound.line ?? 0, blocks: blocks(item, context: &context))
         }
     }
 
@@ -316,14 +335,38 @@ indirect enum MarkdownBlock {
 
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
-    static func inline(_ node: Markup) -> AttributedString {
-        var result = AttributedString()
-        for child in node.children { result += span(child, intent: []) }
-        return detectLinks(result)
+    static func inline(_ node: Markup, formulas: [MarkdownMath.Formula] = []) -> AttributedString {
+        detectLinks(spans(node, intent: [], formulas: formulas))
     }
 
-    private static func span(_ node: Markup, intent: InlinePresentationIntent) -> AttributedString {
-        if let text = node as? Markdown.Text { return styled(text.string, intent) }
+    private static func spans(_ node: Markup, intent: InlinePresentationIntent, formulas: [MarkdownMath.Formula]) -> AttributedString {
+        var value = AttributedString()
+        let children = Array(node.children)
+        for (index, child) in children.enumerated() {
+            // 跨行公式后面几行只剩续行字符：它前面的换行也不要。
+            if child is SoftBreak || child is LineBreak, index + 1 < children.count,
+               (children[index + 1] as? Markdown.Text)?.string.first == MarkdownMath.continuation { continue }
+            value += span(child, intent: intent, formulas: formulas)
+        }
+        return value
+    }
+
+    private static func span(_ node: Markup, intent: InlinePresentationIntent, formulas: [MarkdownMath.Formula]) -> AttributedString {
+        if let text = node as? Markdown.Text {
+            guard !formulas.isEmpty || text.string.contains(MarkdownMath.continuation) else { return styled(text.string, intent) }
+            var value = AttributedString()
+            for piece in MarkdownMath.pieces(text.string, formulas: formulas) {
+                switch piece {
+                case .text(let string): value += styled(string, intent)
+                case .formula(let formula):
+                    // 字面上是公式原文（SwiftUI 的 `Text` 画不了公式时显示它），`RichText` 认这个属性排成公式。
+                    var math = styled(formula.source, intent)
+                    math[MathFormulaAttribute.self] = formula
+                    value += math
+                }
+            }
+            return value
+        }
         if node is SoftBreak || node is LineBreak { return styled("\n", intent) }
         if let code = node as? InlineCode {
             var value = styled(code.code, intent.union(.code))
@@ -335,8 +378,7 @@ indirect enum MarkdownBlock {
         if node is Strong { childIntent.insert(.stronglyEmphasized) }
         if node is Emphasis { childIntent.insert(.emphasized) }
         if node is Strikethrough { childIntent.insert(.strikethrough) }
-        var value = AttributedString()
-        for child in node.children { value += span(child, intent: childIntent) }
+        var value = spans(node, intent: childIntent, formulas: formulas)
         if let image = node as? Markdown.Image {
             value = styled("🖼 " + (value.characters.isEmpty ? (image.source ?? "") : String(value.characters)), intent)
         }
@@ -366,7 +408,7 @@ indirect enum MarkdownBlock {
                   let range = Range(match.range, in: text),
                   let lower = AttributedString.Index(range.lowerBound, within: result),
                   let upper = AttributedString.Index(range.upperBound, within: result),
-                  result[lower..<upper].link == nil else { continue }
+                  result[lower..<upper].link == nil, result[lower..<upper].runs[MathFormulaAttribute.self].allSatisfy({ $0.0 == nil }) else { continue }
             result[lower..<upper].link = url
             result[lower..<upper].foregroundColor = Palette.accent
         }
@@ -382,12 +424,17 @@ private struct BlockView: View {
     var body: some View {
         switch block {
         case .heading(let level, let text, _, _):
-            Text(text)
+            Text(markdown: text, size: size + CGFloat(max(1, 7 - level)) * 1.6)
                 .font(.system(size: size + CGFloat(max(1, 7 - level)) * 1.6, weight: .bold))
                 .foregroundStyle(Palette.heading(level))
         case .paragraph(let text):
             if text.characters.count > LongParagraph.threshold, text.characters.contains("\n") {
                 LongParagraph(text: text, size: size)
+            } else if text.containsMath {
+                // 引用、待办列表里的段落：公式只有 `RichText` 排得出来。按第一行的基线和列表记号对齐。
+                let rich = RichText.lines(text, size: size)
+                RichTextView(text: rich, size: size)
+                    .alignmentGuide(.firstTextBaseline) { rich.layout(width: $0.width).firstBaseline }
             } else {
                 Text(text).font(.system(size: size)).foregroundStyle(Palette.ink).lineSpacing(size * 0.25)
                     .fixedSize(horizontal: false, vertical: true)
@@ -400,7 +447,7 @@ private struct BlockView: View {
                         VStack(alignment: .leading, spacing: size * 0.35) {
                             ForEach(Array(item.blocks.enumerated()), id: \.offset) { _, child in
                                 if item.checkbox == true, case .paragraph(let text) = child {
-                                    Text(text).font(.system(size: size)).strikethrough().foregroundStyle(Palette.muted)
+                                    Text(markdown: text, size: size).font(.system(size: size)).strikethrough().foregroundStyle(Palette.muted)
                                 } else {
                                     BlockView(block: child, size: size, toggleTask: toggleTask)
                                 }
@@ -459,7 +506,7 @@ private struct BlockView: View {
     }
 
     private func tableCell(_ text: AttributedString, header: Bool) -> some View {
-        Text(text)
+        Text(markdown: text, size: size * 0.9)
             .font(.system(size: size * 0.9, weight: header ? .semibold : .regular))
             .padding(.horizontal, 8).padding(.vertical, 6)
             .frame(minWidth: 60, maxWidth: 240, alignment: .leading)

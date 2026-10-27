@@ -25,12 +25,19 @@ enum MarkdownText {
     /// `folds` 不为 nil 时顶层标题可以折叠：里面是收起的标题键，收起的标题下面到下一个同级或更高级标题为止都不显示。
     /// `boardFolds` 不为 nil 时按工作板的折叠画（见 `BoardFoldMarks`）。
     static func render(_ source: String, color: NSColor, fontSize: CGFloat, monospaced: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing, scale: CGFloat = UIScale.factor, document: Document? = nil, interactiveTasks: Bool = false, folds: Set<String>? = nil, boardFolds: BoardFoldMarks? = nil) -> NSAttributedString {
+        let math = MarkdownMath.extract(source)
         let renderer = Renderer(color: color, size: fontSize * scale, monospaced: monospaced, lineSpacing: lineSpacing, interactiveTasks: interactiveTasks)
         renderer.folds = folds
         renderer.boardFolds = boardFolds
-        renderer.sourceLines = source.components(separatedBy: "\n")
-        renderer.blocks(document ?? Document(parsing: source))
+        renderer.formulas = math.formulas
+        renderer.sourceLines = math.source.components(separatedBy: "\n")
+        renderer.blocks(document ?? Document(parsing: math.source))
         return renderer.output
+    }
+
+    /// 解析正文：公式先换成占位符（见 `MarkdownMath`），交给 `render(document:)` 时必须用这个解析。
+    static func parse(_ source: String) -> Document {
+        Document(parsing: MarkdownMath.extract(source).source)
     }
 
     private final class Renderer {
@@ -44,6 +51,7 @@ enum MarkdownText {
         var sourceLines: [String] = []
         var folds: Set<String>?
         var boardFolds: BoardFoldMarks?
+        var formulas: [MarkdownMath.Formula] = []
         init(color: NSColor, size: CGFloat, monospaced: Bool, lineSpacing: CGFloat, interactiveTasks: Bool) {
             self.color = color
             self.size = size
@@ -67,7 +75,17 @@ enum MarkdownText {
 
         func inline(_ node: Markup, font: NSFont? = nil) -> NSMutableAttributedString {
             let font = font ?? self.font
-            if let node = node as? Markdown.Text { return text(node.string, font: font) }
+            if let node = node as? Markdown.Text {
+                guard !formulas.isEmpty || node.string.contains(MarkdownMath.continuation) else { return text(node.string, font: font) }
+                let result = text("", font: font)
+                for piece in MarkdownMath.pieces(node.string, formulas: formulas) {
+                    switch piece {
+                    case .text(let value): result.append(text(value, font: font))
+                    case .formula(let formula): result.append(math(formula, font: font))
+                    }
+                }
+                return result
+            }
             if node is SoftBreak || node is LineBreak { return text("\n", font: font) }
             if let node = node as? InlineCode {
                 let result = text(node.code, font: .monospacedSystemFont(ofSize: font.pointSize, weight: .regular))
@@ -79,13 +97,27 @@ enum MarkdownText {
             if node is Strong { childFont = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) }
             if node is Emphasis { childFont = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
             let result = text("")
-            for child in node.children { result.append(inline(child, font: childFont)) }
+            let children = Array(node.children)
+            for (index, child) in children.enumerated() {
+                // 跨行公式后面几行只剩续行字符：它前面的换行也不要。
+                if child is SoftBreak || child is LineBreak, index + 1 < children.count,
+                   (children[index + 1] as? Markdown.Text)?.string.first == MarkdownMath.continuation { continue }
+                result.append(inline(child, font: childFont))
+            }
             if node is Strikethrough { result.addAttribute(.strikethroughStyle, value: 1, range: result.fullRange) }
             let destination = (node as? Link)?.destination ?? (node as? Markdown.Image)?.source
             if let destination, let url = TaskText.linkURL(destination) {
                 if result.length == 0 { result.append(text(destination, font: font)) }
                 result.addAttributes([.link: url, .foregroundColor: NativePalette.accent, .underlineStyle: 1, .cursor: NSCursor.pointingHand], range: result.fullRange)
             }
+            return result
+        }
+
+        /// 公式附件；排不出来时显示原文（等宽、淡底色，和行内代码一样）。
+        func math(_ formula: MarkdownMath.Formula, font: NSFont) -> NSMutableAttributedString {
+            if let attachment = MathAttachment.string(formula, fontSize: font.pointSize, color: color, font: font) { return attachment }
+            let result = text(formula.source, font: .monospacedSystemFont(ofSize: font.pointSize, weight: .regular))
+            result.addAttribute(.backgroundColor, value: color.withAlphaComponent(0.08), range: result.fullRange)
             return result
         }
 
@@ -100,7 +132,26 @@ enum MarkdownText {
             }
             content.append(text("\n"))
             content.addAttribute(.paragraphStyle, value: style, range: content.fullRange)
+            centerDisplayMath(content, style: style)
             output.append(content)
+        }
+
+        /// 独占一行的独立公式居中，上下多留一点空。
+        func centerDisplayMath(_ content: NSMutableAttributedString, style: NSParagraphStyle) {
+            guard !formulas.isEmpty else { return }
+            let string = content.string as NSString
+            content.enumerateAttribute(MathAttachment.displayKey, in: content.fullRange) { value, range, _ in
+                guard value != nil else { return }
+                let line = string.paragraphRange(for: range)
+                let rest = string.substring(with: line).replacingOccurrences(of: "\u{FFFC}", with: "")
+                guard rest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      let centered = style.mutableCopy() as? NSMutableParagraphStyle else { return }
+                centered.alignment = .center
+                centered.firstLineHeadIndent = style.headIndent
+                centered.paragraphSpacingBefore = max(style.paragraphSpacingBefore, 4)
+                centered.paragraphSpacing = max(style.paragraphSpacing, 6)
+                content.addAttribute(.paragraphStyle, value: centered, range: line)
+            }
         }
 
         func blocks(_ node: Markup, indent: CGFloat = 0) {
@@ -129,7 +180,7 @@ enum MarkdownText {
                     continue
                 }
                 guard foldable, let heading = child as? Heading else { block(child, indent: indent); continue }
-                let name = "h\(heading.level):\(heading.plainText.trimmingCharacters(in: .whitespaces))"
+                let name = "h\(heading.level):\(MarkdownMath.restore(heading.plainText, formulas: formulas).trimmingCharacters(in: .whitespaces))"
                 let occurrence = seen[name, default: 0]
                 seen[name] = occurrence + 1
                 let key = "\(name)#\(occurrence)"

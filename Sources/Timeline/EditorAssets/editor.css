@@ -94,3 +94,9 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 #editor .cm-line.cm-search-line { background: color-mix(in srgb, var(--accent) 12%, transparent); animation: board-search-fade 2.4s ease-out forwards; }
 .cm-search-hit { background: color-mix(in srgb, var(--accent) 38%, transparent); border-radius: 3px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 38%, transparent); }
 @keyframes board-search-fade { 0%, 60% { background: color-mix(in srgb, var(--accent) 16%, transparent); } 100% { background: transparent; } }
+/* 公式（KaTeX，出现公式时才加载）：行内公式跟着正文走；独立公式居中、上下留空，太宽时横向滚动。 */
+.cm-math { cursor: text; }
+.cm-math .katex { font-size: 1.1em; }
+.cm-math-display { display: inline-block; width: 100%; text-align: center; }
+.cm-math-display .katex-display, .cm-math-block .katex-display { margin: 0.35em 0; }
+.cm-math-block { padding: 0.15em 0; overflow-x: auto; overflow-y: hidden; text-align: center; }

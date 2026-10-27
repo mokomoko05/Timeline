@@ -302,6 +302,8 @@ struct FocusRunSummary: View {
     @Environment(\.typography) private var typography
     let run: FocusRun
     let folded: Bool
+    /// 后面还有记录：左边那根线从小结旁边穿过去，不在这里断开。
+    var continues = false
     let toggle: () -> Void
 
     var body: some View {
@@ -338,6 +340,16 @@ struct FocusRunSummary: View {
                 .strokeBorder(Palette.accent.opacity(0.18), lineWidth: Metrics.hairline))
         }
         .padding(.horizontal, 8).padding(.bottom, 12)
+        .overlay(alignment: .leading) {
+            if continues {
+                // 和 NoteThreadRow 的线同一个位置、同一种画法：上接结束那一条，下接下一条。
+                // 上面那条记录的线会往下伸出 6 点，这里让开，半透明的线不叠出深色的一截。
+                Rectangle().fill(Palette.line.opacity(0.7)).frame(width: 1)
+                    .padding(.top, 6)
+                    .padding(.leading, 8 + NoteThread.axisX - 0.5)
+                    .allowsHitTesting(false).accessibilityHidden(true)
+            }
+        }
         .accessibilityElement(children: .combine)
     }
 }

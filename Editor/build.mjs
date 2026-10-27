@@ -1,10 +1,18 @@
 import {build} from "esbuild";
-import {readFile, readdir, writeFile} from "node:fs/promises";
+import {copyFile, mkdir, readFile, readdir, rm, writeFile} from "node:fs/promises";
 import {resolve} from "node:path";
 
 const output = resolve("../Sources/Timeline/EditorAssets");
 await build({entryPoints: ["src/editor.js"], bundle: true, minify: true, format: "iife", target: "safari16",
              outfile: resolve(output, "editor.js"), legalComments: "external"});
+// KaTeX 单独放（工作板里出现公式时才加载）；字体只带 woff2。
+const katex = resolve(output, "katex");
+await rm(katex, {recursive: true, force: true});
+await mkdir(resolve(katex, "fonts"), {recursive: true});
+for (const name of ["katex.min.js", "katex.min.css"]) await copyFile(resolve("node_modules/katex/dist", name), resolve(katex, name));
+for (const name of (await readdir("node_modules/katex/dist/fonts")).filter(name => name.endsWith(".woff2"))) {
+  await copyFile(resolve("node_modules/katex/dist/fonts", name), resolve(katex, "fonts", name));
+}
 const lock = JSON.parse(await readFile("package-lock.json", "utf8"));
 const notices = [];
 for (const [path, entry] of Object.entries(lock.packages)) {

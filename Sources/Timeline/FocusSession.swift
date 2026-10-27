@@ -627,10 +627,12 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
     private func showPanel(size: NSSize) {
         let created = panel == nil
         if panel == nil {
-            let content = FocusPanelView(session: session, close: { [weak self] in
+            var content = FocusPanelView(session: session, close: { [weak self] in
                     self?.workspaceShown = false
                     self?.refresh()
                 }, resize: { [weak self] size in self?.resize(to: size) })
+            content.takeKeyboard = { [weak self] in self?.takeKeyboard() }
+            content.releaseKeyboard = { [weak self] in self?.releaseKeyboard() }
             let host = NSHostingView(rootView: LocalizedRoot { content })
             // 窗口大小和位置只由 resize(to:) 决定（收起时要贴边）；宿主视图自己改窗口大小会保留原来的左边，
             // 小胶囊就停在面板原来的位置上。
@@ -668,6 +670,24 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         if Headless.active { panel.alphaValue = 0; panel.ignoresMouseEvents = true }
         if !panel.isVisible { panel.orderFrontRegardless() }
     }
+
+    /// 悬停展开小伙伴时直接接管键盘，输入框立刻能打字。面板不激活应用，前台应用不变。
+    private func takeKeyboard() {
+        guard let panel, panel.isVisible, !Headless.active, !panel.isKeyWindow else { return }
+        keyboardTaken = true
+        panel.makeKey()
+    }
+
+    /// 悬停展开后又收回小伙伴（什么也没写）：把键盘还给前台应用，接着在原来的地方打字。
+    private func releaseKeyboard() {
+        guard keyboardTaken else { return }
+        keyboardTaken = false
+        guard let panel, panel.isKeyWindow, !NSApp.isActive,
+              let front = NSWorkspace.shared.frontmostApplication, front != .current else { return }
+        front.activate(options: [])
+    }
+
+    private var keyboardTaken = false
 
     /// 默认贴在屏幕右下角：靠右边、靠底边。
     private func defaultFrame(for size: NSSize) -> NSRect {
@@ -943,6 +963,10 @@ struct FocusPanelView: View {
     @StateObject private var reflectionDraft = FocusNoteDraft()
     @StateObject private var mention = MentionState()
 
+    /// 悬停展开小伙伴时让面板接管键盘（输入框直接能打字）；收回时还回去。由控制器提供。
+    var takeKeyboard: () -> Void = {}
+    var releaseKeyboard: () -> Void = {}
+
     init(session: FocusSession, close: @escaping () -> Void = {}, resize: @escaping (CGSize) -> Void = { _ in }) {
         self.session = session
         self.close = close
@@ -1067,7 +1091,15 @@ struct FocusPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: anchor)
         .onHover { inside in
             if inside {
-                if !hoverSuppressed { expand() }
+                if !hoverSuppressed {
+                    // 从小伙伴展开：面板先接管键盘，展开后的记笔记输入框直接拿到光标，不用再点两下。
+                    let fromCompanion = showsCompanion
+                    expand()
+                    if fromCompanion {
+                        focused = true
+                        takeKeyboard()
+                    }
+                }
             } else {
                 hoverSuppressed = false
                 if !pinnedOpen { scheduleCollapse() }
@@ -1140,6 +1172,7 @@ struct FocusPanelView: View {
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
             expanded = false
+            if showsCompanion { releaseKeyboard() }
         }
     }
 

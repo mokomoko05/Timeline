@@ -465,7 +465,7 @@ struct UnifiedJournalView: View {
                                 journalRow(log, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id])
                                     .id(log.id)
                                 if let run = summaries[log.id] {
-                                    FocusRunSummary(run: run, folded: foldedRuns.contains(run.id)) {
+                                    FocusRunSummary(run: run, folded: foldedRuns.contains(run.id), continues: index < logs.count - 1) {
                                         withAnimation(Motion.quick) {
                                             if foldedRuns.contains(run.id) { foldedRuns.remove(run.id) } else { foldedRuns.insert(run.id) }
                                         }

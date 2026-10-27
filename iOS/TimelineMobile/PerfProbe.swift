@@ -41,8 +41,8 @@ enum PerfProbe {
     /// 主线程上现解析 Markdown 花的时间，卡顿时一起报出来。
     static func parsed(_ seconds: CFTimeInterval) { if enabled { parsing += seconds } }
 
-    private static var typesetting: CFTimeInterval = 0
-    private static var drawing: CFTimeInterval = 0
+    fileprivate static var typesetting: CFTimeInterval = 0
+    fileprivate static var drawing: CFTimeInterval = 0
 
     /// 主线程上现排 / 画 `RichText` 花的时间。
     static func typeset(_ seconds: CFTimeInterval) { if enabled { typesetting += seconds } }
@@ -67,11 +67,16 @@ enum PerfProbe {
         for (index, title) in titles.enumerated() {
             _ = store.addParsedTodo(title, on: Date(), priority: index % 4 == 0 ? .high : .normal)
         }
-        for text in ["今天把同步的问题查清楚了 #工作", "跑了 5 公里 #健康", "读书笔记：第二章讲的是排版 #学习"] {
+        for text in ["今天把同步的问题查清楚了 #工作", "跑了 5 公里 #健康", "读书笔记：第二章讲的是排版 #学习", demoMath] {
             _ = try? store.quickLog(text, on: Date())
         }
         store.save()
     }
+
+    /// 带公式的日志：测公式排版的开销。
+    private static let demoMath = (0..<12).map { index in
+        "第 \(index + 1) 条：设 $x_\(index) = \\alpha^{\(index)} + \\beta$，则\n\n$$\n\\sum_{k=1}^{\(index + 2)} \\frac{x_k^2}{\\sqrt{k+\(index)}} = \\int_0^{\\infty} e^{-t^{\(index % 3 + 1)}}\\,dt\n$$"
+    }.joined(separator: "\n\n") + "\n\n> 引用里的公式 $e^{i\\pi}+1=0$\n\n- [ ] 待办里的公式 $a^2+b^2=c^2$ #学习"
 
     /// 截图检查用（`-demoFocus YES`）：启动一秒后对第一个未完成的待办开始专注。
     static func demoFocus(_ focus: FocusTimer) {
@@ -313,6 +318,10 @@ private final class Scroller: NSObject {
         self.view = view
         super.init()
         view.setContentOffset(CGPoint(x: 0, y: -view.adjustedContentInset.top), animated: false)
+        MainActor.assumeIsolated {
+            PerfProbe.typesetting = 0
+            PerfProbe.drawing = 0
+        }
         link = CADisplayLink(target: self, selector: #selector(step(_:)))
         link?.add(to: .main, forMode: .common)
         print("[perf] 开始滚动：内容高 \(Int(view.contentSize.height))")
@@ -323,7 +332,10 @@ private final class Scroller: NSObject {
         guard last > 0 else { interval = link.targetTimestamp - link.timestamp; return }
         let gap = link.timestamp - last
         frames += 1
-        if gap > interval * 1.5 { slow += 1 }
+        if gap > interval * 1.5 {
+            slow += 1
+            print(String(format: "[perf]   第 %d 帧掉帧 %.0f ms（滚到 %d）", frames, gap * 1000, Int(view.contentOffset.y)))
+        }
         worst = max(worst, gap)
         let top = -view.adjustedContentInset.top
         let bottom = view.contentSize.height - view.bounds.height + view.adjustedContentInset.bottom
@@ -332,7 +344,9 @@ private final class Scroller: NSObject {
         if !down, y <= top {
             y = top
             link.invalidate()
-            print(String(format: "[perf] 滚动全文：%d 帧，掉帧 %d 帧，最长一帧 %.0f ms，内容高 %d", frames, slow, worst * 1000, Int(view.contentSize.height)))
+            print(String(format: "[perf] 滚动全文：%d 帧，掉帧 %d 帧，最长一帧 %.0f ms，内容高 %d；主线程排正文 %.1f ms，画正文 %.1f ms",
+                         frames, slow, worst * 1000, Int(view.contentSize.height),
+                         MainActor.assumeIsolated { PerfProbe.typesetting } * 1000, MainActor.assumeIsolated { PerfProbe.drawing } * 1000))
         }
         view.contentOffset.y = y
     }

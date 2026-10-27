@@ -100,7 +100,7 @@ struct TaskLinkText: NSViewRepresentable {
             if let key, let hit = TextRenderCache.shared.entry(for: key) {
                 entry = hit
             } else {
-                if markdown, view.markdownDocument == nil { view.markdownDocument = Document(parsing: source) }
+                if markdown, view.markdownDocument == nil { view.markdownDocument = MarkdownText.parse(source) }
                 if !markdown, view.inlineText == nil { view.inlineText = NSAttributedString(TaskText.rendered(source, alias: displayName)) }
                 let styled = markdown
                     ? MarkdownText.render(source, color: foreground, fontSize: fontSize, monospaced: monospaced, lineSpacing: typography.lineSpacing, scale: typography.scale, document: view.markdownDocument, interactiveTasks: view.interactiveTasks, folds: folds, boardFolds: boardFolds)

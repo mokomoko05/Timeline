@@ -16,6 +16,8 @@ final class RichText: @unchecked Sendable {
         let manager = NSLayoutManager()
         let container: NSTextContainer
         let height: CGFloat
+        /// 第一行基线离顶边的距离：放在列表记号旁边时按它对齐。
+        let firstBaseline: CGFloat
 
         init(_ string: NSAttributedString, width: CGFloat) {
             storage = NSTextStorage(attributedString: string)
@@ -26,6 +28,8 @@ final class RichText: @unchecked Sendable {
             storage.addLayoutManager(manager)
             manager.ensureLayout(for: container)
             height = ceil(manager.usedRect(for: container).height)
+            firstBaseline = storage.length == 0 ? 0
+                : manager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).minY + manager.location(forGlyphAt: 0).y
         }
 
         func draw(_ rect: CGRect) {
@@ -86,6 +90,7 @@ final class RichText: @unchecked Sendable {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = size * 0.25
         string.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: string.length))
+        MathAttachment.centerDisplayMath(string, size: size)
         let result = RichText(string)
         if cache.count > 800 { cache.removeAll() }
         cache[key] = result
@@ -146,6 +151,7 @@ final class RichText: @unchecked Sendable {
             }
             line.append(text)
             line.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: line.length))
+            MathAttachment.centerDisplayMath(line, size: size)
             result.append(line)
         }
 
@@ -232,11 +238,30 @@ final class RichText: @unchecked Sendable {
         return result
     }
 
-    /// 行内格式：加粗、斜体、删除线、行内代码、链接。段落里的换行换成行分隔符，不另起一段（缩进和段距不乱）。
+    /// 行内格式：加粗、斜体、删除线、行内代码、链接、公式。段落里的换行换成行分隔符，不另起一段（缩进和段距不乱）；
+    /// 只有独立公式前后的换行是真的分段，公式自成一段才能居中。
     private static func inline(_ text: AttributedString, size: CGFloat, color: UIColor) -> NSAttributedString {
         let result = NSMutableAttributedString()
+        var breakAfterDisplay = false
         for run in text.runs {
-            let value = String(text.characters[run.range]).replacingOccurrences(of: "\n", with: "\u{2028}")
+            var value = String(text.characters[run.range]).replacingOccurrences(of: "\n", with: "\u{2028}")
+            if breakAfterDisplay, value.hasPrefix("\u{2028}") { value = "\n" + value.dropFirst() }
+            breakAfterDisplay = false
+            if let formula = run[MathFormulaAttribute.self] {
+                let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: size), .foregroundColor: color]
+                if let math = MathAttachment.string(formula, size: size, color: color, attributes: attributes) {
+                    if formula.display {
+                        if result.string.hasSuffix("\u{2028}") { result.replaceCharacters(in: NSRange(location: result.length - 1, length: 1), with: "\n") }
+                        breakAfterDisplay = true
+                    }
+                    result.append(math)
+                } else {
+                    // 排不出来：显示原文，样子和行内代码一样。
+                    result.append(NSAttributedString(string: value, attributes: [.font: UIFont.monospacedSystemFont(ofSize: size * 0.92, weight: .regular),
+                                                                                  .foregroundColor: color, .backgroundColor: UIColor(Palette.muted).withAlphaComponent(0.15)]))
+                }
+                continue
+            }
             let intent = run.inlinePresentationIntent ?? []
             var font = intent.contains(.code) ? UIFont.monospacedSystemFont(ofSize: size, weight: .regular) : UIFont.systemFont(ofSize: size)
             var traits: UIFontDescriptor.SymbolicTraits = []
