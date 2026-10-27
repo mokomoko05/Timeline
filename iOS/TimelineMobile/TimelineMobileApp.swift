@@ -115,6 +115,7 @@ struct RootView: View {
             if let start = UserDefaults.standard.string(forKey: "startTab").flatMap(Tab.init(rawValue:)) { tab = start }
             else if !sync.isConfigured { tab = .settings }
             if #available(iOS 18.0, *), tab == .settings { tab = .tasks; showingSettings = true }
+            PerfProbe.seedDemo(store)
             PerfProbe.start()
             prewarmJournal()
             PerfProbe.runScript { tab = $0 }

@@ -10,6 +10,8 @@ struct AutoFocusTextView: UIViewRepresentable {
     var minLines = 1
     var maxLines = 8
     var submit: (() -> Void)?
+    /// 输入 `@` / `#` 时弹出的补全：改字、挪光标时报给它。
+    var mention: MentionModel?
 
     func makeUIView(context: Context) -> AutoFocusUITextView {
         let view = AutoFocusUITextView()
@@ -23,6 +25,13 @@ struct AutoFocusTextView: UIViewRepresentable {
         view.placeholder.text = placeholder
         view.text = text
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        if let mention {
+            mention.textView = view
+            mention.textEdited = { [weak view, coordinator = context.coordinator] in
+                guard let view else { return }
+                coordinator.textViewDidChange(view)
+            }
+        }
         return view
     }
 
@@ -60,6 +69,11 @@ struct AutoFocusTextView: UIViewRepresentable {
             (textView as? AutoFocusUITextView)?.placeholder.isHidden = !textView.text.isEmpty
             parent.text = textView.text
             textView.invalidateIntrinsicContentSize()
+            parent.mention?.update(textView)
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            parent.mention?.update(textView)
         }
     }
 }

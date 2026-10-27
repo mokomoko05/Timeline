@@ -315,3 +315,10 @@
 "选择文字" = "Select Text";
 "显示排版" = "Show Formatted";
 "显示原文" = "Show Markdown";
+"加标签" = "Add Tag";
+"新建标签" = "New Tag";
+"空标签" = "Empty tag";
+"%lld 待办 · %lld 笔记" = "%lld tasks · %lld notes";
+"关联待办候选" = "Task suggestions";
+"标签候选" = "Tag suggestions";
+"写点什么… @ 关联待办 · # 标签" = "Write something… @ task · # tag";

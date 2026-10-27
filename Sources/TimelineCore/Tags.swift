@@ -312,17 +312,30 @@ enum LinkMatcher {
     /// 质量：0 编号精确；1 标题开头或某个词开头；2 标题 / 标签包含；3 拼音或首字母；4 漏字模糊（最差）。
     static let fuzzy = 4
 
-    private struct Pinyin { let full: String; let initials: String }
+    private struct Pinyin: Sendable { let full: String; let initials: String }
     private static var cache: [String: Pinyin] = [:]
 
     private static func pinyin(_ title: String) -> Pinyin {
         if let hit = cache[title] { return hit }
-        let latin = (title.applyingTransform(.mandarinToLatin, reverse: false) ?? title).applyingTransform(.stripDiacritics, reverse: false) ?? title
-        let words = latin.lowercased().split(whereSeparator: { $0.isWhitespace })
-        let entry = Pinyin(full: words.joined(), initials: String(words.compactMap(\.first)))
+        let entry = transliterate(title)
         if cache.count > 4000 { cache.removeAll() }
         cache[title] = entry
         return entry
+    }
+
+    private nonisolated static func transliterate(_ title: String) -> Pinyin {
+        let latin = (title.applyingTransform(.mandarinToLatin, reverse: false) ?? title).applyingTransform(.stripDiacritics, reverse: false) ?? title
+        let words = latin.lowercased().split(whereSeparator: { $0.isWhitespace })
+        return Pinyin(full: words.joined(), initials: String(words.compactMap(\.first)))
+    }
+
+    /// 拼音转写每个标题要几毫秒，第一次按拼音搜时几百个待办一起转会卡一下：在后台先转好放进缓存。
+    static func warm(_ titles: [String]) async {
+        let missing = Array(Set(titles.filter { cache[$0] == nil }))
+        guard !missing.isEmpty else { return }
+        let computed = await Task.detached(priority: .userInitiated) { missing.map { ($0, transliterate($0)) } }.value
+        if cache.count + computed.count > 4000 { cache.removeAll() }
+        for (title, entry) in computed where cache[title] == nil { cache[title] = entry }
     }
 
     static func quality(of item: ScheduledTask, query: String, number: Int?) -> Int? {
@@ -360,6 +373,14 @@ enum LinkMatcher {
             if !found { return false }
         }
         return true
+    }
+}
+
+extension JournalStore {
+    /// 打开输入框时调一次：把 `@` / `#` 补全按拼音搜要用的转写在后台先算好。
+    public func warmLinkMatching() async {
+        let titles = tasks().map { String(TaskText.rendered($0.task.title, alias: $0.task.calendarName).characters) } + allTags().map(\.name)
+        await LinkMatcher.warm(titles)
     }
 }
 

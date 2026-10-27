@@ -475,10 +475,12 @@ struct ComposeSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
     @State private var linked: UUID?
-    @State private var choices: [TaskChoice] = []
-    /// 用 # 按钮加上的标签（正文里写的 #标签 发送时另外解析）。
+    /// 关联的待办的标题：选的时候记一次，打字时不用每次去找。
+    @State private var linkedTitle = ""
+    /// 用 `@` / `#` 列表选的标签（正文里写的 #标签 发送时另外解析）。
     @State private var pickedTags: [String] = []
-    @State private var tagChoices: [String] = []
+    /// 不订阅：只有列表订阅它，打字时这一页不会因为补全重算。
+    @State private var mention = MentionModel()
     @State private var images: [String] = []
     @State private var picked: [PhotosPickerItem] = []
     @State private var error: String?
@@ -515,10 +517,17 @@ struct ComposeSheet: View {
     private var canSend: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty }
 
     @ViewBuilder private func fields(maxLines: Int) -> some View {
-        AutoFocusTextView(text: $text, placeholder: L("写点什么… 支持 Markdown 和 #标签"), minLines: 4, maxLines: maxLines)
-        if !tags.isEmpty || !pickedTags.isEmpty {
+        // 列表贴在输入框上面：卡片往上长，正在打字的那一行不动。
+        MentionList(model: mention, store: store)
+        AutoFocusTextView(text: $text, placeholder: L("写点什么… @ 关联待办 · # 标签"), minLines: 4, maxLines: maxLines, mention: mention)
+        if linked != nil || !tags.isEmpty || !pickedTags.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
+                    if linked != nil {
+                        Button { linked = nil } label: { Chip(text: "@ " + linkedTitle + " ×", color: Palette.accent) }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(L("不关联"))
+                    }
                     ForEach(tags, id: \.self) { Chip(text: "#" + $0, color: Palette.note) }
                     ForEach(pickedTags, id: \.self) { tag in
                         Button { pickedTags.removeAll { TagText.key($0) == TagText.key(tag) } } label: {
@@ -532,8 +541,9 @@ struct ComposeSheet: View {
         if !images.isEmpty { ImageStrip(store: store, names: images) }
         if let error { Text(error).font(.caption).foregroundStyle(Palette.danger) }
         HStack(spacing: 16) {
-            TaskChoiceMenu(choices: choices, linked: $linked)
-            TagChoiceMenu(choices: tagChoices, fixed: tags, picked: $pickedTags)
+            // 两个按钮在光标处插入 `@` / `#`：弹出同一个列表，接着打字就是搜索。
+            Button { mention.start(.task) } label: { Label("关联待办", systemImage: "at") }
+            Button { mention.start(.tag) } label: { Label("标签", systemImage: "number") }
             PhotosPicker(selection: $picked, maxSelectionCount: 6, matching: .images) {
                 Label("图片", systemImage: "photo")
             }
@@ -543,9 +553,21 @@ struct ComposeSheet: View {
     }
 
     private func load() {
-        linked = taskID
-        choices = TaskChoice.open(in: store, including: taskID)
-        tagChoices = store.allTags().map(\.name)
+        if let taskID { link(taskID) }
+        Task { await store.warmLinkMatching() }
+        mention.provider = MentionProviders.make(store: store, chosenTags: { [tags, pickedTags = $pickedTags] in TagText.merge(tags, pickedTags.wrappedValue) })
+        mention.onPick = { [link, pickedTags = $pickedTags] item in
+            switch item {
+            case .task(let task): link(task.id)
+            case .tag(let tag): pickedTags.wrappedValue = TagText.merge(pickedTags.wrappedValue, [tag.name])
+            }
+        }
+    }
+
+    private func link(_ id: UUID) {
+        linked = id
+        let task = store.locate(id)?.task
+        linkedTitle = (task?.number.map { "#\($0) " } ?? "") + (task.map { String(TaskText.rendered($0.title).characters) } ?? "")
     }
 
     private func take(_ items: [PhotosPickerItem]) {
@@ -587,56 +609,6 @@ struct TaskChoice: Identifiable, Equatable {
         var items = Array(TaskSortMode.deadline.sorted(store.tasks().filter { !$0.task.completed }).prefix(limit))
         if let current, !items.contains(where: { $0.id == current }), let located = store.locate(current) { items.insert(located, at: 0) }
         return items.map { TaskChoice(id: $0.id, title: ($0.task.number.map { "#\($0) " } ?? "") + String(TaskText.rendered($0.task.title).characters)) }
-    }
-}
-
-/// 「关联待办」菜单：单独一个视图，输入文字时不重建。
-private struct TaskChoiceMenu: View {
-    let choices: [TaskChoice]
-    @Binding var linked: UUID?
-
-    var body: some View {
-        Menu {
-            Button("不关联") { linked = nil }
-            ForEach(choices) { choice in Button(choice.title) { linked = choice.id } }
-        } label: {
-            Label(choices.first { $0.id == linked }?.title ?? L("关联待办"), systemImage: "at").lineLimit(1)
-        }
-    }
-}
-
-/// 「加标签」菜单：已有的标签点一下加上 / 去掉，也可以输入新标签。单独一个视图，输入文字时不重建。
-private struct TagChoiceMenu: View {
-    let choices: [String]
-    /// 标签笔记本里固定带上的，不在菜单里。
-    let fixed: [String]
-    @Binding var picked: [String]
-    @State private var naming = false
-    @State private var newTag = ""
-
-    var body: some View {
-        Menu {
-            Button { naming = true } label: { Label("新标签…", systemImage: "plus") }
-            ForEach(choices.filter { tag in !fixed.contains { TagText.key($0) == TagText.key(tag) } }, id: \.self) { tag in
-                Button { toggle(tag) } label: {
-                    if picked.contains(where: { TagText.key($0) == TagText.key(tag) }) { Label("#" + tag, systemImage: "checkmark") } else { Text("#" + tag) }
-                }
-            }
-        } label: {
-            Label(picked.isEmpty ? L("标签") : picked.map { "#" + $0 }.joined(separator: " "), systemImage: "number").lineLimit(1)
-        }
-        .alert("新标签", isPresented: $naming) {
-            TextField("标签名", text: $newTag).textInputAutocapitalization(.never).autocorrectionDisabled()
-            Button("取消", role: .cancel) { newTag = "" }
-            Button("添加") {
-                if let name = TagText.normalize(newTag), !picked.contains(where: { TagText.key($0) == TagText.key(name) }) { picked.append(name) }
-                newTag = ""
-            }
-        }
-    }
-
-    private func toggle(_ tag: String) {
-        if let index = picked.firstIndex(where: { TagText.key($0) == TagText.key(tag) }) { picked.remove(at: index) } else { picked.append(tag) }
     }
 }
 

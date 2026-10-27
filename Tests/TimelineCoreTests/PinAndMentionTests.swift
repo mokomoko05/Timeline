@@ -134,6 +134,14 @@ final class PinAndMentionTests: XCTestCase {
         XCTAssertTrue(numbers("").count == 4)
     }
 
+    func testWarmedPinyinGivesTheSameMatches() async {
+        let store = makeStore(titles: ["整理行李 #旅行", "同步日历"])
+        await store.warmLinkMatching()
+        XCTAssertEqual(store.linkCandidates(query: "zlxl").compactMap(\.task.number), [1], "后台先转好的拼音首字母")
+        XCTAssertEqual(store.linkCandidates(query: "tongbu").compactMap(\.task.number), [2], "后台先转好的全拼")
+        XCTAssertEqual(store.tagCandidates(query: "lx").first?.name, "旅行", "标签也按拼音找")
+    }
+
     func testCandidatesPreferStrongMatchesAndNumberExact() {
         let store = makeStore(titles: ["周报模板", "写周报", "报销", "10 号结算"])
         func numbers(_ query: String) -> [Int] { store.linkCandidates(query: query).compactMap(\.task.number) }

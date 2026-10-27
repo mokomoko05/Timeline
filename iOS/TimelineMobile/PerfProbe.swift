@@ -59,6 +59,20 @@ enum PerfProbe {
         print("[perf] hitch \(milliseconds) ms · \(since) ms after「\(label)」")
     }
 
+    /// 模拟器测试用（`-demoData YES`）：数据是空的时候放一些待办、日志和标签，拖动排序和 @ / # 搜索才有东西可测。
+    static func seedDemo(_ store: JournalStore) {
+        guard UserDefaults.standard.bool(forKey: "demoData"), store.tasks().isEmpty else { return }
+        let titles = ["查清楚同步的问题 #工作", "整理周报 #工作", "回复邮件", "下午3点 开会 #工作", "买菜 #生活", "跑步 30 分钟 #健康",
+                      "明天 读完第三章 #学习", "明天 修自行车 #生活", "后天 准备演示 #工作", "下周一 体检 #健康", "写博客草稿 #写作", "整理照片"]
+        for (index, title) in titles.enumerated() {
+            _ = store.addParsedTodo(title, on: Date(), priority: index % 4 == 0 ? .high : .normal)
+        }
+        for text in ["今天把同步的问题查清楚了 #工作", "跑了 5 公里 #健康", "读书笔记：第二章讲的是排版 #学习"] {
+            _ = try? store.quickLog(text, on: Date())
+        }
+        store.save()
+    }
+
     /// 截图检查用（`-demoFocus YES`）：启动一秒后对第一个未完成的待办开始专注。
     static func demoFocus(_ focus: FocusTimer) {
         guard UserDefaults.standard.bool(forKey: "demoFocus"), !focus.isActive else { return }
@@ -117,6 +131,11 @@ enum PerfProbe {
             ("选择文字", { switchTab(.journal); send("selectText") }),
             ("滚动全文", { scrollThrough() }),
             ("长按长文", { pressLongText() }),
+            ("拖动排序", { switchTab(.tasks); send("dragTask") }),
+            ("拖住待办", { switchTab(.tasks); send("dragHold") }),
+            ("放下待办", { send("dragEnd") }),
+            ("选第一个候选", { send("mentionPick") }),
+            ("拖动并放下", { switchTab(.tasks); send("dragDrop") }),
         ]
         // 走两遍：第一遍含第一次建界面的开销，第二遍是平时的样子。`-perfSteps 切到日记,切到待办 -perfRounds 6` 只走其中几步。
         let only = UserDefaults.standard.string(forKey: "perfSteps")?.components(separatedBy: ",")
@@ -135,16 +154,18 @@ enum PerfProbe {
     }
 
     static let typingText = "今天把同步的问题查清楚了 fix the board export when backgrounding 再测一下输入延迟"
+    /// `-perfTyping mention`：在记一笔里打 `@` 和 `#` 搜索，候选列表跟着每个字刷新。
+    static let mentionText = UserDefaults.standard.string(forKey: "perfTypingText") ?? "@zhengli 今天 #gong 再测一下"
 
     static func runTyping(switchTab: @escaping (RootView.Tab) -> Void) {
         guard enabled, let typing else { return }
-        switchTab(typing == "compose" ? .journal : (typing == "board" ? .boards : .tasks))
+        switchTab(typing == "compose" || typing == "mention" ? .journal : (typing == "board" ? .boards : .tasks))
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             mark("打开输入框 " + typing)
             // 工作板的编辑器在网页里：工作板页自己跑测试（见 BoardWebSession.runTypingTest）。
-            NotificationCenter.default.post(name: openEditor, object: typing)
+            NotificationCenter.default.post(name: openEditor, object: typing == "mention" ? "compose" : typing)
         }
-        let text: [Character] = Array(typingText)
+        let text: [Character] = Array(typing == "mention" ? mentionText : typingText)
         for (index, character) in text.enumerated() where typing != "board" {
             let delay: Double = 6 + Double(index) * 0.1
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
@@ -212,6 +233,12 @@ extension PerfProbe {
     }
 
     fileprivate static var scroller: Scroller?
+    fileprivate static var driver: Driver?
+
+    /// 一帧一帧推着某个动作走 `duration` 秒（`step` 收到 0…1 的进度），报这段时间掉了多少帧。
+    static func drive(duration: CFTimeInterval, step: @escaping (CGFloat) -> Void, done: @escaping () -> Void) {
+        driver = Driver(duration: duration, step: step, done: done)
+    }
 
     /// 「长按长文」：在屏幕上第一块很长的日志中间弹出长按菜单（模拟器里没法真的长按，用菜单交互测试用的入口）。
     static func pressLongText() {
@@ -229,6 +256,43 @@ extension PerfProbe {
         guard let method = class_getInstanceMethod(UIContextMenuInteraction.self, selector) else { print("[perf] 没有菜单测试入口"); return }
         typealias Present = @convention(c) (AnyObject, Selector, CGPoint) -> Void
         unsafeBitCast(method_getImplementation(method), to: Present.self)(interaction, selector, CGPoint(x: shown.midX, y: shown.midY))
+    }
+}
+
+private final class Driver: NSObject {
+    private let duration: CFTimeInterval
+    private let step: (CGFloat) -> Void
+    private let done: () -> Void
+    private var link: CADisplayLink?
+    private var start: CFTimeInterval = 0
+    private var last: CFTimeInterval = 0
+    private var frames = 0
+    private var slow = 0
+    private var worst: CFTimeInterval = 0
+    private var interval: CFTimeInterval = 1 / 60
+
+    init(duration: CFTimeInterval, step: @escaping (CGFloat) -> Void, done: @escaping () -> Void) {
+        self.duration = duration
+        self.step = step
+        self.done = done
+        super.init()
+        link = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        link?.add(to: .main, forMode: .common)
+    }
+
+    @objc private func tick(_ link: CADisplayLink) {
+        defer { last = link.timestamp }
+        guard last > 0 else { start = link.timestamp; interval = link.targetTimestamp - link.timestamp; return }
+        let gap = link.timestamp - last
+        frames += 1
+        if gap > interval * 1.5 { slow += 1 }
+        worst = max(worst, gap)
+        let progress = min(1, (link.timestamp - start) / duration)
+        MainActor.assumeIsolated { step(progress) }
+        guard progress >= 1 else { return }
+        link.invalidate()
+        MainActor.assumeIsolated { done() }
+        print(String(format: "[perf] 推动 %.1f 秒：%d 帧，掉帧 %d 帧，最长一帧 %.0f ms", duration, frames, slow, worst * 1000))
     }
 }
 

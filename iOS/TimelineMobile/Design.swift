@@ -153,6 +153,12 @@ struct RailRow<Node: View, Content: View>: View {
     var nodeY: CGFloat = 10
     /// 竖线上用强调色的一段（专注中）：从 `top` 到 `bottom`（nil 是到行底）。画在节点下面，不穿过节点。
     var accent: (top: CGFloat, bottom: CGFloat?)?
+    /// false：竖线由外面一次画在整列后面（待办页），行里只在首尾两行用底色把线头盖掉。
+    /// 这样行可以上下挪（拖动排序时）而线不跟着走。
+    var drawsLine = true
+    /// 行内容（时间、节点、卡片）相对原位的位移；竖线留在原地。
+    var shift: CGFloat = 0
+    var shiftAnimation: Animation?
     @ViewBuilder var node: () -> Node
     @ViewBuilder var content: () -> Content
 
@@ -177,10 +183,17 @@ struct RailRow<Node: View, Content: View>: View {
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .offset(y: shift)
+        .animation(shiftAnimation, value: shift)
         // 竖线画在整行的背景里，跟着行高走，不用每行一个 GeometryReader。
         .background(alignment: .topLeading) {
-            Self.segment(from: hasPrevious ? 0 : nodeY, to: hasNext ? nil : nodeY)
-                .fill(lineColor)
+            if drawsLine {
+                Self.segment(from: hasPrevious ? 0 : nodeY, to: hasNext ? nil : nodeY)
+                    .fill(lineColor)
+            } else {
+                if !hasPrevious { RailSegment(x: Self.labelWidth + 6 + 10, top: 0, bottom: nodeY, width: 4).fill(Palette.background) }
+                if !hasNext { RailSegment(x: Self.labelWidth + 6 + 10, top: nodeY, bottom: nil, width: 4).fill(Palette.background) }
+            }
             if let accent {
                 RailSegment(x: Self.labelWidth + 6 + 10, top: accent.top, bottom: accent.bottom, width: 2)
                     .fill(Palette.accent.opacity(0.8))
