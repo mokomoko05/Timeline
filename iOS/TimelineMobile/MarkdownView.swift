@@ -542,11 +542,43 @@ private struct CodeBlockView: View {
             }
             .padding(.horizontal, 10).padding(.top, 7)
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(code).font(.system(size: size * 0.82, design: .monospaced)).foregroundStyle(Palette.ink)
+                Text(Self.highlighted(code, language: language)).font(.system(size: size * 0.82, design: .monospaced))
+                    .foregroundStyle(Palette.ink)
                     .padding(10)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Palette.muted.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    /// 按语言着色（注释、字符串、关键字…），结果按代码缓存。
+    private static func highlighted(_ code: String, language: String?) -> AttributedString {
+        var result = AttributedString(code)
+        let utf16 = code.utf16
+        for token in CodeHighlight.tokens(code, language: language) {
+            guard let lower = utf16.index(utf16.startIndex, offsetBy: token.range.location, limitedBy: utf16.endIndex),
+                  let upper = utf16.index(lower, offsetBy: token.range.length, limitedBy: utf16.endIndex),
+                  let from = AttributedString.Index(lower, within: result), let to = AttributedString.Index(upper, within: result) else { continue }
+            result[from..<to].foregroundColor = color(token.kind)
+        }
+        return result
+    }
+
+    /// 和 Mac 一样的配色（接近 GitHub），深浅色各一套。
+    private static func color(_ kind: CodeHighlight.Kind) -> Color {
+        let (light, dark): (UInt32, UInt32)
+        switch kind {
+        case .comment: (light, dark) = (0x6e7781, 0x8b949e)
+        case .string: (light, dark) = (0x0a3069, 0xa5d6ff)
+        case .number, .attribute: (light, dark) = (0x0550ae, 0x79c0ff)
+        case .keyword: (light, dark) = (0xcf222e, 0xff7b72)
+        case .type: (light, dark) = (0x953800, 0xffa657)
+        case .function: (light, dark) = (0x8250df, 0xd2a8ff)
+        }
+        return Color(UIColor { traits in
+            let value = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(red: CGFloat((value >> 16) & 255) / 255, green: CGFloat((value >> 8) & 255) / 255, blue: CGFloat(value & 255) / 255, alpha: 1)
+        })
     }
 }
 

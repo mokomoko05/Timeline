@@ -461,6 +461,92 @@ final class InteractiveTaskText: NSTextView {
         return regions
     }
 
+    /// 代码块：整块的底色区域和右上角「复制」按钮的位置。
+    func codeRegions() -> [(info: MarkdownText.CodeBlockInfo, block: NSRect, copy: NSRect)] {
+        guard markdown, let storage = textStorage, let manager = layoutManager, let container = textContainer, storage.length > 0 else { return [] }
+        var regions: [(info: MarkdownText.CodeBlockInfo, block: NSRect, copy: NSRect)] = []
+        var scanned = false
+        storage.enumerateAttribute(MarkdownText.codeBlockKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard let info = value as? MarkdownText.CodeBlockInfo else { return }
+            if !scanned { manager.ensureLayout(for: container); scanned = true }
+            let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            var union = NSRect.null
+            var header = NSRect.null
+            manager.enumerateLineFragments(forGlyphRange: glyphs) { rect, used, _, _, _ in
+                if header.isNull { header = used }
+                union = union.union(rect)
+            }
+            guard !union.isNull else { return }
+            let style = storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle
+            let left = max(0, (style?.headIndent ?? 12) - 12)
+            let width = min(container.size.width, self.bounds.width - self.textContainerOrigin.x * 2)
+            let block = NSRect(x: self.textContainerOrigin.x + left, y: self.textContainerOrigin.y + union.minY + MarkdownText.codeBlockMargin,
+                               width: width - left,
+                               height: union.height - MarkdownText.codeBlockMargin * 2)
+            let copyWidth: CGFloat = 64, copyHeight: CGFloat = 20
+            // 和第一行的语言名对齐。
+            let labelMid = self.textContainerOrigin.y + header.midY
+            let copy = NSRect(x: block.maxX - copyWidth - 6, y: max(block.minY + 3, labelMid - copyHeight / 2), width: copyWidth, height: copyHeight)
+            regions.append((info, block, copy))
+        }
+        return regions
+    }
+
+    /// 刚复制过的代码块：按钮显示「已复制」一会儿。
+    private var copiedCode: MarkdownText.CodeBlockInfo?
+
+    private func copyCode(_ info: MarkdownText.CodeBlockInfo) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(info.code, forType: .string)
+        copiedCode = info
+        needsDisplay = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, self.copiedCode === info else { return }
+            self.copiedCode = nil
+            self.needsDisplay = true
+        }
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        let ink = foreground ?? .labelColor
+        for region in codeRegions() where region.block.intersects(rect) {
+            let path = NSBezierPath(roundedRect: region.block, xRadius: 8, yRadius: 8)
+            ink.withAlphaComponent(0.06).setFill()
+            path.fill()
+            ink.withAlphaComponent(0.12).setStroke()
+            path.lineWidth = 0.5
+            path.stroke()
+        }
+    }
+
+    private func drawCopyButtons(in rect: NSRect) {
+        let ink = foreground ?? .labelColor
+        for region in codeRegions() where region.copy.intersects(rect) {
+            let copied = copiedCode == region.info
+            let tint = copied ? NSColor(Palette.success) : ink.withAlphaComponent(hoveredCopy == region.copy ? 0.85 : 0.55)
+            if hoveredCopy == region.copy {
+                ink.withAlphaComponent(0.08).setFill()
+                NSBezierPath(roundedRect: region.copy, xRadius: 5, yRadius: 5).fill()
+            }
+            let font = NSFont.systemFont(ofSize: 11, weight: .medium)
+            let label = NSAttributedString(string: AppLocalized(copied ? "已复制" : "复制"), attributes: [.font: font, .foregroundColor: tint])
+            let configuration = NSImage.SymbolConfiguration(pointSize: 10.5, weight: .medium).applying(.init(paletteColors: [tint]))
+            let symbol = NSImage(systemSymbolName: copied ? "checkmark" : "doc.on.doc", accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
+            let labelSize = label.size()
+            let total = (symbol?.size.width ?? 0) + 4 + labelSize.width
+            var x = region.copy.maxX - 6 - total
+            if let symbol {
+                symbol.draw(in: NSRect(x: x, y: region.copy.midY - symbol.size.height / 2, width: symbol.size.width, height: symbol.size.height),
+                            from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+                x += symbol.size.width + 4
+            }
+            label.draw(at: NSPoint(x: x, y: region.copy.midY - labelSize.height / 2))
+        }
+    }
+
+    private var hoveredCopy: NSRect?
+
     /// 可折叠标题右边的收起 / 展开按钮（标题第一行的最右边；标题文字本身留给选择和编辑）。
     func headingRegions() -> [(key: String, rect: NSRect, folded: Bool)] {
         guard onToggleHeading != nil, let storage = textStorage, let manager = layoutManager, let container = textContainer else { return [] }
@@ -508,6 +594,7 @@ final class InteractiveTaskText: NSTextView {
             path.stroke()
         }
         super.draw(dirtyRect)
+        drawCopyButtons(in: dirtyRect)
         // 标题右边的收起 / 展开按钮画在文字上面（文字已经给它让出了位置）。
         for region in headingRegions() where region.rect.intersects(dirtyRect) {
             let color = foreground ?? .labelColor
@@ -527,6 +614,7 @@ final class InteractiveTaskText: NSTextView {
             for region in taskRegions() { addCursorRect(region.rect, cursor: .pointingHand) }
         }
         for region in headingRegions() { addCursorRect(region.rect, cursor: .pointingHand) }
+        for region in codeRegions() { addCursorRect(region.copy, cursor: .pointingHand) }
     }
 
     override func updateTrackingAreas() {
@@ -544,6 +632,9 @@ final class InteractiveTaskText: NSTextView {
         hoveredURL = interactionEnabled ? link(at: point) : nil
         hoveredHeading = interactionEnabled && markdown ? headingKey(at: point) : nil
         if previousHeading != hoveredHeading { needsDisplay = true }
+        let previousCopy = hoveredCopy
+        hoveredCopy = interactionEnabled ? codeRegions().first { $0.copy.contains(point) }?.copy : nil
+        if previousCopy != hoveredCopy { needsDisplay = true }
         if interactionEnabled, dragTaskID != nil {
             (TaskDragSession.shared.activeID != nil ? NSCursor.closedHand : (hoveredURL == nil ? NSCursor.openHand : NSCursor.pointingHand)).set()
         }
@@ -574,6 +665,11 @@ final class InteractiveTaskText: NSTextView {
     override func mouseDown(with event: NSEvent) {
         if markdown {
             let point = convert(event.locationInWindow, from: nil)
+            // 点代码块的「复制」：复制整块代码。
+            if let code = codeRegions().first(where: { $0.copy.contains(point) }) {
+                copyCode(code.info)
+                return
+            }
             // 点标题右边的按钮：收起 / 展开；连续快点每一下都算，不当成双击进入编辑。
             if let heading = headingKey(at: point) {
                 onSelect?()

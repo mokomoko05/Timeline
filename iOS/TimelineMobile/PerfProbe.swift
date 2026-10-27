@@ -136,6 +136,7 @@ enum PerfProbe {
             ("节奏条放大镜", { send("railLoupe") }),
             ("收起放大镜", { send("railLoupeEnd") }),
             ("选择文字", { switchTab(.journal); send("selectText") }),
+            ("滑公式不换天", { switchTab(.journal); checkSwipeGuard() }),
             ("点日志编辑", { switchTab(.journal); send("editLog") }),
             ("收起日志编辑", { send("closeLogEditor") }),
             ("滚动全文", { scrollThrough() }),
@@ -162,6 +163,19 @@ enum PerfProbe {
                 }
             }
         }
+    }
+
+    /// 在宽公式的滑动条上横着滑不换天，在普通文字上滑照常换天：检查两处的判断。
+    static func checkSwipeGuard() {
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        func strips(_ view: UIView) -> [UIScrollView] {
+            ((view as? UIScrollView).flatMap { $0.superview is RichTextCanvas ? [$0] : nil } ?? []) + view.subviews.flatMap(strips)
+        }
+        guard let window = windows.first(where: \.isKeyWindow), let strip = strips(window).first(where: { $0.window != nil }),
+              let canvas = strip.superview else { print("[perf] 屏幕上没有宽公式"); return }
+        let onStrip = strip.convert(CGPoint(x: strip.bounds.midX, y: strip.bounds.midY), to: nil)
+        let onText = canvas.convert(CGPoint(x: 8, y: max(4, strip.frame.minY - 12)), to: nil)
+        print("[perf] 公式上横滑：\(HorizontalScrollers.contains(onStrip) ? "不换天" : "会换天") · 文字上横滑：\(HorizontalScrollers.contains(onText) ? "不换天" : "换天")")
     }
 
     static let typingText = "今天把同步的问题查清楚了 fix the board export when backgrounding 再测一下输入延迟"

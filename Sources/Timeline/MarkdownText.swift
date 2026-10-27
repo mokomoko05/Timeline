@@ -10,6 +10,43 @@ enum MarkdownText {
     static let headingFoldKey = NSAttributedString.Key("TimelineMarkdownHeadingFold")
     /// 可折叠标题现在是否收起（右侧按钮画成朝右还是朝下）。
     static let headingFoldedKey = NSAttributedString.Key("TimelineMarkdownHeadingFolded")
+    /// 代码块：一块代码的原文和语言（复制按钮复制的就是它）。
+    static let codeBlockKey = NSAttributedString.Key("TimelineMarkdownCodeBlock")
+    final class CodeBlockInfo: NSObject {
+        let code: String
+        let language: String?
+        init(code: String, language: String?) {
+            self.code = code
+            self.language = language
+        }
+        override func isEqual(_ object: Any?) -> Bool {
+            (object as? CodeBlockInfo).map { $0.code == code && $0.language == language } ?? false
+        }
+        override var hash: Int { code.hashValue ^ (language?.hashValue ?? 0) }
+    }
+    /// 代码块和上下文之间的间距、块底部的内边距。
+    static let codeBlockMargin: CGFloat = 6
+    static let codeBlockPadding: CGFloat = 10
+
+    /// 代码高亮的颜色（和 GitHub 的配色接近，深浅色各一套）。
+    static func codeColor(_ kind: CodeHighlight.Kind) -> NSColor {
+        let (light, dark): (UInt32, UInt32)
+        switch kind {
+        case .comment: (light, dark) = (0x6e7781, 0x8b949e)
+        case .string: (light, dark) = (0x0a3069, 0xa5d6ff)
+        case .number: (light, dark) = (0x0550ae, 0x79c0ff)
+        case .keyword: (light, dark) = (0xcf222e, 0xff7b72)
+        case .type: (light, dark) = (0x953800, 0xffa657)
+        case .function: (light, dark) = (0x8250df, 0xd2a8ff)
+        case .attribute: (light, dark) = (0x0550ae, 0x79c0ff)
+        }
+        return NSColor(name: nil) { appearance in
+            let value = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: CGFloat((value >> 16) & 255) / 255, green: CGFloat((value >> 8) & 255) / 255,
+                           blue: CGFloat(value & 255) / 255, alpha: 1)
+        }
+    }
+
     /// 标题右侧收起 / 展开按钮的边长；标题文字在右边给它让出位置。
     static func foldButtonSide(fontSize: CGFloat) -> CGFloat { (fontSize * 1.7).rounded() }
 
@@ -130,7 +167,8 @@ enum MarkdownText {
                 for match in detector.matches(in: content.string, range: content.fullRange) {
                     guard let url = match.url.flatMap({ TaskText.linkURL($0.absoluteString) }),
                           content.attribute(.link, at: match.range.location, effectiveRange: nil) == nil,
-                          content.attribute(.backgroundColor, at: match.range.location, effectiveRange: nil) == nil else { continue }
+                          content.attribute(.backgroundColor, at: match.range.location, effectiveRange: nil) == nil,
+                          content.attribute(MarkdownText.codeBlockKey, at: match.range.location, effectiveRange: nil) == nil else { continue }
                     content.addAttributes([.link: url, .foregroundColor: NativePalette.accent, .underlineStyle: 1], range: match.range)
                 }
             }
@@ -200,6 +238,52 @@ enum MarkdownText {
             }
         }
 
+        /// 代码块：整块的底色和边框、右上角的「复制」由 `InteractiveTaskText` 画（按 `codeBlockKey` 找到这一块），
+        /// 这里排文字：第一行是语言名，代码按语言着色，左右留出边距。
+        func renderCode(_ code: CodeBlock, indent: CGFloat) {
+            let body = code.code.hasSuffix("\n") ? String(code.code.dropLast()) : code.code
+            let trimmed = code.language?.trimmingCharacters(in: .whitespaces) ?? ""
+            let language: String? = trimmed.isEmpty ? nil : trimmed
+            let info = MarkdownText.CodeBlockInfo(code: body, language: language)
+            let padding: CGFloat = 12
+            let header = text(language ?? AppLocalized("代码"), font: .systemFont(ofSize: size * 0.8, weight: .semibold))
+            let ink = color
+            header.addAttribute(.foregroundColor, value: NSColor(name: nil) { appearance in
+                var resolved = ink
+                appearance.performAsCurrentDrawingAppearance { resolved = ink.usingColorSpace(.sRGB) ?? ink }
+                return resolved.withAlphaComponent(0.5)
+            }, range: header.fullRange)
+            let headerStyle = style(indent: indent + padding)
+            headerStyle.tailIndent = -padding
+            headerStyle.paragraphSpacingBefore = MarkdownText.codeBlockMargin
+            headerStyle.minimumLineHeight = size * 1.7
+            headerStyle.paragraphSpacing = 0
+            header.append(text("\n"))
+            header.addAttribute(.paragraphStyle, value: headerStyle, range: header.fullRange)
+            header.addAttribute(MarkdownText.codeBlockKey, value: info, range: header.fullRange)
+            output.append(header)
+
+            let mono = NSFont.monospacedSystemFont(ofSize: size * 0.92, weight: .regular)
+            let content = text(body.isEmpty ? " " : body, font: mono)
+            for token in CodeHighlight.tokens(body, language: language) where token.range.location + token.range.length <= content.length {
+                content.addAttribute(.foregroundColor, value: MarkdownText.codeColor(token.kind), range: token.range)
+            }
+            content.append(text("\n", font: mono))
+            let bodyStyle = style(indent: indent + padding)
+            bodyStyle.tailIndent = -padding
+            bodyStyle.lineSpacing = max(1, lineSpacing * 0.6)
+            bodyStyle.paragraphSpacing = 0
+            content.addAttribute(.paragraphStyle, value: bodyStyle, range: content.fullRange)
+            // 最后一行下面留出块的内边距和块与下文的间距（底色画到内边距为止）。
+            let last = (content.string as NSString).paragraphRange(for: NSRange(location: max(0, content.length - 1), length: 0))
+            if let ending = bodyStyle.mutableCopy() as? NSMutableParagraphStyle {
+                ending.paragraphSpacing = MarkdownText.codeBlockPadding + MarkdownText.codeBlockMargin
+                content.addAttribute(.paragraphStyle, value: ending, range: last)
+            }
+            content.addAttribute(MarkdownText.codeBlockKey, value: info, range: content.fullRange)
+            output.append(content)
+        }
+
         func renderHeading(_ heading: Heading, indent: CGFloat, fold: (key: String, folded: Bool)? = nil) {
             let headingFont = NSFont.systemFont(ofSize: size + CGFloat(max(1, 7 - heading.level)) * 1.5, weight: .bold)
             let paragraphStyle = style(indent: indent)
@@ -222,10 +306,7 @@ enum MarkdownText {
             case let node as Paragraph:
                 paragraph(inline(node), style: style(indent: indent))
             case let code as CodeBlock:
-                let content = text(code.code.hasSuffix("\n") ? String(code.code.dropLast()) : code.code,
-                                   font: .monospacedSystemFont(ofSize: size, weight: .regular))
-                content.addAttribute(.backgroundColor, value: color.withAlphaComponent(0.08), range: content.fullRange)
-                paragraph(content, style: style(indent: indent + 8))
+                renderCode(code, indent: indent)
             case let table as Markdown.Table:
                 renderTable(table, indent: indent)
             case let list as OrderedList:

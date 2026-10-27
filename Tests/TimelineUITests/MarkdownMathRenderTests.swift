@@ -183,11 +183,39 @@ final class MarkdownMathRenderTests: XCTestCase {
 
         后文照常。
         """
-        for (name, text) in [("math", source), ("wide", wide)] {
+        let code = """
+        下面是一段 Python：
+
+        ```python
+        def fib(n: int) -> int:
+            # 递归计算斐波那契数
+            if n < 2:
+                return n
+            return fib(n - 1) + fib(n - 2)
+
+        print("fib(10) =", fib(10))
+        ```
+
+        以及 shell：
+
+        ```bash
+        swift test --filter 'Markdown' 2>&1 | grep -E "error|Executed"
+        ```
+
+        - 列表里的代码：
+          ```js
+          const x = [1, 2, 3].map(v => v * 2); // 注释
+          ```
+
+        结束。
+        """
+        for (name, text) in [("math", source), ("wide", wide), ("code", code)] {
         for dark in [false, true] {
             let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
             let view = name == "wide" ? InteractiveTaskText(frame: NSRect(x: 0, y: 0, width: 360, height: 300))
+                : name == "code" ? InteractiveTaskText(frame: NSRect(x: 0, y: 0, width: 460, height: 520))
                 : NSTextView(frame: NSRect(x: 0, y: 0, width: 560, height: 560))
+            (view as? InteractiveTaskText)?.markdown = true
             view.drawsBackground = true
             view.appearance = appearance
             view.textContainerInset = NSSize(width: 16, height: 16)

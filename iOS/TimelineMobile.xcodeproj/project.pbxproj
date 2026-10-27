@@ -265,6 +265,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Timeline;
 				INFOPLIST_FILE = "TimelineMobile-Info.plist";
+				INFOPLIST_KEY_NSCameraUsageDescription = "拍照放进日志。";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "把日记里的图片存到照片。";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -297,6 +298,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Timeline;
 				INFOPLIST_FILE = "TimelineMobile-Info.plist";
+				INFOPLIST_KEY_NSCameraUsageDescription = "拍照放进日志。";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "把日记里的图片存到照片。";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

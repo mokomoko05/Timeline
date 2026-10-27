@@ -1068,3 +1068,5 @@
 "上下拖动排序，拖过哪个日期就改到哪天；横着拖出去可放到日历" = "Drag up or down to reorder; drop under another date to move it there; drag sideways out to the calendar";
 "上下拖动排序，拖过哪个日期就改到哪天；横着拖出去可放到日历；右键设置优先级" = "Drag up or down to reorder; drop under another date to move it there; drag sideways out to the calendar; right-click to set priority";
 "上下拖动排序，拖过日期即改到那一天，横着拖出去可放到日历，右键选择优先级" = "Drag up or down to reorder, drop under another date to move it there, drag sideways out to the calendar, or right-click to choose priority";
+"代码" = "Code";
+"编辑 Markdown 内容" = "Edit Markdown content";

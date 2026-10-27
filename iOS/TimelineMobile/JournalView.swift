@@ -144,9 +144,11 @@ struct JournalView: View {
             .id(selection)
             .onAppear { PerfProbe.lap("这一天出现") }
             .simultaneousGesture(
-                DragGesture(minimumDistance: 30).onEnded { value in
+                DragGesture(minimumDistance: 30, coordinateSpace: .global).onEnded { value in
                     let dx = value.translation.width, dy = value.translation.height
                     guard abs(dx) > 70, abs(dx) > abs(dy) * 1.8 else { return }
+                    // 在能左右滑动的内容上（宽公式、代码、表格、图片）滑：那是在滑内容，不换天。
+                    guard !HorizontalScrollers.contains(value.startLocation) else { return }
                     if let target = neighbor(of: selection, in: keys, by: dx < 0 ? 1 : -1) { go(to: target, keys: keys) }
                 }
             )
@@ -488,6 +490,7 @@ struct ComposeSheet: View {
     @State private var mention = MentionModel()
     @State private var images: [String]
     @State private var picked: [PhotosPickerItem] = []
+    @State private var takingPhoto = false
     @State private var error: String?
     @Environment(\.closeEditor) private var closeEditor
 
@@ -603,8 +606,14 @@ struct ComposeSheet: View {
                 Label("图片", systemImage: "photo")
             }
             Spacer()
+            // 直接拍照：拍好的照片放进这条日志。
+            Button { takingPhoto = true } label: { Label("拍照", systemImage: "camera") }
+                .disabled(!CameraPicker.available)
         }
         .font(.subheadline)
+        .fullScreenCover(isPresented: $takingPhoto) {
+            CameraPicker { image in attach(photo: image) }.ignoresSafeArea()
+        }
     }
 
     private func load() {
@@ -638,6 +647,12 @@ struct ComposeSheet: View {
                   let name = try? store.storeImage(jpeg, fileExtension: "jpg") else { continue }
             images.append(name)
         }
+    }
+
+    private func attach(photo: UIImage) {
+        guard let jpeg = photo.scaledForLog().jpegData(compressionQuality: 0.85),
+              let name = try? store.storeImage(jpeg, fileExtension: "jpg") else { return }
+        images.append(name)
     }
 
     private func send() {
@@ -730,5 +745,54 @@ enum DayRhythm {
     private static func fraction(_ date: Date) -> CGFloat {
         let start = JournalDates.calendar.startOfDay(for: date)
         return CGFloat(min(1, max(0, date.timeIntervalSince(start) / 86_400)))
+    }
+}
+
+/// 屏幕上某一点下面有没有能左右滑动的内容（宽公式的滑动条、代码块、表格、图片条）。
+@MainActor
+enum HorizontalScrollers {
+    static func contains(_ point: CGPoint) -> Bool {
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        guard let window = windows.first(where: \.isKeyWindow) ?? windows.first,
+              var view = window.hitTest(window.convert(point, from: nil), with: nil) else { return false }
+        while true {
+            if let scroll = view as? UIScrollView, scroll.contentSize.width > scroll.bounds.width + 1 || scroll.alwaysBounceHorizontal,
+               scroll.contentSize.height <= scroll.bounds.height + 1 || scroll.alwaysBounceHorizontal {
+                return true
+            }
+            guard let parent = view.superview else { return false }
+            view = parent
+        }
+    }
+}
+
+/// 系统相机：拍一张，用这张就交回来，取消就收起。
+struct CameraPicker: UIViewControllerRepresentable {
+    static var available: Bool { UIImagePickerController.isSourceTypeAvailable(.camera) }
+    let taken: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.cameraCaptureMode = .photo
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ picker: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: CameraPicker
+        init(_ parent: CameraPicker) { self.parent = parent }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage { parent.taken(image) }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.dismiss() }
     }
 }
