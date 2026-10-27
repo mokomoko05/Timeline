@@ -1,84 +1,92 @@
 # Timeline
 
-macOS 原生的待办、专注计时、笔记与日记应用，常驻后台，通过全局快捷键或菜单栏图标打开各个面板。无需账号，数据保存在本机。
+A native macOS + iPhone app for tasks, focus sessions, notes and a daily journal. The Mac app lives in the background and opens panels from global hotkeys or the menu bar. No account and no server: data is a JSON file on disk, and devices sync through a folder in iCloud Drive.
 
-## 主界面
+<img src="docs/screenshots/main.png" width="720" alt="Main window: task timeline and month calendar">
 
-<img src="docs/screenshots/main.png" width="560" alt="主界面">
+## Features
 
-- 左侧时间轴按日期排列待办，标出今天和当前时刻；右侧月历显示每天的待办数量与专注时长。
-- 拖动任务圆点：同一日期内调整顺序，拖入其他日期或日历格修改截止日期。
-- 已完成的事项在原位折叠，已放弃的事项收在每个日期的末尾。
-- 选中任务后可用单键操作：`空格` 完成，`D` 截止日期，`M` / `⇧M` 推后 / 提前一天，`F` 开始专注，`?` 查看全部快捷键。
+### Mac
 
-## 快速记录
-
-<img src="docs/screenshots/capture.png" width="300" alt="快速记录">
-
-- `⌃⌥L` 在任意应用中打开，添加待办或写一条日志。
-- `@` 关联任务，`#` 添加标签，可粘贴图片；图片中的文字会被识别并可搜索。
-
-## 专注计时
-
-<img src="docs/screenshots/focus-picker.png" width="260" alt="选择专注任务">
-
-- 在面板上方的时间轴中选择任务，设置本轮目标与时长后开始。
-- 计时期间面板收起为贴在屏幕边缘的半透明胶囊，显示剩余时间；悬停或点击展开，可暂停、延长、结束或记录笔记。
-- 菜单栏同步显示倒计时。结束后在日记中生成本轮小结。
-
-<img src="docs/screenshots/focus.png" width="260" alt="专注中的胶囊">
-
-## 笔记
-
-<img src="docs/screenshots/notes.png" width="560" alt="笔记">
-
-- 每个任务、每个标签各有一本笔记，标签笔记可按待办分章或按日期查看。
-- 记录按日期排列在时间线上，支持 Markdown、图片与编辑。
-
-## 日记
-
-<img src="docs/screenshots/journal.png" width="560" alt="日记">
-
-- 按天查看全部日志与专注记录，顶部的节奏条显示一天中各条记录的时间分布。
-- 每轮专注显示用时、目标与笔记数，可整轮折叠。
-
-## 工作板与终端
-
-- 工作板：每个任务或标签对应一页 Markdown，支持待办勾选、折叠块、代码复制与 Vim 键位。
-- 内置终端：支持标签页与分屏。
-
-## 全局快捷键
-
-| 快捷键 | 面板 |
+| | |
 | --- | --- |
-| `⌃⌥D` | 主界面 |
-| `⌃⌥L` | 快速记录 |
-| `⌃⌥F` | 专注计时 |
-| `⌃⌥N` | 笔记与日记 |
-| `⌃⌥M` | 工作板 |
-| `⌃Tab` | 终端 |
+| **Timeline + calendar** (`⌃⌥D`) | Tasks on a vertical timeline with a "now" marker; a month calendar shows per-day progress and focus time. Drag a task's dot to reorder it, or drop it on another date to reschedule it. Single-key actions on the selected task (`Space` done, `D` date, `M`/`⇧M` shift a day, `F` focus, `?` help). |
+| **Quick capture** (`⌃⌥L`) | Add a task or a journal entry from any app. `@` links a task, `#` adds a tag, `⌘V` pastes images; text in images is recognized (Vision) and searchable. |
+| **Focus** (`⌃⌥F`) | Pick a task, set a goal and length. While running, the panel shrinks to a translucent capsule docked to the screen edge; the session ends with a reflection written to the journal. |
+| **Notes & journal** (`⌃⌥N`) | One notebook per task and per tag (grouped by task or by date), plus a day-by-day journal with a rhythm bar. Entries are Markdown with LaTeX math, highlighted code blocks with a copy button, and foldable headings. Click any entry to edit it in place, WYSIWYG. |
+| **Boards** (`⌃⌥M`) | A Markdown page per task or tag, with live-rendered checklists, folds and code. |
+| **Terminal** (`⌃Tab`) | Built-in terminal with tabs and splits. |
+| **Search** | One panel across tasks, boards, logs and text in images. |
 
-快捷键可在设置中修改。
+<p>
+<img src="docs/screenshots/journal.png" width="49%" alt="Journal with a focus session and a highlighted code block">
+<img src="docs/screenshots/notes.png" width="49%" alt="Task notebook with display math">
+</p>
+<p>
+<img src="docs/screenshots/notebook.png" width="49%" alt="Tag notebook grouped into chapters">
+<img src="docs/screenshots/search.png" width="49%" alt="Global search">
+</p>
+<p>
+<img src="docs/screenshots/capture.png" width="300" alt="Quick capture">
+<img src="docs/screenshots/focus.png" width="300" alt="Focus capsule and panel">
+<img src="docs/screenshots/focus-picker.png" width="220" alt="Focus task picker">
+</p>
 
-## 安装
+### iPhone
 
-需要 macOS 13 及以上和 Swift 工具链。
+Tasks, journal, notebooks, boards and search over the same data. It adds task reminders, a focus timer, Spotlight indexing, and a composer with `@`/`#` pickers, image paste and the camera. Markdown, math and code render natively, and logs and boards are edited with the same editor as on the Mac.
 
-```sh
-bash scripts/install.sh
+<img src="docs/screenshots/ios.png" width="100%" alt="iPhone: tasks, journal, task notes, board">
+
+## Architecture
+
+```
+Sources/
+  TimelineCore/    Data layer shared by Mac and iPhone (no UI): journal model, tasks, boards,
+                   tags, quick-add parsing, Markdown/math scanning, code highlighting, folder sync
+  TimelineMath/    LaTeX typesetting on CoreText (vendored SwiftMath + Latin Modern fonts)
+  Timeline/        macOS app: AppKit windows/panels hosting SwiftUI views
+    EditorAssets/  Bundled CodeMirror editor (built from Editor/)
+Editor/            CodeMirror 6 + KaTeX source, bundled with esbuild into one editor.js
+iOS/               SwiftUI iPhone app (Xcode project) using TimelineCore, TimelineMath, EditorAssets
+Tests/             TimelineCoreTests (model) and TimelineUITests (views, rendered offscreen)
+scripts/           build / install / screenshot / test helpers
 ```
 
-应用安装到 `~/Applications`，数据保存在 `~/Library/Application Support/Timeline`，每天自动备份，可在应用内导出与恢复。
+- **Storage.** `JournalStore` (TimelineCore) owns one `journal.json` in `~/Library/Application Support/Timeline`. It holds days with tasks and log entries, boards and tags, and is written atomically with a daily backup. Views observe the store; heavy derived data (per-day focus totals, note counts, laid-out text) is cached and invalidated on change.
+- **Rendering.** Mac log text is a custom TextKit view (`InteractiveTaskText`) fed by `MarkdownText` (swift-markdown → `NSAttributedString`). Math becomes `NSTextAttachment`s rendered by TimelineMath, and code blocks are colored by `CodeHighlight`. iOS has its own `RichText` canvas on the same pieces. No WebView is used for reading.
+- **Editing.** Boards, plus logs and notes on click, open a CodeMirror 6 editor in a shared, preloaded `WKWebView` (one for boards, one for inline edits). It uses inline Markdown decorations and KaTeX math, and Swift talks to it over a small message bridge. The bundle is checked in, so building needs no Node.
+- **Sync.** `FolderSync` writes `Timeline/devices/<device>.json` in iCloud Drive (only the device's own file) and merges the others field by field: last edit wins, deletions propagate, concurrent board edits keep both versions behind a conflict marker. Images go to `Timeline/images/`. No iCloud entitlement is needed, so a free Apple ID can sign the iPhone build. See [iOS/README.md](iOS/README.md).
+- **Mac shell.** Floating `NSPanel`s per feature, global hotkeys (Carbon), a menu-bar item, login item, SwiftTerm for the terminal, and Vision OCR for pasted images. UI strings use Chinese source keys, with English in `Resources/en.lproj`.
 
-<details>
-<summary>开发</summary>
+## Build and run
+
+Requirements: macOS 13+, Xcode (Swift 5.9+); iPhone app targets iOS 17.
 
 ```sh
-swift build
-swift test --filter TimelineCoreTests
-bash scripts/screenshots.sh   # 离屏渲染 README 截图
+swift build                      # Mac app
+bash scripts/install.sh          # build, install to ~/Applications and launch (keeps data)
+bash scripts/install-ios.sh      # sign with a free Apple ID and install on a paired iPhone
+bash scripts/install-ios.sh --schedule   # re-install automatically before the 7-day signature expires
 ```
 
-工作板编辑器已离线打包，构建无需 Node.js。修改 `Editor/src` 后，在 `Editor` 目录运行 `npm ci && npm run build`。
+Board editor: after changing `Editor/src`, run `cd Editor && npm ci && npm run build` (writes `Sources/Timeline/EditorAssets/editor.js`).
 
-</details>
+## Testing
+
+```sh
+swift test --filter TimelineCoreTests          # model, sync, parsing
+swift test --filter InlineMarkdownEditorTests  # any UI test class
+```
+
+- UI tests never show windows. `Headless` keeps every test window at alpha 0 and turns off animations, `QuietWindow` ignores the mouse, and `ZZNoVisibleWindowsTests` fails if anything reached the screen. Run `scripts/test-window-monitor.swift` alongside window-related tests to watch the window server.
+- iPhone latency is measured on the simulator with `PerfProbe` (launch args `-perfProbe YES -perfActions YES`, `-perfTyping log|board|compose`, `-demoData YES`). It reports tap-to-next-frame time, per-keystroke latency and hitches.
+
+## Screenshots
+
+```sh
+bash scripts/screenshots.sh       # Mac: renders views offscreen with sample data (English, dark)
+bash scripts/screenshots-ios.sh   # iPhone: same sample data in the booted simulator
+```
+
+Images are written to `docs/screenshots/`.

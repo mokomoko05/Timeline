@@ -63,7 +63,7 @@ struct PillSegmentedControl<Value: Hashable>: View {
                     }
                     Text(LocalizedStringKey(segment.title)).lineLimit(1)
                     if let count = segment.count {
-                        Text("\(count)").monospacedDigit().font(.system(size: fontSize - 2, weight: .semibold))
+                        Text("\(count)").monospacedDigit().lineLimit(1).fixedSize().font(.system(size: fontSize - 2, weight: .semibold))
                             .foregroundStyle(selected ? Palette.accent : Palette.muted)
                             .padding(.horizontal, 5).frame(minHeight: 15)
                             .background(Capsule().fill((selected ? Palette.accent : Palette.muted).opacity(0.14)))

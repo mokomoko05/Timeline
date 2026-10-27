@@ -21,7 +21,9 @@ final class DesignPreviewTests: XCTestCase {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Self.sampleJournal().write(to: directory.appendingPathComponent("journal.json"))
-        // README 截图用中文界面渲染。
+        // 同一份示例数据也给 iPhone 模拟器截图用（scripts/screenshots-ios.sh）。
+        try Self.sampleJournal().write(to: output.appendingPathComponent("sample-journal.json"))
+        // README 截图用英文界面渲染（scripts/screenshots.sh 让测试进程的主 bundle 带上应用的 strings）。
         if let language = ProcessInfo.processInfo.environment["TIMELINE_PREVIEW_LANGUAGE"] {
             previousLanguage = UserDefaults.standard.string(forKey: Prefs.language)
             UserDefaults.standard.set(language, forKey: Prefs.language)
@@ -38,55 +40,143 @@ final class DesignPreviewTests: XCTestCase {
         super.tearDown()
     }
 
-    /// 与 scripts/screenshots.py 相同的示例数据。
+    /// README 截图用的示例数据：待办散在这个月前后，过去的大多已完成并有专注时长，几天里有日志。
     private static func sampleJournal() throws -> Data {
         let today = JournalDates.calendar.startOfDay(for: Date())
         func stamp(_ day: Int = 0, hour: Int = 0, minute: Int = 0) -> Double {
             today.addingTimeInterval(Double(day * 86400 + hour * 3600 + minute * 60)).timeIntervalSinceReferenceDate
         }
-        func task(_ number: Int, _ title: String, _ priority: String, day: Int = 0, completed: Bool = false, tags: [String], minutes: Int = 0) -> [String: Any] {
-            ["id": UUID().uuidString, "number": number, "title": title, "priority": priority, "completed": completed,
-             "dueDate": stamp(day), "dueHasTime": false, "tags": tags, "focusSeconds": minutes * 60]
+        var days: [String: [String: Any]] = [:]
+        var titles: [Int: (id: String, title: String, tags: [String])] = [:]
+        var number = 0
+        func entry(_ day: Int) -> String {
+            let key = JournalDates.key(today.addingTimeInterval(Double(day * 86400)))
+            if days[key] == nil { days[key] = ["todos": [], "logs": [], "summary": "", "deadlineDraft": "", "logDraft": ""] }
+            return key
         }
-        func undated(_ number: Int, _ title: String, dropped: Bool = false, tags: [String]) -> [String: Any] {
-            var value = task(number, title, "normal", completed: dropped, tags: tags)
-            value.removeValue(forKey: "dueDate")
+        @discardableResult
+        func task(_ title: String, _ priority: String = "normal", day: Int? = 0, hour: Int? = nil, done: Bool = false,
+                  dropped: Bool = false, tags: [String] = [], minutes: Int = 0, created: Int? = nil) -> Int {
+            number += 1
+            let id = UUID().uuidString
+            var value: [String: Any] = ["id": id, "number": number, "title": title, "priority": priority, "completed": done || dropped,
+                                        "dueHasTime": hour != nil, "tags": tags, "focusSeconds": minutes * 60]
+            if let day { value["dueDate"] = stamp(day, hour: hour ?? 0) }
             if dropped { value["dropped"] = true }
-            return value
+            let key = entry(created ?? min(day ?? 0, 0))
+            days[key]!["todos"] = (days[key]!["todos"] as! [[String: Any]]) + [value]
+            titles[number] = (id, title, tags)
+            return number
         }
-        func timed(_ number: Int, _ title: String, hour: Int, tags: [String]) -> [String: Any] {
-            var value = task(number, title, "normal", tags: tags)
-            value["dueDate"] = stamp(hour: hour); value["dueHasTime"] = true
-            return value
+        func log(_ day: Int, _ hour: Int, _ minute: Int, _ text: String, task: Int? = nil, kind: String = "note",
+                 tags: [String] = [], _ extra: [String: Any] = [:]) {
+            var value: [String: Any] = ["id": UUID().uuidString, "createdAt": stamp(day, hour: hour, minute: minute), "kind": kind,
+                                        "text": text, "tags": tags]
+            if let task, let linked = titles[task] {
+                value.merge(["taskID": linked.id, "taskNumber": task, "taskTitle": linked.title, "taskTags": linked.tags]) { $1 }
+            }
+            let key = entry(day)
+            days[key]!["logs"] = (days[key]!["logs"] as! [[String: Any]]) + [value.merging(extra) { $1 }]
         }
-        let tasks = [
-            timed(6, "组会同步进度", hour: 1, tags: ["研究"]),
-            timed(7, "给合作者回邮件", hour: 23, tags: []),
-            task(1, "读一篇论文，整理方法与问题", "high", tags: ["阅读"], minutes: 50),
-            task(2, "收集相关资料", "normal", completed: true, tags: ["阅读"], minutes: 25),
-            task(3, "试着复现一个小实验", "normal", tags: ["研究"], minutes: 35),
-            task(4, "整理这一周的阅读笔记", "lower", day: 1, tags: ["阅读"]),
-            task(5, "给下一个项目画张草图", "low", day: 3, tags: ["想法"]),
-            undated(8, "整理书单", tags: ["阅读"]),
-            undated(9, "试用新的笔记模板", dropped: true, tags: ["想法"]),
-            undated(10, "学一门新语言", tags: []),
-            undated(11, "重写旧博客", dropped: true, tags: []),
+        func focus(_ day: Int, _ hour: Int, task: Int, minutes: Int, goal: String, review: String) {
+            log(day, hour, 0, "▶ Focus started · planned \(minutes) min", task: task,
+                ["focus": true, "focusEvent": "start", "focusGoal": goal, "focusPlannedSeconds": minutes * 60])
+            log(day, hour, minutes, review, task: task, ["focus": true, "focusEvent": "review"])
+            log(day, hour, minutes, "■ Focus ended · \(minutes) min", task: task,
+                ["focus": true, "focusEvent": "end", "focusElapsedSeconds": minutes * 60, "focusEndReason": "Phase complete"])
+        }
+
+        // 过去：大多已完成，带专注时长。
+        let proposal = task("Draft the sync design proposal", "high", day: -24, done: true, tags: ["work"], minutes: 90)
+        let ci = task("Set up CI for the iOS build", day: -20, done: true, tags: ["dev"], minutes: 45)
+        let paper = task("Read “Attention Is All You Need”", day: -16, done: true, tags: ["reading"], minutes: 60)
+        task("Dentist appointment", "lower", day: -13, hour: 15, done: true, tags: ["life"])
+        let resolver = task("Refactor the conflict resolver", "high", day: -9, done: true, tags: ["dev"], minutes: 120)
+        task("Weekly review", day: -6, done: true, tags: ["work"], minutes: 20)
+        task("Try another note template", day: -5, dropped: true, tags: ["ideas"])
+        let bench = task("Benchmark log scrolling", day: -3, done: true, tags: ["dev"], minutes: 50)
+        task("Fix the flaky window test", day: -2, tags: ["dev"])
+        // 今天。
+        task("Team stand-up", day: 0, hour: 10, done: true, tags: ["work"])
+        let highlight = task("Ship code-block highlighting", "high", day: 0, tags: ["dev"], minutes: 35)
+        let flash = task("Read FlashAttention, note open questions", "high", day: 0, tags: ["reading"], minutes: 50)
+        task("1:1 with mentor", day: 0, hour: 16, tags: ["work"])
+        // 将来。
+        task("Review open pull requests", day: 1, tags: ["dev"])
+        task("Prepare demo-day slides", "high", day: 2, tags: ["work"])
+        task("Renew passport", "lower", day: 4, tags: ["life"])
+        task("Plan the next sprint", day: 6, tags: ["work"])
+        task("Submit the conference talk", "high", day: 9, tags: ["work"])
+        task("Weekend hike", "low", day: 11, tags: ["life"])
+        // 没有日期。
+        task("Learn Rust ownership", day: nil, tags: ["reading"])
+        task("Reorganize the bookshelf", day: nil, tags: ["life"])
+
+        focus(-24, 9, task: proposal, minutes: 50, goal: "Outline the three sync options", review: "Per-device files win: no write conflicts, easy merge.")
+        log(-20, 14, 30, "CI runs the simulator build and the unit tests on every push.", task: ci, kind: "done")
+        focus(-16, 20, task: paper, minutes: 60, goal: "Understand multi-head attention", review: "Scaled dot-product attention:\n\n$$\\mathrm{Attention}(Q,K,V)=\\mathrm{softmax}\\left(\\frac{QK^\\top}{\\sqrt{d_k}}\\right)V$$")
+        focus(-9, 10, task: resolver, minutes: 45, goal: "Merge field by field", review: "Each field keeps the newest edit; conflicts get a marker instead of being dropped.")
+        log(-6, 18, 0, "## Week in review\n\n- Sync proposal accepted\n- CI is green again\n- Next: scrolling performance", tags: ["work"])
+        focus(-3, 15, task: bench, minutes: 50, goal: "Find the slow frame", review: "Layout was cached per width — scrolling went from 18 ms to 4 ms per frame.")
+        log(-1, 17, 30, "First pass of the tokenizer: comments for `//`, `#` and `--`, strings with escapes.", task: highlight)
+        log(-1, 21, 10, "Idea: the calendar should list tasks in the same order as the list.", tags: ["ideas"])
+        log(0, 10, 20, "Stand-up: demo on Thursday, slides due tomorrow.", kind: "done")
+        focus(0, 15, task: highlight, minutes: 35, goal: "Highlight Swift and Python", review: "Comments and strings are scanned together, so `//` inside a string is not a comment.")
+        log(0, 15, 40, """
+        ## Tokenizer notes
+
+        One combined regex, left to right:
+
+        ```swift
+        let combined = "(" + comment + ")|(" + strings + ")"
+        for match in regex.matches(in: code, range: full) {
+            claim(match.range, isComment(match) ? .comment : .string)
+        }
+        ```
+
+        - Keywords per language family
+        - Cached by code + language
+        """, task: highlight)
+        focus(0, 11, task: flash, minutes: 25, goal: "Read the method, leave two questions", review: "Tiling keeps the softmax in SRAM; memory drops from $O(N^2)$ to $O(N)$.")
+        log(0, 11, 30, """
+        ## Online softmax
+
+        Running max $m$ and sum $\\ell$ are updated per block:
+
+        $$m^{new}=\\max(m, \\tilde m),\\quad \\ell^{new}=e^{m-m^{new}}\\ell+e^{\\tilde m-m^{new}}\\tilde\\ell$$
+
+        1. Why is the backward pass recomputed instead of stored?
+        2. How does block size depend on SRAM?
+        """, task: flash)
+
+        // 工作板：一个跟着任务，一个跟着标签。
+        let now = Date()
+        let boards = [
+            Board(owner: .task(UUID(uuidString: titles[highlight]!.id)!), title: titles[highlight]!.title, markdown: """
+            # Code-block highlighting
+
+            - [x] Tokenizer for comments and strings
+            - [x] Keywords per language family
+            - [ ] Copy button on hover
+            - [ ] Match the editor's colors
+
+            ```python
+            def tokens(code, language):
+                return scan(code, family(language))
+            ```
+            """, now: now),
+            Board(owner: .tag("reading"), title: "reading", markdown: """
+            # Reading queue
+
+            1. FlashAttention — **in progress**
+            2. Ring Attention
+            3. Mamba
+
+            > Write one question per paper before reading it.
+            """, now: now),
         ]
-        let first = tasks[2]["id"] as! String
-        func log(_ hour: Int, _ minute: Int, _ text: String, kind: String = "note", _ extra: [String: Any] = [:]) -> [String: Any] {
-            ["id": UUID().uuidString, "createdAt": stamp(hour: hour, minute: minute), "kind": kind, "text": text,
-             "taskID": first, "taskNumber": 1, "taskTitle": "读一篇论文，整理方法与问题", "taskTags": ["阅读"]].merging(extra) { $1 }
-        }
-        let logs = [
-            log(9, 0, "▶ 开始专注 · 计划 25 min", ["focus": true, "focusEvent": "start", "focusGoal": "看懂方法部分，留下两个问题", "focusPlannedSeconds": 1500]),
-            log(9, 12, "## 一个值得继续看的思路\n\n先用小规模实验验证假设，再考虑完整实现。\n\n- 记录对比条件\n- 解释结果的差异", ["focusEvent": "note"]),
-            log(9, 25, "方法部分读完了。下一轮先验证边界条件。", ["focus": true, "focusEvent": "review"]),
-            log(9, 25, "■ 结束专注 · 用时 25 min · 累计 1 h 15 min · 阶段结束", ["focus": true, "focusEvent": "end", "focusElapsedSeconds": 1500, "focusEndReason": "阶段结束"]),
-            log(10, 5, "整理好参考资料，下午开始实验。", kind: "done"),
-        ]
-        let document: [String: Any] = ["version": 6, "nextTaskNumber": 12, "days": [
-            JournalDates.key(today): ["todos": tasks, "logs": logs, "summary": "", "deadlineDraft": "", "logDraft": ""],
-        ]]
+        let boardData = try JSONSerialization.jsonObject(with: JSONEncoder().encode(boards))
+        let document: [String: Any] = ["version": 8, "nextTaskNumber": number + 1, "days": days, "boards": boardData]
         return try JSONSerialization.data(withJSONObject: document)
     }
 
@@ -119,15 +209,15 @@ final class DesignPreviewTests: XCTestCase {
         defer { defaults.set(previous, forKey: "tasksPaneExpanded") }
         let focus = FocusSession()
         focus.store = store
-        if let task = store.sortedTasks().first(where: { !$0.task.completed }) {
-            focus.start(task: task, url: nil, plannedSeconds: 25 * 60, goal: "读完方法部分，记下两个问题",
+        if let task = store.sortedTasks().first(where: { $0.task.title.hasPrefix("Read FlashAttention") }) {
+            focus.start(task: task, url: nil, plannedSeconds: 25 * 60, goal: "Read the method, leave two questions",
                         now: Date().addingTimeInterval(-7 * 60))
             focus.tick(now: Date())
         }
         defer { focus.stop(reason: "预览结束") }
         for dark in [true, false] {
             let interaction = WorkspaceInteraction()
-            interaction.selectedTaskID = store.sortedTasks().first { $0.task.title.hasPrefix("试着") }?.id
+            interaction.selectedTaskID = store.sortedTasks().first { $0.task.title.hasPrefix("Ship code-block") }?.id
             try render("main", size: NSSize(width: 1280, height: 1250), dark: dark,
                        ContentView(store: store, loginItem: LoginItem())
                 .environmentObject(ReminderScheduler(store: store)).environmentObject(interaction)
@@ -158,16 +248,16 @@ final class DesignPreviewTests: XCTestCase {
 
     func testRenderNotesAndJournal() throws {
         let store = JournalStore(directory: directory)
-        let task = try XCTUnwrap(store.sortedTasks().first)
+        let task = try XCTUnwrap(store.sortedTasks().first { $0.task.title.hasPrefix("Read FlashAttention") })
         for dark in [true, false] {
             let nav = NotesNavigation()
             nav.open(task: task.id)
             let notes = NotesWorkspaceNavigation()
-            try render("notes", size: NSSize(width: 1000, height: 680), dark: dark,
+            try render("notes", size: NSSize(width: 1000, height: 860), dark: dark,
                        UnifiedNotesView(store: store, workspace: notes, nav: nav, close: {}, reveal: { _ in }, openDay: { _ in }))
             let journal = NotesWorkspaceNavigation()
             journal.open(.journal, date: Date())
-            try render("journal", size: NSSize(width: 1000, height: 680), dark: dark,
+            try render("journal", size: NSSize(width: 1000, height: 860), dark: dark,
                        UnifiedNotesView(store: store, workspace: journal, nav: NotesNavigation(), close: {}, reveal: { _ in }, openDay: { _ in }))
         }
     }
@@ -179,32 +269,32 @@ extension DesignPreviewTests {
         let calendar = JournalDates.calendar
         let today = calendar.startOfDay(for: Date())
         // 一个没有任何待办、只有直接记录的笔记本，跨越两个月。
-        for (offset, texts) in [(-34, ["换个角度看问题：先写结论再找证据"]), (-6, ["周末读到的一段话", "可以试试把卡片按主题串起来"]),
-                                (-2, ["## 草图\n\n- 首页只放三件事\n- 次要信息折叠"]), (0, ["今天的灵感：日历上的任务顺序应该跟清单一致"])] {
+        for (offset, texts) in [(-34, ["Flip it: write the conclusion first, then look for evidence"]), (-6, ["A passage from the weekend reading", "Chain cards by theme instead of by date"]),
+                                (-2, ["## Sketch\n\n- Home shows three things only\n- Fold secondary info"]), (0, ["Today: the calendar should keep the list order"])] {
             let day = calendar.date(byAdding: .day, value: offset, to: today)!
             for (index, text) in texts.enumerated() {
-                _ = try store.quickLogEntry(text, linkDefault: false, tags: ["灵感"], on: day,
+                _ = try store.quickLogEntry(text, linkDefault: false, tags: ["ideas"], on: day,
                                             now: day.addingTimeInterval(TimeInterval(9 * 3600 + index * 1800)))
             }
         }
         // 有待办的笔记本里也有直接记录：目录在「直接记录」下面挂一串日期。
         for offset in [-40, -9, -1] {
             let day = calendar.date(byAdding: .day, value: offset, to: today)!
-            _ = try store.quickLogEntry("随手记一笔 \(offset)", linkDefault: false, tags: ["阅读"], on: day,
+            _ = try store.quickLogEntry(["Bookmark: The Annotated Transformer", "Skim the KV-cache survey", "Reread chapter 3 slowly"][[-40, -9, -1].firstIndex(of: offset)!], linkDefault: false, tags: ["reading"], on: day,
                                         now: day.addingTimeInterval(10 * 3600))
         }
         for dark in [true, false] {
             let chapters = NotesNavigation()
-            chapters.open(tag: "阅读")
+            chapters.open(tag: "reading")
             chapters.outlineMode = .chapters
             try render("notebook-chapters", size: NSSize(width: 1180, height: 680), dark: dark,
                        NotesView(store: store, nav: chapters, reveal: { _ in }, openDay: { _ in }))
             let nav = NotesNavigation()
-            nav.open(tag: "灵感")
+            nav.open(tag: "ideas")
             try render("notebook-outline", size: NSSize(width: 1180, height: 680), dark: dark,
                        NotesView(store: store, nav: nav, reveal: { _ in }, openDay: { _ in }))
             let narrow = NotesNavigation()
-            narrow.open(tag: "灵感")
+            narrow.open(tag: "ideas")
             narrow.chapterView = false
             try render("notebook-narrow", size: NSSize(width: 760, height: 560), dark: dark,
                        NotesView(store: store, nav: narrow, reveal: { _ in }, openDay: { _ in }))
@@ -214,7 +304,7 @@ extension DesignPreviewTests {
                 navigation.select(board.id)
                 navigation.toggleFavorite(board.id)
             }
-            if let tagBoard = store.ensureBoard(for: .tag("阅读")) { navigation.toggleFavorite(tagBoard.id) }
+            if let tagBoard = store.ensureBoard(for: .tag("reading")) { navigation.toggleFavorite(tagBoard.id) }
             try render("board", size: NSSize(width: 410, height: 300), dark: dark,
                        BoardWorkspaceView(store: store, navigation: navigation))
             try render("board-switcher", size: NSSize(width: 410, height: 420), dark: dark,
@@ -441,12 +531,12 @@ final class FocusRailWindowProbe: XCTestCase {
 extension DesignPreviewTests {
     func testRenderSearchPanel() throws {
         let store = JournalStore(directory: directory)
-        let board = try XCTUnwrap(store.ensureBoard(for: .tag("论文")))
-        store.setBoardMarkdown("# 论文阅读\n\n- [ ] 读完论文的方法部分\n- 记下两个问题", for: board.id)
+        let board = try XCTUnwrap(store.ensureBoard(for: .tag("reading")))
+        store.setBoardMarkdown("# Attention papers\n\n- [ ] Compare FlashAttention with the original attention\n- Note how tiling changes memory", for: board.id)
         let backdrop = LinearGradient(colors: [Color(red: 0.35, green: 0.45, blue: 0.75), Color(red: 0.85, green: 0.55, blue: 0.45)],
                                       startPoint: .topLeading, endPoint: .bottomTrailing)
         for dark in [true, false] {
-            for query in ["", "论文"] {
+            for query in ["", "attention"] {
                 let model = GlobalSearchModel()
                 model.store = store
                 model.query = query
