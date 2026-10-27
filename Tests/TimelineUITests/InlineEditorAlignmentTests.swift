@@ -56,7 +56,7 @@ final class InlineEditorAlignmentTests: XCTestCase {
         let log = try XCTUnwrap(store.entry(for: date).logs.first)
         let editor = InlineMarkdownEditor.shared
         let root = VStack(alignment: .leading, spacing: 0) {
-            EditableLogText(log: log, editable: true, begin: { _ in }) { editAt in
+            EditableLogText(log: log, editable: true, begin: { _, _ in }) { editAt in
                 TaskLinkText(source: log.text, completed: false, color: Palette.ink, fontSize: 13, edit: {}, open: { _ in },
                              maxLines: 0, markdown: true, compactLines: true, editAt: editAt)
             }
@@ -134,5 +134,82 @@ final class InlineEditorAlignmentTests: XCTestCase {
         editor.begin(log, on: date, store: store, at: nil, fontSize: 13, lineSpacing: 2, dark: true)
         try await wait { host.layoutSubtreeIfNeeded(); return editor.height != nil }
         print("INLINE warm reveal after", ContinuousClock.now - again)
+    }
+
+    /// 鼠标停在一条上：编辑器先悄悄排好版（不拿焦点、正文照常显示）；按下鼠标时直接交给编辑器，
+    /// 同一下就换成编辑器，光标落在按下的那个字上（不用等松开、再等网页画）。
+    func testHoverPreparesAndMouseDownGoesStraightToTheEditor() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let date = Date()
+        let text = "第一行有 **加粗** 的字\n\n1. 第一步\n2. 第二步做完"
+        store.setLogDraft(text, on: date)
+        _ = try store.commitLog(on: date, linkDefault: false)
+        let log = try XCTUnwrap(store.entry(for: date).logs.first)
+        let editor = InlineMarkdownEditor.shared
+        let root = VStack(alignment: .leading, spacing: 0) {
+            EditableLogText(log: log, editable: true, begin: { point, prepare in
+                editor.begin(log, on: date, store: store, at: point, fontSize: 13, lineSpacing: 2, dark: false, prepare: prepare)
+            }) { editAt in
+                TaskLinkText(source: log.text, completed: false, color: Palette.ink, fontSize: 13, edit: {}, open: { _ in },
+                             maxLines: 0, markdown: true, compactLines: true, editAt: editAt)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(width: 420, height: 300, alignment: .top)
+        let host = NSHostingView(rootView: root)
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { editor.finish(); window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        let native = try XCTUnwrap(find(host))
+        let webViewForTest = editor.makeWebView()
+        let selector = NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")
+        typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+        if webViewForTest.responds(to: selector) {
+            unsafeBitCast(webViewForTest.method(for: selector), to: Setter.self)(webViewForTest, selector, false)
+        }
+        defer {
+            if webViewForTest.responds(to: selector) {
+                unsafeBitCast(webViewForTest.method(for: selector), to: Setter.self)(webViewForTest, selector, true)
+            }
+        }
+
+        editor.begin(log, on: date, store: store, at: nil, fontSize: 13, lineSpacing: 2, dark: false, prepare: true)
+        try await wait { host.layoutSubtreeIfNeeded(); return editor.height != nil }
+        host.layoutSubtreeIfNeeded()
+        let webView = try XCTUnwrap(editor.webView)
+        XCTAssertFalse(editor.isEditing(log.id), "只是排好版，还没开始编辑")
+        XCTAssertEqual(native.alphaValue, 1)
+        XCTAssertFalse(window.firstResponder === webView, "提前排版不抢键盘焦点")
+        let revealed = try await webView.evaluateJavaScript("document.querySelectorAll('.cm-line')[0].textContent") as? String
+        XCTAssertEqual(revealed, "第一行有 加粗 的字", "光标不在里面：不露 Markdown 标记，排版和正文一样")
+
+        // 按在「第二步」的「二」上。
+        let target = (native.string as NSString).range(of: "第二步")
+        let manager = try XCTUnwrap(native.layoutManager)
+        let glyph = manager.glyphIndexForCharacter(at: target.location + 1)
+        var rect = manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: native.textContainer!)
+        rect = rect.offsetBy(dx: native.textContainerOrigin.x, dy: native.textContainerOrigin.y)
+        let point = native.convert(NSPoint(x: rect.minX + 2, y: rect.midY), to: nil)
+        func mouse(_ type: NSEvent.EventType) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!
+        }
+        native.mouseDown(with: mouse(.leftMouseDown))
+        XCTAssertTrue(editor.isEditing(log.id), "按下的同一下就开始编辑")
+        XCTAssertNotNil(editor.height, "已经画好：马上换成编辑器")
+        XCTAssertTrue(window.firstResponder === webView, "键盘交给编辑器")
+        native.mouseUp(with: mouse(.leftMouseUp))
+        let expected = (text as NSString).range(of: "第二步").location
+        var head = -1
+        try await wait {
+            head = (try? await webView.evaluateJavaScript("window.boardEditor.snapshot().head") as? Int) ?? -1
+            return head >= expected && head <= expected + 2
+        }
+        XCTAssertTrue(head >= expected && head <= expected + 2, "光标落在按下的字旁边：\(head)，期望 \(expected)…\(expected + 2)")
     }
 }

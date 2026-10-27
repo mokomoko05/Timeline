@@ -32,7 +32,7 @@ final class InlineMarkdownEditorTests: XCTestCase {
         let editor = InlineMarkdownEditor.shared
 
         let root = VStack(alignment: .leading, spacing: 0) {
-            EditableLogText(log: log, editable: true, begin: { point in
+            EditableLogText(log: log, editable: true, begin: { point, _ in
                 editor.begin(log, on: date, store: store, at: point, fontSize: 13, lineSpacing: 2, dark: true)
             }) { editAt in
                 TaskLinkText(source: log.text, completed: false, color: Palette.ink, fontSize: 13, edit: {}, open: { _ in },
@@ -101,7 +101,7 @@ final class InlineMarkdownEditorTests: XCTestCase {
         _ = try store.commitLog(on: date, linkDefault: false)
         let log = try XCTUnwrap(store.entry(for: date).logs.first)
         let editor = InlineMarkdownEditor.shared
-        let root = EditableLogText(log: log, editable: true, begin: { _ in }) { _ in Text(log.text) }.frame(width: 300, height: 200, alignment: .top)
+        let root = EditableLogText(log: log, editable: true, begin: { _, _ in }) { _ in Text(log.text) }.frame(width: 300, height: 200, alignment: .top)
         let host = NSHostingView(rootView: root)
         let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

@@ -624,7 +624,7 @@ struct NotesView: View {
         } content: {
             if !log.text.isEmpty {
                 // 点一下正文就地编辑（和工作板一样所见即所得），点别处、Esc 或 ⌘↩ 保存。
-                EditableLogText(log: log, editable: !store.isReadOnly && log.hasEditableText, begin: { beginNoteEdit(item, at: $0) }) { editAt in
+                EditableLogText(log: log, editable: !store.isReadOnly && log.hasEditableText, begin: { beginNoteEdit(item, at: $0, prepare: $1) }) { editAt in
                     TaskLinkText(source: LogEventStyle.body(log), completed: false, color: Palette.ink, fontSize: 13,
                                  edit: { beginNoteEdit(item, at: nil) }, open: SafariLinks.open,
                                  maxLines: 0, markdown: true, compactLines: true, editAt: editAt, foldID: "log.\(log.id.uuidString)")
@@ -669,10 +669,10 @@ struct NotesView: View {
         .help(LocalizedStringKey(help)).accessibilityLabel(LocalizedStringKey(help))
     }
 
-    private func beginNoteEdit(_ item: JournalStore.LoggedLog, at point: CGPoint?) {
+    private func beginNoteEdit(_ item: JournalStore.LoggedLog, at point: CGPoint?, prepare: Bool = false) {
         guard !store.isReadOnly, item.log.hasEditableText else { return }
         InlineMarkdownEditor.shared.begin(item.log, on: item.date, store: store, at: point,
-                                          fontSize: typography.pt(13), lineSpacing: typography.lineSpacing, dark: colorScheme == .dark)
+                                          fontSize: typography.pt(13), lineSpacing: typography.lineSpacing, dark: colorScheme == .dark, prepare: prepare)
     }
 
     private func deleteNote(_ item: JournalStore.LoggedLog) {

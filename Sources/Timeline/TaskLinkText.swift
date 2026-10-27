@@ -344,6 +344,8 @@ final class InteractiveTaskText: NSTextView {
     var onSelect: (() -> Void)?
     var onClick: (() -> Void)?
     var onEditAt: ((CGPoint) -> Void)?
+    /// 按下鼠标时交给了就地编辑器：这次的拖动、松开也转给它。
+    private weak var forwardedMouse: NSView?
     private var hoveredURL: URL?
     private var hoveredHeading: String?
     private var tracking: NSTrackingArea?
@@ -682,6 +684,13 @@ final class InteractiveTaskText: NSTextView {
             }
             onSelect?()
             onClick?()
+            // 就地编辑器已经在这一条上面排好了（鼠标停在这里时）：这一下直接交给它，光标、拖选都由它处理，和在工作板里点一样。
+            // 之后的拖动、松开还会送到这里（按下的是这个视图），一并转过去。
+            if event.clickCount == 1, onEditAt != nil, interactionEnabled, let editor = InlineMarkdownEditor.shared.takeOver(event) {
+                forwardedMouse = editor
+                editor.mouseDown(with: event)
+                return
+            }
             super.mouseDown(with: event)
             // 系统的选择跟踪在松开鼠标后才返回：没有拖选文字就是点了一下，就地编辑。
             if event.clickCount == 1, selectedRange().length == 0, let onEditAt, interactionEnabled {
@@ -694,6 +703,7 @@ final class InteractiveTaskText: NSTextView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if let forwardedMouse { forwardedMouse.mouseDragged(with: event); return }
         guard interactionEnabled, !dragged, let initial = mouseDownEvent,
               hypot(event.locationInWindow.x - initial.locationInWindow.x,
                     event.locationInWindow.y - initial.locationInWindow.y) > 4 else { return }
@@ -704,6 +714,11 @@ final class InteractiveTaskText: NSTextView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if let forwardedMouse {
+            self.forwardedMouse = nil
+            forwardedMouse.mouseUp(with: event)
+            return
+        }
         defer { mouseDownEvent = nil }
         guard mouseDownEvent != nil, !dragged else { return }
         let point = convert(event.locationInWindow, from: nil)

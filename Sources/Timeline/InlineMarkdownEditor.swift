@@ -17,10 +17,17 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         let date: Date
     }
 
-    /// 正在编辑的条目。
-    @Published private(set) var target: Target?
-    /// 编辑器已经排好版、量出了高度：这时才把渲染好的正文换成编辑器，换的时候不闪。
-    @Published private(set) var height: CGFloat?
+    /// 编辑器所在的条目：正在编辑，或者鼠标停在上面、先悄悄排好版等着点（`preparing`）。
+    private(set) var target: Target?
+    /// 只是提前排好版，还没开始编辑：不拿键盘焦点，正文照常显示。
+    private(set) var preparing = false
+    /// 编辑器已经画好、量出了高度：开始编辑时就把渲染好的正文换成编辑器，换的时候不闪。
+    var height: CGFloat? { slot?.height }
+    /// 每一条只订阅自己的状态：编辑器挪到哪一条，只有新旧两条重算。
+    private var slots = NSMapTable<NSUUID, InlineEditSlot>.strongToWeakObjects()
+    private var slot: InlineEditSlot?
+    private var pendingPrepare: (id: UUID, work: DispatchWorkItem)?
+    private var shift: CGFloat = 0
 
     private(set) var webView: InlineEditorWebView?
     private var store: JournalStore?
@@ -44,27 +51,78 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         }
     }
 
-    func isEditing(_ id: UUID) -> Bool { target?.logID == id }
+    func isEditing(_ id: UUID) -> Bool { target?.logID == id && !preparing }
+
+    func slot(for id: UUID) -> InlineEditSlot {
+        if let slot = slots.object(forKey: id as NSUUID) { return slot }
+        let slot = InlineEditSlot()
+        slots.setObject(slot, forKey: id as NSUUID)
+        return slot
+    }
+
+    /// 鼠标停在一条上一小会儿：先把编辑器放到这一条上面排好版（看不见、不拿焦点），点下去时直接交给它，不用再等。
+    /// 正在编辑别的条目时不动。
+    func prepareSoon(_ id: UUID, _ prepare: @escaping () -> Void) {
+        guard target == nil || preparing, target?.logID != id, pendingPrepare?.id != id, !Headless.active || preparesInTests else { return }
+        pendingPrepare?.work.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.pendingPrepare?.id == id else { return }
+            self.pendingPrepare = nil
+            prepare()
+        }
+        pendingPrepare = (id, work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
+    func cancelPrepare(_ id: UUID) {
+        guard pendingPrepare?.id == id else { return }
+        pendingPrepare?.work.cancel()
+        pendingPrepare = nil
+    }
+
+    /// 测试里也悬停预备（平时测试进程不预备，免得列表测试被打扰）。
+    var preparesInTests = false
+
+    /// 在正文上按下鼠标：编辑器已经在这一条上面排好、画好了，就开始编辑，返回编辑器，这一下（和之后的拖动、松开）交给它，
+    /// 光标由编辑器自己放，和在工作板里点一样；还没准备好返回 nil，照旧松开后再换。
+    func takeOver(_ event: NSEvent) -> NSView? {
+        guard preparing, painted, let webView, let window = webView.window, event.window === window, !webView.isHiddenOrHasHiddenAncestor,
+              webView.bounds.contains(webView.convert(event.locationInWindow, from: nil)) else { return nil }
+        activate(place: nil)
+        return webView
+    }
 
     /// 开始编辑一条日志；`point` 是点在渲染好的正文上的位置（光标放到那里），nil 时放在末尾。
     /// `fontSize`、`lineSpacing` 和渲染好的正文一样（已乘界面缩放），编辑器按它们排版，每一行落在原来的位置上。
     /// `muted`：正文是用淡色画的（日记里专注期间的笔记、反馈），编辑器也用淡色。
+    /// `prepare`：只是鼠标停在上面，先排好版等着点。
     func begin(_ log: DailyLogEntry, on date: Date, store: JournalStore, at point: CGPoint?, fontSize: CGFloat, lineSpacing: CGFloat,
-               dark: Bool, muted: Bool = false) {
+               dark: Bool, muted: Bool = false, prepare: Bool = false) {
         guard !store.isReadOnly else { return }
-        if target?.logID == log.id { return }
+        if prepare, target != nil, !preparing { return }
+        if target?.logID == log.id {
+            if preparing, !prepare {
+                caret = point.map(caretPoint)
+                activate(place: placement(caret))
+            }
+            return
+        }
+        cancelPrepare(log.id)
         finish()
         self.store = store
         target = Target(logID: log.id, date: date)
-        height = nil
+        preparing = prepare
+        slot = slot(for: log.id)
+        slot?.height = nil
+        slot?.phase = prepare ? .prepared : .editing
         original = log.text
         source = log.text
         configured = false
         painted = false
         let folds = HeadingFolds.folded(in: Self.foldID(log.id))
         let metrics = InlineEditorMetrics.css(fontSize: fontSize, lineSpacing: lineSpacing)
-        // 点的位置相对正文的文字区；编辑器的文字区左边多 2px 内边距、整篇往上提了 shift。
-        caret = point.map { CGPoint(x: $0.x + 2, y: $0.y + (metrics["shift"] ?? 0)) }
+        shift = metrics["shift"] ?? 0
+        caret = point.map(caretPoint)
         var colors = BoardLiveEditorSession.colors(dark: dark)
         if muted { colors["ink"] = colors["muted"] }
         settings = ["key": "log." + log.id.uuidString, "source": log.text, "inline": true, "readOnly": false, "sourceMode": false,
@@ -74,12 +132,32 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
                     "folds": Dictionary(uniqueKeysWithValues: folds.map { ($0, true) })]
         _ = makeWebView()
         configure()
+        if !prepare { watchClicks() }
+    }
+
+    /// 点的位置相对正文的文字区；编辑器的文字区左边多 2px 内边距、整篇往上提了 shift。
+    private func caretPoint(_ point: CGPoint) -> CGPoint { CGPoint(x: point.x + 2, y: point.y + shift) }
+
+    private func placement(_ caret: CGPoint?) -> String {
+        caret.map { "window.boardEditor.placeCaret(\($0.x), \($0.y))" }
+            ?? "window.boardEditor.focus(); window.boardEditor.select(window.boardEditor.snapshot().source.length)"
+    }
+
+    /// 提前排好版的这一条开始编辑：拿键盘焦点；`place` 是放光标的脚本（nil：按下的鼠标交给网页，由它放）。
+    private func activate(place: String?) {
+        guard preparing, let webView else { return }
+        preparing = false
+        slot?.phase = .editing
+        webView.window?.makeFirstResponder(webView)
         watchClicks()
+        // 还没配置好：配置时按 `caret` 放光标。
+        if configured, let place { webView.evaluateJavaScript(place + "; 0") }
     }
 
     /// 保存并结束编辑（点了别处、换了窗口内容、应用退出）。
     func finish() {
         guard target != nil else { return }
+        if preparing { end(); return }
         let webView = webView
         save()
         if ready, configured, let webView {
@@ -109,7 +187,10 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
             window.makeFirstResponder(nil)
         }
         target = nil
-        height = nil
+        preparing = false
+        slot?.phase = .idle
+        slot?.height = nil
+        slot = nil
         caret = nil
         configured = false
         painted = false
@@ -174,6 +255,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
 
     /// 内存紧张时释放（没在编辑才放）。
     func release() {
+        if preparing { end() }
         guard target == nil, let webView else { return }
         webView.removeFromSuperview()
         self.webView = nil
@@ -185,12 +267,11 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
               let data = try? JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys]) else { return }
         configured = true
         let json = String(decoding: data, as: UTF8.self)
-        let caret = self.caret
-        webView.window?.makeFirstResponder(webView)
-        let place = caret.map { "window.boardEditor.placeCaret(\($0.x), \($0.y))" }
-            ?? "window.boardEditor.focus(); window.boardEditor.select(window.boardEditor.snapshot().source.length)"
+        // 只是提前排版：不拿焦点、不放光标（光标不在里面时不露任何标记，排版和正文一样）。
+        let place = preparing ? "" : placement(caret) + "; "
+        if !preparing { webView.window?.makeFirstResponder(webView) }
         let target = self.target
-        webView.evaluateJavaScript("window.boardEditor.configure(\(json)); \(place); 0", completionHandler: nil)
+        webView.evaluateJavaScript("window.boardEditor.configure(\(json)); \(place)0", completionHandler: nil)
         // 网页画好了才换：原生正文一直显示到那一刻，中间不会空一帧。
         webView.callAsyncJavaScript("return await window.boardEditor.painted()", arguments: [:], in: nil, in: .page) { [weak self] result in
             guard let self, self.target == target, case .success(let value) = result, let value = value as? Double, value > 0 else { return }
@@ -208,13 +289,13 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
 
     private func reveal(_ value: CGFloat) {
         painted = true
-        height = value
+        slot?.height = value
     }
 
     /// 编辑器挪进了这一条的位置（有窗口了）：拿键盘焦点，排好版。
     func attached() {
         guard let webView, webView.window != nil else { return }
-        if configured { webView.window?.makeFirstResponder(webView) } else { configure() }
+        if configured { if !preparing { webView.window?.makeFirstResponder(webView) } } else { configure() }
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -229,7 +310,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
             composing = body["composing"] as? Bool ?? false
         case "height":
             guard target != nil, configured, painted, let value = body["value"] as? Double, value > 0 else { return }
-            height = CGFloat(value)
+            slot?.height = CGFloat(value)
         case "done":
             finish()
         case "fold":
@@ -386,8 +467,17 @@ final class InlineEditorContainer: NSView {
     }
 }
 
+/// 一条日志 / 笔记和就地编辑器的关系：没有、编辑器在上面排好版等着点、正在编辑。
+@MainActor final class InlineEditSlot: ObservableObject {
+    enum Phase { case idle, prepared, editing }
+    @Published fileprivate(set) var phase = Phase.idle
+    /// 编辑器画好后量出的高度。
+    @Published fileprivate(set) var height: CGFloat?
+}
+
 struct InlineEditorHost: NSViewRepresentable {
-    @ObservedObject var editor: InlineMarkdownEditor
+    let editor: InlineMarkdownEditor
+    @ObservedObject var slot: InlineEditSlot
 
     func makeNSView(context: Context) -> InlineEditorContainer {
         let container = InlineEditorContainer()
@@ -405,35 +495,42 @@ struct InlineEditorHost: NSViewRepresentable {
 
 /// 日志 / 笔记的正文：平时是渲染好的 Markdown，点一下就地变成编辑器。
 struct EditableLogText<Content: View>: View {
-    @ObservedObject private var editor = InlineMarkdownEditor.shared
+    private let editor = InlineMarkdownEditor.shared
+    @ObservedObject private var slot: InlineEditSlot
     let log: DailyLogEntry
     @ViewBuilder let content: (_ beginAt: ((CGPoint) -> Void)?) -> Content
-    let begin: (CGPoint?) -> Void
+    /// 开始编辑（点的位置）；第二个参数为 true 时只是鼠标停在上面，先排好版。
+    let begin: (_ point: CGPoint?, _ prepare: Bool) -> Void
     let editable: Bool
 
-    init(log: DailyLogEntry, editable: Bool, begin: @escaping (CGPoint?) -> Void,
+    init(log: DailyLogEntry, editable: Bool, begin: @escaping (_ point: CGPoint?, _ prepare: Bool) -> Void,
          @ViewBuilder content: @escaping (_ beginAt: ((CGPoint) -> Void)?) -> Content) {
         self.log = log
         self.editable = editable
         self.begin = begin
         self.content = content
+        _slot = ObservedObject(wrappedValue: InlineMarkdownEditor.shared.slot(for: log.id))
     }
 
     var body: some View {
-        let editing = editor.isEditing(log.id)
-        let shown = editing && editor.height != nil
-        // 编辑器一直是同一个视图：先在正文上面悄悄排版（几乎透明），量出高度后正文隐去、编辑器显出来，同一帧换过去。
+        let shown = slot.phase == .editing && slot.height != nil
+        // 编辑器一直是同一个视图：先在正文上面悄悄排版（几乎透明），画好后正文隐去、编辑器显出来，同一帧换过去。
         // 不换视图层级（换了网页要重新挂到窗口上，会白一下；新旧两个容器同时在时还会把网页抢回旧的那个，整块不见）。
-        content(editable && !shown ? { begin($0) } : nil)
+        // 鼠标停在这一条上时就先排好：按下鼠标直接交给编辑器，不用等松开、再等它画。
+        content(editable && !shown ? { begin($0, false) } : nil)
             .opacity(shown ? 0 : 1)
             .allowsHitTesting(!shown)
-            .frame(height: shown ? editor.height : nil, alignment: .top)
+            .frame(height: shown ? slot.height : nil, alignment: .top)
             .overlay(alignment: .top) {
-                if editing {
-                    InlineEditorHost(editor: editor)
+                if slot.phase != .idle {
+                    InlineEditorHost(editor: editor, slot: slot)
                         .opacity(shown ? 1 : 0.01)
                         .allowsHitTesting(shown)
                 }
+            }
+            .onHover { inside in
+                guard editable else { return }
+                if inside { editor.prepareSoon(log.id) { begin(nil, true) } } else { editor.cancelPrepare(log.id) }
             }
     }
 }
