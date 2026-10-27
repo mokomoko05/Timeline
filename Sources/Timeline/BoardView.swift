@@ -195,6 +195,7 @@ struct BoardWorkspaceView: View {
     @ObservedObject var navigation: BoardNavigation
     var close: () -> Void = {}
     @State private var choosing = false
+    @StateObject private var toast = ToastCenter()
 
     private var board: Board? { store.boards.first { $0.id == navigation.selection } }
 
@@ -222,12 +223,7 @@ struct BoardWorkspaceView: View {
                         .keyboardShortcut("k", modifiers: .command)
                 }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            if let error = store.errorMessage {
-                HStack {
-                    Text(AppLocalizedLines(error)).font(.caption).foregroundStyle(Palette.deadline).textSelection(.enabled)
-                    Button("重试保存") { store.save() }
-                }.padding(10)
-            }
+            AppIssueBanner()
         }
         .overlay {
             if choosing {
@@ -241,6 +237,11 @@ struct BoardWorkspaceView: View {
             }
         }
         .animation(Motion.reduced ? nil : .easeOut(duration: 0.12), value: choosing)
+        .overlay(alignment: .bottom) { ToastView(center: toast).padding(.bottom, 18) }
+        .onReceive(NotificationCenter.default.publisher(for: .timelineEditorRecovered)) { note in
+            guard note.object as? String == "board" else { return }
+            toast.show(AppLocalized("编辑器意外退出，已保存输入并重新载入"))
+        }
         .background(Palette.background).foregroundStyle(Palette.ink).tint(Palette.accent)
         .ignoresSafeArea(.container, edges: .top)
         .onAppear { if !Headless.active { BoardLiveEditorSession.preloadEditor() } }

@@ -42,6 +42,14 @@ struct EntryRail: View {
     @State private var picked: UUID?
     @State private var hold: Task<Void, Never>?
 
+    private var currentIndex: Int? { positions.current.flatMap { current in marks.firstIndex { $0.id == current } } }
+
+    private var accessibilityValue: String {
+        guard let index = currentIndex else { return LF("共 %lld 条", marks.count) }
+        let mark = marks[index]
+        return LF("第 %lld 条，共 %lld 条", index + 1, marks.count) + " · " + mark.label + " " + mark.preview
+    }
+
     private struct Touch {
         var startY: CGFloat
         var lastY: CGFloat
@@ -64,16 +72,26 @@ struct EntryRail: View {
                 if let touch, touch.fine != nil {
                     let loupe = RailLoupe(marks: marks, index: touch.fineIndex)
                     loupe.offset(x: -(Self.width + 4), y: min(max(0, touch.lastY - RailLoupe.height / 2), max(0, height - RailLoupe.height)))
-                        .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .trailing)))
+                        .transition(Motion.transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .trailing))))
                         .allowsHitTesting(false)
                 }
             }
-            .animation(.snappy(duration: 0.18), value: touch?.fine != nil)
+            .animation(Motion.adapt(.snappy(duration: 0.18)), value: touch?.fine != nil)
         }
         .frame(width: Self.width)
         .sensoryFeedback(.selection, trigger: picked) { _, new in new != nil }
         .sensoryFeedback(.impact(weight: .medium), trigger: touch?.fine != nil) { old, new in !old && new }
-        .accessibilityHidden(true)
+        // 读屏：整条是一个可调节的元素，上下轻扫跳到上一条 / 下一条记录。
+        .accessibilityElement()
+        .accessibilityLabel(Text("节奏条"))
+        .accessibilityValue(Text(accessibilityValue))
+        .accessibilityHint(Text("上下轻扫跳到上一条或下一条记录"))
+        .accessibilityAdjustableAction { direction in
+            guard !marks.isEmpty else { return }
+            let index = currentIndex ?? -1
+            let next = direction == .increment ? min(index + 1, marks.count - 1) : max(index - 1, 0)
+            select(marks[next].id)
+        }
         // 截图检查用：模拟按住条的中间不动，打开放大镜。
         .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
             if note.object as? String == "railLoupe", !marks.isEmpty {
@@ -189,7 +207,7 @@ private struct RailThumb: View {
                 .overlay(Capsule().stroke(Palette.background, lineWidth: 1.5))
                 .shadow(color: .black.opacity(0.15), radius: 2, y: 1)
                 .position(x: EntryRail.width - 9, y: height * mark.position)
-                .animation(.snappy(duration: 0.2), value: current)
+                .animation(Motion.adapt(.snappy(duration: 0.2)), value: current)
         }
     }
 }

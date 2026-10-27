@@ -34,7 +34,27 @@ extension View {
 /// 折叠不做布局动画：长文本整段跟着动画重排很卡，只让箭头转一下。每个块用它在全文里的序号做标识。
 /// 展开过的块收起时不从视图里拿掉，只把高度压成 0：再展开时文字不用重新排版（长段落排一次要好几帧）。
 /// 块之间的间距放在每块自己的上边距里，压成 0 的块不留空隙。
+/// Markdown 正文。`size` 是默认字号下的大小，跟着系统的「文字大小」缩放（最多放大到 1.8 倍，长文排版还放得下）。
 struct MarkdownView: View {
+    let source: String
+    var foldScope: String?
+    var size: CGFloat = 16
+    var toggleTask: ((Int) -> Void)?
+    /// 只用来在系统文字大小改变时重新计算。
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        MarkdownContent(source: source, foldScope: foldScope, size: Self.scaled(size, typeSize), toggleTask: toggleTask)
+    }
+
+    static func scaled(_ size: CGFloat, _ typeSize: DynamicTypeSize) -> CGFloat {
+        let category = UIContentSizeCategory(typeSize)
+        let scaled = UIFontMetrics(forTextStyle: .body).scaledValue(for: size, compatibleWith: UITraitCollection(preferredContentSizeCategory: category))
+        return min(scaled, size * 1.8).rounded()
+    }
+}
+
+private struct MarkdownContent: View {
     let source: String
     var foldScope: String?
     var size: CGFloat = 16
@@ -62,7 +82,7 @@ struct MarkdownView: View {
                                     .font(.system(size: size * 0.85, weight: .semibold))
                                     .foregroundStyle(Palette.muted)
                                     .rotationEffect(.degrees(folded.contains(key) ? -90 : 0))
-                                    .animation(.easeOut(duration: 0.15), value: folded.contains(key))
+                                    .animation(Motion.adapt(.easeOut(duration: 0.15)), value: folded.contains(key))
                                     .frame(width: size * 1.9, height: size * 1.9)
                                     .background(Palette.muted.opacity(0.12), in: RoundedRectangle(cornerRadius: size * 0.55, style: .continuous))
                                     .frame(width: 44, height: 44)

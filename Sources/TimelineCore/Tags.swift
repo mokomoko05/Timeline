@@ -308,9 +308,9 @@ extension JournalStore {
 
 /// 待办标题与查询词的匹配：字面、拼音、拼音首字母、漏字模糊。
 @MainActor
-enum LinkMatcher {
+public enum LinkMatcher {
     /// 质量：0 编号精确；1 标题开头或某个词开头；2 标题 / 标签包含；3 拼音或首字母；4 漏字模糊（最差）。
-    static let fuzzy = 4
+    public static let fuzzy = 4
 
     private struct Pinyin: Sendable { let full: String; let initials: String }
     private static var cache: [String: Pinyin] = [:]
@@ -349,7 +349,7 @@ enum LinkMatcher {
     }
 
     /// 文字与查询词的匹配质量（1 开头 / 词开头；2 包含；3 拼音或首字母；4 漏字模糊），不匹配为 nil。
-    static func textQuality(_ title: String, rawTitle: String? = nil, tags: [String] = [], query: String) -> Int? {
+    public static func textQuality(_ title: String, rawTitle: String? = nil, tags: [String] = [], query: String) -> Int? {
         let needle = query.lowercased()
         let lower = title.lowercased()
         if lower.hasPrefix(needle) { return 1 }
@@ -373,6 +373,42 @@ enum LinkMatcher {
             if !found { return false }
         }
         return true
+    }
+}
+
+/// 全局搜索（Mac 和 iPhone）共用的匹配规则。
+extension LinkMatcher {
+    /// 搜索词按空格拆开，每个词都要出现（不必挨着）。
+    public nonisolated static func terms(_ query: String) -> [String] {
+        query.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+    }
+
+    public nonisolated static func containsAll(_ text: String, _ terms: [String]) -> Bool {
+        terms.allSatisfy { text.localizedStandardContains($0) }
+    }
+
+    /// 待办的搜索质量（越小越靠前）：0 标题就是搜索词或编号相同；1 开头或词开头；2 包含；3 拼音或拼音首字母。
+    /// 每个词都要匹配，取最差的那个；漏字模糊在全局搜索里太杂，不算。
+    public static func searchQuality(_ item: ScheduledTask, terms: [String]) -> Int? {
+        let title = String(TaskText.rendered(item.task.title, alias: item.task.calendarName).characters)
+        if terms.count == 1, title.compare(terms[0], options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame { return 0 }
+        var worst = 0
+        for term in terms {
+            var quality = textQuality(title, rawTitle: item.task.title, tags: item.task.tags, query: term)
+            if quality == nil, let number = Int(term.drop(while: { $0 == "#" })), item.task.number == number { quality = 0 }
+            guard let quality, quality < fuzzy else { return nil }
+            worst = max(worst, quality)
+        }
+        return worst
+    }
+
+    /// 按搜索质量排好的待办：质量相同时没完成的在前，再按截止日期。
+    public static func searchTasks(_ items: [ScheduledTask], terms: [String]) -> [ScheduledTask] {
+        items.compactMap { item in searchQuality(item, terms: terms).map { (item, $0) } }.sorted { lhs, rhs in
+            if lhs.1 != rhs.1 { return lhs.1 < rhs.1 }
+            if lhs.0.task.completed != rhs.0.task.completed { return !lhs.0.task.completed }
+            return (lhs.0.task.dueDate ?? .distantFuture) < (rhs.0.task.dueDate ?? .distantFuture)
+        }.map(\.0)
     }
 }
 

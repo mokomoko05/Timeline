@@ -144,7 +144,8 @@ final class FocusSessionTests: XCTestCase {
 
         session.stop(reason: "手动结束", now: start.addingTimeInterval(1503))
         XCTAssertEqual(changes, [true, false])
-        let logs = try XCTUnwrap(store.days[JournalDates.key(start)]?.logs)
+        // 临近午夜运行时，结束记录落在第二天。
+        let logs = Array(Set([start, start.addingTimeInterval(1503)].map(JournalDates.key))).sorted().flatMap { store.days[$0]?.logs ?? [] }
         XCTAssertEqual(logs.map(\.text), ["▶ 开始专注", "■ 结束专注 · 用时 25 分 3 秒 · 累计 25 分 3 秒 · 手动结束"], "日志和有链接的任务完全一样")
         XCTAssertEqual(store.locate(plain.id)?.task.focusSeconds ?? 0, 1503, accuracy: 0.01)
     }
@@ -488,6 +489,41 @@ final class FocusSessionTests: XCTestCase {
         session.stop(reason: "手动结束", now: start.addingTimeInterval(600))
         XCTAssertFalse(session.isPaused)
         XCTAssertEqual(store.locate(task.id)?.task.focusSeconds ?? 0, 90, accuracy: 0.01)
+    }
+
+    func testSleepPausesFocusAndWakeAsksWhatToDo() throws {
+        let (session, store, task) = try makeSession()
+        var asked = 0
+        session.onReturnFromSleep = { asked += 1 }
+        let start = JournalDates.calendar.date(bySettingHour: 12, minute: 0, second: 0, of: Date())!
+        session.start(task: task, url: nil, now: start)
+        session.systemWillSleep(at: start.addingTimeInterval(300))
+        XCTAssertTrue(session.isPaused)
+        XCTAssertTrue(session.pausedBySleep)
+        session.systemDidWake()
+        XCTAssertEqual(asked, 1)
+        // 继续之后睡着的 10 分钟不算。
+        session.resume(now: start.addingTimeInterval(900))
+        XCTAssertFalse(session.pausedBySleep)
+        session.stop(reason: "手动结束", now: start.addingTimeInterval(960))
+        XCTAssertEqual(store.locate(task.id)?.task.focusSeconds ?? 0, 360, accuracy: 0.01)
+    }
+
+    func testMissedSleepNotificationIsCaughtByTheTimerGap() throws {
+        let (session, store, task) = try makeSession()
+        var asked = 0
+        session.onReturnFromSleep = { asked += 1 }
+        let start = Date()
+        session.start(task: task, url: nil, now: start)
+        for second in 1...60 { session.timerFired(now: start.addingTimeInterval(TimeInterval(second))) }
+        XCTAssertFalse(session.isPaused, "一秒一次的正常计时不算睡眠")
+        // 合盖 10 分钟，没收到睡眠通知：下一次触发发现间隔，从上一次触发起算暂停。
+        session.timerFired(now: start.addingTimeInterval(660))
+        XCTAssertTrue(session.isPaused)
+        XCTAssertEqual(asked, 1)
+        XCTAssertEqual(session.elapsed, 60, accuracy: 0.01)
+        session.stop(reason: "手动结束", now: start.addingTimeInterval(700))
+        XCTAssertEqual(store.locate(task.id)?.task.focusSeconds ?? 0, 60, accuracy: 0.01)
     }
 
     func testQuickLogsDuringFocusLinkToTheFocusedTaskAndStopWhenItEnds() throws {

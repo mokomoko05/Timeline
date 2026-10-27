@@ -112,6 +112,7 @@ struct BoardPage: View {
                         Toggle(isOn: $sourceMode) { Label("显示 Markdown 源码", systemImage: "chevron.left.forwardslash.chevron.right") }
                         Button { session.commit(); showingHistory = true } label: { Label("版本历史", systemImage: "clock.arrow.circlepath") }
                     } label: { Image(systemName: "ellipsis.circle") }
+                    .accessibilityLabel("更多")
                 }
             }
             .sheet(isPresented: $showingHistory) { BoardHistoryView(store: store, boardID: id) }

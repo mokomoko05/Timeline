@@ -36,7 +36,11 @@ final class FocusSession: ObservableObject {
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var isPaused = false
     @Published private(set) var needsReflection = false
+    /// 这次暂停是电脑睡眠 / 锁屏时自动做的：唤醒后提示用户继续还是结束。
+    @Published private(set) var pausedBySleep = false
     var onCountdownEnd: (() -> Void)?
+    /// 睡眠或锁屏后回来、专注因此停着：界面把专注面板拿出来。
+    var onReturnFromSleep: (() -> Void)?
     var remainingSeconds: TimeInterval {
         max(0, (active?.plannedSeconds ?? 0) - elapsed)
     }
@@ -64,6 +68,10 @@ final class FocusSession: ObservableObject {
     private var automationDenied = false
     private var pausedAt: Date?
     private var pausedSeconds: TimeInterval = 0
+    /// 上一次计时器触发的真实时间：两次之间隔得太久，说明电脑睡过（错过了睡眠通知也能发现）。
+    private var lastTimerFire = Date()
+    /// 计时停了这么久以上就当作睡眠，从停下的那一刻算暂停。
+    static let sleepGap: TimeInterval = 90
 
     deinit { timer?.invalidate() }
 
@@ -106,8 +114,10 @@ final class FocusSession: ObservableObject {
         elapsed = 0
         isPaused = false
         needsReflection = false
+        pausedBySleep = false
         pausedAt = nil
         pausedSeconds = 0
+        lastTimerFire = Date()
         store.setFocusPaused(false)
         awayStreak = 0
         learnedBundle = nil
@@ -131,7 +141,7 @@ final class FocusSession: ObservableObject {
         onActiveChange?(true)
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tick() }
+            MainActor.assumeIsolated { self?.timerFired() }
         }
         // 计时按实际时间计算，晚一点触发不影响读数；允许系统合并唤醒以省电。
         timer?.tolerance = 0.15
@@ -160,6 +170,7 @@ final class FocusSession: ObservableObject {
         elapsed = 0
         isPaused = false
         needsReflection = false
+        pausedBySleep = false
         pausedAt = nil
         pausedSeconds = 0
         baseline = nil
@@ -183,6 +194,7 @@ final class FocusSession: ObservableObject {
         }
         self.pausedAt = nil
         isPaused = false
+        pausedBySleep = false
         elapsed = effectiveElapsed(at: now)
         store?.setFocusPaused(false)
     }
@@ -191,7 +203,20 @@ final class FocusSession: ObservableObject {
         if isPaused { resume(now: now) } else { pause(now: now) }
     }
 
-    private func effectiveElapsed(at now: Date) -> TimeInterval {
+    /// 电脑要睡了 / 屏幕锁上了：人不在，计时停下。`at` 是人离开的时间（默认现在）。
+    func systemWillSleep(at time: Date = Date()) {
+        guard active != nil, !isPaused, !needsReflection else { return }
+        pause(now: time)
+        pausedBySleep = true
+    }
+
+    /// 唤醒 / 解锁：专注是睡眠时停下的，就请界面问一下要继续还是结束。
+    func systemDidWake() {
+        guard active != nil, pausedBySleep else { return }
+        onReturnFromSleep?()
+    }
+
+        private func effectiveElapsed(at now: Date) -> TimeInterval {
         guard let session = active else { return 0 }
         let currentlyPaused = pausedAt.map { max(0, now.timeIntervalSince($0)) } ?? 0
         return max(0, now.timeIntervalSince(session.started) - pausedSeconds - currentlyPaused)
@@ -242,6 +267,17 @@ final class FocusSession: ObservableObject {
         if task.isDropped { stop(reason: "任务已放弃", now: now); return true }
         if task.isDone { stop(reason: "任务已完成", now: now); return true }
         return false
+    }
+
+    /// 计时器每秒一次。睡眠通知没收到（或来晚了）时，两次之间会隔很久：从上一次触发起就算离开了，睡着的时间不计入专注。
+    func timerFired(now: Date = Date()) {
+        defer { lastTimerFire = now }
+        if active != nil, !isPaused, !needsReflection, now.timeIntervalSince(lastTimerFire) > Self.sleepGap {
+            systemWillSleep(at: lastTimerFire)
+            systemDidWake()
+            return
+        }
+        tick(now: now)
     }
 
     func tick(now: Date = Date()) {
@@ -561,6 +597,29 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
             if active { self?.workspaceShown = true }
             self?.refresh()
         }
+        session.onReturnFromSleep = { [weak self] in
+            guard let self else { return }
+            workspaceShown = true
+            refresh()
+        }
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
+            observers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak session] _ in
+                MainActor.assumeIsolated { session?.systemWillSleep() }
+            })
+        }
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
+            observers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak session] _ in
+                MainActor.assumeIsolated { session?.systemDidWake() }
+            })
+        }
+        let distributed = DistributedNotificationCenter.default()
+        observers.append(distributed.addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak session] _ in
+            MainActor.assumeIsolated { session?.systemWillSleep() }
+        })
+        observers.append(distributed.addObserver(forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak session] _ in
+            MainActor.assumeIsolated { session?.systemDidWake() }
+        })
         session.onCountdownEnd = { [weak self] in
             guard let self else { return }
             refresh()
@@ -590,7 +649,12 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
             }
     }
 
-    deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+    deinit {
+        // 观察者分在三个通知中心里；对不上的那个中心移除时什么也不做。
+        for center in [NotificationCenter.default, NSWorkspace.shared.notificationCenter, DistributedNotificationCenter.default()] {
+            observers.forEach(center.removeObserver)
+        }
+    }
 
     /// 专注工作台：未专注时显示任务选择器，专注中显示目标与输入栏。
     func refresh() {
@@ -1281,7 +1345,7 @@ struct FocusPanelView: View {
             HStack(spacing: 6) {
                 Image(systemName: "timer.circle.fill").font(.system(size: 17)).foregroundStyle(Palette.success)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(session.isPaused ? "Paused" : "专注中")
+                    Text(session.pausedBySleep ? "睡眠时已自动暂停" : (session.isPaused ? "Paused" : "专注中"))
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(session.isPaused ? Palette.deadline : Palette.success)
                     Text(active.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)

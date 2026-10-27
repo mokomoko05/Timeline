@@ -337,6 +337,8 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        // 正在编辑时网页进程崩了：已经收到的内容先存下，重新载入后告诉用户一声（不然界面像是自己跳了一下）。
+        if target != nil, !preparing { NotificationCenter.default.post(name: .timelineEditorRecovered, object: "inline") }
         save()
         ready = false
         configured = false

@@ -46,6 +46,7 @@ struct JournalView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { calendar.isOpen.toggle() } label: { Image(systemName: "calendar") }
+                        .accessibilityLabel("日历")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if selection != JournalDates.key(Date()) {
@@ -231,7 +232,7 @@ private struct DayHeader: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(date.formatted(.dateTime.year().month(.defaultDigits).day()))
-                    .font(.system(size: 26, weight: .bold))
+                    .font(.title.bold())
                     .foregroundStyle(Palette.ink)
                 Spacer()
                 arrow("chevron.left", previous)
@@ -253,6 +254,7 @@ private struct DayHeader: View {
         Button { if let target { go(target) } } label: {
             Image(systemName: symbol).font(.body.weight(.semibold)).frame(width: 36, height: 32)
         }
+        .accessibilityLabel(symbol == "chevron.left" ? "前一天" : "后一天")
         .disabled(target == nil)
         .foregroundStyle(target == nil ? Palette.line : Palette.accent)
     }
@@ -443,6 +445,9 @@ private struct MonthCalendar: View {
             }
             .buttonStyle(.plain)
             .disabled(future)
+            .accessibilityLabel(Text(JournalDates.date(for: key).map { DayText.relative($0) ?? DayText.short($0) } ?? key))
+            .accessibilityValue(Text(recorded ? L("有日志") : ""))
+            .accessibilityAddTraits(selected ? .isSelected : [])
         } else {
             Color.clear.frame(maxWidth: .infinity, maxHeight: 1)
         }
@@ -452,6 +457,7 @@ private struct MonthCalendar: View {
         Button { move(offset) } label: {
             Image(systemName: symbol).font(.body.weight(.semibold)).frame(width: 40, height: 32)
         }
+        .accessibilityLabel(offset < 0 ? "上个月" : "下个月")
         .foregroundStyle(Palette.accent)
     }
 

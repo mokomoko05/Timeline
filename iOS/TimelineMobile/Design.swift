@@ -3,6 +3,20 @@ import TimelineCore
 import UIKit
 
 /// 和 Mac 版「默认 · 墨蓝」同一套配色，随系统深浅色切换。
+/// 系统设置里打开「减弱动态效果」时：不做位移、缩放和弹簧动画，换成直接变化或淡入淡出。
+enum Motion {
+    static var reduced: Bool { UIAccessibility.isReduceMotionEnabled }
+
+    /// 动画本身：减弱动态效果时不播（直接变到结果）。
+    static func adapt(_ animation: Animation?) -> Animation? { reduced ? nil : animation }
+
+    /// 只是淡入淡出、闪一下的变化：减弱动态效果时换成很短的淡变，不至于生硬地跳出来。
+    static func fading(_ animation: Animation) -> Animation { reduced ? .easeOut(duration: 0.15) : animation }
+
+    /// 出现 / 消失的过渡：减弱动态效果时只淡入淡出。
+    static func transition(_ transition: AnyTransition) -> AnyTransition { reduced ? .opacity : transition }
+}
+
 enum Palette {
     static let background = color(light: 0xF6F8FA, dark: 0x0D1117)
     static let card = color(light: 0xFFFFFF, dark: 0x161B22)
@@ -184,7 +198,7 @@ struct RailRow<Node: View, Content: View>: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .offset(y: shift)
-        .animation(shiftAnimation, value: shift)
+        .animation(Motion.adapt(shiftAnimation), value: shift)
         // 竖线画在整行的背景里，跟着行高走，不用每行一个 GeometryReader。
         .background(alignment: .topLeading) {
             if drawsLine {

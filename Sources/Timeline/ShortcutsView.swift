@@ -44,6 +44,13 @@ struct ShortcutsView: View {
                 ("⌘K", "切换工作板"),
                 ("Esc", "取消编辑"),
             ]),
+            Group(title: "笔记与日记", rows: [
+                ("↑ ↓", "选择上一条 / 下一条"),
+                ("↑", "输入框为空时选中最后一条"),
+                ("↩", "就地编辑选中的那条"),
+                ("⌫", "删除选中的那条（可撤销）"),
+                ("Esc", "取消选择"),
+            ]),
         ]
     }
 
@@ -58,7 +65,7 @@ struct ShortcutsView: View {
                     .accessibilityLabel("关闭")
             }
             HStack(alignment: .top, spacing: 24) {
-                VStack(alignment: .leading, spacing: 14) { section(groups[0]); section(groups[3]) }
+                VStack(alignment: .leading, spacing: 14) { section(groups[0]); section(groups[3]); section(groups[4]) }
                 VStack(alignment: .leading, spacing: 14) { section(groups[1]); section(groups[2]) }
             }
             Text("全局快捷键可在设置中修改。")

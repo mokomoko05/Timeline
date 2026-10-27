@@ -132,6 +132,7 @@ struct NotesView: View {
             Text("只去掉这个标签（连同子标签），待办和笔记本身都保留。可以 ⌘Z 撤销。")
         }
         .onAppear {
+            registerKeyboardPage()
             InlineMarkdownEditor.shared.preload()
             if let initialTag { nav.open(tag: initialTag) }
             else if let initialSelection { nav.open(task: initialSelection) }
@@ -397,6 +398,7 @@ struct NotesView: View {
                             else { proxy.scrollTo("end", anchor: .bottom) }
                         }
                         .onChange(of: revealNoteID) { reveal($0, proxy: proxy) }
+                        .scrollsToKeyboardSelection(proxy)
                         .onChange(of: selection) { _ in
                             floatingOutline = false
                             tracker.reset()
@@ -697,14 +699,36 @@ struct NotesView: View {
         chapterView && chapters.count >= 2 ? chapters.count : nil
     }
 
+    /// 标签页上从上到下的笔记：按待办分章时是各章（折叠的章不算）依次排，按日期看时按日期。
+    private func tagPageOrder(_ tag: String, notes: [JournalStore.LoggedLog], chapters: [NotebookChapter]) -> [JournalStore.LoggedLog] {
+        chapterView ? chapters.filter { !nav.isCollapsed(tag: tag, chapter: $0.id) }.flatMap(\.notes) : Self.pageOrder(notes)
+    }
+
+    /// 键盘选中用：当前页面上从上到下的笔记。
+    private var keyboardOrder: [JournalStore.LoggedLog] {
+        if let tag = tagSelection {
+            let notes = store.notes(forTag: tag)
+            return tagPageOrder(tag, notes: notes, chapters: chapterView ? store.chapters(notes: notes, tasks: store.tasks(taggedWith: tag)) : [])
+        }
+        guard let id = selection else { return [] }
+        return Self.pageOrder(store.notes(for: id))
+    }
+
+    private func registerKeyboardPage() {
+        LogKeyboardSelection.shared.register(.notes, .init(order: { keyboardOrder.map(\.id) }, edit: { id in
+            if let item = keyboardOrder.first(where: { $0.id == id }) { beginNoteEdit(item, at: nil) }
+        }, delete: { id in
+            guard !store.isReadOnly, let item = keyboardOrder.first(where: { $0.id == id }) else { return }
+            deleteNote(item)
+        }))
+    }
+
     private func tagDetail(_ tag: String) -> some View {
         let tasks = store.tasks(taggedWith: tag)
         let notes = store.notes(forTag: tag)
         let chapters = chapterView ? store.chapters(notes: notes, tasks: tasks) : []
         // 节奏条按页面上的先后：按待办分章时是各章（折叠的章不算）依次排，按日期看时按日期。
-        let railNotes = chapterView
-            ? chapters.filter { !nav.isCollapsed(tag: tag, chapter: $0.id) }.flatMap(\.notes)
-            : Self.pageOrder(notes)
+        let railNotes = tagPageOrder(tag, notes: notes, chapters: chapters)
         let hasBoardContent = store.board(for: .tag(tag))?.hasContent == true
             || tasks.contains { store.board(for: .task($0.id))?.hasContent == true }
         return VStack(spacing: 0) {
@@ -737,6 +761,7 @@ struct NotesView: View {
                     .onChange(of: tagSelection) { _ in floatingOutline = false; tracker.reset(); openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
                     .onChange(of: chapterView) { _ in openTagPage(proxy, startAtTop: hasBoardContent || chapterView) }
                     .onChange(of: revealNoteID) { reveal($0, proxy: proxy) }
+                    .scrollsToKeyboardSelection(proxy)
                     .overlay(alignment: .topTrailing) {
                         if floatingOutline && !outlineFits {
                             outline(tag, chapters, months: months, floating: true, proxy: proxy).padding(10)

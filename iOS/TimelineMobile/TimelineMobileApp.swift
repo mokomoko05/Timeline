@@ -89,6 +89,12 @@ struct RootView: View {
 
     var body: some View {
         tabs
+        .overlay(alignment: .bottom) { UndoToastView() }
+        .overlay(alignment: .top) {
+            IssueBanner(store: store, sync: sync) {
+                if #available(iOS 18.0, *) { showingSettings = true } else { tab = .settings }
+            }
+        }
         .logEditorHost(store)
         .tint(Palette.accent)
         .onContinueUserActivity(CSSearchableItemActionType) { Navigator.shared.open($0) }

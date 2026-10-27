@@ -47,6 +47,7 @@ struct TasksView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { adding = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("新建待办")
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { note in
@@ -221,7 +222,7 @@ struct TasksView: View {
                     drawsLine: false, shift: motion.shift, shiftAnimation: motion.animation) {
                 Dot(color: item.task.completed ? Palette.muted : item.task.priority.color, size: motion.lifted ? 13 : 9,
                     ring: item.task.priority == .urgent || item.task.priority == .high)
-                    .animation(.snappy, value: motion.lifted)
+                    .animation(Motion.adapt(.snappy), value: motion.lifted)
             } content: {
                 TaskCard(store: store, item: item, highlighted: store.focusTaskID == item.id, notes: store.noteCount(for: item.id),
                          hasBoard: store.board(for: .task(item.id))?.hasContent == true) { path.append(item.id) }
@@ -267,7 +268,7 @@ struct TasksView: View {
                 EmptyView()
             } content: {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
+                    withAnimation(Motion.adapt(.easeInOut(duration: 0.2))) {
                         if expandedDone.contains(key) { expandedDone.remove(key) } else { expandedDone.insert(key) }
                     }
                 } label: {
@@ -431,7 +432,7 @@ private final class TaskReorder: ObservableObject {
         self.validate = validate
         settlingID = nil
         drag.value = 0
-        withAnimation(.snappy(duration: 0.2)) { activeID = id }
+        withAnimation(Motion.adapt(.snappy(duration: 0.2))) { activeID = id }
         impact.impactOccurred()
         selection.prepare()
         return true
@@ -510,7 +511,7 @@ private final class TaskReorder: ObservableObject {
             self.drag.value = 0
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDuration) { [weak self] in
                 guard let self, self.settlingID == id else { return }
-                withAnimation(.snappy(duration: 0.2)) { self.settlingID = nil }
+                withAnimation(Motion.adapt(.snappy(duration: 0.2))) { self.settlingID = nil }
             }
         }
     }
@@ -602,7 +603,7 @@ private struct TaskHeader: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(now.formatted(.dateTime.month(.defaultDigits).day()))
-                    .font(.system(size: 32, weight: .bold))
+                    .font(.largeTitle.bold())
                     .foregroundStyle(Palette.ink)
                 Chip(text: L("今天"))
                 Spacer()
@@ -658,7 +659,7 @@ struct TaskCard: View, Equatable {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) { store.toggleTodo(item.id, on: item.date) }
+                withAnimation(Motion.adapt(.easeInOut(duration: 0.2))) { store.toggleTodo(item.id, on: item.date) }
             } label: {
                 Image(systemName: task.isDone ? "checkmark.circle.fill" : (task.isDropped ? "xmark.circle" : "circle"))
                     .font(.title3)
@@ -667,6 +668,8 @@ struct TaskCard: View, Equatable {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(task.isDone ? "取消完成" : "完成")
+            .accessibilityValue(task.isDone ? L("已完成") : (task.isDropped ? L("已放弃") : L("未完成")))
         }
         .padding(.leading, 12).padding(.trailing, 4).padding(.vertical, 8)
         .card(highlighted: highlighted)
@@ -789,7 +792,7 @@ struct TaskActions: View {
                 }
             }
         }
-        Button(role: .destructive) { store.deleteTodo(item.id, on: item.date); store.save() } label: { Label("删除", systemImage: "trash") }
+        Button(role: .destructive) { UndoToast.deleteTodo(item.id, on: item.date, store: store) } label: { Label("删除", systemImage: "trash") }
     }
 
     private var calendar: Calendar { JournalDates.calendar }

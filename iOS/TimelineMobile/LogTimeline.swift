@@ -136,7 +136,7 @@ struct LogTimeline: View {
         .task(id: flash) {
             guard flash != nil else { return }
             try? await Task.sleep(nanoseconds: 1_600_000_000)
-            withAnimation(.easeOut(duration: 0.5)) { flash = nil }
+            withAnimation(Motion.fading(.easeOut(duration: 0.5))) { flash = nil }
         }
     }
 }
@@ -307,7 +307,7 @@ private struct FocusRoundCard: View {
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.down").font(.caption.weight(.bold)).foregroundStyle(Palette.accent)
                     .rotationEffect(.degrees(collapsed ? -90 : 0))
-                    .animation(.easeOut(duration: 0.15), value: collapsed)
+                    .animation(Motion.adapt(.easeOut(duration: 0.15)), value: collapsed)
             }
             .padding(12)
             .card(highlighted: true)
@@ -400,7 +400,7 @@ private struct PressableStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.94 : 1)
             .brightness(configuration.isPressed ? -0.08 : 0)
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+            .animation(Motion.adapt(.spring(response: 0.25, dampingFraction: 0.7)), value: configuration.isPressed)
     }
 }
 
@@ -476,10 +476,10 @@ private final class PhotoSaver: NSObject {
     private var hide: DispatchWorkItem?
 
     func show(_ text: String) {
-        withAnimation(.snappy) { message = text }
+        withAnimation(Motion.fading(.snappy)) { message = text }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         hide?.cancel()
-        let work = DispatchWorkItem { [weak self] in withAnimation(.easeOut) { self?.message = nil } }
+        let work = DispatchWorkItem { [weak self] in withAnimation(Motion.fading(.easeOut)) { self?.message = nil } }
         hide = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: work)
     }
@@ -495,7 +495,7 @@ struct ToastView: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .background(.black.opacity(0.75), in: Capsule())
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(Motion.transition(.move(edge: .bottom).combined(with: .opacity)))
                 .padding(.bottom, 8)
                 .allowsHitTesting(false)
         }
@@ -522,6 +522,7 @@ private struct ImageViewer: View {
             Button { dismiss() } label: {
                 Image(systemName: "xmark.circle.fill").font(.title).symbolRenderingMode(.hierarchical).foregroundStyle(.white)
             }
+            .accessibilityLabel("关闭")
             .padding()
         }
         .safeAreaInset(edge: .bottom) {

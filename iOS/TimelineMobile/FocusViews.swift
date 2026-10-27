@@ -79,6 +79,7 @@ struct FocusBar: View {
                 .disabled(session.finished)
                 .buttonStyle(.plain)
                 .foregroundStyle(Palette.accent)
+                .accessibilityLabel(focus.isPaused ? "继续" : "暂停")
             }
             .padding(.leading, 12).padding(.trailing, 8).padding(.vertical, 8)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))

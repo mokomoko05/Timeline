@@ -60,6 +60,10 @@ public final class FolderSync: ObservableObject {
     @Published public private(set) var isSyncing = false
     @Published public private(set) var lastSync: Date?
     @Published public private(set) var lastError: String?
+    /// 连续失败的轮数：偶尔一次失败（文件正被 iCloud 占用之类）下一轮通常就好了，界面只在连续失败时提醒。
+    @Published public private(set) var failureStreak = 0
+    /// 值得在设置页以外提醒用户的同步问题：连续失败两轮以上。
+    public var persistentError: String? { failureStreak >= 2 ? lastError : nil }
     @Published public private(set) var devices: [Device] = []
     /// 其他设备的文件在 iCloud 上有更新、本机还没下载到：已经请系统下载，几秒后再看。
     @Published public private(set) var waitingForDownload = false
@@ -141,9 +145,11 @@ public final class FolderSync: ObservableObject {
             let changed = try await runOnce()
             lastSync = now()
             lastError = nil
+            if failureStreak != 0 { failureStreak = 0 }
             return changed
         } catch {
             lastError = error.localizedDescription
+            failureStreak += 1
             throw error
         }
     }

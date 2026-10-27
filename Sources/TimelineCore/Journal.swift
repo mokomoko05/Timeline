@@ -232,6 +232,11 @@ public final class JournalStore: ObservableObject {
     /// 只供保存逻辑判断，界面不读；不发布，否则每次写盘完成清除标记时都会让所有窗口再重算一遍。
     public private(set) var hasPendingSave = false
     private var pendingSave: Task<Void, Never>?
+    /// 写盘失败后的自动重试：依次等 `saveRetryDelays`，之后每隔最后一个间隔再试，直到写成功。
+    private var saveRetry: Task<Void, Never>?
+    private var saveRetryAttempt = 0
+    /// 测试可以改短。
+    var saveRetryDelays: [TimeInterval] = [2, 5, 15, 30]
     public let undoManager = UndoManager()
     /// 编码和写盘的串行队列。
     private lazy var writer = JournalWriter(fileURL: fileURL, backupsDirectory: backupsDirectory)
@@ -1275,14 +1280,32 @@ public final class JournalStore: ObservableObject {
         }
     }
 
+    /// 写盘失败后过一会儿自动再试：磁盘腾出空间、权限修好后不用用户再动手。
+    private func scheduleSaveRetry() {
+        guard saveRetry == nil, !isReadOnly, let last = saveRetryDelays.last else { return }
+        let delay = saveRetryAttempt < saveRetryDelays.count ? saveRetryDelays[saveRetryAttempt] : last
+        saveRetryAttempt += 1
+        saveRetry = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return }
+            guard let self else { return }
+            self.saveRetry = nil
+            guard self.errorMessage != nil, !self.isReadOnly else { return }
+            self.persist()
+        }
+    }
+
     /// 等所有后台写入完成（测试用）。
     public func waitForPendingWrites() { writer.waitUntilIdle() }
 
     private func finishSave(_ error: Error?, version: Int) {
         if let error {
             errorMessage = "保存失败，当前修改仍保留在内存中。请释放磁盘空间或检查权限后重试。\n\(error.localizedDescription)"
+            scheduleSaveRetry()
             return
         }
+        saveRetry?.cancel()
+        saveRetry = nil
+        saveRetryAttempt = 0
         lastSaved = Date()
         // 期间又有修改：等那次写入完成再清除标记。值没变就不赋值，免得通知所有观察的窗口。
         guard version == documentVersion else { return }

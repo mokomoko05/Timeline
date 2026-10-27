@@ -30,6 +30,7 @@ struct ContentView: View {
     @State private var requestedEdit: UUID?
     @State private var showingMonthJumper = false
     private let notesWindow = NotesWindowController.shared
+    @ObservedObject private var issues = AppIssues.shared
     @State private var overdueCount = 0
     @State private var scrollTarget: UUID?
     /// 点摘要里的数字时，要定位的任务类型（`overdue` / `today`）。
@@ -71,7 +72,7 @@ struct ContentView: View {
             .flatMap { $0.visibleTasks(expanded: expandedFinished) }
     }
     private var weekStart: Int { weekStartsSunday ? 1 : 2 }
-    private var footerVisible: Bool { store.errorMessage != nil || !reminders.status.isEmpty }
+    private var footerVisible: Bool { issues.current != nil || !reminders.status.isEmpty }
     private var draft: Binding<String> {
         Binding(get: { todoDraft.text }, set: { todoDraft.update($0) })
     }
@@ -686,26 +687,21 @@ struct ContentView: View {
 
     private var footer: some View {
         VStack(spacing: 0) {
-            Rectangle().fill(Palette.line).frame(height: 1)
-            HStack(spacing: 6) {
-                if let error = store.errorMessage {
-                    Image(systemName: "exclamationmark.triangle")
-                    Text(AppLocalizedLines(error)).lineLimit(2).help(AppLocalizedLines(error))
-                    if !store.isReadOnly { Button("重试保存", action: store.save).buttonStyle(HitAreaButtonStyle()) }
-                    Button("打开数据文件夹") { NSWorkspace.shared.open(store.directory) }.buttonStyle(HitAreaButtonStyle())
-                } else {
+            if issues.current != nil {
+                AppIssueBanner().padding(.horizontal, 16)
+            } else {
+                Rectangle().fill(Palette.line).frame(height: 1)
+                HStack(spacing: 6) {
                     Image(systemName: "bell.slash")
                     Text(reminders.status).lineLimit(2)
-                }
-                Spacer()
-                if !reminders.status.isEmpty {
+                    Spacer()
                     Button("通知设置") { if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") { NSWorkspace.shared.open(url) } }
                         .buttonStyle(HitAreaButtonStyle())
                 }
+                .font(.system(size: typography.pt(11)))
+                .foregroundStyle(Palette.deadline)
+                .padding(.horizontal, 30).padding(.vertical, 8)
             }
-            .font(.system(size: typography.pt(11)))
-            .foregroundStyle(Palette.deadline)
-            .padding(.horizontal, 30).padding(.vertical, 8)
         }
     }
 

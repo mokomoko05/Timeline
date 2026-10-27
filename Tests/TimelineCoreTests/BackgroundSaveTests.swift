@@ -82,4 +82,26 @@ final class BackgroundSaveTests: XCTestCase {
         XCTAssertTrue(store.hasPendingSave, "失败后仍标记未保存，退出时会提示")
         XCTAssertEqual(store.tasks().count, 2, "修改保留在内存中")
     }
+
+    func testFailedWriteRetriesByItselfOnceTheDiskRecovers() async throws {
+        let store = makeStore()
+        store.saveRetryDelays = [0.05]
+        store.addTodo("Saved", on: Date())
+        store.waitForPendingWrites()
+        try FileManager.default.removeItem(at: store.fileURL)
+        try FileManager.default.createDirectory(at: store.fileURL, withIntermediateDirectories: false)
+        store.addTodo("Later", on: Date())
+        store.waitForPendingWrites()
+        for _ in 0..<20 where store.errorMessage == nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNotNil(store.errorMessage)
+        // 问题排除后不用再改什么，自动重试就写进去了。
+        try FileManager.default.removeItem(at: store.fileURL)
+        for _ in 0..<100 where store.errorMessage != nil {
+            try await Task.sleep(for: .milliseconds(20))
+            store.waitForPendingWrites()
+        }
+        XCTAssertNil(store.errorMessage)
+        XCTAssertFalse(store.hasPendingSave)
+        XCTAssertEqual(Set(reloaded(store).tasks().map(\.task.title)), ["Saved", "Later"])
+    }
 }

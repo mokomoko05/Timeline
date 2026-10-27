@@ -2,8 +2,20 @@ import AppKit
 
 /// 主窗口：Esc 在笔记 / 日记页上收起窗口（没有文字框先处理它时），和原来独立的笔记窗口一致。
 /// 窗口钉在所在屏幕的中央，拖不动；拉边缘缩放时以中心为基准对称缩放，被拉的那条边始终跟着鼠标。
+/// 关掉「固定在屏幕中央」后就是普通窗口，可以拖到一边和别的应用并排。
 final class MainWindow: NSWindow {
     var cancel: (() -> Bool)?
+    var keepsCentered = true {
+        didSet {
+            guard keepsCentered != oldValue else { return }
+            isMovable = !keepsCentered
+            if keepsCentered { setFrame(frame, display: true) }
+        }
+    }
+    /// 用户自己拉出来的大小。换到小屏幕时窗口被压小，回到大屏幕时按它恢复。
+    private(set) var preferredSize: NSSize?
+    /// 上次居中时所在屏幕的可用区域：变了说明换了屏幕（或屏幕分辨率变了）。
+    private var lastArea: NSRect?
     /// 开始拉边时的窗口和鼠标位置，以及拉的是哪几条边（-1 左 / 下，1 右 / 上，0 没拉）。
     private var resizeStart: (frame: NSRect, mouse: NSPoint, edges: (x: CGFloat, y: CGFloat))?
 
@@ -15,7 +27,11 @@ final class MainWindow: NSWindow {
             MainActor.assumeIsolated { self?.beginResize() }
         }
         NotificationCenter.default.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: self, queue: nil) { [weak self] _ in
-            MainActor.assumeIsolated { self?.resizeStart = nil }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.resizeStart = nil
+                self.preferredSize = self.frame.size
+            }
         }
     }
 
@@ -50,13 +66,17 @@ final class MainWindow: NSWindow {
 
     /// 全屏时交给系统；否则把窗口放到它所在屏幕可用区域的中央。
     private func centered(_ proposed: NSRect) -> NSRect {
-        guard !styleMask.contains(.fullScreen) else { return proposed }
+        guard keepsCentered, !styleMask.contains(.fullScreen) else { return proposed }
         let center = NSPoint(x: proposed.midX, y: proposed.midY)
         guard let area = (NSScreen.screens.first { NSMouseInRect(center, $0.frame, false) } ?? screen ?? NSScreen.main)?.visibleFrame else { return proposed }
         var size = proposed.size
         if inLiveResize, let start = resizeStart {
             size = Self.symmetricSize(start: start.frame.size, edges: start.edges, mouseDelta: NSPoint(x: NSEvent.mouseLocation.x - start.mouse.x, y: NSEvent.mouseLocation.y - start.mouse.y), proposed: proposed.size)
+        } else if let preferredSize, let lastArea, lastArea != area {
+            // 换到了另一块屏幕：放得下就回到用户拉出来的大小（之前在小屏幕上被压小了）。
+            size = NSSize(width: max(size.width, preferredSize.width), height: max(size.height, preferredSize.height))
         }
+        lastArea = area
         return Self.centeredFrame(size: size, in: area, minSize: minSize, maxSize: maxSize)
     }
 

@@ -1,3 +1,4 @@
+import Combine
 import AppKit
 import Carbon.HIToolbox
 import SwiftUI
@@ -123,6 +124,11 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
     private var hotKeyItems: [(item: NSMenuItem, action: HotKeyAction, title: String)] = []
     private var hotKeyObserver: NSObjectProtocol?
     private var languageObserver: NSObjectProtocol?
+    /// 菜单最上面的问题提示（保存 / 同步出错时才出现）和处理它的按钮。
+    private let issueItem = NSMenuItem()
+    private let issueActionItem = NSMenuItem()
+    private let issueSeparator = NSMenuItem.separator()
+    private var issueSink: AnyCancellable?
 
     init(store: JournalStore, openMain: @escaping () -> Void, openShell: @escaping () -> Void = {}) {
         self.store = store
@@ -152,6 +158,10 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
             menuItem.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
             hotKeyItems.append((menuItem, action, title))
         }
+        issueItem.isEnabled = false
+        issueActionItem.target = self
+        issueActionItem.action = #selector(resolveIssue)
+        for item in [issueItem, issueActionItem, issueSeparator] { menu.addItem(item) }
         summaryItem.isEnabled = false
         menu.addItem(summaryItem)
         menu.addItem(.separator())
@@ -176,6 +186,7 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
         item.menu = menu
         statusItem = item
         refreshHotKeyLabels()
+        issueSink = AppIssues.shared.$current.receive(on: RunLoop.main).sink { [weak self] in self?.showIssue($0) }
         if languageObserver == nil {
             languageObserver = NotificationCenter.default.addObserver(forName: .appLanguageDidChange, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
@@ -211,6 +222,42 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
                 entry.item.title = "\(AppLocalized(entry.title))    \(binding.label)"
                 entry.item.keyEquivalent = ""
             }
+        }
+    }
+
+    /// 出了问题：图标换成带感叹号的样子，菜单最上面写明问题并给一个处理按钮。
+    private func showIssue(_ issue: AppIssues.Kind?) {
+        let issues = AppIssues.shared
+        for item in [issueItem, issueActionItem, issueSeparator] { item.isHidden = issue == nil }
+        if let button = statusItem?.button {
+            if let issue {
+                let symbol = issue.isSync ? "icloud.slash" : "exclamationmark.triangle"
+                button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: issues.title)
+                button.image?.isTemplate = true
+                button.toolTip = issues.title + "\n" + issues.detail
+            } else {
+                button.image = TimelineMark.menuImage()
+                button.image?.isTemplate = true
+                refreshHotKeyLabels()
+            }
+        }
+        guard let issue else { return }
+        issueItem.title = issues.title
+        issueItem.image = NSImage(systemSymbolName: issue.isSync ? "icloud.slash" : "exclamationmark.triangle.fill", accessibilityDescription: nil)
+        switch issue {
+        case .saveFailed: issueActionItem.title = AppLocalized("重试保存")
+        case .readOnly: issueActionItem.title = AppLocalized("打开数据文件夹")
+        case .syncFailed: issueActionItem.title = AppLocalized("立即同步")
+        }
+    }
+
+    @objc private func resolveIssue() {
+        let issues = AppIssues.shared
+        switch issues.current {
+        case .saveFailed: issues.retrySave()
+        case .readOnly: issues.openDataFolder()
+        case .syncFailed: issues.syncNow()
+        case nil: break
         }
     }
 
@@ -345,6 +392,7 @@ struct QuickCaptureView: View {
     @ObservedObject private var languages = LanguageStore.shared
     @ObservedObject var store: JournalStore
     @ObservedObject var model: QuickCaptureModel
+    @ObservedObject private var issues = AppIssues.shared
     let close: () -> Void
     let resize: (CGFloat) -> Void
     @StateObject private var mention = MentionState()
@@ -428,6 +476,9 @@ struct QuickCaptureView: View {
                     .help(destination == nil ? "" : AppLocalized("查看刚记下的内容"))
                 } else if let failure {
                     Label(failure, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.deadline)
+                } else if let issue = issues.current, !issue.isSync {
+                    Label(issues.title, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.deadline)
+                        .help(issues.detail)
                 } else if restored, model.hasDraft {
                     HStack(spacing: 6) {
                         Label("草稿已恢复", systemImage: "arrow.uturn.backward.circle").foregroundStyle(Palette.muted)

@@ -37,6 +37,8 @@ extension Notification.Name {
 
 /// 偏好设置的存储键；设置窗口、菜单栏和主界面共用。
 enum Prefs {
+    /// 主窗口钉在屏幕中央（拖不动、对称缩放）；关掉后是普通窗口。
+    static let mainWindowCentered = "mainWindowCentered"
     static let language = "appLanguage"
     static let hideCompleted = "hideCompleted"
     static let clickExpands = "clickExpandsTasks"

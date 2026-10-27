@@ -246,6 +246,7 @@ struct UnifiedNotesView: View {
                 journalBody
             }
             .transaction { $0.animation = nil; $0.disablesAnimations = true }
+            AppIssueBanner()
         }
         .background(AmbientBackdrop())
         .foregroundStyle(Palette.ink)
@@ -254,6 +255,10 @@ struct UnifiedNotesView: View {
         .onReceive(store.$lastAction.dropFirst()) { event in
             guard let event, NotesWindowController.shared.isKey, let message = ToastCenter.undoMessages[event.name] else { return }
             toast.show(message, actionTitle: "撤销") { store.undo() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .timelineEditorRecovered)) { note in
+            guard note.object as? String == "inline" else { return }
+            toast.show(AppLocalized("编辑器意外退出，已保存输入并重新载入"))
         }
         .environmentObject(interaction)
         .environmentObject(toast)
@@ -482,10 +487,12 @@ struct UnifiedJournalView: View {
                 .contentShape(Rectangle())
                 // 今天从最新一条开始（接着写），往日从当天第一条开始读。
                 .onAppear {
+                    registerKeyboardPage()
                     if let id = revealLog { revealID = id; revealLog = nil }
                     else if openedDay != JournalDates.key(date) { openDay(proxy) }
                 }
                 .onChange(of: revealLog) { id in if let id { revealID = id; revealLog = nil } }
+                .scrollsToKeyboardSelection(proxy)
                 // 带着要定位的那一条换日期时，不再按「打开这一天」滚到开头 / 末尾，免得把定位冲掉。
                 .onChange(of: date) { _ in
                     tracker.reset()
@@ -644,6 +651,22 @@ struct UnifiedJournalView: View {
             }
             else if case .help = command { store.setLogDraft("", on: date); error = "日志命令：/link、/done、/filter、/help" }
         } catch let issue { error = AppErrorDescription(issue) }
+    }
+
+    /// 键盘选中用的顺序：页面上从上到下（折叠的一轮专注里收起的那些不算）。
+    private func registerKeyboardPage() {
+        LogKeyboardSelection.shared.register(.journal, .init(order: {
+            let all = entry.logsInTimeOrder
+            let hidden = Set(FocusRun.runs(in: all).filter { foldedRuns.contains($0.id) }.flatMap { [$0.start.id] + $0.inner.map(\.id) })
+            return all.filter { !hidden.contains($0.id) }.map(\.id)
+        }, edit: { id in
+            guard let log = entry.logs.first(where: { $0.id == id }), !store.isReadOnly else { return }
+            beginEdit(log, at: nil)
+        }, delete: { id in
+            guard !store.isReadOnly else { return }
+            if InlineMarkdownEditor.shared.isEditing(id) { InlineMarkdownEditor.shared.finish() }
+            store.deleteLog(id, on: date); error = "已删除这条日志，⌘Z 可撤销"
+        }))
     }
 
     private func beginEdit(_ log: DailyLogEntry, at point: CGPoint?, prepare: Bool = false) {

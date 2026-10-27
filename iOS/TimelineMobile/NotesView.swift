@@ -157,6 +157,7 @@ struct TaskPage: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if item != nil {
                     Button { editing = true } label: { Image(systemName: "slider.horizontal.3") }
+                        .accessibilityLabel("编辑待办")
                 }
             }
         }
@@ -348,7 +349,7 @@ struct TaskEditSheet: View {
                     }
                     Section {
                         Button(item.task.isDropped ? "恢复待办" : "放弃待办") { store.dropTodo(id, on: item.date) }.disabled(item.task.isDone)
-                        Button("删除待办", role: .destructive) { store.deleteTodo(id, on: item.date); dismiss() }
+                        Button("删除待办", role: .destructive) { UndoToast.deleteTodo(id, on: item.date, store: store); dismiss() }
                     }
                 }
                 .navigationTitle("编辑待办")

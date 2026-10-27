@@ -1070,3 +1070,16 @@
 "上下拖动排序，拖过日期即改到那一天，横着拖出去可放到日历，右键选择优先级" = "Drag up or down to reorder, drop under another date to move it there, drag sideways out to the calendar, or right-click to choose priority";
 "代码" = "Code";
 "编辑 Markdown 内容" = "Edit Markdown content";
+
+/* App-wide issue banner, focus sleep pause, notes keyboard selection, window centering */
+"日记处于只读状态" = "Journal is read-only";
+"保存失败，正在自动重试" = "Save failed — retrying automatically";
+"iCloud 同步出错" = "iCloud sync error";
+"同步设置…" = "Sync Settings…";
+"睡眠时已自动暂停" = "Paused while asleep";
+"固定在屏幕中央" = "Keep Centered on Screen";
+"编辑器意外退出，已保存输入并重新载入" = "The editor quit unexpectedly. Your typing was saved and it has reloaded.";
+"选择上一条 / 下一条" = "Select previous / next entry";
+"输入框为空时选中最后一条" = "Select the last entry when the input is empty";
+"就地编辑选中的那条" = "Edit the selected entry in place";
+"删除选中的那条（可撤销）" = "Delete the selected entry (undoable)";

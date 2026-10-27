@@ -86,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// 主窗口隐藏半小时以上就释放界面，下次显示前重建。
     private var mainContent: HiddenContentReleaser?
     private var cloudSync: CloudSyncController?
+    private var centeringObserver: NSObjectProtocol?
     /// 让日志、待办和工作板出现在系统 Spotlight 里。
     private var spotlight: SpotlightIndexer?
 
@@ -126,6 +127,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         focusPanel = FocusPanelController(session: focus)
         loginItem = LoginItem()
         if !snapshotRun { cloudSync = CloudSyncController(store: store) }
+        AppIssues.shared.attach(store: store, cloudSync: cloudSync)
+        if !snapshotRun { LogKeyboardSelection.shared.install() }
         settings = SettingsWindowController(loginItem: loginItem, cloudSync: cloudSync, failedHotKeys: { [weak self] in self?.failedHotKeys })
         // 切到别的应用就把工作窗口收起来；快速面板和专注计时窗口不在其中。
         autoHide = AutoHideOnResign(windows: { [weak self] in
@@ -183,6 +186,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         })
         window.center()
         window.setFrameAutosaveName("TimelineMainWindow")
+        UserDefaults.standard.register(defaults: [Prefs.mainWindowCentered: true])
+        mainWindow.keepsCentered = UserDefaults.standard.bool(forKey: Prefs.mainWindowCentered)
+        centeringObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak mainWindow] _ in
+            MainActor.assumeIsolated {
+                let centered = UserDefaults.standard.bool(forKey: Prefs.mainWindowCentered)
+                if mainWindow?.keepsCentered != centered { mainWindow?.keepsCentered = centered }
+            }
+        }
         window.makeKeyAndOrderFront(nil)
         Headless.activateApp()
         reminders.onComplete = { [weak self] in self?.toast.show(AppLocalizedFormat("已从通知完成「%@」", $0)) }
@@ -296,6 +307,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     private func showMainWindow() {
+        // 和全局快捷键一样：出现在鼠标所在的屏幕上。
+        if !window.isVisible { moveToMouseScreenIfNeeded() }
         mainContent?.restoreIfNeeded()
         switchPage(notes: false)
         if window.isMiniaturized { window.deminiaturize(nil) }
@@ -812,6 +825,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         windowMenu.addItem(withTitle: AppLocalized("最小化"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: AppLocalized("缩放"), action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         windowMenu.addItem(menuItem("显示 / 隐藏 Timeline") { [weak self] in self?.toggleMainWindow() })
+        windowMenu.addItem(menuItem("固定在屏幕中央", toggle: (Prefs.mainWindowCentered, true)))
         let windowItem = NSMenuItem(title: AppLocalized("窗口"), action: nil, keyEquivalent: "")
         windowItem.submenu = windowMenu
         mainMenu.addItem(windowItem)

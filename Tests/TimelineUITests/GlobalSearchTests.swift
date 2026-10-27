@@ -78,6 +78,46 @@ final class GlobalSearchPanelTests: XCTestCase {
         XCTAssertEqual(model.hits.map(\.kind), [.image])
     }
 
+    /// 多个词各自出现即可；待办能按拼音和首字母找到；标题正好是搜索词的排最前，其次是开头匹配。
+    func testTermsPinyinAndRanking() throws {
+        let store = makeStore()
+        _ = try XCTUnwrap(store.addParsedTodo("整理论文笔记", on: day))
+        _ = try XCTUnwrap(store.addParsedTodo("论文", on: day))
+        _ = try XCTUnwrap(store.addParsedTodo("提交论文", on: day))
+        _ = try store.quickLogEntry("预算的事明天和会议一起说", on: day, now: day.addingTimeInterval(60))
+        _ = try store.quickLogEntry("只有会议", on: day, now: day.addingTimeInterval(120))
+
+        let ranked = GlobalSearch.hits(store: store, query: "论文").filter { $0.kind == .task }.map(\.title)
+        XCTAssertEqual(ranked.first, "论文", "完全相同的标题排第一")
+        XCTAssertEqual(Set(ranked), ["论文", "整理论文笔记", "提交论文"])
+
+        XCTAssertEqual(GlobalSearch.hits(store: store, query: "lunwen").filter { $0.kind == .task }.count, 3, "拼音")
+        XCTAssertEqual(GlobalSearch.hits(store: store, query: "zllw").filter { $0.kind == .task }.map(\.title), ["整理论文笔记"], "拼音首字母")
+
+        let logs = GlobalSearch.hits(store: store, query: "会议 预算").filter { $0.kind == .log }
+        XCTAssertEqual(logs.map(\.title), ["预算的事明天和会议一起说"], "两个词都要出现，不必挨着")
+    }
+
+    /// 打字时走后台扫描：结果和同步算的一样；数据变了重新建语料。
+    func testBackgroundSearchMatchesSynchronousResults() async throws {
+        let store = makeStore()
+        let board = try XCTUnwrap(store.ensureBoard(for: .tag("Reading")))
+        store.setBoardMarkdown("一\n目标 needle 行", for: board.id)
+        _ = try store.quickLogEntry("日志里的 needle", on: day)
+        let model = GlobalSearchModel()
+        model.store = store
+        model.query = "needle"
+        model.recomputeInBackground(resetSelection: true)
+        for _ in 0..<100 where model.allHits.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(model.allHits, GlobalSearch.hits(store: store, query: "needle"))
+        XCTAssertEqual(model.allHits.map(\.kind), [.board, .log])
+
+        store.setBoardMarkdown("改掉了", for: board.id)
+        model.recomputeInBackground(resetSelection: false)
+        for _ in 0..<100 where model.allHits.count != 1 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(model.allHits.map(\.kind), [.log], "改过的工作板不再命中")
+    }
+
     private static var keepAlive: [NotesWindowController] = []
 
     /// 笔记结果：笔记窗口打开到那个待办后，接住要定位的那条笔记（滚过去并闪一下）。

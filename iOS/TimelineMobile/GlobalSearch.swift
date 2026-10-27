@@ -88,6 +88,8 @@ struct GlobalSearchView: View {
                    let hit = results.hits.first(where: { "\($0.kind)" == kind }) { open(hit) }
             }
             .onAppear {
+                // 待办按拼音搜要先转写标题：一进搜索页就在后台转好。
+                Task { await store.warmLinkMatching() }
                 // 截图检查用：`-searchQuery 词` 打开时直接搜。
                 if query.isEmpty, let start = UserDefaults.standard.string(forKey: "searchQuery") { query = start }
             }
@@ -102,7 +104,7 @@ struct GlobalSearchView: View {
                     let count = results.count(item)
                     let selected = scope == item
                     Button {
-                        withAnimation(.snappy(duration: 0.2)) { scope = item }
+                        withAnimation(Motion.adapt(.snappy(duration: 0.2))) { scope = item }
                     } label: {
                         HStack(spacing: 5) {
                             Image(systemName: item.symbol).font(.caption.weight(.semibold))
@@ -129,7 +131,7 @@ struct GlobalSearchView: View {
                 Image(systemName: "magnifyingglass").font(.system(size: 34, weight: .light)).foregroundStyle(Palette.muted.opacity(0.7))
                 Text(LF("没有找到「%@」", trimmed)).font(.headline).foregroundStyle(Palette.ink)
                 if scope != .all, results.count(.all) > 0 {
-                    Button(LF("在全部结果中查看（%lld）", results.count(.all))) { withAnimation(.snappy(duration: 0.2)) { scope = .all } }
+                    Button(LF("在全部结果中查看（%lld）", results.count(.all))) { withAnimation(Motion.adapt(.snappy(duration: 0.2))) { scope = .all } }
                         .font(.subheadline)
                 }
             }
@@ -431,9 +433,11 @@ struct SearchResults {
     init(store: JournalStore, query raw: String) {
         let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
-        hits = store.tasks(matching: query).sorted { lhs, rhs in
-            lhs.task.completed != rhs.task.completed ? !lhs.task.completed : (lhs.task.dueDate ?? .distantFuture) < (rhs.task.dueDate ?? .distantFuture)
-        }.prefix(80).map { item in
+        let tag = TagText.searchTag(query)
+        // 多个词各自出现即可；待办还能按拼音、拼音首字母找。
+        let terms = tag == nil ? LinkMatcher.terms(query) : []
+        let tasks = tag == nil ? LinkMatcher.searchTasks(store.tasks(), terms: terms) : LinkMatcher.searchTasks(store.tasks(matching: query), terms: [])
+        hits = tasks.prefix(80).map { item in
             var parts: [String] = []
             if let number = item.task.number { parts.append("#\(number)") }
             parts.append(item.task.dueDate.map { LF("截止 %@", DayText.relative($0) ?? DayText.short($0)) } ?? L("未设日期"))
@@ -441,14 +445,14 @@ struct SearchResults {
             return SearchHit(id: "task-\(item.id)", kind: .task, title: String(TaskText.rendered(item.task.title).characters),
                              detail: parts.joined(separator: " · "), target: .task(item.id), completed: item.task.completed)
         }
-        if let tag = TagText.searchTag(query) {
-            for item in store.logs(forTag: tag).reversed() { hits.append(Self.logHit(item, store: store, query: nil)) }
+        if let tag {
+            for item in store.logs(forTag: tag).reversed() { hits.append(Self.logHit(item, store: store, terms: [])) }
             hits = Array(hits.prefix(Self.limit))
             return
         }
         for board in store.boards where !store.isBoardArchived(board) {
             var found = 0
-            for (index, line) in board.markdown.components(separatedBy: .newlines).enumerated() where line.localizedStandardContains(query) {
+            for (index, line) in board.markdown.components(separatedBy: .newlines).enumerated() where LinkMatcher.containsAll(line, terms) {
                 hits.append(SearchHit(id: "board-\(board.id)-\(index)", kind: .board, title: Self.readable(line),
                                       detail: LF("%@ · 第 %lld 行", store.boardTitle(board), index + 1), target: .board(board.id, line: index + 1)))
                 found += 1
@@ -457,18 +461,17 @@ struct SearchResults {
         }
         for item in store.allLogs(includeFocus: true).reversed() {
             let log = item.log
-            let inText = [log.text, log.focusGoal ?? "", log.taskTitle ?? ""].contains { $0.localizedStandardContains(query) }
-                    || log.tags.contains { $0.localizedStandardContains(query) } || log.taskTags.contains { $0.localizedStandardContains(query) }
-            if inText {
-                hits.append(Self.logHit(item, store: store, query: query))
-            } else if log.recognizedText.localizedStandardContains(query) {
-                hits.append(Self.imageHit(item, store: store, query: query))
+            let text = ([log.text, log.focusGoal ?? "", log.taskTitle ?? ""] + log.tags + log.taskTags).joined(separator: "\n")
+            if LinkMatcher.containsAll(text, terms) {
+                hits.append(Self.logHit(item, store: store, terms: terms))
+            } else if !log.images.isEmpty, LinkMatcher.containsAll(log.recognizedText, terms) {
+                hits.append(Self.imageHit(item, store: store, terms: terms))
             }
             if hits.count > Self.limit { break }
         }
         for key in store.days.keys.sorted(by: >) {
-            guard let summary = store.days[key]?.summary, summary.localizedStandardContains(query), let date = JournalDates.date(for: key) else { continue }
-            let line = summary.components(separatedBy: .newlines).first { $0.localizedStandardContains(query) } ?? summary
+            guard let summary = store.days[key]?.summary, !summary.isEmpty, LinkMatcher.containsAll(summary, terms), let date = JournalDates.date(for: key) else { continue }
+            let line = Self.bestLine(summary.components(separatedBy: .newlines), terms: terms) ?? summary
             hits.append(SearchHit(id: "summary-\(key)", kind: .summary, title: Self.readable(line),
                                   detail: LF("%@ · 每日小结", DayText.relative(date) ?? DayText.short(date)), target: .summary(key)))
         }
@@ -486,21 +489,28 @@ struct SearchResults {
     }
 
     /// 多行正文只显示命中的那一行（没有就第一行非空的），去掉 Markdown 记号。
-    @MainActor private static func logHit(_ item: JournalStore.LoggedLog, store: JournalStore, query: String?) -> SearchHit {
+    @MainActor private static func logHit(_ item: JournalStore.LoggedLog, store: JournalStore, terms: [String]) -> SearchHit {
         let lines = LogStyle.body(item.log).components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        let line = query.flatMap { query in lines.first { $0.localizedStandardContains(query) } } ?? lines.first ?? ""
+        let line = bestLine(lines, terms: terms) ?? lines.first ?? ""
         let title = String(TaskText.rendered(readable(line)).characters)
         return SearchHit(id: "log-\(item.log.id)", kind: .log, title: title.isEmpty ? (item.log.focusGoal ?? L("图片")) : title,
                          detail: detail(item), target: target(item, store: store), image: item.log.images.first)
     }
 
     /// 文字只在图片里：标题换成图片里命中的那一行，带上那张图。
-    @MainActor private static func imageHit(_ item: JournalStore.LoggedLog, store: JournalStore, query: String) -> SearchHit {
+    @MainActor private static func imageHit(_ item: JournalStore.LoggedLog, store: JournalStore, terms: [String]) -> SearchHit {
         let log = item.log
-        let image = log.images.first { log.imageText[$0]?.localizedStandardContains(query) == true }
-        let line = image.flatMap { log.imageText[$0] }?.components(separatedBy: .newlines).first { $0.localizedStandardContains(query) } ?? ""
+        let image = log.images.first { log.imageText[$0].map { LinkMatcher.containsAll($0, terms) } == true }
+            ?? log.images.first { name in terms.contains { log.imageText[name]?.localizedStandardContains($0) == true } }
+        let line = image.flatMap { log.imageText[$0] }.flatMap { bestLine($0.components(separatedBy: .newlines), terms: terms) } ?? ""
         return SearchHit(id: "image-\(log.id)", kind: .image, title: line.trimmingCharacters(in: .whitespaces),
                          detail: LF("图片中的文字 · %@", detail(item)), target: target(item, store: store), image: image)
+    }
+
+    /// 命中的那一行：所有词都在的行优先，其次是有任意一个词的行。
+    private static func bestLine(_ lines: [String], terms: [String]) -> String? {
+        guard !terms.isEmpty else { return nil }
+        return lines.first { LinkMatcher.containsAll($0, terms) } ?? lines.first { line in terms.contains { line.localizedStandardContains($0) } }
     }
 
     /// 去掉缩进和行首的 Markdown 记号，读起来像正文。

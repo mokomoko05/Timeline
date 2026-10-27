@@ -85,7 +85,7 @@ private struct LogActionsHost: ViewModifier {
                 Button("删除", role: .destructive) {
                     store.deleteLog(logged.id, on: logged.date)
                     store.save()
-                    actions.toast.show(L("已删除"))
+                    UndoToast.shared.show(L("已删除日志")) { store.undo() }
                 }
             } message: { logged in
                 if let text = logged.log.copyText { Text(String(text.prefix(80))) }
@@ -195,7 +195,7 @@ private struct LogEditSheet: View {
             }
             BoardWebEditor(session: session)
                 .frame(height: min(max(session.contentHeight ?? 120, 96), UIScreen.main.bounds.height * 0.32))
-                .animation(.snappy(duration: 0.15), value: session.contentHeight)
+                .animation(Motion.adapt(.snappy(duration: 0.15)), value: session.contentHeight)
         }
         .onAppear {
             session.beginEditing()

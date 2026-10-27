@@ -61,79 +61,169 @@ enum GlobalSearchScope: String, CaseIterable, Identifiable {
     }
 }
 
+/// 搜索要扫的文字：日志、工作板、每日总结拆成普通字符串，可以拿到后台去扫。数据变了才重建。
+struct GlobalSearchCorpus: Sendable {
+    struct Log: Sendable {
+        let key: String
+        let id: UUID
+        /// 正文、专注目标、关联待办标题、标签，合在一起判断「文字里有没有」。
+        let text: String
+        let imageText: String
+    }
+    struct BoardLines: Sendable {
+        let index: Int
+        let lines: [String]
+    }
+    /// 日期从新到旧，同一天里新的在前。
+    var logs: [Log] = []
+    var boards: [BoardLines] = []
+    /// 日期从新到旧。
+    var summaries: [(key: String, text: String)] = []
+
+    @MainActor static func build(_ store: JournalStore) -> GlobalSearchCorpus {
+        var corpus = GlobalSearchCorpus()
+        for (index, board) in store.boards.enumerated() where !board.archived {
+            corpus.boards.append(BoardLines(index: index, lines: GlobalSearch.lines(of: board)))
+        }
+        for key in store.days.keys.sorted(by: >) {
+            guard let day = store.days[key] else { continue }
+            for log in day.logs.sorted(by: { $0.createdAt > $1.createdAt }) {
+                let text = ([log.text, log.focusGoal ?? "", log.taskTitle ?? ""] + log.tags + log.taskTags).joined(separator: "\n")
+                corpus.logs.append(Log(key: key, id: log.id, text: text, imageText: log.recognizedText))
+            }
+            if !day.summary.isEmpty { corpus.summaries.append((key, day.summary)) }
+        }
+        return corpus
+    }
+
+    /// 扫描结果：只记位置，标题和说明回到主线程再拼。
+    struct Matches: Sendable {
+        var boardLines: [(board: Int, line: Int)] = []
+        var logs: [(key: String, id: UUID, inImage: Bool)] = []
+        var summaries: [String] = []
+    }
+
+    func scan(_ terms: [String], limit: Int, perBoard: Int) -> Matches {
+        var matches = Matches()
+        for board in boards {
+            var found = 0
+            for (index, line) in board.lines.enumerated() where GlobalSearch.containsAll(line, terms) {
+                matches.boardLines.append((board.index, index))
+                found += 1
+                if found == perBoard { break }
+            }
+        }
+        for log in logs {
+            if GlobalSearch.containsAll(log.text, terms) {
+                matches.logs.append((log.key, log.id, false))
+            } else if !log.imageText.isEmpty, GlobalSearch.containsAll(log.imageText, terms) {
+                matches.logs.append((log.key, log.id, true))
+            }
+            if matches.logs.count > limit { break }
+        }
+        for summary in summaries where GlobalSearch.containsAll(summary.text, terms) { matches.summaries.append(summary.key) }
+        return matches
+    }
+}
+
 @MainActor
 enum GlobalSearch {
     static let boardLinesPerBoard = 4
     static let limit = 300
 
-    /// 待办在前，然后是工作板的命中行、日志（新的在前，文字在图片里的单列）、每日总结。
+    nonisolated static func terms(_ query: String) -> [String] { LinkMatcher.terms(query) }
+    nonisolated static func containsAll(_ text: String, _ terms: [String]) -> Bool { LinkMatcher.containsAll(text, terms) }
+
+    /// 每页工作板拆好的行：内容没变就复用，不用每按一个键都把整页再拆一遍。
+    private static var lineCache: [UUID: (markdown: String, lines: [String])] = [:]
+
+    static func lines(of board: Board) -> [String] {
+        if let cached = lineCache[board.id], cached.markdown == board.markdown { return cached.lines }
+        let lines = board.markdown.components(separatedBy: .newlines)
+        lineCache[board.id] = (board.markdown, lines)
+        return lines
+    }
+
+    /// 待办在前（按匹配质量，再按未完成、截止日期），然后是工作板的命中行、日志（新的在前，文字在图片里的单列）、每日总结。
     static func hits(store: JournalStore, query raw: String) -> [GlobalSearchHit] {
         let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return [] }
-        var result: [GlobalSearchHit] = store.tasks(matching: query).sorted { lhs, rhs in
-            lhs.task.completed != rhs.task.completed ? !lhs.task.completed : (lhs.task.dueDate ?? .distantFuture) < (rhs.task.dueDate ?? .distantFuture)
-        }.prefix(80).map { item in
+        if let tag = TagText.searchTag(query) { return tagHits(store: store, tag: tag) }
+        let terms = terms(query)
+        let matches = GlobalSearchCorpus.build(store).scan(terms, limit: limit, perBoard: boardLinesPerBoard)
+        return assemble(store: store, terms: terms, tasks: taskHits(store: store, terms: terms), matches: matches)
+    }
+
+    /// 「#标签」：带这个标签的待办和日志。
+    static func tagHits(store: JournalStore, tag: String) -> [GlobalSearchHit] {
+        var result = taskHits(LinkMatcher.searchTasks(store.tasks(matching: "#" + tag), terms: []))
+        for item in store.logs(forTag: tag).reversed() { result.append(logHit(item.log, key: item.key, store: store, terms: [], inImage: false)) }
+        return Array(result.prefix(limit))
+    }
+
+    static func taskHits(store: JournalStore, terms: [String]) -> [GlobalSearchHit] {
+        taskHits(LinkMatcher.searchTasks(store.tasks(), terms: terms))
+    }
+
+    private static func taskHits(_ ranked: [ScheduledTask]) -> [GlobalSearchHit] {
+        ranked.prefix(80).map { item in
             var detail = item.task.dueDate.map { AppLocalizedFormat("截止 %@", $0.relativeLabel) } ?? AppLocalized("未设日期")
             if !item.task.tags.isEmpty { detail += " · " + item.task.tags.map { "#" + $0 }.joined(separator: " ") }
             return GlobalSearchHit(id: "task-\(item.id)", kind: .task, title: String(TaskText.rendered(item.task.title).characters),
                                    detail: detail, target: .task(item.id), completed: item.task.completed)
         }
-        if let tag = TagText.searchTag(query) {
-            for item in store.logs(forTag: tag).reversed() { result.append(logHit(item.log, key: item.key, store: store, query: nil)) }
-            return Array(result.prefix(limit))
+    }
+
+    /// 把后台扫出来的位置拼成结果行。
+    static func assemble(store: JournalStore, terms: [String], tasks: [GlobalSearchHit], matches: GlobalSearchCorpus.Matches) -> [GlobalSearchHit] {
+        var result = tasks
+        for match in matches.boardLines where store.boards.indices.contains(match.board) {
+            let board = store.boards[match.board]
+            let lines = lines(of: board)
+            guard lines.indices.contains(match.line) else { continue }
+            result.append(GlobalSearchHit(id: "board-\(board.id)-\(match.line)", kind: .board, title: readable(lines[match.line]),
+                                          detail: AppLocalizedFormat("%@ · 第 %lld 行", store.boardTitle(board), match.line + 1),
+                                          target: .board(board.owner, line: match.line + 1)))
         }
-        for board in store.boards where !board.archived {
-            var found = 0
-            for (index, line) in board.markdown.components(separatedBy: .newlines).enumerated() where line.localizedStandardContains(query) {
-                result.append(GlobalSearchHit(id: "board-\(board.id)-\(index)", kind: .board, title: readable(line),
-                                              detail: AppLocalizedFormat("%@ · 第 %lld 行", store.boardTitle(board), index + 1),
-                                              target: .board(board.owner, line: index + 1)))
-                found += 1
-                if found == boardLinesPerBoard { break }
-            }
+        for match in matches.logs {
+            guard result.count <= limit else { break }
+            guard let log = store.days[match.key]?.logs.first(where: { $0.id == match.id }) else { continue }
+            result.append(logHit(log, key: match.key, store: store, terms: terms, inImage: match.inImage))
         }
         var summaries: [GlobalSearchHit] = []
-        for key in store.days.keys.sorted(by: >) {
-            guard let day = store.days[key] else { continue }
-            for log in day.logs.sorted(by: { $0.createdAt > $1.createdAt }) {
-                let inText = [log.text, log.focusGoal ?? "", log.taskTitle ?? ""].contains { $0.localizedStandardContains(query) }
-                    || log.tags.contains { $0.localizedStandardContains(query) } || log.taskTags.contains { $0.localizedStandardContains(query) }
-                if inText {
-                    result.append(logHit(log, key: key, store: store, query: nil, matchQuery: query))
-                } else if log.recognizedText.localizedStandardContains(query) {
-                    result.append(logHit(log, key: key, store: store, query: query))
-                }
-            }
-            if let date = JournalDates.date(for: key), day.summary.localizedStandardContains(query) {
-                let line = day.summary.components(separatedBy: .newlines).first { $0.localizedStandardContains(query) } ?? day.summary
-                summaries.append(GlobalSearchHit(id: "summary-\(key)", kind: .summary, title: readable(line),
-                                                 detail: AppLocalizedFormat("%@ · 每日总结", date.relativeLabel), target: .summary(date)))
-            }
-            if result.count > limit { break }
+        for key in matches.summaries {
+            guard let date = JournalDates.date(for: key), let summary = store.days[key]?.summary else { continue }
+            let line = summary.components(separatedBy: .newlines).first { containsAll($0, terms) }
+                ?? summary.components(separatedBy: .newlines).first { $0.localizedStandardContains(terms.first ?? "") } ?? summary
+            summaries.append(GlobalSearchHit(id: "summary-\(key)", kind: .summary, title: readable(line),
+                                             detail: AppLocalizedFormat("%@ · 每日总结", date.relativeLabel), target: .summary(date)))
         }
         return Array((result + summaries).prefix(limit))
     }
 
-    /// `query` 不为空：文字只在图片里，标题换成图片中命中的那一行，并带上那张图。
-    private static func logHit(_ log: DailyLogEntry, key: String, store: JournalStore, query: String?, matchQuery: String? = nil) -> GlobalSearchHit {
+    /// `inImage`：文字只在图片里，标题换成图片中命中的那一行，并带上那张图。
+    private static func logHit(_ log: DailyLogEntry, key: String, store: JournalStore, terms: [String], inImage: Bool) -> GlobalSearchHit {
         let date = JournalDates.date(for: key) ?? log.createdAt
         var detail = date.relativeLabel + " " + NoteThread.shortTime(log.createdAt)
         if let title = log.taskTitle { detail += " · " + title }
         let target = GlobalSearchHit.Target.log(date: date, id: log.id, taskID: log.taskID.flatMap { store.locate($0) == nil ? nil : $0 })
-        if let query {
-            let image = log.images.first { log.imageText[$0]?.localizedStandardContains(query) == true }
-            let line = image.flatMap { log.imageText[$0] }?.components(separatedBy: .newlines).first { $0.localizedStandardContains(query) } ?? ""
+        if inImage {
+            let image = log.images.first { log.imageText[$0].map { containsAll($0, terms) } == true }
+                ?? log.images.first { log.imageText[$0]?.localizedStandardContains(terms.first ?? "") == true }
+            let lines = image.flatMap { log.imageText[$0] }?.components(separatedBy: .newlines) ?? []
+            let line = lines.first { containsAll($0, terms) } ?? lines.first { $0.localizedStandardContains(terms.first ?? "") } ?? ""
             return GlobalSearchHit(id: "image-\(log.id)", kind: .image, title: line.trimmingCharacters(in: .whitespaces),
                                    detail: detail, target: target, image: image.map(store.imageURL))
         }
-        return GlobalSearchHit(id: "log-\(log.id)", kind: .log, title: excerpt(LogEventStyle.body(log), query: matchQuery),
+        return GlobalSearchHit(id: "log-\(log.id)", kind: .log, title: excerpt(LogEventStyle.body(log), terms: terms),
                                detail: detail, target: target)
     }
 
     /// 多行正文只显示命中的那一行（没有就第一行非空的），去掉 Markdown 记号。
-    static func excerpt(_ text: String, query: String?) -> String {
+    static func excerpt(_ text: String, terms: [String]) -> String {
         let lines = text.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        let line = query.flatMap { query in lines.first { $0.localizedStandardContains(query) } } ?? lines.first ?? ""
+        let line = terms.isEmpty ? lines.first ?? "" : lines.first { containsAll($0, terms) }
+            ?? lines.first { line in terms.contains { line.localizedStandardContains($0) } } ?? lines.first ?? ""
         let readable = String(TaskText.rendered(readable(line)).characters)
         return readable.isEmpty ? AppLocalized("图片") : readable
     }
@@ -162,7 +252,7 @@ final class GlobalSearchModel: ObservableObject {
 
     init() {
         $query.removeDuplicates().debounce(for: .milliseconds(90), scheduler: RunLoop.main)
-            .sink { [weak self] _ in self?.recompute(resetSelection: true) }.store(in: &cancellables)
+            .sink { [weak self] _ in self?.recomputeInBackground(resetSelection: true) }.store(in: &cancellables)
         $scope.dropFirst().sink { [weak self] _ in self?.selection = 0 }.store(in: &cancellables)
     }
 
@@ -170,12 +260,52 @@ final class GlobalSearchModel: ObservableObject {
 
     func count(_ scope: GlobalSearchScope) -> Int { scope == .all ? allHits.count : allHits.filter { scope.includes($0.kind) }.count }
 
-    func presented() { presentation += 1 }
+    func presented() {
+        presentation += 1
+        // 待办按拼音搜要先转写标题：面板一出来就在后台转好，第一次敲拼音不卡。
+        if let store { Task { await store.warmLinkMatching() } }
+    }
 
+    /// 搜索语料：数据变了才重建（不是每按一个键）。
+    private var corpus: GlobalSearchCorpus?
+    /// 每次搜索加一：后台扫完回来时已经有更新的搜索，就丢掉这次的结果。
+    private var generation = 0
+    private var scanning: Task<Void, Never>?
+
+    /// 同步算完（测试和需要立刻拿到结果的地方用）。
     func recompute(resetSelection: Bool = false) {
         guard let store else { allHits = []; return }
-        allHits = GlobalSearch.hits(store: store, query: query)
-        if resetSelection { selection = 0 } else { selection = min(selection, max(0, hits.count - 1)) }
+        generation += 1
+        scanning?.cancel()
+        publish(GlobalSearch.hits(store: store, query: query), resetSelection: resetSelection)
+    }
+
+    /// 打字时用：待办（少、要拼音缓存）在主线程匹配，日志、工作板、总结拿到后台扫，扫完再拼成结果。
+    func recomputeInBackground(resetSelection: Bool) {
+        guard let store else { allHits = []; return }
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        generation += 1
+        scanning?.cancel()
+        guard !query.isEmpty else { publish([], resetSelection: resetSelection); return }
+        if TagText.searchTag(query) != nil { publish(GlobalSearch.hits(store: store, query: query), resetSelection: resetSelection); return }
+        let terms = GlobalSearch.terms(query)
+        let tasks = GlobalSearch.taskHits(store: store, terms: terms)
+        let corpus = corpus ?? GlobalSearchCorpus.build(store)
+        self.corpus = corpus
+        let current = generation
+        let limit = GlobalSearch.limit, perBoard = GlobalSearch.boardLinesPerBoard
+        scanning = Task { [weak self] in
+            let matches = await Task.detached(priority: .userInitiated) {
+                corpus.scan(terms, limit: limit, perBoard: perBoard)
+            }.value
+            guard let self, !Task.isCancelled, current == self.generation, let store = self.store else { return }
+            self.publish(GlobalSearch.assemble(store: store, terms: terms, tasks: tasks, matches: matches), resetSelection: resetSelection)
+        }
+    }
+
+    private func publish(_ hits: [GlobalSearchHit], resetSelection: Bool) {
+        allHits = hits
+        if resetSelection { selection = 0 } else { selection = min(selection, max(0, self.hits.count - 1)) }
     }
 
     func move(_ amount: Int) {
@@ -194,10 +324,13 @@ final class GlobalSearchModel: ObservableObject {
 
     /// 面板开着时数据变了（别处改了、图片文字识别好了）也跟着刷新。
     private func observe() {
-        storeChanges = store?.objectWillChange.debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+        corpus = nil
+        storeChanges = store?.objectWillChange
+            .handleEvents(receiveOutput: { [weak self] _ in self?.corpus = nil })
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
             .sink { [weak self] _ in
                 guard let self, !self.query.isEmpty, GlobalSearchController.shared.isVisible else { return }
-                self.recompute()
+                self.recomputeInBackground(resetSelection: false)
             }
     }
 }

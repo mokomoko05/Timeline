@@ -85,10 +85,10 @@ private struct FloatingEditorHost<Content: View>: View {
                             .ignoresSafeArea(edges: .bottom)
                     }
                     // 收起时卡片已经跟着键盘往下走了，再叠一个滑出会在底部停一下；只淡掉。
-                    .transition(.asymmetric(insertion: .move(edge: .bottom), removal: .opacity))
+                    .transition(Motion.transition(.asymmetric(insertion: .move(edge: .bottom), removal: .opacity)))
             }
         }
-        .animation(.snappy(duration: 0.22), value: shown)
+        .animation(Motion.adapt(.snappy(duration: 0.22)), value: shown)
         // 从外面收起（比如存完了）时也立刻放下键盘。
         .onChange(of: shown) { _, shown in if !shown { Self.dropKeyboard() } }
     }

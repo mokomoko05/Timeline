@@ -77,6 +77,7 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
                 .fill(highlighted ? Palette.accent.opacity(0.12) : Palette.soft.opacity(hovered ? 0.35 : 0))
                 .padding(.bottom, 8)
         }
+        .background { LogSelectionMark(id: log.id).padding(.bottom, 8) }
         .overlay(alignment: .topLeading) { rail.padding(.leading, 8).padding(.top, 6) }
         .contentShape(Rectangle())
         .onHover { hovered = $0 }

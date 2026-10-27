@@ -118,6 +118,8 @@ enum PerfProbe {
         let steps: [(String, () -> Void)] = [
             ("完成一个待办", { toggled = firstOpen(); if let item = toggled { store.toggleTodo(item.id, on: item.date) } }),
             ("取消完成", { if let item = toggled { store.toggleTodo(item.id, on: item.date) } }),
+            ("删除待办", { if let item = firstOpen() { UndoToast.deleteTodo(item.id, on: item.date, store: store) } }),
+            ("撤销删除", { UndoToast.shared.performUndo() }),
             ("打开待办笔记页", { send("openTask") }),
             ("任务设置", { send("editTask") }),
             ("关掉任务设置", { send("closeSheet") }),

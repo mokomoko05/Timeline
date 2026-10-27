@@ -53,4 +53,19 @@ final class MainWindowCenteringTests: XCTestCase {
         assertCentered()
         XCTAssertEqual(window.frame.size, NSSize(width: 700, height: 580))
     }
+
+    /// 关掉「固定在屏幕中央」后是普通窗口：能拖、位置照设；再打开又回到中央。
+    func testCenteringCanBeTurnedOff() throws {
+        let window = MainWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled, .resizable], backing: .buffered, defer: true)
+        let visible = try XCTUnwrap(window.screen ?? NSScreen.main).visibleFrame
+        window.keepsCentered = false
+        XCTAssertTrue(window.isMovable)
+        let origin = NSPoint(x: visible.minX + 10, y: visible.minY + 10)
+        window.setFrameOrigin(origin)
+        XCTAssertEqual(window.frame.origin, origin)
+        window.keepsCentered = true
+        XCTAssertFalse(window.isMovable)
+        XCTAssertEqual(window.frame.midX, visible.midX, accuracy: 1)
+        XCTAssertEqual(window.frame.midY, visible.midY, accuracy: 1)
+    }
 }

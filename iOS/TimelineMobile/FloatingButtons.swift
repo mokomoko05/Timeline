@@ -71,7 +71,7 @@ final class ScrollEdges: ObservableObject {
     fileprivate func update(top: CGFloat, bottom: CGFloat, height: CGFloat) {
         let top = top < -240, bottom = bottom > height + 160
         if top != showsTop || bottom != showsBottom {
-            withAnimation(.snappy(duration: 0.2)) {
+            withAnimation(Motion.adapt(.snappy(duration: 0.2))) {
                 showsTop = top
                 showsBottom = bottom
             }
@@ -217,6 +217,6 @@ struct FloatingButtons: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text(title))
-        .transition(.opacity.combined(with: .scale(scale: 0.85)))
+        .transition(Motion.transition(.opacity.combined(with: .scale(scale: 0.85))))
     }
 }

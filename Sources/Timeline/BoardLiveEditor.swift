@@ -418,6 +418,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        if ready { NotificationCenter.default.post(name: .timelineEditorRecovered, object: "board") }
         flush()
         Self.shared.map { $0.handler.pageReady = false; $0.handler.navigationStarted = false }
         ready = false

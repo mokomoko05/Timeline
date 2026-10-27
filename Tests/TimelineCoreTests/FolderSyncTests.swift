@@ -154,6 +154,32 @@ final class FolderSyncTests: XCTestCase {
         XCTAssertEqual(mac.store.boards.first { $0.id == board.id }!.markdown, "整理好了")
     }
 
+    func testConcurrentLogEditsKeepBothVersions() async throws {
+        let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
+        let day = clock
+        let log = try XCTUnwrap(try mac.store.quickLogEntry("原文", on: day, now: day).entry)
+        mac.store.save()
+        try await sync(mac, phone)
+
+        phone.store.updateLog(log.id, text: "手机改的", on: day)
+        phone.store.save()
+        mac.store.updateLog(log.id, text: "Mac 改的", on: day)
+        mac.store.save()
+        try await sync(phone, mac, phone)
+
+        assertSameContent(mac, phone)
+        let text = mac.store.entry(for: day).logs.first { $0.id == log.id }!.text
+        XCTAssertTrue(text.hasPrefix("Mac 改的"), text)
+        XCTAssertTrue(text.contains("同步冲突：以下是 iPhone"), text)
+        XCTAssertTrue(text.hasSuffix("手机改的"), text)
+
+        // 依次修改照常覆盖。
+        phone.store.updateLog(log.id, text: "整理好了", on: day)
+        phone.store.save()
+        try await sync(phone, mac)
+        XCTAssertEqual(mac.store.entry(for: day).logs.first { $0.id == log.id }!.text, "整理好了")
+    }
+
     func testSequentialBoardEditsOverwriteWithoutConflict() async throws {
         let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
         let board = mac.store.ensureBoard(for: .tag("读书"))!

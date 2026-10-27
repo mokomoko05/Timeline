@@ -4,6 +4,8 @@ import TimelineCore
 
 extension Notification.Name {
     static let timelineCommitEditing = Notification.Name("TimelineCommitEditing")
+    /// 编辑器的网页进程意外退出、已保存并重新载入：界面提示一句。`object` 是 "inline"（日志就地编辑）或 "board"。
+    static let timelineEditorRecovered = Notification.Name("TimelineEditorRecovered")
 }
 
 struct TaskTitleView: View {

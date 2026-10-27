@@ -127,7 +127,8 @@ struct SyncMerge {
     var describeDevice: (String) -> String = { $0 }
 
     /// 两边各自改过就把两份都留下的长文本字段（键的前缀 → 字段名）。
-    static let textFields: [String: String] = ["board/": "markdown", "summary/": "text"]
+    /// 日志也能就地编辑成长文，两台设备同时改同一条时同样两份都留。
+    static let textFields: [String: String] = ["board/": "markdown", "summary/": "text", "log/": "text"]
 
     static func isTextField(record key: String, field: String) -> Bool {
         textFields.contains { key.hasPrefix($0.key) && $0.value == field }
