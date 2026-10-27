@@ -446,14 +446,26 @@ final class InlineEditorWebView: WKWebView {
 }
 
 /// 放就地编辑器的容器：哪一条在编辑，编辑器就挪到那一条的容器里。
+/// 同一条可能同时出现在两处（笔记窗口里笔记页和日记页一直都在，隐藏的那页也有这一条，比如专注时记的笔记）：
+/// 只有显示着的容器才拿编辑器，也不从显示着的容器那里抢，免得编辑器挂进看不见的那页、这边整条空白。
 final class InlineEditorContainer: NSView {
     override var isFlipped: Bool { true }
+
+    private var showing: Bool { window != nil && !isHiddenOrHasHiddenAncestor }
 
     func attach(_ editor: NSView) {
         guard editor.superview !== self else { return }
         editor.removeFromSuperview()
         editor.frame = bounds
         addSubview(editor)
+    }
+
+    /// 编辑器不在这里、这里显示着、编辑器现在待的地方看不见（或还没地方）：挪过来，开始排版 / 拿焦点。
+    @MainActor func claim() {
+        guard showing, let webView = InlineMarkdownEditor.shared.webView, webView.superview !== self else { return }
+        if let other = webView.superview as? InlineEditorContainer, other.showing { return }
+        attach(webView)
+        InlineMarkdownEditor.shared.attached()
     }
 
     override func layout() {
@@ -463,7 +475,12 @@ final class InlineEditorContainer: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { MainActor.assumeIsolated { InlineMarkdownEditor.shared.attached() } }
+        MainActor.assumeIsolated { claim() }
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        MainActor.assumeIsolated { claim() }
     }
 }
 
@@ -480,16 +497,13 @@ struct InlineEditorHost: NSViewRepresentable {
     @ObservedObject var slot: InlineEditSlot
 
     func makeNSView(context: Context) -> InlineEditorContainer {
-        let container = InlineEditorContainer()
-        container.attach(editor.makeWebView())
-        return container
+        _ = editor.makeWebView()
+        // 挂进窗口时（viewDidMoveToWindow）才拿编辑器：那时才知道这一处是不是显示着。
+        return InlineEditorContainer()
     }
 
     func updateNSView(_ container: InlineEditorContainer, context: Context) {
-        if let webView = editor.webView, webView.superview !== container {
-            container.attach(webView)
-            editor.attached()
-        }
+        container.claim()
     }
 }
 

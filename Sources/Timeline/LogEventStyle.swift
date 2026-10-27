@@ -15,6 +15,9 @@ enum LogEventStyle {
         }
     }
 
+    /// 专注的开始、结束这类自动写的记录用小一号的淡色；专注期间自己记的笔记、反馈和普通日志一样。
+    static func quiet(_ log: DailyLogEntry) -> Bool { log.isFocusMarker && !log.hasEditableText }
+
     static func symbol(_ log: DailyLogEntry) -> String? {
         guard log.focusMarker == "END" else { return nil }
         return log.focusMetMinimum == false ? "xmark" : "checkmark"

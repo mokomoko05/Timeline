@@ -561,8 +561,8 @@ struct UnifiedJournalView: View {
             if !LogEventStyle.body(log).isEmpty {
                 // 点一下正文就地编辑（和工作板一样所见即所得），点别处、Esc 或 ⌘↩ 保存。
                 EditableLogText(log: log, editable: !store.isReadOnly && log.hasEditableText, begin: { beginEdit(log, at: $0, prepare: $1) }) { editAt in
-                    TaskLinkText(source: LogEventStyle.body(log), completed: false, color: log.isFocusMarker ? Palette.muted : Palette.ink,
-                                 fontSize: log.isFocusMarker ? 12 : 13,
+                    TaskLinkText(source: LogEventStyle.body(log), completed: false, color: LogEventStyle.quiet(log) ? Palette.muted : Palette.ink,
+                                 fontSize: LogEventStyle.quiet(log) ? 12 : 13,
                                  edit: { beginEdit(log, at: nil) }, open: SafariLinks.open, maxLines: 0,
                                  markdown: true, compactLines: true, editAt: editAt, foldID: "log.\(log.id.uuidString)")
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -648,8 +648,8 @@ struct UnifiedJournalView: View {
 
     private func beginEdit(_ log: DailyLogEntry, at point: CGPoint?, prepare: Bool = false) {
         guard log.hasEditableText else { return }
-        InlineMarkdownEditor.shared.begin(log, on: date, store: store, at: point, fontSize: typography.pt(log.isFocusMarker ? 12 : 13),
-                                          lineSpacing: typography.lineSpacing, dark: colorScheme == .dark, muted: log.isFocusMarker, prepare: prepare)
+        InlineMarkdownEditor.shared.begin(log, on: date, store: store, at: point, fontSize: typography.pt(LogEventStyle.quiet(log) ? 12 : 13),
+                                          lineSpacing: typography.lineSpacing, dark: colorScheme == .dark, muted: LogEventStyle.quiet(log), prepare: prepare)
     }
 
 }
