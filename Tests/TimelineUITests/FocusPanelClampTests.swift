@@ -2,12 +2,12 @@ import AppKit
 import XCTest
 @testable import Timeline
 
-final class FocusPanelClampTests: XCTestCase {
+final class WindowScreenBoundsClampTests: XCTestCase {
     private let visible = NSRect(x: 0, y: 40, width: 1440, height: 835)
 
     func testInsideFrameStaysPut() {
         let frame = NSRect(x: 200, y: 300, width: 340, height: 158)
-        XCTAssertEqual(FocusPanel.clamp(frame, to: visible), frame)
+        XCTAssertEqual(WindowScreenBounds.clamp(frame, to: visible), frame)
     }
 
     func testEveryEdgeIsPulledBackOnScreen() {
@@ -20,14 +20,14 @@ final class FocusPanelClampTests: XCTestCase {
             (NSPoint(x: 2000, y: 2000), NSPoint(x: 1100, y: 717)),
         ]
         for (origin, expected) in cases {
-            let clamped = FocusPanel.clamp(NSRect(origin: origin, size: size), to: visible)
+            let clamped = WindowScreenBounds.clamp(NSRect(origin: origin, size: size), to: visible)
             XCTAssertEqual(clamped.origin, expected, "\(origin)")
             XCTAssertEqual(clamped.size, size)
         }
     }
 
     func testOversizedFrameKeepsTopLeftVisible() {
-        let clamped = FocusPanel.clamp(NSRect(x: 100, y: 100, width: 2000, height: 1000), to: visible)
+        let clamped = WindowScreenBounds.clamp(NSRect(x: 100, y: 100, width: 2000, height: 1000), to: visible)
         XCTAssertEqual(clamped.minX, visible.minX)
         XCTAssertEqual(clamped.maxY, visible.maxY)
     }

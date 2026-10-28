@@ -22,9 +22,7 @@ final class BoardWindowTests: XCTestCase {
             let origin = panel.frame.origin
             let start = NSPoint(x: panel.frame.midX, y: panel.frame.maxY - 7)
             var pointer = start
-            let draggablePanel = try XCTUnwrap(panel as? QuietPanel)
-            draggablePanel.dragging = ScreenBoundDragging(mouseLocation: { pointer })
-            defer { draggablePanel.dragging = ScreenBoundDragging() }
+            let dragging = ScreenBoundDragging(mouseLocation: { pointer })
             for (type, delta) in [(NSEvent.EventType.leftMouseDown, 0.0), (.leftMouseDragged, 20),
                                   (.leftMouseDragged, 40), (.leftMouseDragged, 0), (.leftMouseUp, 0)] {
                 pointer = NSPoint(x: start.x + delta, y: start.y)
@@ -32,7 +30,7 @@ final class BoardWindowTests: XCTestCase {
                     location: panel.convertPoint(fromScreen: pointer),
                     modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                     windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
-                panel.sendEvent(event)
+                dragging.send(event, in: panel) { panel.sendEvent($0) }
                 XCTAssertEqual(panel.frame.origin.x, origin.x + delta, accuracy: 0.1)
             }
             let point = NSPoint(x: panel.frame.width - 21, y: panel.frame.height - 18)

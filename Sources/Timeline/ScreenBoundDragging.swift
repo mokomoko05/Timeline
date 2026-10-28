@@ -3,12 +3,12 @@ import AppKit
 @MainActor
 final class ScreenBoundDragging {
     private var drag: (mouse: NSPoint, origin: NSPoint, moving: Bool, titlebar: Bool)?
-    private let eventScreenLocation: ((NSEvent) -> NSPoint)?
     private let mouseLocation: () -> NSPoint
+    private let defaults: UserDefaults
 
-    init(eventScreenLocation: ((NSEvent) -> NSPoint)? = nil, mouseLocation: @escaping () -> NSPoint = { NSEvent.mouseLocation }) {
-        self.eventScreenLocation = eventScreenLocation
+    init(mouseLocation: @escaping () -> NSPoint = { NSEvent.mouseLocation }, defaults: UserDefaults = .standard) {
         self.mouseLocation = mouseLocation
+        self.defaults = defaults
     }
 
     func send(_ event: NSEvent, in window: NSWindow, forward: (NSEvent) -> Void) {
@@ -20,12 +20,15 @@ final class ScreenBoundDragging {
         forward(event)
     }
 
-    private func screenLocation(of event: NSEvent) -> NSPoint {
-        if let eventScreenLocation { return eventScreenLocation(event) }
-        // AppKit 可能按窗口的新位置重建 event.cgEvent 的屏幕坐标。拖动期间窗口一直在变，
-        // 对排队事件再做这种换算会反复叠加偏移，贴边时尤其容易来回跳。
-        // 直接跟随窗口坐标系之外的当前指针；旧事件最多重复最新目标，不追赶旧位置。
-        return mouseLocation()
+    func doubleClickTitlebar(in window: NSWindow) {
+        // 读取系统全局偏好；旧版系统只有 AppleMiniaturizeOnDoubleClick。
+        let action = defaults.string(forKey: "AppleActionOnDoubleClick")?.lowercased()
+            ?? (defaults.bool(forKey: "AppleMiniaturizeOnDoubleClick") ? "minimize" : "zoom")
+        switch action {
+        case "minimize": if window.styleMask.contains(.miniaturizable) { window.performMiniaturize(nil) }
+        case "zoom", "maximize": if window.styleMask.contains(.resizable) { window.performZoom(nil) }
+        default: break
+        }
     }
 
     func filter(_ event: NSEvent, in window: NSWindow) -> NSEvent? {
@@ -48,14 +51,15 @@ final class ScreenBoundDragging {
             let titlebar = inTitlebar && !hit.isDescendant(of: content)
             if titlebar { window.makeKeyAndOrderFront(nil) }
             if titlebar && event.clickCount == 2 {
-                window.performZoom(nil)
+                doubleClickTitlebar(in: window)
                 return nil
             }
-            drag = (screenLocation(of: event), window.frame.origin, false, titlebar)
+            drag = (mouseLocation(), window.frame.origin, false, titlebar)
             if titlebar { return nil }
         case .leftMouseDragged:
             if var current = drag {
-                let mouse = screenLocation(of: event)
+                // 当前指针独立于正在移动的窗口；积压事件不会叠加窗口偏移。
+                let mouse = mouseLocation()
                 let dx = mouse.x - current.mouse.x, dy = mouse.y - current.mouse.y
                 if !current.moving && hypot(dx, dy) < 3 { return current.titlebar ? nil : event }
                 current.moving = true
@@ -63,8 +67,7 @@ final class ScreenBoundDragging {
                 var target = window.frame
                 // NSWindow 的屏幕原点会取整；先使用相同粒度，避免半点目标不断触发无效移动。
                 target.origin = NSPoint(x: (current.origin.x + dx).rounded(), y: (current.origin.y + dy).rounded())
-                let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? window.screen ?? NSScreen.main
-                if let screen { target = Self.clamp(target, to: screen.visibleFrame) }
+                target = window.constrainFrameRect(target, to: nil)
                 if target.origin != window.frame.origin { window.setFrameOrigin(target.origin) }
                 return nil
             }
@@ -85,16 +88,49 @@ final class ScreenBoundDragging {
         return event
     }
 
-    nonisolated static func clamp(_ frame: NSRect, to visible: NSRect) -> NSRect {
-        var frame = frame
-        frame.origin.x = max(min(frame.origin.x, visible.maxX - frame.width), visible.minX)
-        frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - frame.height)
-        return frame
-    }
 }
 
 class ScreenBoundWindow: NSWindow {
-    var dragging = ScreenBoundDragging()
+    private let dragging = ScreenBoundDragging()
+    private var screenObserver: NSObjectProtocol?
+    /// 实际屏幕可用区域；测试替身只替换显示器信息，不替换约束路径。
+    var screenVisibleFrames: [NSRect] { NSScreen.screens.map(\.visibleFrame) }
+
+    override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
+        screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isVisible else { return }
+                self.setFrame(self.frame, display: true)
+            }
+        }
+    }
+
+    deinit { if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) } }
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        guard !styleMask.contains(.fullScreen) else { return frameRect }
+        return WindowScreenBounds.constrain(frameRect, to: screenVisibleFrames, fallback: screen?.visibleFrame ?? NSScreen.main?.visibleFrame)
+    }
+
+    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+        super.setFrame(constrainFrameRect(frameRect, to: nil), display: flag)
+    }
+
+    override func setFrame(_ frameRect: NSRect, display flag: Bool, animate: Bool) {
+        super.setFrame(constrainFrameRect(frameRect, to: nil), display: flag, animate: animate)
+    }
+
+    override func setFrameOrigin(_ point: NSPoint) { setFrame(NSRect(origin: point, size: frame.size), display: false) }
+    override func setFrameTopLeftPoint(_ point: NSPoint) {
+        setFrameOrigin(NSPoint(x: point.x, y: point.y - frame.height))
+    }
+
+    override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+        if place != .out { setFrame(frame, display: false) }
+        super.order(place, relativeTo: otherWin)
+    }
 
     override func sendEvent(_ event: NSEvent) {
         dragging.send(event, in: self) { super.sendEvent($0) }
@@ -102,11 +138,45 @@ class ScreenBoundWindow: NSWindow {
 }
 
 class QuietPanel: NSPanel {
-    var dragging = ScreenBoundDragging()
+    private let dragging = ScreenBoundDragging()
+    private var screenObserver: NSObjectProtocol?
+    var screenVisibleFrames: [NSRect] { NSScreen.screens.map(\.visibleFrame) }
 
     override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
         if Headless.active { ignoresMouseEvents = true }
+        screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isVisible else { return }
+                self.setFrame(self.frame, display: true)
+            }
+        }
+    }
+
+    deinit { if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) } }
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        guard !styleMask.contains(.fullScreen) else { return frameRect }
+        return WindowScreenBounds.constrain(frameRect, to: screenVisibleFrames, fallback: screen?.visibleFrame ?? NSScreen.main?.visibleFrame)
+    }
+
+    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+        super.setFrame(constrainFrameRect(frameRect, to: nil), display: flag)
+    }
+
+    override func setFrame(_ frameRect: NSRect, display flag: Bool, animate: Bool) {
+        super.setFrame(constrainFrameRect(frameRect, to: nil), display: flag, animate: animate)
+    }
+
+    override func setFrameOrigin(_ point: NSPoint) { setFrame(NSRect(origin: point, size: frame.size), display: false) }
+    override func setFrameTopLeftPoint(_ point: NSPoint) {
+        setFrameOrigin(NSPoint(x: point.x, y: point.y - frame.height))
+    }
+
+    override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+        if place != .out { setFrame(frame, display: false) }
+        super.order(place, relativeTo: otherWin)
     }
 
     override func sendEvent(_ event: NSEvent) {

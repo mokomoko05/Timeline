@@ -505,10 +505,6 @@ enum FocusPanelStyle: String, CaseIterable, Identifiable {
     }
 }
 
-private extension NSRect {
-    var area: CGFloat { isNull ? 0 : width * height }
-}
-
 final class FocusPanel: QuietPanel {
     override var canBecomeKey: Bool { true }
 
@@ -518,10 +514,6 @@ final class FocusPanel: QuietPanel {
         return NSRect(x: x, y: saved.minY, width: size.width, height: size.height)
     }
 
-    /// 把窗口整个放进屏幕可见区域；窗口比屏幕还大时贴住左上角。
-    static func clamp(_ frame: NSRect, to visible: NSRect) -> NSRect {
-        ScreenBoundDragging.clamp(frame, to: visible)
-    }
 }
 
 @MainActor
@@ -663,7 +655,7 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
             panel.level = .floating
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
-            // 拖动由 FocusPanel 自己处理，好把窗口限制在屏幕内。
+            // 拖动与屏幕边界由 QuietPanel 基类统一处理。
             panel.isMovableByWindowBackground = false
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             panel.delegate = self
@@ -677,9 +669,6 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
         } else {
             frame = NSRect(x: panel.frame.minX, y: panel.frame.maxY - size.height, width: size.width, height: size.height)
         }
-        // 保存的位置可能只有一部分还在屏幕上（换了显示器、分辨率变了），整个挪回屏幕里。
-        let screen = NSScreen.screens.max { $0.visibleFrame.intersection(frame).area < $1.visibleFrame.intersection(frame).area }
-        if let visible = (screen ?? NSScreen.main)?.visibleFrame { frame = FocusPanel.clamp(frame, to: visible) }
         if panel.frame != frame { panel.setFrame(frame, display: true) }
         if Headless.active { panel.alphaValue = 0; panel.ignoresMouseEvents = true }
         if !panel.isVisible { panel.orderFrontRegardless() }
@@ -748,7 +737,6 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
             frame.origin.x = min(max(frame.origin.x, screen.minX + Self.edgeInset), screen.maxX - size.width - Self.edgeInset)
         }
         frame.origin.y = min(max(panel.frame.minY, screen.minY + Self.edgeInset), screen.maxY - size.height)
-        frame = FocusPanel.clamp(frame, to: screen)
         if FocusDock.shared.right != dockedRight { FocusDock.shared.right = dockedRight }
         guard frame.integral != panel.frame.integral else { return }
         // 窗口变大后、内容重新排版前，画面里的内容会先贴着窗口顶部闪一帧。

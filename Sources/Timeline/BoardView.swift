@@ -144,7 +144,6 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
         }
         panel.level = .floating
         if Headless.active { panel.alphaValue = 0; panel.ignoresMouseEvents = true }
-        if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(panel.frame) }) { panel.center() }
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
         if let revealLine, let owner, let board = store.board(for: owner) {
