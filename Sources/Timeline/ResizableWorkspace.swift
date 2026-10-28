@@ -196,6 +196,7 @@ struct ResizeHandle: NSViewRepresentable {
 }
 
 final class ResizeHandleView: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
     var axis: ResizeAxis = .both
     var begin: (() -> Void)?
     var change: ((CGSize) -> Void)?

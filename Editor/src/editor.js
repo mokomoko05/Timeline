@@ -14,6 +14,11 @@ const refold = StateEffect.define();
 const flashEffect = StateEffect.define();
 // 光标在不在编辑器里：不在时整页都是渲染好的样子，不露任何 Markdown 标记。
 const setFocused = StateEffect.define();
+const setComposing = StateEffect.define();
+const compositionState = StateField.define({
+  create: () => false,
+  update: (value, transaction) => transaction.effects.find(effect => effect.is(setComposing))?.value ?? value
+});
 const external = Annotation.define();
 const externalChange = external.of(true);
 const editable = new Compartment();
@@ -222,11 +227,18 @@ const mathBlocks = StateField.define({
     return {blocks, key: revealedBlocks(state, blocks), decorations: mathBlockDecorations(state, blocks)};
   },
   update(value, transaction) {
+    if (transaction.state.field(compositionState)) {
+      if (!transaction.docChanged) return value;
+      const blocks = value.blocks.map(block => ({...block,
+        from: transaction.changes.mapPos(block.from, -1), to: transaction.changes.mapPos(block.to, 1)}));
+      return {...value, blocks, decorations: value.decorations.map(transaction.changes)};
+    }
     const loaded = transaction.effects.some(effect => effect.is(mathLoaded));
-    const blocks = transaction.docChanged ? findMathBlocks(transaction.state.doc) : value.blocks;
+    const finished = transaction.effects.some(effect => effect.is(setComposing) && !effect.value);
+    const blocks = transaction.docChanged || finished ? findMathBlocks(transaction.state.doc) : value.blocks;
     if (!blocks.length && !value.blocks.length) return value;
     const key = revealedBlocks(transaction.state, blocks);
-    if (!transaction.docChanged && !loaded && key === value.key && transaction.startState.readOnly === transaction.state.readOnly) return value;
+    if (!transaction.docChanged && !finished && !loaded && key === value.key && transaction.startState.readOnly === transaction.state.readOnly) return value;
     return {blocks, key, decorations: mathBlockDecorations(transaction.state, blocks)};
   },
   provide: field => EditorView.decorations.from(field, value => value.decorations)
@@ -765,6 +777,12 @@ const live = StateField.define({
             decorations: structure(state, blocks, states, headings, null)};
   },
   update(value, transaction) {
+    if (transaction.state.field(compositionState)) {
+      if (!transaction.docChanged) return value;
+      return {...value, ...mapStructure(value, transaction.changes),
+        expanded: new Map([...value.expanded].map(([position, open]) => [transaction.changes.mapPos(position), open])),
+        flash: null, decorations: value.decorations.map(transaction.changes)};
+    }
     let expanded = value.expanded;
     let flash = value.flash;
     const changed = transaction.docChanged;
@@ -785,6 +803,8 @@ const live = StateField.define({
         effectsChanged = true;
       } else if (effect.is(refold)) {
         effectsChanged = true;
+      } else if (effect.is(setComposing) && !effect.value) {
+        effectsChanged = true;
       } else if (effect.is(flashEffect)) {
         flash = effect.value;
         effectsChanged = true;
@@ -795,7 +815,7 @@ const live = StateField.define({
     let {blocks, details, headings} = value;
     const mapped = changed && plainEdit(transaction);
     if (mapped) ({blocks, details, headings} = mapStructure(value, transaction.changes));
-    else if (changed || parsed) {
+    else if (changed || parsed || transaction.effects.some(effect => effect.is(setComposing) && !effect.value)) {
       blocks = collectBlocks(transaction.state, tree);
       details = parseDetails(transaction.state.doc, blocks.html);
       headings = parseHeadings(transaction.state.doc, blocks.headings, details);
@@ -954,6 +974,11 @@ function inlineDecorations(view) {
 const inlinePreview = ViewPlugin.fromClass(class {
   constructor(view) { this.build(view); }
   update(update) {
+    if (update.state.field(compositionState)) {
+      this.decorations = this.decorations.map(update.changes);
+      this.atomic = this.atomic.map(update.changes);
+      return;
+    }
     const {startState, state} = update;
     if (update.docChanged || update.viewportChanged || update.selectionSet || update.transactions.some(transaction => transaction.effects.length)
         || syntaxTree(startState) !== syntaxTree(state) || startState.readOnly !== state.readOnly) this.build(update.view);
@@ -1001,6 +1026,7 @@ let changeTimer = null;
 
 function scheduleChange() {
   clearTimeout(changeTimer);
+  if (composing || view.composing) { changeTimer = null; return; }
   changeTimer = setTimeout(flushChange, changeDelay);
 }
 
@@ -1008,6 +1034,7 @@ function flushChange() {
   if (changeTimer == null) return;
   clearTimeout(changeTimer);
   changeTimer = null;
+  if (composing || view.composing) return;
   post({kind: "change", ...snapshot()});
 }
 
@@ -1020,7 +1047,7 @@ function commit() {
 function editorExtensions(config) {
   return [history(), drawSelection({cursorBlinkRate: 0}), rectangularSelection(), EditorView.lineWrapping,
           indentOnInput(), bracketMatching(), markdown({base: markdownLanguage}), syntaxHighlighting(highlighting),
-          focused,
+          focused, compositionState,
           livePreview.of(config.sourceMode ? [] : livePreviewExtensions),
           editable.of(editability(config.readOnly)),
           // 撤销 / 重做：没有可撤销的也吞掉按键，不落到应用别处的撤销上。
@@ -1047,7 +1074,7 @@ function editorExtensions(config) {
             spellcheck: "false", tabindex: "0"
           })),
           EditorView.updateListener.of(update => {
-            if (update.transactions.length) reportHistory(update.state);
+            if (update.transactions.length && !update.state.field(compositionState)) reportHistory(update.state);
             if (update.heightChanged || update.geometryChanged) reportHeight();
             if (update.docChanged && !update.transactions.some(transaction => transaction.annotation(external))) scheduleChange();
           }),
@@ -1061,8 +1088,21 @@ function editorExtensions(config) {
               event.preventDefault();
               return true;
             },
-            compositionstart() { composing = true; },
-            compositionend() { composing = false; setTimeout(commit, 0); },
+            compositionstart(_event, view) {
+              composing = true;
+              clearTimeout(changeTimer);
+              changeTimer = null;
+              view.dispatch({effects: setComposing.of(true)});
+            },
+            compositionend(_event, editor) {
+              composing = false;
+              const key = currentKey;
+              setTimeout(() => {
+                if (composing || editor !== view || key !== currentKey) return;
+                editor.dispatch({effects: setComposing.of(false)});
+                scheduleChange();
+              }, 0);
+            },
             // 光标进出编辑器：按编辑区自己的焦点算（不看窗口是不是在前台），切到别的应用再回来时版面不变。
             focus(_event, view) {
               if (!view.state.field(focused)) view.dispatch({effects: setFocused.of(true)});
@@ -1113,7 +1153,10 @@ let currentKey = null;
 
 function switchBoard(config) {
   if (currentKey != null) {
-    flushChange();
+    if (view.state.field(compositionState) && !composing) {
+      view.dispatch({effects: setComposing.of(false)});
+      commit();
+    } else flushChange();
     savedBoards.delete(currentKey);
     savedBoards.set(currentKey, {state: view.state, scroll: view.scrollDOM.scrollTop});
     while (savedBoards.size > savedBoardLimit) savedBoards.delete(savedBoards.keys().next().value);
@@ -1126,7 +1169,7 @@ function switchBoard(config) {
   view.setState(saved?.state ?? freshState(config));
   // 恢复的状态里模式可能和现在不同：按这次的配置重新设一遍，折叠按这块工作板的记忆重算。
   view.dispatch({effects: [editable.reconfigure(editability(!!config.readOnly)), livePreview.reconfigure(config.sourceMode ? [] : livePreviewExtensions),
-                           refold.of(null), setFocused.of(document.activeElement === view.contentDOM)]});
+                           refold.of(null), setComposing.of(false), setFocused.of(document.activeElement === view.contentDOM)]});
   currentReadOnly = config.readOnly;
   currentSourceMode = config.sourceMode;
   const scroll = saved?.scroll ?? 0;

@@ -509,55 +509,8 @@ private extension NSRect {
     var area: CGFloat { isNull ? 0 : width * height }
 }
 
-final class FocusPanel: NSPanel {
+final class FocusPanel: QuietPanel {
     override var canBecomeKey: Bool { true }
-
-    /// 系统的背景拖动由窗口服务器执行，拖动中改不了位置；自己跟着鼠标移动，才能让窗口始终留在屏幕里。
-    private var drag: (mouse: NSPoint, origin: NSPoint, moving: Bool)?
-
-    override func sendEvent(_ event: NSEvent) {
-        switch event.type {
-        case .leftMouseDown:
-            drag = nil
-            if let content = contentView,
-               let hit = content.hitTest(content.convert(event.locationInWindow, from: nil)),
-               hit.mouseDownCanMoveWindow {
-                drag = (NSEvent.mouseLocation, frame.origin, false)
-            }
-        case .leftMouseDragged:
-            if var current = drag {
-                let mouse = NSEvent.mouseLocation
-                let dx = mouse.x - current.mouse.x, dy = mouse.y - current.mouse.y
-                if !current.moving && hypot(dx, dy) < 3 { break }
-                current.moving = true
-                drag = current
-                var target = frame
-                target.origin = NSPoint(x: current.origin.x + dx, y: current.origin.y + dy)
-                let visible = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }?.visibleFrame
-                    ?? screen?.visibleFrame
-                if let visible { target = Self.clamp(target, to: visible) }
-                if target.origin != frame.origin { setFrameOrigin(target.origin) }
-                return
-            }
-        case .leftMouseUp:
-            if let current = drag {
-                drag = nil
-                // 拖动过就不让按下处的按钮被当成点击：把松手位置挪到窗口外。
-                if current.moving,
-                   let cancel = NSEvent.mouseEvent(with: .leftMouseUp, location: NSPoint(x: -10_000, y: -10_000),
-                                                   modifierFlags: event.modifierFlags, timestamp: event.timestamp,
-                                                   windowNumber: event.windowNumber, context: nil,
-                                                   eventNumber: event.eventNumber, clickCount: event.clickCount,
-                                                   pressure: event.pressure) {
-                    super.sendEvent(cancel)
-                    return
-                }
-            }
-        default:
-            break
-        }
-        super.sendEvent(event)
-    }
 
     /// 按记下的位置摆一个新尺寸的面板：在屏幕右半边就保持右边不动，否则保持左边；底边始终不动。
     static func restored(_ saved: NSRect, size: NSSize, in visible: NSRect) -> NSRect {
@@ -567,10 +520,7 @@ final class FocusPanel: NSPanel {
 
     /// 把窗口整个放进屏幕可见区域；窗口比屏幕还大时贴住左上角。
     static func clamp(_ frame: NSRect, to visible: NSRect) -> NSRect {
-        var frame = frame
-        frame.origin.x = max(min(frame.origin.x, visible.maxX - frame.width), visible.minX)
-        frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - frame.height)
-        return frame
+        ScreenBoundDragging.clamp(frame, to: visible)
     }
 }
 

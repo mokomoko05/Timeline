@@ -103,7 +103,7 @@ extension NSPopover {
 /// 日页所有窗口的基类。平时和 NSWindow 完全一样；测试环境下窗口照常"显示"（isVisible、焦点、层级关系都正常，
 /// 断言不受影响），但实际透明度恒为 0、不接收鼠标，所以屏幕上什么也看不到。
 /// `alphaValue` 在测试里只记录「逻辑值」，淡入淡出的代码读到的和平时一样。
-class QuietWindow: NSWindow {
+class QuietWindow: ScreenBoundWindow {
     override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
         silence()

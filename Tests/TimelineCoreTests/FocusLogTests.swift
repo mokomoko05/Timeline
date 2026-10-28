@@ -2,6 +2,41 @@ import XCTest
 @testable import TimelineCore
 
 final class FocusLogTests: XCTestCase {
+    @MainActor
+    func testUnlinkAndRelinkFocusNotesUpdateMarkersAndSupportUndoAndReload() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let date = Date()
+        let task = try XCTUnwrap(store.addParsedTodo("Focus", on: date))
+        let other = try XCTUnwrap(store.addParsedTodo("Other", on: date))
+        store.setFocusTask(task.id)
+        let first = try XCTUnwrap(store.quickLogEntry("First", on: date).entry)
+        let second = try XCTUnwrap(store.quickLogEntry("Second", on: date).entry)
+        let start = try XCTUnwrap(store.addFocusLog("▶ 开始专注", taskID: task.id, now: date, event: .start))
+        XCTAssertEqual(store.setLogTask(nil, forLogs: [first.id, second.id]), 2)
+        for note in store.entry(for: date).logs where [first.id, second.id].contains(note.id) {
+            XCTAssertEqual(note.focusMarker, "INFO")
+            XCTAssertNil(note.focusEvent)
+        }
+        store.undo()
+        XCTAssertEqual(store.entry(for: date).logs.first?.focusMarker, "NOTE")
+        store.redo()
+        XCTAssertEqual(store.entry(for: date).logs.first?.focusMarker, "INFO")
+        store.setLogTask(task.id, forLog: first.id, on: date)
+        XCTAssertEqual(store.entry(for: date).logs.first?.focusMarker, "NOTE")
+        store.setLogTask(other.id, forLog: first.id, on: date)
+        XCTAssertEqual(store.entry(for: date).logs.first?.focusMarker, "INFO")
+        store.setFocusTask(nil)
+        store.setLogTask(task.id, forLog: second.id, on: date)
+        XCTAssertEqual(store.entry(for: date).logs[1].focusMarker, "INFO")
+        XCTAssertEqual(store.entry(for: date).logs.first { $0.id == start }?.focusEvent, .start)
+        store.save()
+        let reloaded = JournalStore(directory: directory)
+        XCTAssertEqual(reloaded.entry(for: date).logs[1].focusMarker, "INFO")
+        XCTAssertEqual(reloaded.entry(for: date).logs.first?.taskID, other.id)
+    }
+
     func testMinimumStatusRoundTripsAndExistingStructuredEndsUseFiveMinuteDefault() throws {
         for seconds in [0.0, 299, 300, 301] {
             let record = DailyLogEntry(createdAt: Date(), kind: .note, text: "End", focus: true,
@@ -102,10 +137,18 @@ final class FocusLogTests: XCTestCase {
             XCTAssertFalse(entry.showsTimelineTags)
             XCTAssertEqual(entry.showsTimelineContext, event == .start)
         }
-        let note = DailyLogEntry(createdAt: now, kind: .note, text: "A finding", focusEvent: .note)
+        let note = DailyLogEntry(createdAt: now, kind: .note, text: "A finding", taskID: UUID(), focusEvent: .note)
         XCTAssertTrue(note.isNotebookEntry)
         XCTAssertFalse(note.showsTimelineContext)
         XCTAssertFalse(note.showsTimelineTags)
+        var orphaned = note
+        orphaned.taskID = nil
+        XCTAssertEqual(orphaned.focusMarker, "INFO")
+        XCTAssertFalse(orphaned.isFocusMarker)
+        XCTAssertTrue(orphaned.showsTimelineContext)
+        XCTAssertTrue(orphaned.showsTimelineTags)
+        let reloaded = try? JSONDecoder().decode(DailyLogEntry.self, from: JSONEncoder().encode(orphaned))
+        XCTAssertEqual(reloaded?.focusMarker, "INFO")
         let legacyReview = DailyLogEntry(createdAt: now, kind: .note, text: "阶段反馈 · Finished")
         XCTAssertFalse(legacyReview.isNotebookEntry)
         let ordinary = DailyLogEntry(createdAt: now, kind: .note, text: "Ordinary")

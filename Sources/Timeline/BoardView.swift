@@ -79,7 +79,7 @@ final class BoardNavigation: ObservableObject {
     }
 }
 
-private final class BoardPanel: NSPanel {
+private final class BoardPanel: QuietPanel {
     override var canBecomeKey: Bool { true }
 
     override func cancelOperation(_ sender: Any?) {}
@@ -115,7 +115,7 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
             panel.title = AppLocalized("工作板")
             panel.titleVisibility = .hidden
             panel.titlebarAppearsTransparent = true
-            panel.isMovableByWindowBackground = true
+            panel.isMovableByWindowBackground = false
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
             panel.isFloatingPanel = true

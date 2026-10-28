@@ -187,7 +187,7 @@ final class ImageViewerController: NSObject, NSWindowDelegate {
         window.styleMask = [.titled, .closable, .resizable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = false
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 360, height: 280)
         window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]

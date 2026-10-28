@@ -75,6 +75,7 @@ struct NativeTaskHandle: NSViewRepresentable {
 }
 
 final class TaskHandleView: NSView, NSDraggingSource {
+    override var mouseDownCanMoveWindow: Bool { false }
     var dragOrigin: TaskDragOrigin = .taskList
     var titleSource: (title: String, alias: String) = ("", "")
     var title: String { String(TaskText.rendered(titleSource.title, alias: titleSource.alias).characters) }

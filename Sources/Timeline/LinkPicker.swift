@@ -142,6 +142,7 @@ struct LogChipsBar: View {
     var contextTags: [String] = []
     /// 这个输入框能不能选待办（任务页里日志固定属于这个任务，不能）。
     var showsLink = true
+    var automaticallyLinks = true
     /// 什么都没选时显示的提示。
     var hint = ""
     var size: CGFloat = 11
@@ -150,11 +151,11 @@ struct LogChipsBar: View {
     private var explicit: ScheduledTask? { link.flatMap(store.locate) }
 
     private func choose(_ id: UUID?) {
-        if let id { link = id; unlinked = false } else { link = nil; unlinked = store.defaultLinkTask != nil }
+        if let id { link = id; unlinked = false } else { link = nil; unlinked = automaticallyLinks && store.defaultLinkTask != nil }
     }
 
     private var hasChips: Bool {
-        !tags.isEmpty || (showsLink && (explicit != nil || unlinked || store.defaultLinkTask != nil))
+        !tags.isEmpty || (showsLink && (explicit != nil || (automaticallyLinks && (unlinked || store.defaultLinkTask != nil))))
     }
 
     var body: some View {
@@ -191,13 +192,12 @@ struct LogChipsBar: View {
             small(pinned ? "pin.fill" : "pin", pinned ? "取消固定" : "固定为当前待办：之后的日志默认都记到它名下（不计时），再点一次取消",
                   tint: pinned ? Palette.accent : Palette.muted) { store.pinTask(pinned ? nil : task.id) }
             small("xmark", "取消这次的关联") { link = nil }
-        } else if unlinked {
-            pill("link.badge.plus", "这条不关联待办", tint: Palette.muted)
+        } else if automaticallyLinks && unlinked {
             small("arrow.uturn.backward", "恢复自动关联") { unlinked = false }
-        } else if let focus = store.focusTask, !store.focusPaused {
+        } else if automaticallyLinks, let focus = store.focusTask, !store.focusPaused {
             pill("timer", AppLocalized("专注中 ") + FocusHint.label(focus), tint: Palette.success)
             small("xmark", "这条不关联") { unlinked = true }
-        } else if let pinned = store.pinnedTask {
+        } else if automaticallyLinks, let pinned = store.pinnedTask {
             pill("pin.fill", AppLocalized("固定 ") + FocusHint.label(pinned), tint: Palette.accent)
             small("pin.slash", "取消固定") { store.pinTask(nil) }
             small("xmark", "这条不关联") { unlinked = true }

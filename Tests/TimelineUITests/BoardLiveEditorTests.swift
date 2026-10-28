@@ -845,6 +845,76 @@ final class BoardLiveEditorTests: XCTestCase {
         XCTAssertTrue(literal == true)
     }
 
+    func testCompositionTypingLatencyOnLargeBoard() async throws {
+        let source = (1...1000).map { "## Section \($0)\n\nParagraph with **formatting** and $x + y$.\n\n" }.joined()
+        let fixture = try LiveFixture(source: source)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        let result = try await fixture.webView.evaluateJavaScript("""
+        (() => {
+          const editor = window.boardEditor, view = editor.view();
+          editor.focus(); editor.select(10);
+          function measure(composition) {
+            const heading = document.querySelector('.board-heading-fold'), initialKey = heading.dataset.key;
+            if (composition) view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart', {bubbles: true}));
+            const samples = [], values = ['z', 'zh', 'zho', 'zhon', 'zhong', '中'];
+            let length = 0;
+            for (let round = 0; round < 6; round++) for (const text of values) {
+              const start = performance.now();
+              view.dispatch({changes: {from: 10, to: 10 + length, insert: text},
+                selection: {anchor: 10 + text.length}, userEvent: 'input.type.compose'});
+              samples.push(performance.now() - start);
+              length = text.length;
+            }
+            const stableHeading = heading.dataset.key === initialKey;
+            if (composition) view.contentDOM.dispatchEvent(new CompositionEvent('compositionend', {bubbles: true}));
+            samples.sort((left, right) => left - right);
+            return {mean: samples.reduce((sum, value) => sum + value, 0) / samples.length,
+              p95: samples[Math.floor(samples.length * 0.95)], source: editor.snapshot().source, stableHeading};
+          }
+          const baseline = measure(false);
+          view.dispatch({changes: {from: 10, to: 11, insert: ''}, selection: {anchor: 10}});
+          return {...measure(true), baselineMean: baseline.mean, baselineP95: baseline.p95};
+        })()
+        """) as? [String: Any] ?? [:]
+        let mean = try XCTUnwrap(result["mean"] as? Double)
+        let p95 = try XCTUnwrap(result["p95"] as? Double)
+        let baselineMean = try XCTUnwrap(result["baselineMean"] as? Double)
+        let baselineP95 = try XCTUnwrap(result["baselineP95"] as? Double)
+        print(String(format: "BOARD IME dispatch baseline mean=%.2fms p95=%.2fms; composing mean=%.2fms p95=%.2fms",
+                     baselineMean, baselineP95, mean, p95))
+        XCTAssertLessThan(p95, 50)
+        XCTAssertEqual(result["stableHeading"] as? Bool, true)
+        XCTAssertTrue((result["source"] as? String)?.hasPrefix("## Section中 1") == true)
+        await fixture.commit()
+        XCTAssertEqual(fixture.store.boards[0].markdown, result["source"] as? String)
+    }
+
+    func testConsecutiveCompositionsDeferSavingAndRefreshHeadingAfterCompletion() async throws {
+        let original = "## Before\n\nAfter"
+        let fixture = try LiveFixture(source: original)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.focus();window.boardEditor.select(9)")
+        for word in ["中文", "继续"] {
+            let encoded = String(decoding: try JSONEncoder().encode(word), as: UTF8.self)
+            _ = try await fixture.webView.evaluateJavaScript("""
+            (() => {
+              const editor = window.boardEditor, content = editor.view().contentDOM;
+              content.dispatchEvent(new CompositionEvent('compositionstart', {bubbles: true}));
+              editor.replaceSelection(\(encoded));
+              content.dispatchEvent(new CompositionEvent('compositionend', {bubbles: true}));
+            })()
+            """)
+            try await Task.sleep(for: .milliseconds(40))
+            XCTAssertEqual(fixture.store.boards[0].markdown, original)
+        }
+        for _ in 0..<50 where fixture.store.boards[0].markdown == original { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(fixture.store.boards[0].markdown, "## Before中文继续\n\nAfter")
+        let heading = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-heading-fold').dataset.key") as? String
+        XCTAssertEqual(heading, "h2:Before中文继续#0")
+    }
+
     func testCompositionDoesNotPublishIntermediateTextOrResetCaret() async throws {
         let fixture = try LiveFixture(source: "Before\n\nAfter")
         defer { fixture.close() }

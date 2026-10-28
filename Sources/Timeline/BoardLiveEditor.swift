@@ -45,7 +45,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
     @Published private(set) var error: String?
     private(set) var webView: WKWebView?
     private let store: JournalStore
-    private let boardID: UUID
+    fileprivate let boardID: UUID
     private let pasteboard: NSPasteboard
     private let defaults: UserDefaults
     /// 搜索结果要跳到的行（编辑器还没加载好时先记下）。
@@ -444,8 +444,8 @@ final class WeakBoardScriptHandler: NSObject, WKScriptMessageHandler {
         }
         // 换工作板之前那块的改动（编辑器停顿后才送）：交给那块工作板的会话。
         if let body, let kind = body["kind"] as? String, kind == "change" || kind == "commit",
-           let key = body["key"] as? String, let target = BoardLiveEditorSession.session(forKey: key), target !== session {
-            target.acceptLate(body)
+           let key = body["key"] as? String, key != session?.boardID.uuidString {
+            BoardLiveEditorSession.session(forKey: key)?.acceptLate(body)
             return
         }
         session?.userContentController(userContentController, didReceive: message)

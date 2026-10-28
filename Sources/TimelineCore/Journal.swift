@@ -582,6 +582,7 @@ public final class JournalStore: ObservableObject {
                 log.taskTitle = title
                 log.taskNumber = located?.task.number
                 log.taskTags = located?.task.tags ?? []
+                if log.taskID != updated[key]!.logs[index].taskID { updateFocusAssociation(&log) }
                 updated[key]!.logs[index] = log
                 changed += 1
             }
@@ -637,6 +638,7 @@ public final class JournalStore: ObservableObject {
         let located = taskID.flatMap(locate)
         change(date, action: "修改日志关联") { entry in
             guard let index = entry.logs.firstIndex(where: { $0.id == logID }) else { return }
+            let previousTaskID = entry.logs[index].taskID
             if let located {
                 entry.logs[index].taskID = located.id
                 entry.logs[index].taskTitle = String(TaskText.rendered(located.task.title).characters)
@@ -648,7 +650,13 @@ public final class JournalStore: ObservableObject {
                 entry.logs[index].taskNumber = nil
                 entry.logs[index].taskTags = []
             }
+            if entry.logs[index].taskID != previousTaskID { updateFocusAssociation(&entry.logs[index]) }
         }
+    }
+
+    private func updateFocusAssociation(_ log: inout DailyLogEntry) {
+        guard log.focusEvent == .note || !log.isFocusMarker else { return }
+        log.focusEvent = log.taskID != nil && log.taskID == focusTaskID && !focusPaused ? .note : nil
     }
 
     @discardableResult

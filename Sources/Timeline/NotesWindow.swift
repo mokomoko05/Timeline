@@ -177,7 +177,7 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             window.standardWindowButton(button)?.isHidden = true
         }
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = false
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 640, height: 420)
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]

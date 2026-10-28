@@ -3,7 +3,7 @@ import AppKit
 /// 主窗口：Esc 在笔记 / 日记页上收起窗口（没有文字框先处理它时），和原来独立的笔记窗口一致。
 /// 窗口钉在所在屏幕的中央，拖不动；拉边缘缩放时以中心为基准对称缩放，被拉的那条边始终跟着鼠标。
 /// 关掉「固定在屏幕中央」后就是普通窗口，可以拖到一边和别的应用并排。
-final class MainWindow: NSWindow {
+final class MainWindow: QuietWindow {
     var cancel: (() -> Bool)?
     var keepsCentered = true {
         didSet {

@@ -85,13 +85,20 @@ final class QuickCaptureModel: ObservableObject {
     @Published var text = ""
     @Published var images: [String] = []
     @Published var tags: [String] = []
-    /// 这条日志明确关联的待办（`@` 选的，或用选择器选的）；`unlinked` 表示明确不关联。都没有时按专注 / 固定关联自动处理。
     @Published var link: UUID?
     @Published var unlinked = false
     /// 每次呼出加一：面板复用，视图据此重置提示和焦点（相当于重新出现）。
     @Published private(set) var presentation = 0
 
     func presented() { presentation += 1 }
+
+    @MainActor
+    func recordLog(in store: JournalStore, on date: Date = Date()) throws -> (command: LogCommand, entry: DailyLogEntry?) {
+        let paused = store.focusPaused
+        return try store.quickLogEntry(text, images: images, taskID: paused ? nil : link,
+                                       linkDefault: false, tags: paused ? [] : tags,
+                                       allowInlineTaskReference: !paused, on: date)
+    }
 
     var hasDraft: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !tags.isEmpty || link != nil
@@ -107,7 +114,7 @@ final class QuickCaptureModel: ObservableObject {
     }
 }
 
-private final class QuickPanel: NSPanel {
+private final class QuickPanel: QuietPanel {
     override var canBecomeKey: Bool { true }
 }
 
@@ -330,7 +337,7 @@ final class QuickCaptureController: NSObject, NSMenuDelegate, NSWindowDelegate {
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.isMovableByWindowBackground = true
+        panel.isMovableByWindowBackground = false
         panel.setFrameOrigin(restoredOrigin(for: panel.frame.size))
         panel.delegate = self
         if Headless.active { panel.alphaValue = 0; panel.ignoresMouseEvents = true }
@@ -493,7 +500,7 @@ struct QuickCaptureView: View {
                     }
                 } else {
                     LogChipsBar(store: store, link: $model.link, unlinked: $model.unlinked, tags: $model.tags, contextTags: model.tags,
-                                hint: "⌘Enter 记录")
+                                automaticallyLinks: false, hint: "⌘Enter 记录")
                 }
             }.font(.system(size: typography.pt(12))).frame(height: LogChipsBar.height, alignment: .leading)
         }
@@ -578,11 +585,7 @@ struct QuickCaptureView: View {
         case .log:
             do {
                 let paused = store.focusPaused
-                let result = try store.quickLogEntry(value, images: images,
-                                                     taskID: paused ? nil : model.link,
-                                                     linkDefault: paused ? false : !model.unlinked,
-                                                     tags: paused ? [] : tags,
-                                                     allowInlineTaskReference: !paused, on: Date())
+                let result = try model.recordLog(in: store)
                 guard case .entry = result.command else { failure = AppLocalized("快速记录只支持普通文字和 /note /done /block /plan。"); return }
                 let linked = result.entry.flatMap(FocusHint.label(of:)).map { AppLocalized("，已关联 ") + $0 } ?? ""
                 message = (images.isEmpty ? AppLocalized("已记录") : AppLocalizedFormat("已记录，含 %lld 张图片", images.count)) + linked

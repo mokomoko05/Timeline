@@ -337,7 +337,7 @@ final class GlobalSearchModel: ObservableObject {
 
 // MARK: - 面板
 
-private final class GlobalSearchPanel: NSPanel {
+private final class GlobalSearchPanel: QuietPanel {
     override var canBecomeKey: Bool { true }
     var onCancel: (() -> Void)?
     override func cancelOperation(_ sender: Any?) { onCancel?() }
@@ -393,7 +393,7 @@ final class GlobalSearchController: NSObject, NSWindowDelegate {
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        panel.isMovableByWindowBackground = true
+        panel.isMovableByWindowBackground = false
         panel.delegate = self
         panel.onCancel = { [weak self] in self?.close() }
         return panel

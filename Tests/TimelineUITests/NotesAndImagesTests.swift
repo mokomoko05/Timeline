@@ -208,7 +208,8 @@ final class NotesAndImagesTests: XCTestCase {
         addTeardownBlock { viewer.close() }
         viewer.show(store: store, names: ["a.png", "b.png", "c.png"], index: 0)
         let window = try XCTUnwrap(viewer.window)
-        XCTAssertTrue(window.isMovableByWindowBackground, "背景可以拖动")
+        XCTAssertFalse(window.isMovableByWindowBackground)
+        XCTAssertTrue(window is ScreenBoundWindow)
         XCTAssertTrue(window.styleMask.contains(.resizable), "可以调整大小")
         XCTAssertTrue(window is QuietWindow, "测试里不闪窗口")
         func key(_ code: UInt16) -> NSEvent {
