@@ -44,6 +44,7 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
     var focusAfter = false
     /// 刚写下或刚跳到的那条：短暂铺一层强调色底。
     var highlighted = false
+    var actionWidth: CGFloat = 96
     @ViewBuilder let meta: () -> Meta
     @ViewBuilder let content: () -> Content
     @ViewBuilder let actions: () -> Actions
@@ -57,11 +58,8 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
         HStack(alignment: .top, spacing: 10) {
             Color.clear.frame(width: NoteThread.gutter)
             VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .center, spacing: 6) {
-                    meta()
-                    Spacer(minLength: 8)
-                    // 悬停时才构建：每行常驻四五个透明按钮，长笔记页会多占几十 MB。行高按按钮高度预留，出现时不跳动。
-                    if hovered || holding { actions().environment(\.holdHoverActions) { holding = $0 } }
+                NoteThreadHeader(showsActions: hovered || holding, actionWidth: actionWidth, meta: meta) {
+                    actions().environment(\.holdHoverActions) { holding = $0 }
                 }
                 .font(.system(size: typography.pt(11))).monospacedDigit()
                 .foregroundStyle(Palette.muted)
@@ -81,7 +79,6 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
         .overlay(alignment: .topLeading) { rail.padding(.leading, 8).padding(.top, 6) }
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
-        .animation(Motion.quick, value: hovered)
     }
 
     private var rail: some View {
@@ -120,6 +117,24 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
         } else {
             Circle().fill(color.opacity(0.9)).frame(width: 7, height: 7)
                 .overlay(Circle().strokeBorder(Palette.background, lineWidth: 1.5))
+        }
+    }
+}
+
+struct NoteThreadHeader<Meta: View, Actions: View>: View {
+    let showsActions: Bool
+    let actionWidth: CGFloat
+    @ViewBuilder let meta: () -> Meta
+    @ViewBuilder let actions: () -> Actions
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 6) {
+            meta()
+            Spacer(minLength: 8)
+        }
+        .padding(.trailing, actionWidth > 0 ? actionWidth + 6 : 0)
+        .overlay(alignment: .trailing) {
+            if showsActions { actions().frame(width: actionWidth, alignment: .trailing) }
         }
     }
 }

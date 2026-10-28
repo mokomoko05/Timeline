@@ -27,6 +27,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     private var slots = NSMapTable<NSUUID, InlineEditSlot>.strongToWeakObjects()
     private var slot: InlineEditSlot?
     private var pendingPrepare: (id: UUID, work: DispatchWorkItem)?
+    private var lastScroll = -TimeInterval.infinity
     private var shift: CGFloat = 0
 
     private(set) var webView: InlineEditorWebView?
@@ -63,7 +64,8 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     /// 鼠标停在一条上一小会儿：先把编辑器放到这一条上面排好版（看不见、不拿焦点），点下去时直接交给它，不用再等。
     /// 正在编辑别的条目时不动。
     func prepareSoon(_ id: UUID, _ prepare: @escaping () -> Void) {
-        guard target == nil || preparing, target?.logID != id, pendingPrepare?.id != id, !Headless.active || preparesInTests else { return }
+        guard target == nil || preparing, target?.logID != id, pendingPrepare?.id != id,
+              ProcessInfo.processInfo.systemUptime - lastScroll > 0.2, !Headless.active || preparesInTests else { return }
         pendingPrepare?.work.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.pendingPrepare?.id == id else { return }
@@ -78,6 +80,13 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         guard pendingPrepare?.id == id else { return }
         pendingPrepare?.work.cancel()
         pendingPrepare = nil
+    }
+
+    func didScroll(in scroll: NSScrollView) {
+        lastScroll = ProcessInfo.processInfo.systemUptime
+        pendingPrepare?.work.cancel()
+        pendingPrepare = nil
+        if preparing, webView?.enclosingScrollView === scroll { end() }
     }
 
     /// 测试里也悬停预备（平时测试进程不预备，免得列表测试被打扰）。
@@ -497,6 +506,10 @@ final class InlineEditorContainer: NSView {
 struct InlineEditorHost: NSViewRepresentable {
     let editor: InlineMarkdownEditor
     @ObservedObject var slot: InlineEditSlot
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: InlineEditorContainer, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? nsView.bounds.width, height: proposal.height ?? nsView.bounds.height)
+    }
 
     func makeNSView(context: Context) -> InlineEditorContainer {
         _ = editor.makeWebView()

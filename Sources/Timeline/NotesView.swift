@@ -593,19 +593,22 @@ struct NotesView: View {
     /// 一组笔记穿在同一根线上：第一条以上、最后一条以下不再延伸。
     private func threadedRows(_ items: [JournalStore.LoggedLog], showTask: Bool = false, showDate: Bool = false, tag: String? = nil) -> some View {
         ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-            if index > 0, let gap = NoteThread.gapLabel(from: items[index - 1].log.createdAt, to: item.log.createdAt) {
-                NoteThreadGap(label: gap)
+            VStack(alignment: .leading, spacing: 0) {
+                if index > 0, let gap = NoteThread.gapLabel(from: items[index - 1].log.createdAt, to: item.log.createdAt) {
+                    NoteThreadGap(label: gap)
+                }
+                noteRow(item, showTask: showTask, showDate: showDate, tag: tag, hasPrevious: index > 0, hasNext: index < items.count - 1)
+                    .id(item.id)
+                    .recordsScrollPosition(item.id, in: tracker)
             }
-            noteRow(item, showTask: showTask, showDate: showDate, tag: tag, hasPrevious: index > 0, hasNext: index < items.count - 1)
-                .id(item.id)
-                .recordsScrollPosition(item.id, in: tracker)
         }
     }
 
     private func noteRow(_ item: JournalStore.LoggedLog, showTask: Bool = false, showDate: Bool = false, tag: String? = nil,
                          hasPrevious: Bool = true, hasNext: Bool = true) -> some View {
         let log = item.log
-        return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext, highlighted: flashNoteID == log.id) {
+        return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext, highlighted: flashNoteID == log.id,
+                             actionWidth: store.isReadOnly ? 24 : 96) {
             // 时间、类型、来源排成一行淡淡的说明，不和正文抢。
             Text((showDate ? item.date.relativeLabel + " " : "") + NoteThread.shortTime(log.createdAt))
                 .help(item.key + " " + Self.time(log.createdAt))

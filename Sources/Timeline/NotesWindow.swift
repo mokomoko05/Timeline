@@ -456,16 +456,18 @@ struct UnifiedJournalView: View {
                             let summaries = Dictionary(uniqueKeysWithValues: runs.map { ($0.end.id, $0) })
                             let segments = store.timelineSegments()
                             ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
-                                if index > 0, let gap = NoteThread.gapLabel(from: logs[index - 1].createdAt, to: log.createdAt) {
-                                    NoteThreadGap(label: gap)
-                                }
-                                journalRow(log, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id])
-                                    .id(log.id)
-                                    .recordsScrollPosition(log.id, in: tracker)
-                                if let run = summaries[log.id] {
-                                    FocusRunSummary(run: run, folded: foldedRuns.contains(run.id), continues: index < logs.count - 1) {
-                                        withAnimation(Motion.quick) {
-                                            if foldedRuns.contains(run.id) { foldedRuns.remove(run.id) } else { foldedRuns.insert(run.id) }
+                                VStack(alignment: .leading, spacing: 0) {
+                                    if index > 0, let gap = NoteThread.gapLabel(from: logs[index - 1].createdAt, to: log.createdAt) {
+                                        NoteThreadGap(label: gap)
+                                    }
+                                    journalRow(log, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id])
+                                        .id(log.id)
+                                        .recordsScrollPosition(log.id, in: tracker)
+                                    if let run = summaries[log.id] {
+                                        FocusRunSummary(run: run, folded: foldedRuns.contains(run.id), continues: index < logs.count - 1) {
+                                            withAnimation(Motion.quick) {
+                                                if foldedRuns.contains(run.id) { foldedRuns.remove(run.id) } else { foldedRuns.insert(run.id) }
+                                            }
                                         }
                                     }
                                 }
@@ -551,7 +553,7 @@ struct UnifiedJournalView: View {
     private func journalRow(_ log: DailyLogEntry, hasPrevious: Bool, hasNext: Bool, segment: LogTimelineSegment?) -> some View {
         return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext,
                              focusBefore: segment?.focusBefore == true, focusAfter: segment?.focusAfter == true,
-                             highlighted: highlightedID == log.id) {
+                             highlighted: highlightedID == log.id, actionWidth: store.isReadOnly ? 0 : 72) {
             Text(NoteThread.shortTime(log.createdAt)).help(LogEventStyle.time(log.createdAt))
             if let kind = NoteThread.kindLabel(log) {
                 Text(kind).foregroundStyle(LogEventStyle.color(log)).fontWeight(.medium)

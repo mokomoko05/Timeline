@@ -16,6 +16,10 @@ struct RetainedWorkspacePages<First: View, Second: View>: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSView { NSView() }
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? nsView.bounds.width, height: proposal.height ?? nsView.bounds.height)
+    }
+
     func updateNSView(_ view: NSView, context: Context) {
         let coordinator = context.coordinator
         if showsFirst, coordinator.first == nil { coordinator.first = Self.page(in: view) }
@@ -28,6 +32,7 @@ struct RetainedWorkspacePages<First: View, Second: View>: NSViewRepresentable {
 
     private static func page(in view: NSView) -> NSHostingView<AnyView> {
         let page = NSHostingView(rootView: AnyView(EmptyView()))
+        page.sizingOptions = []
         page.frame = view.bounds
         page.autoresizingMask = [.width, .height]
         view.addSubview(page)

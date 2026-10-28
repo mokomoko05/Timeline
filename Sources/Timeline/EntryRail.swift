@@ -151,7 +151,6 @@ private struct RailThumb: View {
                 .overlay(Capsule().stroke(Palette.background, lineWidth: 1.5))
                 .shadow(color: .black.opacity(0.15), radius: 2, y: 1)
                 .position(x: EntryRail.width - 9, y: height * mark.position)
-                .animation(.easeOut(duration: 0.15), value: current)
         }
     }
 }
@@ -202,38 +201,49 @@ private struct RailLoupe: View {
 @MainActor
 final class ScrollTracker: ObservableObject {
     static let space = "scroll-tracker"
-    @Published private(set) var current: UUID?
-    @Published private(set) var showsTop = false
-    @Published private(set) var showsBottom = false
+    private struct Position: Equatable {
+        var current: UUID?
+        var showsTop = false
+        var showsBottom = false
+    }
+
+    @Published private var position = Position()
+    var current: UUID? { position.current }
+    var showsTop: Bool { position.showsTop }
+    var showsBottom: Bool { position.showsBottom }
     /// 每条记录里垫着的一个小 NSView（懒加载的列表里只有已经排出来的那些）：滚动时按它们在内容里的位置找顶上那一条。
     /// 不用 SwiftUI 的 GeometryReader：那样每滚一帧每一行都要重算一遍。
     fileprivate let markers = NSHashTable<RowMarkerView>.weakObjects()
     fileprivate weak var scrollView: NSScrollView?
 
     private var pending = false
+    private var scrolling = false
 
     func reset() {
-        current = nil
+        if current != nil { position.current = nil }
     }
 
     /// 有新的一行挂上来（刚打开、懒加载出新行）：这一轮事件处理完后再算一次（一轮里只算一次）。
-    func setNeedsUpdate() {
+    func setNeedsUpdate(scrolling: Bool = false) {
+        self.scrolling = self.scrolling || scrolling
         guard !pending else { return }
         pending = true
         DispatchQueue.main.async { [weak self] in
-            self?.pending = false
-            self?.update()
+            guard let self else { return }
+            self.pending = false
+            if self.scrolling, let scrollView = self.scrollView { InlineMarkdownEditor.shared.didScroll(in: scrollView) }
+            self.scrolling = false
+            self.update()
         }
     }
 
     func update() {
         guard let scrollView, let document = scrollView.documentView else { return }
+        if scrollView.hasVerticalScroller { scrollView.hasVerticalScroller = false }
         let visible = scrollView.contentView.bounds
         let offset = visible.minY
         let top = offset > 240
         let bottom = document.frame.height - visible.maxY > 160
-        if top != showsTop { withAnimation(Motion.quick) { showsTop = top } }
-        if bottom != showsBottom { withAnimation(Motion.quick) { showsBottom = bottom } }
         let line = offset + 12
         var best: (id: UUID, top: CGFloat)?
         var first: (id: UUID, top: CGFloat)?
@@ -243,8 +253,8 @@ final class ScrollTracker: ObservableObject {
             if value <= line, value > (best?.top ?? -.infinity) { best = (id, value) }
             if value < (first?.top ?? .infinity) { first = (id, value) }
         }
-        let next = best?.id ?? first?.id
-        if next != current { current = next }
+        let next = Position(current: best?.id ?? first?.id, showsTop: top, showsBottom: bottom)
+        if next != position { position = next }
     }
 }
 
@@ -258,6 +268,7 @@ private struct ScrollTrackerHook: NSViewRepresentable {
     final class HookView: NSView {
         var tracker: ScrollTracker
         private var observed: NSScrollView?
+        private var lastOrigin = NSPoint.zero
 
         init(tracker: ScrollTracker) {
             self.tracker = tracker
@@ -273,24 +284,24 @@ private struct ScrollTrackerHook: NSViewRepresentable {
             guard let scroll = enclosingScrollView, scroll !== observed else { return }
             NotificationCenter.default.removeObserver(self)
             observed = scroll
+            lastOrigin = scroll.contentView.bounds.origin
             scroll.contentView.postsBoundsChangedNotifications = true
             scroll.documentView?.postsFrameChangedNotifications = true
             NotificationCenter.default.addObserver(self, selector: #selector(changed), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
             if let document = scroll.documentView {
                 NotificationCenter.default.addObserver(self, selector: #selector(changed), name: NSView.frameDidChangeNotification, object: document)
             }
-            scroll.hasVerticalScroller = false
             MainActor.assumeIsolated {
                 tracker.scrollView = scroll
-                tracker.update()
+                tracker.setNeedsUpdate()
             }
         }
 
         @objc private func changed() {
             MainActor.assumeIsolated {
-                // 节奏条代替滚动条：SwiftUI 的「隐藏滚动条」在用鼠标（滚动条常显）时不起作用，这里直接关掉。
-                if let observed, observed.hasVerticalScroller { observed.hasVerticalScroller = false }
-                tracker.update()
+                let origin = observed?.contentView.bounds.origin ?? .zero
+                tracker.setNeedsUpdate(scrolling: origin != lastOrigin)
+                lastOrigin = origin
             }
         }
 
