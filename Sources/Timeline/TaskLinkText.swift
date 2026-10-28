@@ -44,7 +44,6 @@ struct TaskLinkText: NSViewRepresentable {
         view.textContainerInset = NSSize(width: 5, height: 4)
         view.textContainer?.lineFragmentPadding = 0
         view.textContainer?.maximumNumberOfLines = maxLines
-        view.measurer.update(NSAttributedString(), maxLines: maxLines)
         view.textContainer?.lineBreakMode = .byTruncatingTail
         view.textContainer?.widthTracksTextView = false
         view.isHorizontallyResizable = false
@@ -350,14 +349,16 @@ final class InteractiveTaskText: NSTextView {
     var measuredText: TextRenderCache.Entry?
 
     func measuredHeight(forWidth width: CGFloat, maxLines: Int) -> CGFloat {
-        guard let rendered else { return measurer.height(forWidth: width) }
         let key = Int((min(width, 100_000) * 2).rounded())
-        if let hit = rendered.heights[key] { return hit }
+        if let hit = rendered?.heights[key] { return hit }
+        let measurement = measurer ?? TextMeasurer()
+        measurer = measurement
+        guard let rendered else { return measurement.height(forWidth: width) }
         if measuredText !== rendered {
-            measurer.update(rendered.styled, maxLines: maxLines)
+            measurement.update(rendered.styled, maxLines: maxLines)
             measuredText = rendered
         }
-        let height = measurer.height(forWidth: width)
+        let height = measurement.height(forWidth: width)
         if rendered.heights.count > 32 { rendered.heights.removeAll() }
         rendered.heights[key] = height
         return height
@@ -365,7 +366,7 @@ final class InteractiveTaskText: NSTextView {
     var markdown = false
     var interactiveTasks = false
     var onToggleMarkdownTask: ((Int) -> Void)?
-    let measurer = TextMeasurer()
+    private(set) var measurer: TextMeasurer?
     var menuItems: [TextMenuItem] = []
     var source: String?
     var displayName: String?
