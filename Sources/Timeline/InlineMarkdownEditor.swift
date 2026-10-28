@@ -3,7 +3,7 @@ import SwiftUI
 import WebKit
 import TimelineCore
 
-/// 日志、笔记的就地编辑：点一下正文，这一条就换成和工作板一样的所见即所得编辑器（只有光标所在的元素露出 Markdown 标记），
+/// 日志、笔记的就地编辑：进入编辑时，这一条换成和工作板一样的所见即所得编辑器（只有光标所在的元素露出 Markdown 标记），
 /// 点别处、Esc 或 ⌘↩ 保存并换回渲染好的正文。
 ///
 /// 整个应用只有一个这样的编辑器（一份 WebKit 网页进程，和工作板那个分开，两个窗口可以同时用）：
@@ -17,7 +17,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         let date: Date
     }
 
-    /// 编辑器所在的条目：正在编辑，或者鼠标停在上面、先悄悄排好版等着点（`preparing`）。
+    /// 编辑器所在的条目：正在编辑，或者提前排好版（`preparing`）。
     private(set) var target: Target?
     /// 只是提前排好版，还没开始编辑：不拿键盘焦点，正文照常显示。
     private(set) var preparing = false
@@ -61,11 +61,11 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         return slot
     }
 
-    /// 鼠标停在一条上一小会儿：先把编辑器放到这一条上面排好版（看不见、不拿焦点），点下去时直接交给它，不用再等。
+    /// 延迟预备编辑器：先在这一条上面排好版（看不见、不拿焦点），点击时可直接接管。
     /// 正在编辑别的条目时不动。
-    func prepareSoon(_ id: UUID, _ prepare: @escaping () -> Void) {
+    func prepareSoon(_ id: UUID, selected: Bool = false, _ prepare: @escaping () -> Void) {
         guard target == nil || preparing, target?.logID != id, pendingPrepare?.id != id,
-              ProcessInfo.processInfo.systemUptime - lastScroll > 0.2, !Headless.active || preparesInTests else { return }
+              selected || ProcessInfo.processInfo.systemUptime - lastScroll > 0.2, !Headless.active || preparesInTests else { return }
         pendingPrepare?.work.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.pendingPrepare?.id == id else { return }
@@ -73,13 +73,20 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
             prepare()
         }
         pendingPrepare = (id, work)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+        // 选中先画出来，再预备当前这一条；连续切换或开始滚动时仍可取消。
+        DispatchQueue.main.asyncAfter(deadline: .now() + (selected ? 0.04 : 0.12), execute: work)
     }
 
     func cancelPrepare(_ id: UUID) {
         guard pendingPrepare?.id == id else { return }
         pendingPrepare?.work.cancel()
         pendingPrepare = nil
+    }
+
+    func cancelPreparation() {
+        pendingPrepare?.work.cancel()
+        pendingPrepare = nil
+        if preparing { end() }
     }
 
     func didScroll(in scroll: NSScrollView) {
@@ -89,7 +96,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         if preparing, webView?.enclosingScrollView === scroll { end() }
     }
 
-    /// 测试里也悬停预备（平时测试进程不预备，免得列表测试被打扰）。
+    /// 测试里也允许延迟预备（平时测试进程不预备，免得列表测试被打扰）。
     var preparesInTests = false
 
     /// 在正文上按下鼠标：编辑器已经在这一条上面排好、画好了，就开始编辑，返回编辑器，这一下（和之后的拖动、松开）交给它，
@@ -104,7 +111,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     /// 开始编辑一条日志；`point` 是点在渲染好的正文上的位置（光标放到那里），nil 时放在末尾。
     /// `fontSize`、`lineSpacing` 和渲染好的正文一样（已乘界面缩放），编辑器按它们排版，每一行落在原来的位置上。
     /// `muted`：正文是用淡色画的（日记里专注期间的笔记、反馈），编辑器也用淡色。
-    /// `prepare`：只是鼠标停在上面，先排好版等着点。
+    /// `prepare`：只提前排版，不进入编辑。
     func begin(_ log: DailyLogEntry, on date: Date, store: JournalStore, at point: CGPoint?, fontSize: CGFloat, lineSpacing: CGFloat,
                dark: Bool, muted: Bool = false, prepare: Bool = false) {
         guard !store.isReadOnly else { return }
@@ -522,13 +529,13 @@ struct InlineEditorHost: NSViewRepresentable {
     }
 }
 
-/// 日志 / 笔记的正文：平时是渲染好的 Markdown，点一下就地变成编辑器。
+/// 日志 / 笔记的正文：选中后可提前排版，进入编辑时才显示编辑器并拿焦点。
 struct EditableLogText<Content: View>: View {
     private let editor = InlineMarkdownEditor.shared
     @ObservedObject private var slot: InlineEditSlot
     let log: DailyLogEntry
     @ViewBuilder let content: (_ beginAt: ((CGPoint) -> Void)?) -> Content
-    /// 开始编辑（点的位置）；第二个参数为 true 时只是鼠标停在上面，先排好版。
+    /// 开始编辑（点的位置）；第二个参数为 true 时只提前排版。
     let begin: (_ point: CGPoint?, _ prepare: Bool) -> Void
     let editable: Bool
 
@@ -545,7 +552,6 @@ struct EditableLogText<Content: View>: View {
         let shown = slot.phase == .editing && slot.height != nil
         // 编辑器一直是同一个视图：先在正文上面悄悄排版（几乎透明），画好后正文隐去、编辑器显出来，同一帧换过去。
         // 不换视图层级（换了网页要重新挂到窗口上，会白一下；新旧两个容器同时在时还会把网页抢回旧的那个，整块不见）。
-        // 鼠标停在这一条上时就先排好：按下鼠标直接交给编辑器，不用等松开、再等它画。
         content(editable && !shown ? { begin($0, false) } : nil)
             .opacity(shown ? 0 : 1)
             .allowsHitTesting(!shown)
@@ -556,10 +562,6 @@ struct EditableLogText<Content: View>: View {
                         .opacity(shown ? 1 : 0.01)
                         .allowsHitTesting(shown)
                 }
-            }
-            .onHover { inside in
-                guard editable else { return }
-                if inside { editor.prepareSoon(log.id) { begin(nil, true) } } else { editor.cancelPrepare(log.id) }
             }
     }
 }

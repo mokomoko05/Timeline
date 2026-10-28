@@ -558,7 +558,8 @@ struct UnifiedJournalView: View {
         let showsMetadata = NoteThread.kindLabel(log) != nil || taskLabel != nil || (log.showsTimelineTags && !log.tags.isEmpty)
         return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext,
                              focusBefore: segment?.focusBefore == true, focusAfter: segment?.focusAfter == true,
-                             highlighted: highlightedID == log.id, actionWidth: store.isReadOnly ? 0 : 72, showsMetadata: showsMetadata) {
+                             highlighted: highlightedID == log.id, actionWidth: store.isReadOnly ? 0 : 72, showsMetadata: showsMetadata,
+                             prepareEdit: !store.isReadOnly && log.hasEditableText ? { beginEdit(log, at: nil, prepare: true) } : nil) {
             if let kind = NoteThread.kindLabel(log) {
                 Text(kind).foregroundStyle(LogEventStyle.color(log)).fontWeight(.medium)
             }
@@ -572,7 +573,7 @@ struct UnifiedJournalView: View {
             if log.showsTimelineTags, !log.tags.isEmpty { TaskTagLine(tags: log.tags, log: log.id) }
         } content: {
             if !LogEventStyle.body(log).isEmpty {
-                // 点一下正文就地编辑（和工作板一样所见即所得），点别处、Esc 或 ⌘↩ 保存。
+                // 先选中，再点击正文就地编辑；点别处、Esc 或 ⌘↩ 保存。
                 EditableLogText(log: log, editable: !store.isReadOnly && log.hasEditableText, begin: { beginEdit(log, at: $0, prepare: $1) }) { editAt in
                     TaskLinkText(source: LogEventStyle.body(log), completed: false, color: LogEventStyle.quiet(log) ? Palette.muted : Palette.ink,
                                  fontSize: LogEventStyle.quiet(log) ? 12 : 13,

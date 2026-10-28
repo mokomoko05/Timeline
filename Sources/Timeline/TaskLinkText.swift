@@ -785,7 +785,7 @@ final class InteractiveTaskText: NSTextView {
             }
             onSelect?()
             onClick?()
-            // 就地编辑器已经在这一条上面排好了（鼠标停在这里时）：这一下直接交给它，光标、拖选都由它处理，和在工作板里点一样。
+            // 就地编辑器若已经在这一条上面排好：这一下直接交给它，光标、拖选都由它处理，和在工作板里点一样。
             // 之后的拖动、松开还会送到这里（按下的是这个视图），一并转过去。
             if event.clickCount == 1, onEditAt != nil, interactionEnabled, let editor = InlineMarkdownEditor.shared.takeOver(event) {
                 forwardedMouse = editor

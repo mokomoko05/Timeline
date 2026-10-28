@@ -2,7 +2,7 @@ import SwiftUI
 import TimelineCore
 
 /// 笔记和日记共用的「线」：左侧一根细线贯穿同一天的记录，每条记录是线上的一颗小珠子。
-/// 时间放在节点左侧；操作按钮悬停时才出现。
+/// 时间放在节点左侧；选中条目后显示操作按钮。
 enum NoteThread {
     static let timeWidth: CGFloat = 46
     static let gutter: CGFloat = 70
@@ -47,12 +47,10 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
     var highlighted = false
     var actionWidth: CGFloat = 96
     var showsMetadata = true
+    var prepareEdit: (() -> Void)? = nil
     @ViewBuilder let meta: () -> Meta
     @ViewBuilder let content: () -> Content
     @ViewBuilder let actions: () -> Actions
-    @State private var hovered = false
-    /// 按钮弹出的浮窗还开着：鼠标移进浮窗时按钮不能收起。
-    @State private var holding = false
 
     private var beadY: CGFloat { typography.pt(8) }
 
@@ -60,8 +58,8 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
         let _ = TextLayoutProbe.count("timelineRowBodies")
         VStack(alignment: .leading, spacing: 3) {
             if showsMetadata {
-                NoteThreadHeader(showsActions: hovered || holding, actionWidth: actionWidth, meta: meta) {
-                    actions().environment(\.holdHoverActions) { holding = $0 }
+                NoteThreadHeader(showsActions: true, actionWidth: actionWidth, meta: meta) {
+                    LogSelectionActions(id: log.id, actions: actions)
                 }
                 .font(.system(size: typography.pt(11))).monospacedDigit()
                 .foregroundStyle(Palette.muted)
@@ -69,16 +67,19 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
             }
             content()
         }
+        // 无说明行时，按钮和正文共用第一行：始终留出操作列，避免选中时遮住标题折叠按钮或正文。
+        .padding(.trailing, !showsMetadata && actionWidth > 0 ? actionWidth + 6 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, NoteThread.gutter + 10)
         .padding(.bottom, 6)
         .padding(.horizontal, 8).padding(.top, 4)
         .background {
             RoundedRectangle(cornerRadius: Metrics.radiusMedium, style: .continuous)
-                .fill(highlighted ? Palette.accent.opacity(0.12) : Palette.soft.opacity(hovered ? 0.35 : 0))
+                .fill(highlighted ? Palette.accent.opacity(0.12) : .clear)
                 .padding(.bottom, 2)
         }
         .background { LogSelectionMark(id: log.id).padding(.bottom, 2) }
+        .background { LogRowSelectionArea(id: log.id, prepare: prepareEdit) }
         .overlay(alignment: .topLeading) { rail.padding(.leading, 8).padding(.top, 4) }
         .overlay(alignment: .topLeading) {
             Text(NoteThread.shortTime(log.createdAt))
@@ -90,15 +91,12 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
                 .padding(.leading, 8).padding(.top, 4)
         }
         .overlay(alignment: .topTrailing) {
-            if !showsMetadata, actionWidth > 0, hovered || holding {
-                actions().environment(\.holdHoverActions) { holding = $0 }
-                    .frame(width: actionWidth, height: 22)
-                    .background(Palette.background.opacity(0.96), in: RoundedRectangle(cornerRadius: 5))
+            if !showsMetadata, actionWidth > 0 {
+                LogSelectionActions(id: log.id, width: actionWidth, floating: true, actions: actions)
                     .padding(.trailing, 8).padding(.top, 2)
             }
         }
         .contentShape(Rectangle())
-        .onHover { hovered = $0 }
     }
 
     private var rail: some View {
@@ -137,6 +135,26 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
         } else {
             Circle().fill(color.opacity(0.9)).frame(width: 7, height: 7)
                 .overlay(Circle().strokeBorder(Palette.background, lineWidth: 1.5))
+        }
+    }
+}
+
+/// 只有操作栏订阅选中状态；切换选中不重新计算整条正文。
+private struct LogSelectionActions<Actions: View>: View {
+    let id: UUID
+    var width: CGFloat? = nil
+    var floating = false
+    @ViewBuilder let actions: () -> Actions
+    @ObservedObject private var selection = LogKeyboardSelection.shared
+    @State private var holding = false
+
+    var body: some View {
+        if selection.selectedID == id || holding {
+            actions().environment(\.holdHoverActions) { holding = $0 }
+                .frame(width: width, height: floating ? 22 : nil)
+                .background {
+                    if floating { RoundedRectangle(cornerRadius: 5).fill(Palette.background.opacity(0.96)) }
+                }
         }
     }
 }

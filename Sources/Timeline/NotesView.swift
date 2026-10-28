@@ -613,7 +613,8 @@ struct NotesView: View {
         let log = item.log
         let showsMetadata = showDate || NoteThread.kindLabel(log) != nil || (showTask && Self.sourceLabel(log) != nil) || !log.tags.isEmpty
         return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext, highlighted: flashNoteID == log.id,
-                             actionWidth: store.isReadOnly ? 24 : 96, showsMetadata: showsMetadata) {
+                             actionWidth: store.isReadOnly ? 24 : 96, showsMetadata: showsMetadata,
+                             prepareEdit: !store.isReadOnly && log.hasEditableText ? { beginNoteEdit(item, at: nil, prepare: true) } : nil) {
             if showDate { Text(item.date.relativeLabel).help(item.key) }
             if let kind = NoteThread.kindLabel(log) {
                 Text(kind).foregroundStyle(LogEventStyle.color(log)).fontWeight(.medium)
@@ -631,7 +632,7 @@ struct NotesView: View {
             if !log.tags.isEmpty { TaskTagLine(tags: log.tags, log: log.id) }
         } content: {
             if !log.text.isEmpty {
-                // 点一下正文就地编辑（和工作板一样所见即所得），点别处、Esc 或 ⌘↩ 保存。
+                // 先选中，再点击正文就地编辑；点别处、Esc 或 ⌘↩ 保存。
                 EditableLogText(log: log, editable: !store.isReadOnly && log.hasEditableText, begin: { beginNoteEdit(item, at: $0, prepare: $1) }) { editAt in
                     TaskLinkText(source: LogEventStyle.body(log), completed: false, color: Palette.ink, fontSize: 13,
                                  edit: { beginNoteEdit(item, at: nil) }, open: SafariLinks.open,

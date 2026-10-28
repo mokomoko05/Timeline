@@ -36,7 +36,7 @@ final class NoteThreadLayoutTests: XCTestCase {
                 let view = try XCTUnwrap(text(in: host))
                 let frame = view.convert(view.bounds, to: host)
                 XCTAssertEqual(frame.minX, 88, accuracy: 0.5)
-                XCTAssertEqual(frame.maxX, width - 8, accuracy: 0.5)
+                XCTAssertEqual(frame.maxX, width - 8 - 78, accuracy: 0.5)
                 XCTAssertEqual(host.fittingSize.height, view.bounds.height + 10, accuracy: 0.5)
                 XCTAssertLessThanOrEqual(view.bounds.height, previousHeight)
                 XCTAssertGreaterThan(view.bounds.height, 100)
@@ -56,17 +56,26 @@ final class NoteThreadLayoutTests: XCTestCase {
         }
     }
 
-    func testHoverActionReservationKeepsPlainNoteHeightAndTextWidthStable() throws {
+    func testSelectionDoesNotChangePlainNoteHeightOrTextWidth() throws {
         func texts(in view: NSView) -> [InteractiveTaskText] {
             ((view as? InteractiveTaskText).map { [$0] } ?? []) + view.subviews.flatMap { texts(in: $0) }
         }
+        let selection = LogKeyboardSelection.shared
+        defer { selection.select(nil) }
         for scale in [0.8, 1.1, 1.5] {
-            let readOnly = row(scale: scale, metadata: false, actionWidth: 0)
             let editable = row(scale: scale, metadata: false, actionWidth: 96)
-            XCTAssertEqual(readOnly.fittingSize.height, editable.fittingSize.height, accuracy: 0.5)
-            let readText = try XCTUnwrap(texts(in: readOnly).first)
             let editText = try XCTUnwrap(texts(in: editable).first)
-            XCTAssertEqual(readText.bounds.width, editText.bounds.width, accuracy: 0.5)
+            func rowID(in view: NSView) -> UUID? {
+                (view as? LogRowSelectionView)?.id ?? view.subviews.lazy.compactMap { rowID(in: $0) }.first
+            }
+            let id = try XCTUnwrap(rowID(in: editable))
+            let height = editable.fittingSize.height, textWidth = editText.bounds.width
+            for selected in [id, nil, id] {
+                selection.select(selected, reveal: false)
+                editable.layoutSubtreeIfNeeded()
+                XCTAssertEqual(editable.fittingSize.height, height, accuracy: 0.5)
+                XCTAssertEqual(editText.bounds.width, textWidth, accuracy: 0.5)
+            }
             XCTAssertGreaterThan(editText.convert(editText.bounds, to: editable).minX, 80)
         }
     }
