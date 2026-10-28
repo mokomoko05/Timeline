@@ -7,6 +7,56 @@ import TimelineCore
 
 @MainActor
 final class JournalScrollRegressionTests: XCTestCase {
+    func testJournalNavigationAndRevealRemainLiveAcrossRetainedHosts() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let today = JournalDates.calendar.startOfDay(for: Date())
+        let yesterday = try XCTUnwrap(JournalDates.calendar.date(byAdding: .day, value: -1, to: today))
+        for index in 0..<6 {
+            _ = try store.quickLog("Today \(index)\n" + String(repeating: "A paragraph of text.\n", count: 12),
+                                  on: today, now: today.addingTimeInterval(Double(index) * 60))
+        }
+        _ = try store.quickLog("Yesterday", on: yesterday, now: yesterday)
+        let workspace = NotesWorkspaceNavigation(date: today)
+        workspace.open(.journal)
+        let host = NSHostingView(rootView: UnifiedNotesView(store: store, workspace: workspace,
+                                                          nav: NotesNavigation(defaults: InMemoryDefaults()), close: {}, reveal: { _ in }, openDay: { _ in }))
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 680),
+                                 styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.contentView = nil; window.close() }
+        func settle() async throws {
+            for _ in 0..<10 {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        func markers(in view: NSView) -> [RowMarkerView] {
+            guard !view.isHidden else { return [] }
+            return ((view as? RowMarkerView).map { [$0] } ?? []) + view.subviews.flatMap { markers(in: $0) }
+        }
+        let todayIDs = Set(store.entry(for: today).logs.map(\.id))
+        try await settle()
+        XCTAssertEqual(Set(markers(in: host).compactMap(\.id)), todayIDs)
+        workspace.open(.journal, date: yesterday)
+        try await settle()
+        XCTAssertEqual(Set(markers(in: host).compactMap(\.id)), Set(store.entry(for: yesterday).logs.map(\.id)))
+        workspace.mode = .notes
+        try await settle()
+        let target = store.entry(for: today).logs[2].id
+        workspace.open(.journal, date: today, log: target)
+        try await settle()
+        XCTAssertNil(workspace.revealLog)
+        XCTAssertEqual(Set(markers(in: host).compactMap(\.id)), todayIDs)
+        let marker = try XCTUnwrap(markers(in: host).first { $0.id == target })
+        let scroll = try XCTUnwrap(marker.enclosingScrollView)
+        let document = try XCTUnwrap(scroll.documentView)
+        XCTAssertTrue(marker.convert(marker.bounds, to: document).intersects(scroll.contentView.bounds))
+    }
+
     private func scrollViews(in view: NSView) -> [NSScrollView] {
         ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrollViews)
     }

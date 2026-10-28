@@ -24,7 +24,7 @@ final class JournalEditingTests: XCTestCase {
         let date = JournalDates.calendar.startOfDay(for: Date())
         _ = try store.quickLog("Journal edit original", linkDefault: false, on: date)
         let log = try XCTUnwrap(store.entry(for: date).logs.first)
-        let host = NSHostingView(rootView: UnifiedJournalView(store: store, date: .constant(date), navigationRequest: 0))
+        let host = NSHostingView(rootView: UnifiedJournalView(store: store, workspace: NotesWorkspaceNavigation(date: date)))
         let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host

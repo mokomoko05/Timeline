@@ -297,6 +297,51 @@ final class InteractiveTaskText: NSTextView {
 
     required init?(coder: NSCoder) { super.init(coder: coder) }
 
+    private struct RegionLayoutKey: Equatable {
+        let storage: ObjectIdentifier
+        let manager: ObjectIdentifier
+        let container: ObjectIdentifier
+        let bounds: NSRect
+        let origin: NSPoint
+        let containerSize: NSSize
+        let padding: CGFloat
+        let maxLines: Int
+        let lineBreakMode: NSLineBreakMode
+    }
+
+    private var cachedLinks: (key: RegionLayoutKey, regions: [(url: URL, rect: NSRect)])?
+    private var cachedTasks: (key: RegionLayoutKey, regions: [(line: Int, rect: NSRect)])?
+    private var cachedCode: (key: RegionLayoutKey, regions: [(info: MarkdownText.CodeBlockInfo, block: NSRect, copy: NSRect)])?
+    private var cachedHeadings: (key: RegionLayoutKey, regions: [(key: String, rect: NSRect, folded: Bool)])?
+    private weak var observedRegionStorage: NSTextStorage?
+    private var regionObservation: NSObjectProtocol?
+
+    deinit {
+        if let regionObservation { NotificationCenter.default.removeObserver(regionObservation) }
+    }
+
+    private func invalidateRegionCache() {
+        cachedLinks = nil
+        cachedTasks = nil
+        cachedCode = nil
+        cachedHeadings = nil
+    }
+
+    private func regionLayoutKey(storage: NSTextStorage, manager: NSLayoutManager, container: NSTextContainer) -> RegionLayoutKey {
+        if observedRegionStorage !== storage {
+            if let regionObservation { NotificationCenter.default.removeObserver(regionObservation) }
+            observedRegionStorage = storage
+            invalidateRegionCache()
+            regionObservation = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification,
+                                                                       object: storage, queue: nil) { [weak self] _ in
+                MainActor.assumeIsolated { self?.invalidateRegionCache() }
+            }
+        }
+        return RegionLayoutKey(storage: ObjectIdentifier(storage), manager: ObjectIdentifier(manager), container: ObjectIdentifier(container),
+                               bounds: bounds, origin: textContainerOrigin, containerSize: container.containerSize,
+                               padding: container.lineFragmentPadding, maxLines: container.maximumNumberOfLines, lineBreakMode: container.lineBreakMode)
+    }
+
     var markdownDocument: Document?
     var inlineText: NSAttributedString?
     /// 现在显示的排版结果（和它在各个宽度下的高度，可能和别的行共用）。
@@ -363,12 +408,13 @@ final class InteractiveTaskText: NSTextView {
 
     /// 文本容器宽度始终跟随视图实际宽度。
     override func setFrameSize(_ newSize: NSSize) {
-        super.setFrameSize(newSize)
         let width = max(1, newSize.width - textContainerInset.width * 2)
+        if frame.size == newSize, let container = textContainer, abs(container.containerSize.width - width) <= 0.5 { return }
+        super.setFrameSize(newSize)
         if let container = textContainer, abs(container.containerSize.width - width) > 0.5 {
             container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+            needsLayout = true
         }
-        needsLayout = true
     }
 
     /// 太宽的独立公式：每个一条能左右滑动的条（只在有这种公式时才建）。
@@ -422,6 +468,8 @@ final class InteractiveTaskText: NSTextView {
 
     func linkRegions() -> [(url: URL, rect: NSRect)] {
         guard let storage = textStorage, let manager = layoutManager, let container = textContainer else { return [] }
+        let key = regionLayoutKey(storage: storage, manager: manager, container: container)
+        if let cachedLinks, cachedLinks.key == key { return cachedLinks.regions }
         manager.ensureLayout(for: container)
         var regions: [(url: URL, rect: NSRect)] = []
         storage.enumerateAttribute(.link, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
@@ -441,6 +489,7 @@ final class InteractiveTaskText: NSTextView {
                 if !rect.isEmpty { regions.append((url, rect)) }
             }
         }
+        cachedLinks = (regionLayoutKey(storage: storage, manager: manager, container: container), regions)
         return regions
     }
 
@@ -450,6 +499,8 @@ final class InteractiveTaskText: NSTextView {
 
     func taskRegions() -> [(line: Int, rect: NSRect)] {
         guard let storage = textStorage, let manager = layoutManager, let container = textContainer else { return [] }
+        let key = regionLayoutKey(storage: storage, manager: manager, container: container)
+        if let cachedTasks, cachedTasks.key == key { return cachedTasks.regions }
         manager.ensureLayout(for: container)
         var regions: [(line: Int, rect: NSRect)] = []
         storage.enumerateAttribute(MarkdownText.taskLineKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
@@ -460,12 +511,15 @@ final class InteractiveTaskText: NSTextView {
                 .insetBy(dx: -3, dy: -3).intersection(self.bounds)
             if !rect.isEmpty { regions.append((line, rect)) }
         }
+        cachedTasks = (regionLayoutKey(storage: storage, manager: manager, container: container), regions)
         return regions
     }
 
     /// 代码块：整块的底色区域和右上角「复制」按钮的位置。
     func codeRegions() -> [(info: MarkdownText.CodeBlockInfo, block: NSRect, copy: NSRect)] {
         guard markdown, let storage = textStorage, let manager = layoutManager, let container = textContainer, storage.length > 0 else { return [] }
+        let key = regionLayoutKey(storage: storage, manager: manager, container: container)
+        if let cachedCode, cachedCode.key == key { return cachedCode.regions }
         var regions: [(info: MarkdownText.CodeBlockInfo, block: NSRect, copy: NSRect)] = []
         var scanned = false
         storage.enumerateAttribute(MarkdownText.codeBlockKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
@@ -491,6 +545,7 @@ final class InteractiveTaskText: NSTextView {
             let copy = NSRect(x: block.maxX - copyWidth - 6, y: max(block.minY + 3, labelMid - copyHeight / 2), width: copyWidth, height: copyHeight)
             regions.append((info, block, copy))
         }
+        cachedCode = (regionLayoutKey(storage: storage, manager: manager, container: container), regions)
         return regions
     }
 
@@ -552,6 +607,8 @@ final class InteractiveTaskText: NSTextView {
     /// 可折叠标题右边的收起 / 展开按钮（标题第一行的最右边；标题文字本身留给选择和编辑）。
     func headingRegions() -> [(key: String, rect: NSRect, folded: Bool)] {
         guard onToggleHeading != nil, let storage = textStorage, let manager = layoutManager, let container = textContainer else { return [] }
+        let key = regionLayoutKey(storage: storage, manager: manager, container: container)
+        if let cachedHeadings, cachedHeadings.key == key { return cachedHeadings.regions }
         manager.ensureLayout(for: container)
         var regions: [(key: String, rect: NSRect, folded: Bool)] = []
         storage.enumerateAttribute(MarkdownText.headingFoldKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
@@ -570,6 +627,7 @@ final class InteractiveTaskText: NSTextView {
             let rect = NSRect(x: right - side, y: self.textContainerOrigin.y + line.midY - side / 2, width: side, height: side)
             if rect.intersects(self.bounds) { regions.append((key, rect, folded)) }
         }
+        cachedHeadings = (regionLayoutKey(storage: storage, manager: manager, container: container), regions)
         return regions
     }
 

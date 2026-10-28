@@ -204,13 +204,17 @@ enum UnifiedNotesMode { case notes, journal }
 @MainActor
 final class NotesWorkspaceNavigation: ObservableObject {
     @Published var mode: UnifiedNotesMode = .notes
-    @Published var date = JournalDates.calendar.startOfDay(for: Date())
+    @Published var date: Date
     @Published private(set) var requestID = 0
     /// 打开时要定位并高亮的那条日志（来自搜索结果）。
     @Published var revealLog: UUID?
     /// ⌘F：聚焦当前页面自己的搜索框。两页各自计数，隐藏的那页不响应。
     @Published private(set) var notesSearchRequest = 0
     @Published private(set) var journalSearchRequest = 0
+
+    init(date: Date = Date()) {
+        self.date = JournalDates.calendar.startOfDay(for: date)
+    }
 
     func focusSearch() {
         if mode == .notes { notesSearchRequest += 1 } else { journalSearchRequest += 1 }
@@ -283,8 +287,7 @@ struct UnifiedNotesView: View {
     }
 
     private var journalBody: some View {
-        UnifiedJournalView(store: store, date: $workspace.date, navigationRequest: workspace.requestID,
-                           revealLog: $workspace.revealLog, searchRequest: workspace.journalSearchRequest)
+        UnifiedJournalView(store: store, workspace: workspace)
     }
 
 }
@@ -295,20 +298,20 @@ struct UnifiedJournalView: View {
     @Environment(\.typography) private var typography
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var store: JournalStore
-    @Binding var date: Date
-    let navigationRequest: Int
-    @Binding var revealLog: UUID?
+    @ObservedObject var workspace: NotesWorkspaceNavigation
 
-    /// 每加一次就聚焦日期列表的搜索框（笔记窗口里的 ⌘F）。
-    let searchRequest: Int
-
-    init(store: JournalStore, date: Binding<Date>, navigationRequest: Int, revealLog: Binding<UUID?> = .constant(nil), searchRequest: Int = 0) {
-        self.store = store
-        self.searchRequest = searchRequest
-        _date = date
-        self.navigationRequest = navigationRequest
-        _revealLog = revealLog
+    private var date: Date {
+        get { workspace.date }
+        nonmutating set { workspace.date = newValue }
     }
+
+    private var revealLog: UUID? {
+        get { workspace.revealLog }
+        nonmutating set { workspace.revealLog = newValue }
+    }
+
+    private var navigationRequest: Int { workspace.requestID }
+    private var searchRequest: Int { workspace.journalSearchRequest }
     @StateObject private var mention = MentionState()
     @State private var focused = false
     @State private var error: String?

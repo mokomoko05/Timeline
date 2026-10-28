@@ -222,6 +222,7 @@ final class ScrollFramePerformanceTests: XCTestCase {
     }
 
     private func probe(_ label: String, store: JournalStore, workspace: NotesWorkspaceNavigation, nav: NotesNavigation) async throws {
+        let openingStarted = CACurrentMediaTime()
         let view = UnifiedNotesView(store: store, workspace: workspace, nav: nav, close: {}, reveal: { _ in }, openDay: { _ in })
             .environment(\.typography, AppTypography(scale: 1.1, lineSpacing: 0))
             .frame(width: 1424, height: 876)
@@ -230,6 +231,7 @@ final class ScrollFramePerformanceTests: XCTestCase {
         defer { InlineMarkdownEditor.shared.finish(); window.contentView = nil; window.close() }
         host.layoutSubtreeIfNeeded()
         host.displayIfNeeded()
+        print("FRAME OPEN \(label) synchronousMS=\((CACurrentMediaTime() - openingStarted) * 1000)")
         try await Task.sleep(for: .seconds(1))
         let scroll = try XCTUnwrap(scrollViews(in: host).max {
             ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0)

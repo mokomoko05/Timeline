@@ -64,7 +64,7 @@ final class EntryRailTests: XCTestCase {
         for index in 0..<30 {
             _ = try store.quickLog("第 \(index) 条日志\n\n多写一行，让页面长到需要滚动。", on: day, now: day.addingTimeInterval(Double(index + 1) * 600))
         }
-        let root = UnifiedJournalView(store: store, date: .constant(day), navigationRequest: 0)
+        let root = UnifiedJournalView(store: store, workspace: NotesWorkspaceNavigation(date: day))
             .environmentObject(WorkspaceInteraction()).environmentObject(ToastCenter())
             .frame(width: 900, height: 600)
         let host = NSHostingView(rootView: root)
