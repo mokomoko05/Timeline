@@ -554,14 +554,15 @@ struct UnifiedJournalView: View {
     }
 
     private func journalRow(_ log: DailyLogEntry, hasPrevious: Bool, hasNext: Bool, segment: LogTimelineSegment?) -> some View {
+        let taskLabel = log.showsTimelineContext || !hasPrevious ? LogTaskLabel.saved(log, store: store, logDate: date) : nil
+        let showsMetadata = NoteThread.kindLabel(log) != nil || taskLabel != nil || (log.showsTimelineTags && !log.tags.isEmpty)
         return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext,
                              focusBefore: segment?.focusBefore == true, focusAfter: segment?.focusAfter == true,
-                             highlighted: highlightedID == log.id, actionWidth: store.isReadOnly ? 0 : 72) {
-            Text(NoteThread.shortTime(log.createdAt)).help(LogEventStyle.time(log.createdAt))
+                             highlighted: highlightedID == log.id, actionWidth: store.isReadOnly ? 0 : 72, showsMetadata: showsMetadata) {
             if let kind = NoteThread.kindLabel(log) {
                 Text(kind).foregroundStyle(LogEventStyle.color(log)).fontWeight(.medium)
             }
-            if log.showsTimelineContext || !hasPrevious, let label = LogTaskLabel.saved(log, store: store, logDate: date) {
+            if let label = taskLabel {
                 // 点关联的任务：切到它的笔记，停在这一条。
                 Button {
                     if let id = log.taskID, store.noteTopic(for: id) != nil { NotesWindowController.shared.openTaskNotes(id, log: log.id) }

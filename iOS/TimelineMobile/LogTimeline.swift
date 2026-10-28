@@ -177,6 +177,7 @@ struct LogEntryRow: View, Equatable {
     }
 
     var body: some View {
+        let _ = PerfProbe.renderedFocusNote(log)
         RailRow(label: DayText.time(log.createdAt), hasPrevious: hasPrevious, hasNext: hasNext,
                 lineColor: Palette.line, nodeY: 10, accent: focusSegment) {
             node
@@ -241,13 +242,16 @@ struct LogEntryRow: View, Equatable {
     }
 
     private var hasHeader: Bool {
-        LogStyle.label(log) != nil || (showsTask && (log.taskID != nil || log.taskTitle != nil)) || !log.tags.isEmpty
+        LogStyle.label(log) != nil || (showsTask && log.showsTimelineContext && (log.taskID != nil || log.taskTitle != nil))
+            || (log.showsTimelineTags && !log.tags.isEmpty)
     }
 
     @ViewBuilder private var header: some View {
         let label = LogStyle.label(log)
-        let taskTitle = task.map { String(TaskText.rendered($0.task.title).characters) } ?? (showsTask ? log.taskTitle : nil)
-        if label != nil || taskTitle != nil || !log.tags.isEmpty {
+        let taskTitle = showsTask && log.showsTimelineContext
+            ? task.map { String(TaskText.rendered($0.task.title).characters) } ?? log.taskTitle : nil
+        let tags = log.showsTimelineTags ? log.tags : []
+        if label != nil || taskTitle != nil || !tags.isEmpty {
             HStack(spacing: 6) {
                 if let label { Text(label).fontWeight(.semibold).foregroundStyle(LogStyle.color(log)) }
                 if let taskTitle {
@@ -264,7 +268,7 @@ struct LogEntryRow: View, Equatable {
                     }
                 }
                 // 点标签：打开这个标签的笔记本，停在这一条。
-                ForEach(log.tags, id: \.self) { tag in
+                ForEach(tags, id: \.self) { tag in
                     NavigationLink(value: NotesView.Destination.tag(tag, reveal: log.id)) {
                         Text("#" + tag).foregroundStyle(Palette.note)
                             .padding(.vertical, 4)

@@ -3,6 +3,26 @@ import AppKit
 @MainActor
 final class ScreenBoundDragging {
     private var drag: (mouse: NSPoint, origin: NSPoint, moving: Bool, titlebar: Bool)?
+    private let eventScreenLocation: ((NSEvent) -> NSPoint)?
+
+    init(eventScreenLocation: ((NSEvent) -> NSPoint)? = nil) {
+        self.eventScreenLocation = eventScreenLocation
+    }
+
+    func send(_ event: NSEvent, in window: NSWindow, forward: (NSEvent) -> Void) {
+        guard let event = filter(event, in: window) else { return }
+        let movable = window.isMovable
+        let suspendsMovement = event.type == .leftMouseDown && drag != nil
+        if suspendsMovement { window.isMovable = false }
+        defer { if suspendsMovement { window.isMovable = movable } }
+        forward(event)
+    }
+
+    private func screenLocation(of event: NSEvent) -> NSPoint {
+        if let eventScreenLocation { return eventScreenLocation(event) }
+        guard let location = event.cgEvent?.location, let screen = NSScreen.screens.first else { return NSEvent.mouseLocation }
+        return NSPoint(x: location.x, y: screen.frame.maxY - location.y)
+    }
 
     func filter(_ event: NSEvent, in window: NSWindow) -> NSEvent? {
         switch event.type {
@@ -12,21 +32,26 @@ final class ScreenBoundDragging {
             let point = event.locationInWindow
             if window.styleMask.contains(.resizable),
                point.x < 5 || point.x > window.frame.width - 5 || point.y < 5 || point.y > window.frame.height - 5 { break }
-            let titlebar = window.styleMask.contains(.titled) && point.y >= window.contentLayoutRect.maxY
-            let root = titlebar ? content.superview ?? content : content
+            let inTitlebar = window.styleMask.contains(.titled) && point.y >= window.contentLayoutRect.maxY
+            let root = inTitlebar ? content.superview ?? content : content
             let hitPoint = root.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
             guard let hit = root.hitTest(hitPoint), hit.mouseDownCanMoveWindow else { break }
-            if titlebar, hit is NSControl { break }
+            var ancestor: NSView? = hit
+            while let view = ancestor {
+                if view is NSControl { return event }
+                ancestor = view.superview
+            }
+            let titlebar = inTitlebar && !hit.isDescendant(of: content)
             if titlebar { window.makeKeyAndOrderFront(nil) }
             if titlebar && event.clickCount == 2 {
                 window.performZoom(nil)
                 return nil
             }
-            drag = (window.convertPoint(toScreen: event.locationInWindow), window.frame.origin, false, titlebar)
+            drag = (screenLocation(of: event), window.frame.origin, false, titlebar)
             if titlebar { return nil }
         case .leftMouseDragged:
             if var current = drag {
-                let mouse = window.convertPoint(toScreen: event.locationInWindow)
+                let mouse = screenLocation(of: event)
                 let dx = mouse.x - current.mouse.x, dy = mouse.y - current.mouse.y
                 if !current.moving && hypot(dx, dy) < 3 { return current.titlebar ? nil : event }
                 current.moving = true
@@ -67,7 +92,7 @@ class ScreenBoundWindow: NSWindow {
     private let dragging = ScreenBoundDragging()
 
     override func sendEvent(_ event: NSEvent) {
-        if let event = dragging.filter(event, in: self) { super.sendEvent(event) }
+        dragging.send(event, in: self) { super.sendEvent($0) }
     }
 }
 
@@ -80,6 +105,6 @@ class QuietPanel: NSPanel {
     }
 
     override func sendEvent(_ event: NSEvent) {
-        if let event = dragging.filter(event, in: self) { super.sendEvent(event) }
+        dragging.send(event, in: self) { super.sendEvent($0) }
     }
 }

@@ -79,7 +79,6 @@ enum LogStyle {
     static func label(_ log: DailyLogEntry) -> String? {
         switch log.focusMarker {
         case "FOCUS": return L("开始专注")
-        case "NOTE": return L("专注笔记")
         case "REVIEW": return L("阶段反馈")
         case "END": return L(log.focusMetMinimum == false ? "未达到最低专注时长" : "结束专注")
         case "DONE": return L("完成")

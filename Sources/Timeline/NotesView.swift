@@ -607,11 +607,10 @@ struct NotesView: View {
     private func noteRow(_ item: JournalStore.LoggedLog, showTask: Bool = false, showDate: Bool = false, tag: String? = nil,
                          hasPrevious: Bool = true, hasNext: Bool = true) -> some View {
         let log = item.log
+        let showsMetadata = showDate || NoteThread.kindLabel(log) != nil || (showTask && Self.sourceLabel(log) != nil) || !log.tags.isEmpty
         return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext, highlighted: flashNoteID == log.id,
-                             actionWidth: store.isReadOnly ? 24 : 96) {
-            // 时间、类型、来源排成一行淡淡的说明，不和正文抢。
-            Text((showDate ? item.date.relativeLabel + " " : "") + NoteThread.shortTime(log.createdAt))
-                .help(item.key + " " + Self.time(log.createdAt))
+                             actionWidth: store.isReadOnly ? 24 : 96, showsMetadata: showsMetadata) {
+            if showDate { Text(item.date.relativeLabel).help(item.key) }
             if let kind = NoteThread.kindLabel(log) {
                 Text(kind).foregroundStyle(LogEventStyle.color(log)).fontWeight(.medium)
             }

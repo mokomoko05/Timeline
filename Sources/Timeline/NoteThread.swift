@@ -2,10 +2,11 @@ import SwiftUI
 import TimelineCore
 
 /// 笔记和日记共用的「线」：左侧一根细线贯穿同一天的记录，每条记录是线上的一颗小珠子。
-/// 时间只作为一行很淡的说明放在正文上方，正文才是主角；操作按钮悬停时才出现。
+/// 时间放在节点左侧；操作按钮悬停时才出现。
 enum NoteThread {
-    static let gutter: CGFloat = 18
-    static let axisX: CGFloat = 6
+    static let timeWidth: CGFloat = 46
+    static let gutter: CGFloat = 70
+    static let axisX: CGFloat = 58
 
     /// 记录类型的中文名，比全大写的标记更安静。
     static func kindLabel(_ log: DailyLogEntry) -> String? {
@@ -45,6 +46,7 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
     /// 刚写下或刚跳到的那条：短暂铺一层强调色底。
     var highlighted = false
     var actionWidth: CGFloat = 96
+    var showsMetadata = true
     @ViewBuilder let meta: () -> Meta
     @ViewBuilder let content: () -> Content
     @ViewBuilder let actions: () -> Actions
@@ -57,26 +59,45 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Color.clear.frame(width: NoteThread.gutter)
-            VStack(alignment: .leading, spacing: 5) {
-                NoteThreadHeader(showsActions: hovered || holding, actionWidth: actionWidth, meta: meta) {
-                    actions().environment(\.holdHoverActions) { holding = $0 }
+            VStack(alignment: .leading, spacing: 3) {
+                if showsMetadata {
+                    NoteThreadHeader(showsActions: hovered || holding, actionWidth: actionWidth, meta: meta) {
+                        actions().environment(\.holdHoverActions) { holding = $0 }
+                    }
+                    .font(.system(size: typography.pt(11))).monospacedDigit()
+                    .foregroundStyle(Palette.muted)
+                    .frame(minHeight: typography.pt(16))
                 }
-                .font(.system(size: typography.pt(11))).monospacedDigit()
-                .foregroundStyle(Palette.muted)
-                .frame(minHeight: max(typography.pt(16), 22))
                 content()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.bottom, 12)
+            .padding(.bottom, 6)
         }
-        .padding(.horizontal, 8).padding(.top, 6)
+        .padding(.horizontal, 8).padding(.top, 4)
         .background {
             RoundedRectangle(cornerRadius: Metrics.radiusMedium, style: .continuous)
                 .fill(highlighted ? Palette.accent.opacity(0.12) : Palette.soft.opacity(hovered ? 0.35 : 0))
-                .padding(.bottom, 8)
+                .padding(.bottom, 2)
         }
-        .background { LogSelectionMark(id: log.id).padding(.bottom, 8) }
-        .overlay(alignment: .topLeading) { rail.padding(.leading, 8).padding(.top, 6) }
+        .background { LogSelectionMark(id: log.id).padding(.bottom, 2) }
+        .overlay(alignment: .topLeading) { rail.padding(.leading, 8).padding(.top, 4) }
+        .overlay(alignment: .topLeading) {
+            Text(NoteThread.shortTime(log.createdAt))
+                .font(.system(size: typography.pt(10))).monospacedDigit()
+                .foregroundStyle(Palette.muted)
+                .lineLimit(1).minimumScaleFactor(0.85)
+                .frame(width: NoteThread.timeWidth, height: typography.pt(16), alignment: .trailing)
+                .help(log.createdAt.formatted(.dateTime.year().month().day()) + " " + LogEventStyle.time(log.createdAt))
+                .padding(.leading, 8).padding(.top, 4)
+        }
+        .overlay(alignment: .topTrailing) {
+            if !showsMetadata, actionWidth > 0, hovered || holding {
+                actions().environment(\.holdHoverActions) { holding = $0 }
+                    .frame(width: actionWidth, height: 22)
+                    .background(Palette.background.opacity(0.96), in: RoundedRectangle(cornerRadius: 5))
+                    .padding(.trailing, 8).padding(.top, 2)
+            }
+        }
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
     }
@@ -84,8 +105,8 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
     private var rail: some View {
         GeometryReader { geometry in
             let x = NoteThread.axisX
-            let top = hasPrevious ? -6 : beadY
-            let bottom = hasNext ? geometry.size.height + 6 : beadY
+            let top = hasPrevious ? -4 : beadY
+            let bottom = hasNext ? geometry.size.height + 4 : beadY
             ZStack(alignment: .topLeading) {
                 Path { path in
                     path.move(to: CGPoint(x: x, y: top))
@@ -158,6 +179,7 @@ struct NoteDayKnot: View {
                         .overlay(Circle().strokeBorder(today ? Palette.background : Palette.muted.opacity(0.8), lineWidth: today ? 1.5 : 1.25))
                 }
                 .frame(width: NoteThread.gutter)
+                .offset(x: NoteThread.axisX - NoteThread.gutter / 2)
                 Text(date.relativeLabel)
                     .font(.system(size: typography.pt(13), weight: .semibold))
                     .foregroundStyle(today ? Palette.accent : Palette.ink)
@@ -169,7 +191,7 @@ struct NoteDayKnot: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.top, 18).padding(.bottom, 2)
+        .padding(.top, 12).padding(.bottom, 2)
         .help("跳到这一天的日志")
     }
 }
@@ -207,6 +229,7 @@ struct NoteThreadEmpty: View {
                     .frame(width: 1.5, height: 46)
             }
             .frame(width: NoteThread.gutter)
+            .offset(x: NoteThread.axisX - NoteThread.gutter / 2)
             Text(LocalizedStringKey(text)).font(.system(size: 12)).foregroundStyle(Palette.muted).padding(.top, -2)
             Spacer(minLength: 0)
         }
@@ -286,13 +309,13 @@ struct FocusRunSummary: View {
             .overlay(RoundedRectangle(cornerRadius: Metrics.radiusMedium, style: .continuous)
                 .strokeBorder(Palette.accent.opacity(0.18), lineWidth: Metrics.hairline))
         }
-        .padding(.horizontal, 8).padding(.bottom, 12)
+        .padding(.horizontal, 8).padding(.bottom, 8)
         .overlay(alignment: .leading) {
             if continues {
                 // 和 NoteThreadRow 的线同一个位置、同一种画法：上接结束那一条，下接下一条。
-                // 上面那条记录的线会往下伸出 6 点，这里让开，半透明的线不叠出深色的一截。
+                // 上面那条记录的线会往下伸出 4 点，这里让开，半透明的线不叠出深色的一截。
                 Rectangle().fill(Palette.line.opacity(0.7)).frame(width: 1)
-                    .padding(.top, 6)
+                    .padding(.top, 4)
                     .padding(.leading, 8 + NoteThread.axisX - 0.5)
                     .allowsHitTesting(false).accessibilityHidden(true)
             }

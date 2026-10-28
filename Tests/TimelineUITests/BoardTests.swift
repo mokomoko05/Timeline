@@ -7,6 +7,41 @@ import TimelineCore
 
 @MainActor
 final class BoardWindowTests: XCTestCase {
+    func testClickingTitlebarCloseButtonHidesBoardAndCanBeRepeated() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let board = try XCTUnwrap(store.ensureBoard(for: .tag("Close")))
+        let controller = BoardWindowController(defaults: InMemoryDefaults())
+        defer { controller.hide() }
+        for _ in 0..<2 {
+            controller.show(store: store, owner: board.owner)
+            let panel = try XCTUnwrap(controller.panel)
+            panel.contentView?.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(50))
+            let origin = panel.frame.origin
+            let start = NSPoint(x: panel.frame.midX, y: panel.frame.maxY - 7)
+            for (type, delta) in [(NSEvent.EventType.leftMouseDown, 0.0), (.leftMouseDragged, 20),
+                                  (.leftMouseDragged, 40), (.leftMouseDragged, 0), (.leftMouseUp, 0)] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(with: type,
+                    location: panel.convertPoint(fromScreen: NSPoint(x: start.x + delta, y: start.y)),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+                panel.sendEvent(event)
+                XCTAssertEqual(panel.frame.origin.x, origin.x + delta, accuracy: 0.1)
+            }
+            let point = NSPoint(x: panel.frame.width - 21, y: panel.frame.height - 18)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point,
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+                panel.sendEvent(event)
+            }
+            try await Task.sleep(for: .milliseconds(50))
+            XCTAssertFalse(panel.isVisible, "工作板的 SwiftUI X 按钮点击后必须收起窗口")
+        }
+    }
+
     func testNativeRepeatedEscapeDoesNotHideBoard() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let defaults = InMemoryDefaults()

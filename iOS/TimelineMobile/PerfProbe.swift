@@ -17,9 +17,31 @@ enum PerfProbe {
     private static var label = "launch"
     private static var marked = CACurrentMediaTime()
     private static var monitor: FrameMonitor?
+    private static var focusNoteID: UUID?
+    private static var focusNoteMarker: String?
+    private static var focusNoteIsGray = false
+    private static var focusNoteHasLabel = false
+    private static var focusNoteRenderedAt: CFTimeInterval?
+
+    static func renderedFocusNote(_ log: DailyLogEntry) {
+        guard enabled, log.id == focusNoteID else { return }
+        focusNoteMarker = log.focusMarker
+        focusNoteRenderedAt = CACurrentMediaTime()
+        focusNoteIsGray = LogStyle.color(log) == Palette.muted
+        focusNoteHasLabel = LogStyle.label(log) != nil
+        lap("focus note body \(log.focusMarker)")
+    }
+
+    private static func checkFocusNote(_ marker: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            let matches = focusNoteMarker == marker && focusNoteIsGray == (marker == "INFO") && !focusNoteHasLabel
+            print("[perf] FOCUS_RENDER \(matches ? "PASS" : "FAIL") expected=\(marker) rendered=\(focusNoteMarker ?? "missing") gray=\(focusNoteIsGray) label=\(focusNoteHasLabel)")
+        }
+    }
 
     static func start() {
         guard enabled, monitor == nil else { return }
+        setvbuf(stdout, nil, _IOLBF, 0)
         monitor = FrameMonitor()
     }
 
@@ -96,6 +118,10 @@ enum PerfProbe {
     private static var latencies: [Double] = []
 
     fileprivate static func frameDrawn(at time: CFTimeInterval) {
+        if let rendered = focusNoteRenderedAt {
+            focusNoteRenderedAt = nil
+            print("[perf] FOCUS_FRAME \(focusNoteMarker ?? "missing") mutationToFrameMS=\(Int((time - marked) * 1000)) bodyToFrameMS=\(Int((time - rendered) * 1000))")
+        }
         if let (name, start) = pendingAction {
             pendingAction = nil
             print("[perf] 「\(name)」到下一帧 \(Int((time - start) * 1000)) ms")
@@ -127,6 +153,33 @@ enum PerfProbe {
             ("新建待办", { send("addTask") }),
             ("关掉新建待办", { send("closeSheet") }),
             ("切到日记", { switchTab(.journal) }),
+            ("建立专注笔记", {
+                switchTab(.journal)
+                if store.focusTaskID == nil, let task = firstOpen() {
+                    store.setFocusTask(task.id)
+                    store.addFocusLog("▶ 开始专注", taskID: task.id, event: .start)
+                }
+                if let focusNoteID { store.deleteLog(focusNoteID, on: Date()) }
+                focusNoteID = try? store.quickLogEntry("Performance focus note", taskID: store.focusTaskID, on: Date(), focusEvent: .note).entry?.id
+                focusNoteMarker = nil
+                checkFocusNote("NOTE")
+            }),
+            ("取消笔记关联", {
+                guard let focusNoteID else { return }
+                store.setLogTask(nil, forLog: focusNoteID, on: Date())
+                checkFocusNote("INFO")
+            }),
+            ("定位专注笔记", {
+                guard let focusNoteID,
+                      let index = store.allLogs(includeFocus: true).filter({ JournalDates.calendar.isDateInToday($0.date) })
+                        .firstIndex(where: { $0.id == focusNoteID }) else { return }
+                NotificationCenter.default.post(name: revealLog, object: index)
+            }),
+            ("恢复笔记关联", {
+                guard let focusNoteID else { return }
+                store.setLogTask(store.focusTaskID, forLog: focusNoteID, on: Date())
+                checkFocusNote("NOTE")
+            }),
             ("记一笔", { send("compose") }),
             ("关掉记一笔", { send("closeSheet") }),
             ("滑动中跳转", { send("flingJump") }),
