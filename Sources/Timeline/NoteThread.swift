@@ -57,22 +57,21 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
     private var beadY: CGFloat { typography.pt(8) }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Color.clear.frame(width: NoteThread.gutter)
-            VStack(alignment: .leading, spacing: 3) {
-                if showsMetadata {
-                    NoteThreadHeader(showsActions: hovered || holding, actionWidth: actionWidth, meta: meta) {
-                        actions().environment(\.holdHoverActions) { holding = $0 }
-                    }
-                    .font(.system(size: typography.pt(11))).monospacedDigit()
-                    .foregroundStyle(Palette.muted)
-                    .frame(minHeight: typography.pt(16))
+        let _ = TextLayoutProbe.count("timelineRowBodies")
+        VStack(alignment: .leading, spacing: 3) {
+            if showsMetadata {
+                NoteThreadHeader(showsActions: hovered || holding, actionWidth: actionWidth, meta: meta) {
+                    actions().environment(\.holdHoverActions) { holding = $0 }
                 }
-                content()
+                .font(.system(size: typography.pt(11))).monospacedDigit()
+                .foregroundStyle(Palette.muted)
+                .frame(minHeight: typography.pt(16))
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.bottom, 6)
+            content()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, NoteThread.gutter + 10)
+        .padding(.bottom, 6)
         .padding(.horizontal, 8).padding(.top, 4)
         .background {
             RoundedRectangle(cornerRadius: Metrics.radiusMedium, style: .continuous)

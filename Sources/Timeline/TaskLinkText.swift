@@ -34,6 +34,9 @@ struct TaskLinkText: NSViewRepresentable {
     @State private var foldRevision = 0
 
     func makeNSView(context: Context) -> InteractiveTaskText {
+        TextLayoutProbe.count("makeTextViews")
+        let started = TextLayoutProbe.start()
+        defer { TextLayoutProbe.end("makeTextViews", since: started) }
         let view = InteractiveTaskText()
         // 有图层、只在内容变了才重画：拖动排序时行只是平移，由图层合成，不再每帧重新排版、绘制文字。
         view.wantsLayer = true
@@ -56,6 +59,9 @@ struct TaskLinkText: NSViewRepresentable {
     }
 
     func updateNSView(_ view: InteractiveTaskText, context: Context) {
+        TextLayoutProbe.count("updateTextViews")
+        let started = TextLayoutProbe.start()
+        defer { TextLayoutProbe.end("updateTextViews", since: started) }
         view.appearance = NSAppearance(named: context.environment.colorScheme == .dark ? .darkAqua : .aqua)
         view.onEdit = edit
         view.onOpen = open
@@ -100,8 +106,12 @@ struct TaskLinkText: NSViewRepresentable {
                 lineSpacing: typography.lineSpacing, folds: folds, maxLines: maxLines) : nil
             let entry: TextRenderCache.Entry
             if let key, let hit = TextRenderCache.shared.entry(for: key) {
+                TextLayoutProbe.count("renderCacheHits")
                 entry = hit
             } else {
+                TextLayoutProbe.count("renderCacheMisses")
+                let renderStarted = TextLayoutProbe.start()
+                defer { TextLayoutProbe.end("parseAndRender", since: renderStarted) }
                 if markdown, view.markdownDocument == nil { view.markdownDocument = MarkdownText.parse(source) }
                 if !markdown, view.inlineText == nil { view.inlineText = NSAttributedString(TaskText.rendered(source, alias: displayName)) }
                 let styled = markdown
@@ -110,7 +120,9 @@ struct TaskLinkText: NSViewRepresentable {
                 entry = TextRenderCache.Entry(styled)
                 if let key { TextRenderCache.shared.store(entry, for: key) }
             }
+            let storageStarted = TextLayoutProbe.start()
             view.textStorage?.setAttributedString(entry.styled)
+            TextLayoutProbe.end("setTextStorage", since: storageStarted)
             if !sourceChanged { view.selectedRanges = selection }
             view.rendered = entry
             view.measuredText = nil
@@ -121,6 +133,9 @@ struct TaskLinkText: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: InteractiveTaskText, context: Context) -> CGSize? {
+        TextLayoutProbe.proposal(proposal.width)
+        let started = TextLayoutProbe.start()
+        defer { TextLayoutProbe.end("sizeProposals", since: started) }
         let width = max(1, proposal.width ?? 240)
         // 用单独的排版栈测量，不碰视图自己的文本容器（SwiftUI 会用很多个宽度试探，缩放窗口时每帧都是新宽度；
         // 之前是改容器、排版、再还原重排，一次测量要排两遍中文）。同一个宽度的结果缓存起来。
@@ -206,6 +221,7 @@ final class TextMeasurer {
     private var cache: [Int: CGFloat] = [:]
 
     init() {
+        TextLayoutProbe.count("makeMeasurers")
         storage.addLayoutManager(manager)
         manager.addTextContainer(container)
         container.lineFragmentPadding = 0
@@ -226,6 +242,10 @@ final class TextMeasurer {
         let width = rawWidth.isFinite ? min(rawWidth, 100_000) : 100_000
         let key = Int((width * 2).rounded())
         if let hit = cache[key] { return hit }
+        TextLayoutProbe.count("textKitMeasurements")
+        if TextLayoutProbe.enabled { TextLayoutProbe.count("measureWidth:\(key)") }
+        let started = TextLayoutProbe.start()
+        defer { TextLayoutProbe.end("textKitMeasurements", since: started) }
         container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
         manager.ensureLayout(for: container)
         let height = ceil(manager.usedRect(for: container).height)
@@ -350,7 +370,11 @@ final class InteractiveTaskText: NSTextView {
 
     func measuredHeight(forWidth width: CGFloat, maxLines: Int) -> CGFloat {
         let key = Int((min(width, 100_000) * 2).rounded())
-        if let hit = rendered?.heights[key] { return hit }
+        if let hit = rendered?.heights[key] {
+            TextLayoutProbe.count("heightCacheHits")
+            return hit
+        }
+        TextLayoutProbe.count("heightCacheMisses")
         let measurement = measurer ?? TextMeasurer()
         measurer = measurement
         guard let rendered else { return measurement.height(forWidth: width) }
@@ -409,10 +433,15 @@ final class InteractiveTaskText: NSTextView {
 
     /// 文本容器宽度始终跟随视图实际宽度。
     override func setFrameSize(_ newSize: NSSize) {
+        TextLayoutProbe.count("setTextFrames")
         let width = max(1, newSize.width - textContainerInset.width * 2)
         if frame.size == newSize, let container = textContainer, abs(container.containerSize.width - width) <= 0.5 { return }
+        TextLayoutProbe.count("changedTextFrames")
+        let started = TextLayoutProbe.start()
+        defer { TextLayoutProbe.end("setTextFrames", since: started) }
         super.setFrameSize(newSize)
         if let container = textContainer, abs(container.containerSize.width - width) > 0.5 {
+            TextLayoutProbe.count("textWidthChanges")
             container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
             needsLayout = true
         }
@@ -422,6 +451,9 @@ final class InteractiveTaskText: NSTextView {
     private var mathStrips: [NSScrollView] = []
 
     override func layout() {
+        TextLayoutProbe.count("nativeTextLayouts")
+        let started = TextLayoutProbe.start()
+        defer { TextLayoutProbe.end("nativeTextLayouts", since: started) }
         super.layout()
         layoutMathStrips()
     }

@@ -6,8 +6,9 @@ import TimelineCore
 
 @MainActor
 final class NoteThreadLayoutTests: XCTestCase {
-    private func row(scale: Double, metadata: Bool, actionWidth: CGFloat = 72) -> NSHostingView<AnyView> {
-        let log = DailyLogEntry(createdAt: Date(), kind: .note, text: "A short journal note")
+    private func row(scale: Double, metadata: Bool, actionWidth: CGFloat = 72,
+                     width: CGFloat = 600, source: String = "A short journal note") -> NSHostingView<AnyView> {
+        let log = DailyLogEntry(createdAt: Date(), kind: .note, text: source)
         let root = NoteThreadRow(log: log, actionWidth: actionWidth, showsMetadata: metadata) {
             Text("Associated task")
         } content: {
@@ -17,10 +18,33 @@ final class NoteThreadLayoutTests: XCTestCase {
             Image(systemName: "trash").frame(width: 24, height: 22)
         }
         let host = NSHostingView(rootView: AnyView(root.environment(\.typography, AppTypography(scale: scale, lineSpacing: 0))
-            .frame(width: 600).fixedSize(horizontal: false, vertical: true)))
-        host.frame = NSRect(x: 0, y: 0, width: 600, height: 120)
+            .frame(width: width).fixedSize(horizontal: false, vertical: true)))
+        host.frame = NSRect(x: 0, y: 0, width: width, height: 120)
         host.layoutSubtreeIfNeeded()
         return host
+    }
+
+    func testLongMarkdownFitsInsideTheTimelineGutterAtNarrowAndWideWidths() throws {
+        func text(in view: NSView) -> InteractiveTaskText? {
+            (view as? InteractiveTaskText) ?? view.subviews.lazy.compactMap { text(in: $0) }.first
+        }
+        let source = Array(repeating: "长日记正文 **强调** 和 [链接](https://example.com)，缩窄窗口时需要完整换行。", count: 50).joined(separator: "\n\n")
+        for scale in [0.8, 1.1, 1.5] {
+            var previousHeight: CGFloat = .infinity
+            for width: CGFloat in [300, 600, 1000] {
+                let host = row(scale: scale, metadata: false, width: width, source: source)
+                let view = try XCTUnwrap(text(in: host))
+                let frame = view.convert(view.bounds, to: host)
+                XCTAssertEqual(frame.minX, 88, accuracy: 0.5)
+                XCTAssertEqual(frame.maxX, width - 8, accuracy: 0.5)
+                XCTAssertEqual(host.fittingSize.height, view.bounds.height + 10, accuracy: 0.5)
+                XCTAssertLessThanOrEqual(view.bounds.height, previousHeight)
+                XCTAssertGreaterThan(view.bounds.height, 100)
+                XCTAssertGreaterThanOrEqual(view.linkRegions().count, 50)
+                XCTAssertTrue(view.linkRegions().allSatisfy { $0.url.absoluteString == "https://example.com" })
+                previousHeight = view.bounds.height
+            }
+        }
     }
 
     func testPlainNotesRemoveTheEmptyMetadataLineAtEveryTextScale() {

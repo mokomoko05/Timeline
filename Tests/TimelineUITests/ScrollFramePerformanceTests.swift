@@ -158,6 +158,7 @@ final class ScrollFramePerformanceTests: XCTestCase {
         let statistics: ScrollFrameStatistics
         let displayClock: ScrollRefreshStatistics
         let samples: [ScrollFrameSample]
+        let textLayout: TextLayoutProbe.Snapshot?
     }
 
     func testFrameStatisticsCountMissedOpportunitiesAndSeparateWorkFromQueueDelay() {
@@ -216,12 +217,68 @@ final class ScrollFramePerformanceTests: XCTestCase {
         try await probe("journal-data-copy", store: store, workspace: workspace, nav: NotesNavigation(defaults: InMemoryDefaults()))
     }
 
+    func testDisplayPacedLongestRealDataPages() async throws {
+        guard ProcessInfo.processInfo.environment["TIMELINE_REAL_LONG_PROBE"] == "1",
+              let source = ProcessInfo.processInfo.environment["TIMELINE_SCROLL_PROBE_DATA"] else { throw XCTSkip("real long data probe only") }
+        _ = Headless.active
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for name in ["journal.json", "Images"] {
+            let item = URL(fileURLWithPath: source).appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: item.path) {
+                try FileManager.default.copyItem(at: item, to: directory.appendingPathComponent(name))
+            }
+        }
+        let store = JournalStore(directory: directory)
+        func characters(_ logs: [DailyLogEntry]) -> Int { logs.reduce(0) { $0 + $1.text.utf16.count } }
+        let days = store.days.sorted {
+            let first = characters($0.value.logs), second = characters($1.value.logs)
+            return first == second ? $0.key < $1.key : first > second
+        }
+        XCTAssertGreaterThan(days.first?.value.logs.map { $0.text.utf16.count }.max() ?? 0, 3000)
+        let selected = ProcessInfo.processInfo.environment["TIMELINE_REAL_LONG_PAGE"]
+        if selected == nil { try await probeControl() }
+        func includes(_ label: String) -> Bool { selected == nil || selected == label }
+        for (index, day) in days.prefix(2).enumerated() {
+            let label = index == 0 ? "real-journal-longest" : "real-journal-dense"
+            guard includes(label) else { continue }
+            let date = try XCTUnwrap(JournalDates.date(for: day.key))
+            print("REAL FIXTURE \(label) date=\(day.key) entries=\(day.value.logs.count) utf16=\(characters(day.value.logs)) images=\(day.value.logs.reduce(0) { $0 + $1.images.count })")
+            let workspace = NotesWorkspaceNavigation()
+            workspace.open(.journal, date: date)
+            try await probe(label, store: store, workspace: workspace, nav: NotesNavigation(defaults: InMemoryDefaults()))
+        }
+        let tags = store.allTags().map { ($0.name, store.notes(forTag: $0.name)) }
+        if includes("real-notes-tag"), let richest = tags.max(by: { characters($0.1.map(\.log)) < characters($1.1.map(\.log)) }) {
+            let logs = richest.1.map(\.log)
+            print("REAL FIXTURE real-notes-tag entries=\(logs.count) utf16=\(characters(logs)) images=\(logs.reduce(0) { $0 + $1.images.count })")
+            let nav = NotesNavigation(defaults: InMemoryDefaults())
+            nav.chapterView = false
+            nav.open(tag: richest.0)
+            try await probe("real-notes-tag", store: store, workspace: NotesWorkspaceNavigation(), nav: nav)
+        }
+        let tasks = store.noteTopics().map { ($0.id, store.notes(for: $0.id)) }
+        if includes("real-notes-task"), let dense = tasks.max(by: {
+            $0.1.count == $1.1.count
+                ? $0.1.reduce(0) { $0 + $1.log.images.count } < $1.1.reduce(0) { $0 + $1.log.images.count }
+                : $0.1.count < $1.1.count
+        }) {
+            let logs = dense.1.map(\.log)
+            print("REAL FIXTURE real-notes-task entries=\(logs.count) utf16=\(characters(logs)) images=\(logs.reduce(0) { $0 + $1.images.count })")
+            let nav = NotesNavigation(defaults: InMemoryDefaults())
+            nav.open(task: dense.0)
+            try await probe("real-notes-task", store: store, workspace: NotesWorkspaceNavigation(), nav: nav)
+        }
+    }
+
     private func scrollViews(in view: NSView) -> [NSScrollView] {
         guard !view.isHidden else { return [] }
         return ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrollViews)
     }
 
     private func probe(_ label: String, store: JournalStore, workspace: NotesWorkspaceNavigation, nav: NotesNavigation) async throws {
+        TextLayoutProbe.reset()
         let openingStarted = CACurrentMediaTime()
         let view = UnifiedNotesView(store: store, workspace: workspace, nav: nav, close: {}, reveal: { _ in }, openDay: { _ in })
             .environment(\.typography, AppTypography(scale: 1.1, lineSpacing: 0))
@@ -232,6 +289,7 @@ final class ScrollFramePerformanceTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         host.displayIfNeeded()
         print("FRAME OPEN \(label) synchronousMS=\((CACurrentMediaTime() - openingStarted) * 1000)")
+        TextLayoutProbe.report(label + "-open")
         try await Task.sleep(for: .seconds(1))
         let scroll = try XCTUnwrap(scrollViews(in: host).max {
             ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0)
@@ -284,6 +342,7 @@ final class ScrollFramePerformanceTests: XCTestCase {
     }
 
     private func measure(_ label: String, direction: Double, scroll: NSScrollView, host: NSView) async throws -> Report {
+        TextLayoutProbe.reset()
         let duration = 8.0
         let speed = 4500.0
         let done = expectation(description: label)
@@ -330,7 +389,8 @@ final class ScrollFramePerformanceTests: XCTestCase {
                      stats.p95QueueDelayMS, stats.workOverBudget, stats.scrollTotalMS, stats.layoutTotalMS, stats.drawTotalMS, stats.distance))
         print(String(format: "FRAME CLOCK %@: %d ticks, %d coalesced while main callback pending; source interval p95/max %.2f/%.2fms",
                      label, displayClock.ticks, displayClock.coalescedTicks, displayClock.p95IntervalMS, displayClock.maxIntervalMS))
-        return Report(label: label, statistics: stats, displayClock: displayClock, samples: samples)
+        TextLayoutProbe.report(label)
+        return Report(label: label, statistics: stats, displayClock: displayClock, samples: samples, textLayout: TextLayoutProbe.snapshot())
     }
 
     private func write(_ report: Report) throws {
