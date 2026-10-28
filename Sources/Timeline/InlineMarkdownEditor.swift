@@ -41,6 +41,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     private var painted = false
     private var settings: [String: Any] = [:]
     private var caret: CGPoint?
+    private var selectsWord = false
     private var clickMonitor: Any?
     /// 测试里换成内存里的剪贴板。
     var pasteboard: NSPasteboard = .general
@@ -155,8 +156,16 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     private func caretPoint(_ point: CGPoint) -> CGPoint { CGPoint(x: point.x + 2, y: point.y + shift) }
 
     private func placement(_ caret: CGPoint?) -> String {
-        caret.map { "window.boardEditor.placeCaret(\($0.x), \($0.y))" }
+        let place = caret.map { "window.boardEditor.placeCaret(\($0.x), \($0.y))" }
             ?? "window.boardEditor.focus(); window.boardEditor.select(window.boardEditor.snapshot().source.length)"
+        return place + (selectsWord ? "; window.boardEditor.selectWordAtCaret()" : "")
+    }
+
+    /// 双击快于预备完成时，配置后仍保留双击选词语义。
+    func selectClickedWord() {
+        guard target != nil, !preparing else { return }
+        selectsWord = true
+        if configured { webView?.evaluateJavaScript("window.boardEditor.selectWordAtCaret()") }
     }
 
     /// 提前排好版的这一条开始编辑：拿键盘焦点；`place` 是放光标的脚本（nil：按下的鼠标交给网页，由它放）。
@@ -208,6 +217,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         slot?.height = nil
         slot = nil
         caret = nil
+        selectsWord = false
         configured = false
         painted = false
         store = nil

@@ -779,7 +779,7 @@ final class InteractiveTaskText: NSTextView {
                 toggleHeading(heading)
                 return
             }
-            if event.clickCount == 2 || link(at: point) != nil || taskRegions().contains(where: { $0.rect.contains(point) }) {
+            if (event.clickCount == 2 && onEditAt == nil) || link(at: point) != nil || taskRegions().contains(where: { $0.rect.contains(point) }) {
                 activate(at: point, clickCount: event.clickCount)
                 return
             }
@@ -787,9 +787,15 @@ final class InteractiveTaskText: NSTextView {
             onClick?()
             // 就地编辑器若已经在这一条上面排好：这一下直接交给它，光标、拖选都由它处理，和在工作板里点一样。
             // 之后的拖动、松开还会送到这里（按下的是这个视图），一并转过去。
-            if event.clickCount == 1, onEditAt != nil, interactionEnabled, let editor = InlineMarkdownEditor.shared.takeOver(event) {
+            if onEditAt != nil, interactionEnabled, let editor = InlineMarkdownEditor.shared.takeOver(event) {
                 forwardedMouse = editor
                 editor.mouseDown(with: event)
+                return
+            }
+            // 快速双击时预备可能尚未完成；仍在点击处编辑，而不是走旧的末尾编辑入口。
+            if event.clickCount == 2, let onEditAt, interactionEnabled {
+                onEditAt(NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y))
+                InlineMarkdownEditor.shared.selectClickedWord()
                 return
             }
             super.mouseDown(with: event)

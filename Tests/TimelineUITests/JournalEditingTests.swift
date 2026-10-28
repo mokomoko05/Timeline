@@ -29,17 +29,35 @@ final class JournalEditingTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.orderFront(nil)
-        defer { InlineMarkdownEditor.shared.finish(); window.contentView = nil; window.close() }
+        let selection = LogKeyboardSelection.shared
+        selection.select(nil)
+        defer { InlineMarkdownEditor.shared.finish(); selection.select(nil); window.contentView = nil; window.close() }
         try await Task.sleep(for: .milliseconds(100))
         host.layoutSubtreeIfNeeded()
         let label = try XCTUnwrap(descendants(host, of: InteractiveTaskText.self).first { $0.source == "Journal edit original" })
-        let point = label.convert(NSPoint(x: label.bounds.midX, y: label.bounds.midY), to: nil)
+        let point = label.convert(NSPoint(x: label.textContainerOrigin.x + 18, y: label.textContainerOrigin.y + 8), to: nil)
         let hit = host.hitTest(host.superview?.convert(point, from: nil) ?? point)
         XCTAssertTrue(hit === label, "正文点击实际命中：\(String(describing: hit)); 正文边界：\(label.bounds); 窗口坐标：\(point)")
+        let firstClick = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        XCTAssertNil(selection.handleMouseDown(firstClick))
+        XCTAssertEqual(selection.selectedID, log.id)
+        XCTAssertFalse(InlineMarkdownEditor.shared.isEditing(log.id))
         let doubleClick = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
             windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 2, pressure: 1))
+        XCTAssertNotNil(selection.handleMouseDown(doubleClick))
         label.mouseDown(with: doubleClick)
         XCTAssertTrue(InlineMarkdownEditor.shared.isEditing(log.id), "双击正文就地编辑这一条")
+        let editor = InlineMarkdownEditor.shared
+        for _ in 0..<500 where editor.height == nil {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let result = try await editor.makeWebView().evaluateJavaScript("window.boardEditor.snapshot()")
+        let snapshot = try XCTUnwrap(result as? [String: Any])
+        let anchor = try XCTUnwrap(snapshot["anchor"] as? Int), head = try XCTUnwrap(snapshot["head"] as? Int)
+        XCTAssertEqual((log.text as NSString).substring(with: NSRange(location: min(anchor, head), length: abs(head - anchor))), "Journal",
+                       "A cold double click must select the clicked word in the editing document")
     }
 
     func testTitleEditingIgnoresBlurAndPlainReturnButAcceptsCommandReturn() async throws {

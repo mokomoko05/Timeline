@@ -1278,6 +1278,12 @@ window.boardEditor = {
     }, 1600);
   },
   focus() { view.focus(); },
+  selectWordAtCaret() {
+    if (currentReadOnly) return snapshot();
+    const word = view.state.wordAt(view.state.selection.main.head);
+    if (word) view.dispatch({selection: {anchor: word.from, head: word.to}});
+    return snapshot();
+  },
   // 就地编辑：点在渲染好的正文哪里，光标就放到对应的位置（坐标相对编辑器左上角）。
   placeCaret(x, y) {
     if (currentReadOnly) return snapshot();

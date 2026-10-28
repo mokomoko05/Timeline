@@ -33,15 +33,26 @@ final class NotesWindowTests: XCTestCase {
         let editor = try XCTUnwrap(views(host, type: ImagePasteTextView.self).first { !$0.isHiddenOrHasHiddenAncestor })
         let scroll = try XCTUnwrap(views(host, type: NSScrollView.self).filter { !$0.isHiddenOrHasHiddenAncestor }
             .max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) })
-        // 用滚轮事件往上滚（像用户那样），SwiftUI 才会把它当成当前位置记住。
-        let wheel = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 2000, wheel2: 0, wheel3: 0))
-        scroll.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: wheel)))
-        let bottom = scroll.contentView.bounds.origin
-        for _ in 0..<20 where scroll.contentView.bounds.origin == bottom {
-            try await Task.sleep(nanoseconds: 50_000_000)
+        // 首次 layout 才触发今天的 scrollTo(bottom)；先让这次初始定位落定，避免覆盖测试滚动。
+        var stable = 0
+        var previous = scroll.contentView.bounds
+        for _ in 0..<40 where stable < 3 {
+            try await Task.sleep(for: .milliseconds(50))
             host.layoutSubtreeIfNeeded()
+            let current = scroll.contentView.bounds
+            stable = current == previous ? stable + 1 : 0
+            previous = current
         }
+        XCTAssertEqual(stable, 3, "初始页面定位必须先完成")
+        // 这里验证保留视图的滚动状态，而非未绑定窗口的合成滚轮事件分发。
+        // 直接通过原生 clip view 滚动，并等待 SwiftUI 读到新的可见区域。
+        let bottom = scroll.contentView.bounds.origin
+        scroll.contentView.scroll(to: NSPoint(x: bottom.x, y: max(0, bottom.y - 2000)))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
         let position = scroll.contentView.bounds.origin
+        XCTAssertLessThan(position.y, bottom.y - 100, "测试必须确实滚离原位置")
         XCTAssertLessThan(position.y, (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.height - 100, "已经离开底部")
         for _ in 0..<3 {
             workspace.mode = .notes

@@ -20,11 +20,11 @@ final class LogRowInteractionTests: XCTestCase {
         ((root as? T).map { [$0] } ?? []) + root.subviews.flatMap { descendants($0, of: type) }
     }
 
-    private func event(_ type: NSEvent.EventType = .leftMouseDown, in view: NSView, at point: NSPoint) throws -> NSEvent {
+    private func event(_ type: NSEvent.EventType = .leftMouseDown, in view: NSView, at point: NSPoint, clickCount: Int = 1) throws -> NSEvent {
         let window = try XCTUnwrap(view.window)
         return try XCTUnwrap(NSEvent.mouseEvent(with: type, location: view.convert(point, to: nil), modifierFlags: [],
                                                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                                               context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+                                               context: nil, eventNumber: 0, clickCount: clickCount, pressure: type == .leftMouseDown ? 1 : 0))
     }
 
     private func makeHost(_ log: DailyLogEntry, width: CGFloat = 600, scale: Double = 1.1, actionWidth: CGFloat = 72,
@@ -56,6 +56,14 @@ final class LogRowInteractionTests: XCTestCase {
     }
 
     func testFirstClickSelectsAndPreparesWithoutScrollingOrEditingAndNextClickEdits() async throws {
+        try await preparedClick(clickCount: 1)
+    }
+
+    func testDoubleClickAfterSelectionHandsOriginalEventToPreparedEditor() async throws {
+        try await preparedClick(clickCount: 2)
+    }
+
+    private func preparedClick(clickCount: Int) async throws {
         let selection = LogKeyboardSelection.shared
         let editor = InlineMarkdownEditor.shared
         selection.select(nil)
@@ -67,9 +75,11 @@ final class LogRowInteractionTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = JournalStore(directory: directory), date = Date()
         let log = try XCTUnwrap(store.quickLogEntry("First select, then edit this note.", linkDefault: false, on: date).entry)
+        var editCalls = 0
         let host = makeHost(log, prepare: {
             editor.begin(log, on: date, store: store, at: nil, fontSize: 14.3, lineSpacing: 0, dark: false, prepare: true)
         }) { point in
+            editCalls += 1
             editor.begin(log, on: date, store: store, at: point, fontSize: 14.3, lineSpacing: 0, dark: false)
         }
         let window = makeWindow(host)
@@ -118,18 +128,42 @@ final class LogRowInteractionTests: XCTestCase {
         }
         XCTAssertNotNil(editor.height)
 
-        let second = try event(in: text, at: point)
+        let second = try event(in: text, at: point, clickCount: clickCount)
         XCTAssertNotNil(selection.handleMouseDown(second))
         NSApp.postEvent(try event(.leftMouseUp, in: text, at: point), atStart: true)
         let editStarted = ProcessInfo.processInfo.systemUptime
         text.mouseDown(with: second)
         XCTAssertTrue(editor.isEditing(log.id))
+        XCTAssertEqual(editCalls, 0, "The original click, including its click count, must go to the prepared WebKit editor")
         for _ in 0..<500 where editor.height == nil {
             host.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertNotNil(editor.height)
         print(String(format: "LOG EDIT second-click-to-ready %.2fms", (ProcessInfo.processInfo.systemUptime - editStarted) * 1000))
+    }
+
+    func testFastDoubleClickBeforePreparationEditsAtClickedPosition() throws {
+        let selection = LogKeyboardSelection.shared
+        let editor = InlineMarkdownEditor.shared
+        editor.finish()
+        selection.select(nil)
+        let log = DailyLogEntry(createdAt: Date(), kind: .note, text: "First select, then double click here.")
+        var edits: [CGPoint?] = []
+        let host = makeHost(log) { edits.append($0) }
+        let window = makeWindow(host)
+        defer { selection.select(nil); window.contentView = nil; window.close() }
+        let text = try XCTUnwrap(descendants(host, of: InteractiveTaskText.self).first)
+        let point = NSPoint(x: 30, y: 8)
+        XCTAssertNil(selection.handleMouseDown(try event(in: text, at: point)))
+        XCTAssertEqual(selection.selectedID, log.id)
+        XCTAssertTrue(edits.isEmpty)
+        XCTAssertNil(editor.target)
+        let second = try event(in: text, at: point, clickCount: 2)
+        XCTAssertNotNil(selection.handleMouseDown(second))
+        text.mouseDown(with: second)
+        XCTAssertEqual(edits.count, 1)
+        XCTAssertEqual(try XCTUnwrap(edits.first.flatMap { $0 }), NSPoint(x: point.x - text.textContainerOrigin.x, y: point.y - text.textContainerOrigin.y))
     }
 
     func testSelectedActionsLeaveHeadingAndItsHitAreaUnobstructedAtEveryScale() throws {

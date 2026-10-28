@@ -44,7 +44,9 @@ final class LogKeyboardSelection: ObservableObject {
         }
         mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             guard let self else { return event }
-            return MainActor.assumeIsolated { self.handleMouseDown(event) }
+            // 只把 Bool 带出隔离闭包，NSEvent 不符合 Sendable。
+            let consumed = MainActor.assumeIsolated { self.handleMouseDown(event) == nil }
+            return consumed ? nil : event
         }
     }
 

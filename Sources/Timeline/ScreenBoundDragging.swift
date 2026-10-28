@@ -26,8 +26,9 @@ final class ScreenBoundDragging {
             ?? (defaults.bool(forKey: "AppleMiniaturizeOnDoubleClick") ? "minimize" : "zoom")
         switch action {
         case "minimize": if window.styleMask.contains(.miniaturizable) { window.performMiniaturize(nil) }
-        case "zoom", "maximize": if window.styleMask.contains(.resizable) { window.performZoom(nil) }
-        default: break
+        case "none": break
+        // 新系统的 Fill / 未识别值沿用默认缩放，避免静默吞掉双击。
+        default: if window.styleMask.contains(.resizable) { window.performZoom(nil) }
         }
     }
 
@@ -111,6 +112,10 @@ class ScreenBoundWindow: NSWindow {
 
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
         guard !styleMask.contains(.fullScreen) else { return frameRect }
+        if inLiveResize {
+            return WindowScreenBounds.constrainResize(frameRect, current: frame, minimum: minSize, to: screenVisibleFrames,
+                                                     fallback: screen?.visibleFrame ?? NSScreen.main?.visibleFrame)
+        }
         return WindowScreenBounds.constrain(frameRect, to: screenVisibleFrames, fallback: screen?.visibleFrame ?? NSScreen.main?.visibleFrame)
     }
 
@@ -158,6 +163,10 @@ class QuietPanel: NSPanel {
 
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
         guard !styleMask.contains(.fullScreen) else { return frameRect }
+        if inLiveResize {
+            return WindowScreenBounds.constrainResize(frameRect, current: frame, minimum: minSize, to: screenVisibleFrames,
+                                                     fallback: screen?.visibleFrame ?? NSScreen.main?.visibleFrame)
+        }
         return WindowScreenBounds.constrain(frameRect, to: screenVisibleFrames, fallback: screen?.visibleFrame ?? NSScreen.main?.visibleFrame)
     }
 
