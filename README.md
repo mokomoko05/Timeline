@@ -1,5 +1,34 @@
 # Timeline
 
+## 手写的介绍
+
+这个软件想具体地记录每天我某个时间点做了什么，想了什么，以一些细碎的感想和阅读笔记标记大四这段非常浑浑噩噩的时光。我想让未来的我回看过去一段精确到分钟的记录时，能知道一天有限的时间里，我看了什么、新知道了什么、构建了什么，这也许给我一种“我不算是一事无成”的错觉。
+
+而 Obsidian 的移动端很难用。各种笔记软件显示的具体时间戳都不够直观，我感觉它们没有时间的味道。我又很想自己尝试开发一个软件，看看现在的agent能做到什么程度。它们很强，这个就是它们的作品，我只是在许愿。
+
+我消费了很多时间和token，用AI来vibe coding这个app的界面、功能，交互的各种细节。开发过程中，我随意使用一段时间就能发现一些bug和我觉得应该实现，但AI没有实现的地方。现在我没什么想改的了（20261028限定）。
+
+还是介绍一下主要的界面。有以下这些，
+Ctrl + Option + (D/N/F/L/M) 可以唤起它们：
+- **[D for Dashboard]** 设置和安排任务的日历和主界面，
+- **[N for Notes]** 以标签和标签下的任务组织成的笔记，日记，
+- **[F for Focus]** 专注计时工作台（让我在阅读时感受到时间的流动），
+- **[L for Log]** 快速日志/任务输入界面（方便随时按出来写点东西），
+- **[M for Memo]** 一个附在所有标签/任务下的board，用来记录一些很快会被删掉的内容，或者随时需要复制粘贴的内容，
+- **Ctrl + Tab** 是一个模仿ghostty功能的可以随时唤起的终端。
+
+我把大写锁定键(标着中/英的那个键) 改成 Ctrl (macOS设置里就可以改)。
+
+另外一个细节是除了 Focus Panel 是按 Enter 来提交内容，大部分的输入框都是按 **Command + Enter** 来提交内容，因为我的 Wechat 是这么设置的，这样我可以在 Wechat 里按 Enter 而不是 Option + Enter 来换行。
+
+存储文本内容的似乎是一个 journal.json 文件，iOS 和 macOS 端使用免费用户的 5GB iCloud Drive 进行缓慢的同步。如果图片太多，过个几年会爆存储空间，那时候就升级一下 iCloud 就行。那时候我应该都工作了。
+
+从 20261007 到 20261028 ，我暂时没有什么想改的东西了，额度用完是一方面，我也没遇到什么非要改的细节了。所以打算写这么一段当个收尾。这段时间里还没有第二个人用过这个软件，在别人手上，它一定会有很多需要改进的内容。
+
+后面就是AI生成的内容。
+
+## AI generated README
+
 A native macOS + iPhone app for tasks, focus sessions, notes and a daily journal. The Mac app lives in the background and opens panels from global hotkeys or the menu bar. No account and no server: data is a JSON file on disk, and devices sync through a folder in iCloud Drive.
 
 <img src="docs/screenshots/main.png" width="720" alt="Main window: task timeline and month calendar">
