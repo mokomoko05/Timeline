@@ -35,7 +35,7 @@ struct EntryRail: View {
     let marks: [RailMark]
     var spans: [ClosedRange<CGFloat>] = []
     var ticks: [RailTick] = []
-    @ObservedObject var tracker: ScrollTracker
+    let tracker: ScrollTracker
     let select: (UUID) -> Void
     /// 拖完 / 点完停下的那一条（短暂高亮）。
     var settle: (UUID) -> Void = { _ in }

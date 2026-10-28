@@ -127,7 +127,7 @@ struct TaskLinkText: NSViewRepresentable {
             view.rendered = entry
             view.measuredText = nil
             view.invalidateIntrinsicContentSize()
-            view.needsDisplay = true
+            view.invalidateRenderedText()
             view.window?.invalidateCursorRects(for: view)
         }
     }
@@ -367,6 +367,16 @@ final class InteractiveTaskText: NSTextView {
     var rendered: TextRenderCache.Entry?
     /// 测量用的排版栈里现在放的是哪一份：换了正文才重新放进去，量过的宽度直接查缓存。
     var measuredText: TextRenderCache.Entry?
+
+    /// 新正文尚未获得实际宽度时，不为一次重绘请求先按 1 pt 排完整篇。
+    /// 真正放置 / 绘制时仍使用默认 TextKit 排版与失效规则。
+    func invalidateRenderedText() {
+        guard let container = textContainer, container.containerSize.width <= 1 else {
+            needsDisplay = true
+            return
+        }
+        setNeedsDisplay(bounds, avoidAdditionalLayout: true)
+    }
 
     func measuredHeight(forWidth width: CGFloat, maxLines: Int) -> CGFloat {
         let key = Int((min(width, 100_000) * 2).rounded())

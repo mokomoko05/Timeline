@@ -31,8 +31,12 @@ enum LogTaskLabel {
 }
 
 struct DailyLogView: View {
-    /// 一天的日志总字数超过这么多才懒加载：一次排完所有行打开会慢，但懒加载时没画出来的行只能估高度，滚动会跳。
-    static let lazyCharacterBudget = 16_000
+    /// 常见长日记一次排好，避免估算高度导致跳动；仍限制条目数和正文总量。
+    static let lazyCharacterBudget = 32_000
+
+    static func usesLazyLayout(_ logs: [DailyLogEntry]) -> Bool {
+        logs.count > 120 || logs.reduce(0) { $0 + $1.text.utf16.count } > lazyCharacterBudget
+    }
     @Environment(\.typography) private var typography
     @ObservedObject var store: JournalStore
     let date: Date
@@ -394,7 +398,7 @@ struct DailyLogView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     // 一天的日志一般不多：用普通 VStack，每行高度都是真实的，滚动时滚动条和位置不会因为估算行高而跳。
-                    NotesStack(lazy: entry.logs.reduce(0) { $0 + $1.text.utf16.count } > Self.lazyCharacterBudget, spacing: 0) {
+                    NotesStack(lazy: Self.usesLazyLayout(entry.logs), spacing: 0) {
                         let logs = entry.logsInTimeOrder
                         ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
                             DailyLogRow(store: store, date: date, log: log, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id], highlighted: editingLogID == log.id, next: { focused = true },

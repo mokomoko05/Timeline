@@ -159,6 +159,15 @@ final class ScrollFramePerformanceTests: XCTestCase {
         let displayClock: ScrollRefreshStatistics
         let samples: [ScrollFrameSample]
         let textLayout: TextLayoutProbe.Snapshot?
+        let mainThreadCPUMS: Double
+        let processCPUMS: Double
+    }
+
+    private func processCPUTimeMS() -> Double {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return 0 }
+        return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1000
+            + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1000
     }
 
     func testFrameStatisticsCountMissedOpportunitiesAndSeparateWorkFromQueueDelay() {
@@ -353,6 +362,8 @@ final class ScrollFramePerformanceTests: XCTestCase {
         var stationary = 0
         print("FRAME BEGIN \(label) pid=\(ProcessInfo.processInfo.processIdentifier)")
         fflush(stdout)
+        let threadCPUStarted = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+        let processCPUStarted = processCPUTimeMS()
         try clock.start { issued in
             let start = CACurrentMediaTime()
             if first == nil { first = start }
@@ -381,6 +392,8 @@ final class ScrollFramePerformanceTests: XCTestCase {
         defer { clock.stop() }
         await fulfillment(of: [done], timeout: duration + 10)
         clock.stop()
+        let mainThreadCPUMS = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - threadCPUStarted) / 1_000_000
+        let processCPUMS = processCPUTimeMS() - processCPUStarted
         let stats = ScrollFrameStatistics(samples: samples, refreshMS: clock.refreshMS)
         let displayClock = clock.statistics()
         print(String(format: "FRAME %@: %.2fms refresh; %d moving/%d callbacks; missed opportunities %d; >50ms gaps %d; work median/p95/max %.2f/%.2f/%.2fms; interval p95/max %.2f/%.2fms; queue p95 %.2fms; over budget %d; scroll/layout/draw total %.1f/%.1f/%.1fms; distance %.0fpt",
@@ -390,7 +403,9 @@ final class ScrollFramePerformanceTests: XCTestCase {
         print(String(format: "FRAME CLOCK %@: %d ticks, %d coalesced while main callback pending; source interval p95/max %.2f/%.2fms",
                      label, displayClock.ticks, displayClock.coalescedTicks, displayClock.p95IntervalMS, displayClock.maxIntervalMS))
         TextLayoutProbe.report(label)
-        return Report(label: label, statistics: stats, displayClock: displayClock, samples: samples, textLayout: TextLayoutProbe.snapshot())
+        print(String(format: "FRAME CPU %@: main %.1fms; process %.1fms (includes work outside scroll callbacks)", label, mainThreadCPUMS, processCPUMS))
+        return Report(label: label, statistics: stats, displayClock: displayClock, samples: samples, textLayout: TextLayoutProbe.snapshot(),
+                      mainThreadCPUMS: mainThreadCPUMS, processCPUMS: processCPUMS)
     }
 
     private func write(_ report: Report) throws {

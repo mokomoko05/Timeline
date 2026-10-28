@@ -447,7 +447,7 @@ struct UnifiedJournalView: View {
                 let logs = all.filter { !hidden.contains($0.id) }
                 ScrollView {
                     // 一天的日志不多时整列排好，滚动条按真实高度算（长日志也不会让它跳）。
-                    NotesStack(lazy: entry.logs.count > NotesView.lazyThreshold, spacing: 0) {
+                    NotesStack(lazy: DailyLogView.usesLazyLayout(entry.logs), spacing: 0) {
                         Color.clear.frame(height: 1).id("journal-top")
                         if entry.logsInTimeOrder.isEmpty {
                             VStack(spacing: 8) {

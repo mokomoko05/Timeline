@@ -375,7 +375,7 @@ struct NotesView: View {
                     let months = NotesTimelineIndex.months(notes)
                     HStack(spacing: 0) {
                         ScrollView {
-                            NotesStack(lazy: notes.count > Self.lazyThreshold) {
+                            NotesStack(lazy: Self.usesLazyLayout(notes)) {
                                 Color.clear.frame(height: 1).id("top")
                                 BoardNotesSection(store: store, owner: .task(id)).id("board-start")
                                 if notes.isEmpty { NoteThreadEmpty(text: topic.deleted ? "这个任务没有留下笔记" : "还没有笔记 · 在下方写下第一条") }
@@ -553,9 +553,13 @@ struct NotesView: View {
             .help(LocalizedStringKey(title)).accessibilityLabel(LocalizedStringKey(title))
     }
 
-    /// 一页里展开显示的笔记不多时整页一次排好：滚动条的长短和位置按真实高度算，不会边滚边变。
-    /// 更长的才按需加载：每条笔记常驻约 1 MB（文字图层和视图），一次排好几百条会占用数百 MB。
-    static let lazyThreshold = 40
+    /// 有限数量的笔记一次排好，滚动时不重新创建条目；大量条目或长正文仍按需加载。
+    static let lazyThreshold = 80
+
+    private static func usesLazyLayout(_ notes: [JournalStore.LoggedLog], visibleCount: Int? = nil) -> Bool {
+        (visibleCount ?? notes.count) > lazyThreshold
+            || notes.reduce(0) { $0 + $1.log.text.utf16.count } > DailyLogView.lazyCharacterBudget
+    }
 
     private func visibleNoteCount(chapters: [NotebookChapter], notes: [JournalStore.LoggedLog], tag: String) -> Int {
         guard chapterView else { return notes.count }
@@ -740,7 +744,7 @@ struct NotesView: View {
                 let months = NotesTimelineIndex.months(notes)
                 HStack(spacing: 0) {
                     ScrollView {
-                        NotesStack(lazy: visibleNoteCount(chapters: chapters, notes: notes, tag: tag) > Self.lazyThreshold) {
+                        NotesStack(lazy: Self.usesLazyLayout(notes, visibleCount: visibleNoteCount(chapters: chapters, notes: notes, tag: tag))) {
                             Color.clear.frame(height: 1).id("board-start")
                             BoardNotesSection(store: store, owner: .tag(tag))
                             if notes.isEmpty && tasks.isEmpty {

@@ -7,6 +7,58 @@ import TimelineCore
 
 @MainActor
 final class JournalScrollRegressionTests: XCTestCase {
+    func testDatedNotebookRowsRevealNotesAcrossLazyDayBoundaries() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let base = JournalDates.calendar.startOfDay(for: Date())
+        let task = try XCTUnwrap(store.addParsedTodo("Notebook navigation", on: base))
+        var ids: [UUID] = []
+        for index in 0..<90 {
+            let day = try XCTUnwrap(JournalDates.calendar.date(byAdding: .day, value: index / 6, to: base))
+            let entry = try store.quickLogEntry("Note \(index)\n" + String(repeating: "A paragraph of text.\n", count: 4),
+                                               taskID: task.id, tags: ["Navigation"], on: day,
+                                               now: day.addingTimeInterval(Double(index % 6) * 60))
+            ids.append(try XCTUnwrap(entry.entry).id)
+        }
+        let nav = NotesNavigation(defaults: InMemoryDefaults())
+        nav.chapterView = false
+        nav.open(task: task.id)
+        let host = NSHostingView(rootView: UnifiedNotesView(store: store, workspace: NotesWorkspaceNavigation(), nav: nav,
+                                                          close: {}, reveal: { _ in }, openDay: { _ in }))
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 680),
+                                 styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.contentView = nil; window.close() }
+        func markers(in view: NSView) -> [RowMarkerView] {
+            guard !view.isHidden else { return [] }
+            return ((view as? RowMarkerView).map { [$0] } ?? []) + view.subviews.flatMap { markers(in: $0) }
+        }
+        func isVisible(_ id: UUID) -> Bool {
+            markers(in: host).contains { marker in
+                guard marker.id == id, let scroll = marker.enclosingScrollView, let document = scroll.documentView else { return false }
+                return marker.convert(marker.bounds, to: document).intersects(scroll.contentView.bounds)
+            }
+        }
+        for showsTag in [false, true] {
+            if showsTag { nav.open(tag: "Navigation") }
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+            for target in [ids[0], ids[46], ids[89], ids[6]] {
+                nav.revealNote = target
+                for _ in 0..<80 {
+                    host.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(10))
+                    if nav.revealNote == nil && isVisible(target) { break }
+                }
+                XCTAssertNil(nav.revealNote)
+                XCTAssertTrue(isVisible(target), "Revealing a note must preserve its UUID scroll target across day groups")
+            }
+        }
+    }
+
     func testJournalNavigationAndRevealRemainLiveAcrossRetainedHosts() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

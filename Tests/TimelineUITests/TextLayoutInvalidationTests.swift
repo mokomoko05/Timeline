@@ -4,6 +4,38 @@ import XCTest
 
 @MainActor
 final class TextLayoutInvalidationTests: XCTestCase {
+    func testInvalidatingUnplacedLongTextDoesNotLayOutEveryCharacterAtOnePointWidth() throws {
+        let view = InteractiveTaskText()
+        view.isEditable = false
+        view.textContainerInset = NSSize(width: 2, height: 0)
+        let container = try XCTUnwrap(view.textContainer)
+        container.widthTracksTextView = false
+        container.lineFragmentPadding = 0
+        let manager = try XCTUnwrap(view.layoutManager)
+        let source = String(repeating: "中文长日记和 English words，需要完整换行。", count: 400)
+            + " [最后一个链接](https://example.com)"
+        view.textStorage?.setAttributedString(TaskLinkText.styledText(source, completed: false, color: .labelColor, fontSize: 13))
+        XCTAssertEqual(container.containerSize.width, 1)
+        view.invalidateRenderedText()
+        XCTAssertEqual(manager.firstUnlaidCharacterIndex(), 0)
+        XCTAssertFalse(manager.allowsNonContiguousLayout)
+        view.setFrameSize(NSSize(width: 600, height: 20_000))
+        manager.ensureLayout(for: container)
+        XCTAssertEqual(manager.firstUnlaidCharacterIndex(), view.string.utf16.count)
+        XCTAssertGreaterThan(manager.usedRect(for: container).height, 100)
+        XCTAssertLessThan(manager.usedRect(for: container).height, 10_000)
+        XCTAssertEqual(view.linkRegions().last?.url.absoluteString, "https://example.com")
+    }
+
+    func testPlacedTextRetainsTheNormalInvalidationBehavior() throws {
+        let view = try textView()
+        view.needsDisplay = false
+        view.invalidateRenderedText()
+        let manager = try XCTUnwrap(view.layoutManager)
+        XCTAssertEqual(manager.firstUnlaidCharacterIndex(), view.string.utf16.count)
+        XCTAssertFalse(manager.allowsNonContiguousLayout)
+    }
+
     private func textView() throws -> InteractiveTaskText {
         let view = InteractiveTaskText(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
         view.isEditable = false
