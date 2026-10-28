@@ -21,10 +21,15 @@ final class BoardWindowTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(50))
             let origin = panel.frame.origin
             let start = NSPoint(x: panel.frame.midX, y: panel.frame.maxY - 7)
+            var pointer = start
+            let draggablePanel = try XCTUnwrap(panel as? QuietPanel)
+            draggablePanel.dragging = ScreenBoundDragging(mouseLocation: { pointer })
+            defer { draggablePanel.dragging = ScreenBoundDragging() }
             for (type, delta) in [(NSEvent.EventType.leftMouseDown, 0.0), (.leftMouseDragged, 20),
                                   (.leftMouseDragged, 40), (.leftMouseDragged, 0), (.leftMouseUp, 0)] {
+                pointer = NSPoint(x: start.x + delta, y: start.y)
                 let event = try XCTUnwrap(NSEvent.mouseEvent(with: type,
-                    location: panel.convertPoint(fromScreen: NSPoint(x: start.x + delta, y: start.y)),
+                    location: panel.convertPoint(fromScreen: pointer),
                     modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                     windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
                 panel.sendEvent(event)

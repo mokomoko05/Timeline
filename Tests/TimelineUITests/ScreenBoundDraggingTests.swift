@@ -11,6 +11,11 @@ final class ScreenBoundDraggingTests: XCTestCase {
                                         context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
     }
 
+    /// 同步合成的事件只在这一刻换算；排队与真实指针采样另有回归。
+    private func syntheticDragging(in window: NSWindow) -> ScreenBoundDragging {
+        ScreenBoundDragging(eventScreenLocation: { window.convertPoint(toScreen: $0.locationInWindow) })
+    }
+
     func testWindowsAndPanelsStayInsideAllScreenEdgesWhileDragging() throws {
         _ = Headless.active
         let area = try XCTUnwrap(NSScreen.main?.visibleFrame)
@@ -28,6 +33,9 @@ final class ScreenBoundDraggingTests: XCTestCase {
             (window as? MainWindow)?.keepsCentered = false
             window.isMovable = true
             window.contentView = DraggableBackground(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+            let dragging = syntheticDragging(in: window)
+            if let window = window as? ScreenBoundWindow { window.dragging = dragging }
+            if let panel = window as? QuietPanel { panel.dragging = dragging }
             for target in [NSPoint(x: area.minX - 500, y: area.midY), NSPoint(x: area.maxX + 500, y: area.midY),
                            NSPoint(x: area.midX, y: area.minY - 500), NSPoint(x: area.midX, y: area.maxY + 500)] {
                 window.setFrameOrigin(NSPoint(x: area.midX - 120, y: area.midY - 80))
@@ -48,7 +56,7 @@ final class ScreenBoundDraggingTests: XCTestCase {
                                  styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        let dragging = ScreenBoundDragging()
+        let dragging = syntheticDragging(in: window)
         let resizePoint = NSPoint(x: window.frame.maxX - 1, y: window.frame.midY)
         XCTAssertNotNil(dragging.filter(try mouse(.leftMouseDown, at: resizePoint, in: window), in: window))
         let start = NSPoint(x: window.frame.midX, y: window.frame.maxY - 10)
@@ -71,7 +79,7 @@ final class ScreenBoundDraggingTests: XCTestCase {
         window.isReleasedWhenClosed = false
         defer { window.close() }
         window.contentView = NSTextView(frame: NSRect(x: 0, y: 0, width: 240, height: 160))
-        let dragging = ScreenBoundDragging(), before = window.frame
+        let dragging = syntheticDragging(in: window), before = window.frame
         _ = dragging.filter(try mouse(.leftMouseDown, at: NSPoint(x: 240, y: 240), in: window), in: window)
         XCTAssertNotNil(dragging.filter(try mouse(.leftMouseDragged, at: NSPoint(x: 100, y: 100), in: window), in: window))
         XCTAssertEqual(window.frame, before)
@@ -95,7 +103,7 @@ final class ScreenBoundDraggingTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         let point = NSPoint(x: window.frame.maxX - 21, y: window.frame.maxY - 18)
         let event = try mouse(.leftMouseDown, at: point, in: window)
-        let dragging = ScreenBoundDragging()
+        let dragging = syntheticDragging(in: window)
         XCTAssertNotNil(dragging.filter(event, in: window), "SwiftUI 标题栏按钮必须收到原始按下事件")
         XCTAssertNotNil(dragging.filter(try mouse(.leftMouseUp, at: point, in: window), in: window))
     }
@@ -121,6 +129,66 @@ final class ScreenBoundDraggingTests: XCTestCase {
                        "已经排队的事件不能按移动后的窗口原点再次换算")
     }
 
+    func testQueuedAppKitDragLocationsFollowLivePointerWithoutAddingWindowMovement() throws {
+        _ = Headless.active
+        let window = QuietPanel(contentRect: NSRect(x: 200, y: 200, width: 410, height: 560),
+                                styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let start = NSPoint(x: window.frame.midX, y: window.frame.maxY - 10)
+        let down = try mouse(.leftMouseDown, at: start, in: window)
+        let targets = [20.0, 40, 60, 80].map { NSPoint(x: start.x + $0, y: start.y) }
+        let events = try targets.map { try mouse(.leftMouseDragged, at: $0, in: window) }
+        var pointer = start
+        let dragging = ScreenBoundDragging(mouseLocation: { pointer })
+        let origin = window.frame.origin
+        _ = dragging.filter(down, in: window)
+        for (event, target) in zip(events, targets) {
+            pointer = target
+            _ = dragging.filter(event, in: window)
+            XCTAssertEqual(window.frame.origin.x, origin.x + target.x - start.x, accuracy: 0.1)
+        }
+    }
+
+    func testHoldingAgainstEveryEdgeStaysStillAndOldEventsCannotPullItBack() throws {
+        _ = Headless.active
+        let area = try XCTUnwrap(NSScreen.main?.visibleFrame)
+        for style: NSWindow.StyleMask in [.borderless, [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel]] {
+            let window = DragRecordingPanel(contentRect: NSRect(x: area.midX - 180, y: area.midY - 140, width: 360, height: 280),
+                                            styleMask: style, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = DraggableBackground(frame: NSRect(origin: .zero, size: window.frame.size))
+            defer { window.close() }
+            let initial = window.frame
+            for target in [NSPoint(x: area.minX, y: area.midY), NSPoint(x: area.maxX - 1, y: area.midY),
+                           NSPoint(x: area.midX, y: area.minY), NSPoint(x: area.midX, y: area.maxY - 1)] {
+                window.setFrameOrigin(initial.origin)
+                let start = NSPoint(x: initial.midX, y: initial.maxY - 10)
+                var pointer = start
+                let dragging = ScreenBoundDragging(mouseLocation: { pointer })
+                let down = try mouse(.leftMouseDown, at: start, in: window)
+                // 提前排队：事件仍带着旧窗口坐标，处理时指针已经到达屏幕边缘。
+                let stale = try mouse(.leftMouseDragged, at: NSPoint(x: start.x + 5, y: start.y), in: window)
+                _ = dragging.filter(down, in: window)
+                pointer = target
+                _ = dragging.filter(stale, in: window)
+                let edgeFrame = window.frame
+                XCTAssertTrue(area.contains(edgeFrame))
+                XCTAssertNotEqual(edgeFrame.origin, initial.origin)
+                window.moves = 0
+                for _ in 0..<100 {
+                    _ = dragging.filter(stale, in: window)
+                    XCTAssertEqual(window.frame, edgeFrame, "顶住边缘时，过时事件不能把窗口拉回去")
+                }
+                XCTAssertEqual(window.moves, 0, "目标没有变化时不重复提交窗口移动")
+                pointer = start
+                _ = dragging.filter(stale, in: window)
+                XCTAssertEqual(window.frame.origin, initial.origin, "拉回来后正常跟随当前指针")
+                _ = dragging.filter(try mouse(.leftMouseUp, at: start, in: window), in: window)
+            }
+        }
+    }
+
     func testContentDragDisablesNativeMovementAndRestoresItAfterForwarding() throws {
         _ = Headless.active
         let window = QuietWindow(contentRect: NSRect(x: 200, y: 200, width: 240, height: 160),
@@ -129,7 +197,7 @@ final class ScreenBoundDraggingTests: XCTestCase {
         defer { window.close() }
         window.contentView = DraggableBackground(frame: NSRect(x: 0, y: 0, width: 240, height: 160))
         window.isMovableByWindowBackground = true
-        let dragging = ScreenBoundDragging()
+        let dragging = syntheticDragging(in: window)
         let start = NSPoint(x: 250, y: 250)
         var forwarded = 0
         dragging.send(try mouse(.leftMouseDown, at: start, in: window), in: window) { event in
@@ -187,4 +255,12 @@ final class ScreenBoundDraggingTests: XCTestCase {
 private final class DraggableBackground: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
     override func mouseDown(with event: NSEvent) {}
+}
+
+private final class DragRecordingPanel: QuietPanel {
+    var moves = 0
+    override func setFrameOrigin(_ point: NSPoint) {
+        moves += 1
+        super.setFrameOrigin(point)
+    }
 }
