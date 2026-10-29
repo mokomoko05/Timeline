@@ -54,12 +54,14 @@ enum DeadlineSelection {
 struct DeadlineSelectionView: View {
     @Binding var due: Date
     @Binding var timed: Bool
+    var showsTimeToggle: Bool
     @Environment(\.locale) private var locale
     @AppStorage(Prefs.weekStartsSunday) private var sundayFirst = false
     @State private var month: Date
 
-    init(due: Binding<Date>, timed: Binding<Bool>) {
+    init(due: Binding<Date>, timed: Binding<Bool>, showsTimeToggle: Bool = true) {
         _due = due; _timed = timed
+        self.showsTimeToggle = showsTimeToggle
         _month = State(initialValue: JournalDates.monthStart(due.wrappedValue))
     }
 
@@ -84,7 +86,7 @@ struct DeadlineSelectionView: View {
             }
             Divider()
             HStack {
-                Toggle("指定时间", isOn: $timed).toggleStyle(.checkbox).font(.system(size: 12))
+                if showsTimeToggle { Toggle("指定时间", isOn: $timed).toggleStyle(.checkbox).font(.system(size: 12)) }
                 Spacer()
                 Text(timed ? "24 小时制" : "全天").font(.system(size: 11)).foregroundStyle(Palette.muted)
             }

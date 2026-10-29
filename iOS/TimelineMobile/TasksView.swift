@@ -126,22 +126,23 @@ struct TasksView: View {
         var rows: [Row] = []
 
         // 逾期的先按日期、同一天里按手动顺序。
-        let overdue = all.filter { !$0.task.completed && ($0.task.effectiveDeadline.map { $0 < now } ?? false) && calendar.startOfDay(for: $0.task.dueDate!) < today }
+        let overdue = all.filter { !$0.task.completed && ($0.task.effectiveDeadline.map { $0 < now } ?? false) && calendar.startOfDay(for: $0.task.timelineDate!) < today }
             .sorted { a, b in
-                let dayA = calendar.startOfDay(for: a.task.dueDate!), dayB = calendar.startOfDay(for: b.task.dueDate!)
+                let dayA = calendar.startOfDay(for: a.task.timelineDate!), dayB = calendar.startOfDay(for: b.task.timelineDate!)
                 return dayA != dayB ? dayA < dayB : ScheduledTask.listOrder(a, b)
             }
         if !overdue.isEmpty {
             rows.append(.day(key: "overdue", date: nil, title: L("逾期"), subtitle: LF("%lld 项", overdue.count), kind: .overdue))
             rows += overdue.map { .task($0, group: "overdue") }
         }
+        let overdueIDs = Set(overdue.map(\.id))
 
         // 今天起有截止日期的：按天分组。
         let dated = all.filter { item in
-            guard let due = item.task.dueDate else { return false }
-            return calendar.startOfDay(for: due) >= today && !item.task.isDropped
+            guard let due = item.task.timelineDate else { return false }
+            return !overdueIDs.contains(item.id) && (calendar.startOfDay(for: due) >= today || (item.task.timeRange != nil && item.task.dueDate! >= today)) && !item.task.isDropped
         }
-        var byDay = Dictionary(grouping: dated) { calendar.startOfDay(for: $0.task.dueDate!) }
+        var byDay = Dictionary(grouping: dated) { calendar.startOfDay(for: $0.task.timelineDate!) }
         if query.isEmpty, byDay[today] == nil { byDay[today] = [] }
         for day in byDay.keys.sorted() {
             let items = byDay[day] ?? []
@@ -154,7 +155,7 @@ struct TasksView: View {
                              kind: isToday ? .today : .future))
             var placedNow = !isToday
             for item in open {
-                if !placedNow, item.task.dueHasTime, let due = item.task.dueDate, due > now {
+                if !placedNow, item.task.dueHasTime, let due = item.task.timelineDate, due > now {
                     rows.append(.now(now, group: key))
                     placedNow = true
                 }
@@ -219,6 +220,7 @@ struct TasksView: View {
         case .task(let item, _):
             RailRow(label: timeLabel(item.task), labelColor: item.task.dueHasTime ? Palette.accent : Palette.muted,
                     hasPrevious: hasPrevious, hasNext: hasNext, nodeY: 22,
+                    accent: item.task.timeRange != nil ? (top: 22, bottom: nil) : nil,
                     drawsLine: false, shift: motion.shift, shiftAnimation: motion.animation) {
                 Dot(color: item.task.completed ? Palette.muted : item.task.priority.color, size: motion.lifted ? 13 : 9,
                     ring: item.task.priority == .urgent || item.task.priority == .high)
@@ -292,9 +294,12 @@ struct TasksView: View {
     }
 
     private func timeLabel(_ task: Todo) -> String {
-        guard let due = task.dueDate else { return "" }
+        guard let due = task.timelineDate else { return "" }
         let calendar = JournalDates.calendar
         let today = calendar.startOfDay(for: Date())
+        if let range = task.timelineTimeLabel, task.timeRange != nil {
+            return calendar.startOfDay(for: due) < today ? DayText.short(due) + "\n" + range : range
+        }
         if calendar.startOfDay(for: due) < today { return DayText.short(due) }
         return task.dueHasTime ? DayText.time(due) : L("全天")
     }
@@ -364,7 +369,7 @@ struct TasksView: View {
         case "overdue":
             // 逾期分组没有一个确定的日期：只能在里面调整先后。
             valid = dragged.group == "overdue"
-            day = item.task.dueDate.map { calendar.startOfDay(for: $0) }
+            day = item.task.timelineDate.map { calendar.startOfDay(for: $0) }
         case "undated":
             valid = true
             day = nil
@@ -597,7 +602,7 @@ private struct TaskHeader: View {
         let calendar = JournalDates.calendar
         let open = tasks.filter { !$0.task.completed }
         let overdue = open.filter { $0.task.effectiveDeadline.map { $0 < now } ?? false }.count
-        let todayTasks = tasks.filter { $0.task.dueDate.map(calendar.isDateInToday) ?? false && !$0.task.isDropped }
+        let todayTasks = tasks.filter { $0.task.timelineDate.map(calendar.isDateInToday) ?? false && !$0.task.isDropped }
         let todayDone = todayTasks.filter(\.task.isDone).count
         let undated = open.filter { $0.task.dueDate == nil }.count
         VStack(alignment: .leading, spacing: 10) {
@@ -765,7 +770,7 @@ struct TaskActions: View {
                     }
                 }
             } label: {
-                Label("截止日期", systemImage: "calendar.badge.clock")
+                Label("任务时间", systemImage: "calendar.badge.clock")
             }
             Menu {
                 ForEach(TaskPriority.allCases) { priority in
@@ -809,7 +814,7 @@ struct TaskActions: View {
     }
 
     private func postpone() {
-        let base = max(calendar.startOfDay(for: item.task.dueDate ?? Date()), calendar.startOfDay(for: Date()))
+        let base = max(calendar.startOfDay(for: item.task.timelineDate ?? Date()), calendar.startOfDay(for: Date()))
         store.setDeadline(item.id, to: calendar.date(byAdding: .day, value: 1, to: base))
         store.save()
     }
@@ -820,36 +825,31 @@ struct TaskDateSheet: View {
     @ObservedObject var store: JournalStore
     let id: UUID
     @Environment(\.dismiss) private var dismiss
-    @State private var date = Date()
-    @State private var hasTime = false
+    @State private var timing = TaskTimeDraft(task: Todo(title: ""))
     @State private var reminder = -1
     @EnvironmentObject private var reminders: ReminderScheduler
 
     var body: some View {
         NavigationStack {
             Form {
-                DatePicker("日期", selection: $date, displayedComponents: .date)
-                    .datePickerStyle(.graphical)
-                Toggle("指定时间", isOn: $hasTime.animation())
-                if hasTime { DatePicker("时间", selection: $date, displayedComponents: .hourAndMinute) }
+                TaskTimeFields(timing: $timing)
                 Section {
-                    ReminderPicker(minutes: $reminder, timed: hasTime)
+                    ReminderPicker(minutes: $reminder, timed: timing.hasTime, isInterval: timing.mode == .interval)
                 } footer: {
                     if reminder >= 0, reminders.authorization == .denied {
                         Text("通知未开启：到 设置 › 通知 › Timeline 里允许通知，提醒才会响。")
                     }
                 }
             }
-            .navigationTitle("截止日期")
+            .navigationTitle("任务时间")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { save(); dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("完成") { save(); dismiss() }.disabled(!timing.isValid) }
             }
             .onAppear {
                 guard let task = store.locate(id)?.task else { return }
-                date = task.dueDate ?? Date()
-                hasTime = task.dueHasTime
+                timing = TaskTimeDraft(task: task)
                 reminder = task.reminderMinutes ?? -1
             }
         }
@@ -859,9 +859,10 @@ struct TaskDateSheet: View {
     private func save() {
         guard let item = store.locate(id) else { return }
         let calendar = JournalDates.calendar
-        let due = hasTime ? calendar.date(bySetting: .second, value: 0, of: date) ?? date : calendar.startOfDay(for: date)
-        store.updateTodo(id, scheduledDate: item.date, dueDate: due, dueHasTime: hasTime,
-                         reminderMinutes: reminder < 0 ? nil : reminder, repeatRule: item.task.repeatRule)
+        let due = timing.hasTime ? calendar.date(bySetting: .second, value: 0, of: timing.end) ?? timing.end : calendar.startOfDay(for: timing.end)
+        store.updateTodo(id, scheduledDate: item.date, dueDate: due, dueHasTime: timing.hasTime,
+                         reminderMinutes: reminder < 0 ? nil : reminder, repeatRule: item.task.repeatRule,
+                         startDate: .some(timing.startDate))
         store.save()
     }
 }
@@ -873,7 +874,7 @@ struct AddTaskSheet: View {
     @Environment(\.closeEditor) private var closeEditor
     @State private var text = ""
     @State private var hasDue = false
-    @State private var due = Date()
+    @State private var timing = TaskTimeDraft(task: Todo(title: ""))
     @State private var priority = TaskPriority.normal
 
     var body: some View {
@@ -882,9 +883,8 @@ struct AddTaskSheet: View {
                 EditorCardHeader(title: "新待办", confirm: "添加", canConfirm: canAdd, cancel: close.close, action: add)
                 AutoFocusTextView(text: $text, placeholder: L("要做什么？可写「明天 下午3点」「#标签」"), maxLines: 4, submit: add)
                 HStack(spacing: 14) {
-                    Toggle(isOn: $hasDue.animation(.snappy(duration: 0.2))) { Label("截止", systemImage: "calendar") }
+                    Toggle(isOn: $hasDue.animation(.snappy(duration: 0.2))) { Label("任务时间", systemImage: "calendar") }
                         .toggleStyle(.button)
-                    if hasDue { DatePicker("日期", selection: $due, displayedComponents: .date).labelsHidden() }
                     Menu {
                         Picker("优先级", selection: $priority) {
                             ForEach(TaskPriority.allCases) { Text(L($0.title)).tag($0) }
@@ -895,20 +895,21 @@ struct AddTaskSheet: View {
                     Spacer()
                 }
                 .font(.subheadline)
+                if hasDue { TaskTimeFields(timing: $timing) }
             }
         } else {
             sheet
         }
     }
 
-    private var canAdd: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var canAdd: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (!hasDue || timing.isValid) }
 
     private var sheet: some View {
         NavigationStack {
             Form {
                 AutoFocusTextView(text: $text, placeholder: L("要做什么？可写「明天 下午3点」「#标签」"), maxLines: 4, submit: add)
-                Toggle("截止日期", isOn: $hasDue.animation())
-                if hasDue { DatePicker("日期", selection: $due, displayedComponents: .date) }
+                Toggle("设置任务时间", isOn: $hasDue.animation())
+                if hasDue { TaskTimeFields(timing: $timing) }
                 Picker("优先级", selection: $priority) {
                     ForEach(TaskPriority.allCases) { Text(L($0.title)).tag($0) }
                 }
@@ -918,7 +919,7 @@ struct AddTaskSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("添加", action: add).disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("添加", action: add).disabled(!canAdd)
                 }
             }
         }
@@ -926,8 +927,13 @@ struct AddTaskSheet: View {
     }
 
     private func add() {
-        guard let created = store.addParsedTodo(text, on: Date(), priority: priority) else { return }
-        if hasDue { store.setDeadline(created.id, to: due) }
+        var options = TaskCreationOptions()
+        options.priority = priority
+        options.overridesDeadline = hasDue
+        options.dueDate = timing.end
+        options.dueHasTime = timing.hasTime
+        options.startDate = timing.startDate
+        guard canAdd, store.addParsedTodo(text, on: Date(), options: options) != nil else { return }
         if let closeEditor { closeEditor() } else { dismiss() }
     }
 }

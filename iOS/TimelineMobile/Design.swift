@@ -183,9 +183,10 @@ struct RailRow<Node: View, Content: View>: View {
             Text(label)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(labelColor)
-                .lineLimit(1)
+                .lineLimit(label.contains("\n") ? nil : 1)
+                .multilineTextAlignment(.trailing)
                 // 只有可能放不下的（日期）才允许缩小：带缩放的文字要多量几遍，时刻「05:21」总放得下。
-                .minimumScaleFactor(label.count > 5 ? 0.7 : 1)
+                .minimumScaleFactor(!label.contains("\n") && label.count > 5 ? 0.7 : 1)
                 .frame(width: Self.labelWidth, alignment: .trailing)
                 .padding(.top, nodeY - 8)
             // 节点放在固定大小的占位上：没有节点（`EmptyView`）的行也留出这一格，右边的内容和别的行对齐。

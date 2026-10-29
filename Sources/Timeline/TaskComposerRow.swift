@@ -88,31 +88,29 @@ struct DraftDeadlineButton: View {
 private struct DraftDeadlineEditor: View {
     @Binding var options: TaskCreationOptions
     @Environment(\.dismiss) private var dismiss
-    @State private var due: Date
-    @State private var timed: Bool
+    @State private var timing: TaskTimeDraft
 
     init(options: Binding<TaskCreationOptions>, initial: Todo, defaultDate: Date) {
         _options = options
-        _due = State(initialValue: DeadlineSelection.initialDate(initial.dueDate ?? defaultDate, hasTime: initial.dueHasTime))
-        _timed = State(initialValue: initial.dueHasTime)
+        _timing = State(initialValue: TaskTimeDraft(task: initial, defaultDate: defaultDate))
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("截止日期与时间").font(.system(size: 14, weight: .semibold))
-            DeadlineSelectionView(due: $due, timed: $timed)
+            Text("任务时间").font(.system(size: 14, weight: .semibold))
+            TaskTimeSelectionView(timing: $timing)
             HStack {
                 Button("清除") {
-                    options.overridesDeadline = true; options.dueDate = nil; options.dueHasTime = false
+                    options.overridesDeadline = true; options.dueDate = nil; options.dueHasTime = false; options.startDate = nil
                     dismiss()
                 }
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存") {
                     NSApp.keyWindow?.makeFirstResponder(nil)
-                    options.overridesDeadline = true; options.dueDate = due; options.dueHasTime = timed
+                    options.overridesDeadline = true; options.dueDate = timing.end; options.dueHasTime = timing.hasTime; options.startDate = timing.startDate
                     dismiss()
-                }.keyboardShortcut(.defaultAction)
+                }.keyboardShortcut(.defaultAction).disabled(!timing.isValid)
             }
         }.padding(16).foregroundStyle(Palette.ink).background(Palette.background)
     }

@@ -349,3 +349,13 @@
 "有日志" = "Has entries";
 "无法读取日记，已停止写入以保护原文件。请在数据文件夹中检查 journal.json 和备份。" = "Couldn’t read the journal. Writing has stopped to protect the original file. Check journal.json and the backups in the data folder.";
 "保存失败，当前修改仍保留在内存中。请释放磁盘空间或检查权限后重试。" = "Save failed. Your changes are still in memory. Free up disk space or check permissions, then try again.";
+
+"任务时间" = "Task time";
+"截止时刻" = "Deadline";
+"时间段" = "Time range";
+"开始时间" = "Start";
+"结束时间" = "End";
+"开始时" = "At start";
+"设置任务时间" = "Schedule task";
+"按开始时间排列，结束后视为逾期；提醒以开始时间为准。" = "Ordered by start time. Overdue after the end; reminders are based on the start.";
+"结束时间必须晚于开始时间" = "End must be after start";

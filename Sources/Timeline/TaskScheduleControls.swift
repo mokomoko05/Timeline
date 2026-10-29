@@ -76,6 +76,8 @@ struct TaskDeadlineButton: View {
     let store: JournalStore
     let task: Todo
     var compact = false
+    /// 月历行高度固定，时间段只显示开始时刻和省略标记；完整范围仍在提示和编辑器里。
+    var stacksRange = true
     @State private var showing = false
 
     static func time(_ date: Date) -> String {
@@ -85,6 +87,7 @@ struct TaskDeadlineButton: View {
 
     static func label(for task: Todo, compact: Bool = false) -> String {
         guard let due = task.dueDate else { return AppLocalized("设置日期") }
+        if let label = task.timeRangeLabel { return compact ? task.timelineTimeLabel! : (task.timelineDate!.relativeLabel + " " + label) }
         if compact { return task.dueHasTime ? time(due) : AppLocalized("全天") }
         return task.dueHasTime ? due.relativeLabel + " " + time(due) : due.relativeLabel
     }
@@ -94,6 +97,12 @@ struct TaskDeadlineButton: View {
     /// 所在的行被悬停 / 选中时也显示图标（整行都是触发区，不必对准这一小块）。
     var rowActive = false
     private var quietUndated: Bool { compact && task.dueDate == nil }
+    private var timeHelp: String {
+        if let range = task.timeRange {
+            return range.start.formatted(date: .complete, time: .shortened) + " – " + range.end.formatted(date: .complete, time: .shortened)
+        }
+        return task.dueDate?.formatted(date: .complete, time: task.dueHasTime ? .shortened : .omitted) ?? AppLocalized("设置截止日期与时间")
+    }
 
     var body: some View {
         Button { showing = true } label: {
@@ -102,17 +111,17 @@ struct TaskDeadlineButton: View {
                     Image(systemName: "calendar.badge.plus").opacity(hovered || rowActive ? 1 : 0)
                 } else {
                     if !compact { Image(systemName: task.dueHasTime ? "clock" : "calendar") }
-                    Text(Self.label(for: task, compact: compact))
+                    Text(compact && !stacksRange && task.timeRange != nil ? Self.time(task.timelineDate!) + "…" : Self.label(for: task, compact: compact))
                 }
             }
                 .font(.system(size: compact ? 10 : 11, weight: .medium)).monospacedDigit()
-                .lineLimit(1).fixedSize()
+                .lineLimit(task.timeRange == nil || !compact ? 1 : nil).multilineTextAlignment(.trailing).fixedSize()
                 .foregroundStyle(!task.completed && task.effectiveDeadline.map({ $0 < Date() }) == true ? Palette.deadline : (task.dueHasTime ? Palette.accent : Palette.muted))
                 .padding(.horizontal, compact ? 2 : 4).padding(.vertical, 2)
         }
         .buttonStyle(.plain).raisedOnHover(radius: 4).disabled(store.isReadOnly)
         .onHover { hovered = $0 }
-        .help(task.dueDate.map { $0.formatted(date: .complete, time: task.dueHasTime ? .shortened : .omitted) } ?? AppLocalized("设置截止日期与时间"))
+        .help(timeHelp)
         .accessibilityLabel(AppLocalized("截止日期与时间") + " " + Self.label(for: task))
         .accessibilityIdentifier("task-deadline-" + task.id.uuidString)
         .popover(isPresented: $showing, arrowEdge: .bottom) {
@@ -125,18 +134,16 @@ struct TaskDeadlineEditor: View {
     @ObservedObject var store: JournalStore
     let task: Todo
     let close: () -> Void
-    @State private var due: Date
-    @State private var timed: Bool
+    @State private var timing: TaskTimeDraft
     init(store: JournalStore, task: Todo, close: @escaping () -> Void) {
         self.store = store; self.task = task; self.close = close
-        _due = State(initialValue: DeadlineSelection.initialDate(task.dueDate ?? Date(), hasTime: task.dueHasTime))
-        _timed = State(initialValue: task.dueHasTime)
+        _timing = State(initialValue: TaskTimeDraft(task: task))
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("截止日期与时间").font(.system(size: 14, weight: .semibold))
+            Text("任务时间").font(.system(size: 14, weight: .semibold))
             Text(String(TaskText.rendered(task.title).characters)).font(.system(size: 11)).foregroundStyle(Palette.muted).lineLimit(2)
-            DeadlineSelectionView(due: $due, timed: $timed)
+            TaskTimeSelectionView(timing: $timing)
             Divider()
             HStack {
                 Button("清除") { store.setDeadline(task.id, to: nil); close() }
@@ -146,11 +153,11 @@ struct TaskDeadlineEditor: View {
                 Button("保存") {
                     NSApp.keyWindow?.makeFirstResponder(nil)
                     if let current = store.locate(task.id) {
-                        store.updateTodo(task.id, scheduledDate: current.date, dueDate: due, dueHasTime: timed,
-                                         reminderMinutes: current.task.reminderMinutes, repeatRule: current.task.repeatRule)
+                        store.updateTodo(task.id, scheduledDate: current.date, dueDate: timing.end, dueHasTime: timing.hasTime,
+                                         reminderMinutes: current.task.reminderMinutes, repeatRule: current.task.repeatRule, startDate: .some(timing.startDate))
                     }
                     close()
-                }.keyboardShortcut(.defaultAction)
+                }.keyboardShortcut(.defaultAction).disabled(!timing.isValid)
             }
         }.padding(16).foregroundStyle(Palette.ink).background(Palette.background)
     }

@@ -171,7 +171,7 @@ struct ContentView: View {
             reminders.refresh()
         }
         .onReceive(NotificationCenter.default.publisher(for: .timelineNavigate)) { if let date = $0.object as? Date { select(date) } }
-        .onReceive(NotificationCenter.default.publisher(for: .timelineReveal)) { if let id = $0.object as? UUID { reveal(date: store.locate(id)?.task.dueDate, taskID: id) } }
+        .onReceive(NotificationCenter.default.publisher(for: .timelineReveal)) { if let id = $0.object as? UUID { reveal(date: store.locate(id)?.task.timelineDate, taskID: id) } }
         .onReceive(NotificationCenter.default.publisher(for: .timelineOpenTag)) { note in
             guard let tag = note.object as? String else { return }
             showNotes(tag: tag)
@@ -189,7 +189,7 @@ struct ContentView: View {
     private func showNotes(tag: String?, taskID: UUID? = nil, followSelection: Bool = true) {
         let target = taskID ?? (followSelection && tag == nil ? interaction.selectedTaskID.flatMap { store.locate($0)?.id } : nil)
         notesWindow.show(store: store, taskID: target, tag: tag,
-                         reveal: { id in reveal(date: store.locate(id)?.task.dueDate, taskID: id) },
+                         reveal: { id in reveal(date: store.locate(id)?.task.timelineDate, taskID: id) },
                          openDay: { date in select(date); notesWindow.showJournal(store: store, date: date) })
     }
 
@@ -228,7 +228,7 @@ struct ContentView: View {
         case .postponeSelected(let days):
             guard let task = selectedTask, !task.task.completed, !store.isReadOnly else { return }
             let calendar = JournalDates.calendar
-            let base = calendar.startOfDay(for: task.task.dueDate ?? Date())
+            let base = calendar.startOfDay(for: task.task.timelineDate ?? Date())
             // 逾期的任务往后推时从今天起算：推一次就到明天，不是从原来的截止日再加一天。
             let start = days > 0 ? max(base, calendar.startOfDay(for: Date())) : base
             guard let target = calendar.date(byAdding: .day, value: days, to: start) else { return }
@@ -285,7 +285,7 @@ struct ContentView: View {
                 (i + 1 < neighbours.count ? neighbours[i + 1] : (i > 0 ? neighbours[i - 1] : nil))?.id
             }
         case .deselect: interaction.selectedTaskID = nil
-        case .reveal(let id): reveal(date: store.locate(id)?.task.dueDate, taskID: id)
+        case .reveal(let id): reveal(date: store.locate(id)?.task.timelineDate, taskID: id)
         case .export: exportJournal()
         case .backups: showingBackups = true
         case .recentlyDeleted: showingRecentlyDeleted = true
@@ -500,7 +500,7 @@ struct ContentView: View {
                     if let id {
                         if let item = store.locate(id), item.task.completed {
                             expandedFinished.insert(id)
-                            if let due = item.task.dueDate { select(due) }
+                            if let due = item.task.timelineDate { select(due) }
                         }
                         DispatchQueue.main.async { proxy.scrollTo(id, anchor: .center) }
                         scrollTarget = nil
@@ -516,7 +516,7 @@ struct ContentView: View {
                             proxy.scrollTo("undated", anchor: .top)
                         } else if id == "today" {
                             proxy.scrollTo(TaskTimelineSection.dayID(Date()), anchor: .top)
-                        } else if let item = visible.first(where: { !$0.task.completed && (id == "overdue" ? ($0.task.effectiveDeadline ?? .distantFuture) < Date() : JournalDates.calendar.isDateInToday($0.task.dueDate ?? .distantPast)) }) {
+                        } else if let item = visible.first(where: { !$0.task.completed && (id == "overdue" ? ($0.task.effectiveDeadline ?? .distantFuture) < Date() : JournalDates.calendar.isDateInToday($0.task.timelineDate ?? .distantPast)) }) {
                             proxy.scrollTo(item.id, anchor: .top)
                         }
                         scrollGroup = nil

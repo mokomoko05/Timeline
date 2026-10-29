@@ -33,6 +33,13 @@ struct ManagedTaskRow: View {
                 priorityControl
                     .frame(width: 22).frame(maxHeight: .infinity)
                     .background {
+                        if task.timeRange != nil {
+                            VStack(spacing: 0) {
+                                Circle().fill(Palette.accent).frame(width: 4, height: 4)
+                                Rectangle().fill(Palette.accent.opacity(0.55)).frame(width: 2)
+                                Circle().fill(Palette.accent).frame(width: 4, height: 4)
+                            }.padding(.vertical, 5).allowsHitTesting(false)
+                        }
                         // 悬停 / 选中时珠子外多一圈柔和的光晕。
                         Circle().fill(PriorityMark(priority: task.priority).color.opacity(0.16))
                             .frame(width: 22, height: 22)

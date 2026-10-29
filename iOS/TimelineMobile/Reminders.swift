@@ -162,11 +162,12 @@ enum BackgroundRefresh {
 struct ReminderPicker: View {
     @Binding var minutes: Int
     let timed: Bool
+    var isInterval = false
 
     var body: some View {
         Picker("提醒", selection: $minutes) {
             Text("不提醒").tag(-1)
-            Text(timed ? "截止时" : "当天 09:00").tag(0)
+            Text(isInterval ? "开始时" : (timed ? "截止时" : "当天 09:00")).tag(0)
             Text("提前 15 分钟").tag(15)
             Text("提前 30 分钟").tag(30)
             Text("提前 1 小时").tag(60)

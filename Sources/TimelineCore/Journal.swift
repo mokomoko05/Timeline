@@ -15,6 +15,16 @@ public struct Todo: Codable, Identifiable, Equatable {
         didSet { if dueDate != oldValue { listPosition = nil } }
     }
     public var dueHasTime = false
+    /// 可选的计划开始时间；存在时 dueDate 是该时间段的结束时间。
+    public var startDate: Date? {
+        didSet { if startDate != oldValue { listPosition = nil } }
+    }
+    public var timeRange: DateInterval? {
+        guard dueHasTime, let startDate, let dueDate, startDate < dueDate else { return nil }
+        return DateInterval(start: startDate, end: dueDate)
+    }
+    /// 时间轴和月历按开始时间定位；纯截止任务仍按截止时间定位。
+    public var timelineDate: Date? { timeRange?.start ?? dueDate }
     public var reminderMinutes: Int?
     public var repeatRule: RepeatRule = .none
     public var repeatMonthDay: Int?
@@ -35,8 +45,8 @@ public struct Todo: Codable, Identifiable, Equatable {
     /// 没有截止日期的任务排在最后。
     public static let undatedSortKey = 4_102_444_800.0
 
-    /// 清单的排序键：手动位置优先，否则是截止时间。
-    public var sortKey: Double { listPosition ?? dueDate?.timeIntervalSince1970 ?? Self.undatedSortKey }
+    /// 清单的排序键：手动位置优先，时间段按开始时间，其余按截止时间。
+    public var sortKey: Double { listPosition ?? timelineDate?.timeIntervalSince1970 ?? Self.undatedSortKey }
 
     public var effectiveDeadline: Date? {
         guard let dueDate else { return nil }
@@ -44,7 +54,7 @@ public struct Todo: Codable, Identifiable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, calendarName, priority, completed, dropped, dueDate, dueHasTime, reminderMinutes, repeatRule, repeatMonthDay, nextOccurrenceID, number, focusSeconds, listPosition, tags
+        case id, title, calendarName, priority, completed, dropped, dueDate, dueHasTime, startDate, reminderMinutes, repeatRule, repeatMonthDay, nextOccurrenceID, number, focusSeconds, listPosition, tags
     }
 
     public init(from decoder: Decoder) throws {
@@ -58,6 +68,8 @@ public struct Todo: Codable, Identifiable, Equatable {
         if !completed { dropped = false }
         dueDate = try values.decodeIfPresent(Date.self, forKey: .dueDate)
         dueHasTime = try values.decodeIfPresent(Bool.self, forKey: .dueHasTime) ?? false
+        startDate = try values.decodeIfPresent(Date.self, forKey: .startDate)
+        if !dueHasTime || dueDate == nil || startDate.map({ $0 >= dueDate! }) == true { startDate = nil }
         reminderMinutes = try values.decodeIfPresent(Int.self, forKey: .reminderMinutes)
         repeatRule = try values.decodeIfPresent(RepeatRule.self, forKey: .repeatRule) ?? .none
         repeatMonthDay = try values.decodeIfPresent(Int.self, forKey: .repeatMonthDay)
@@ -462,9 +474,9 @@ public final class JournalStore: ObservableObject {
         if wasDropped, !updated[key]!.todos[index].completed {
             let restored = updated[key]!.todos[index]
             let calendar = JournalDates.calendar
-            let day = restored.dueDate.map { calendar.startOfDay(for: $0) }
+            let day = restored.timelineDate.map { calendar.startOfDay(for: $0) }
             let peers = updated.values.flatMap(\.todos).filter { other in
-                other.id != restored.id && other.dueDate.map { calendar.startOfDay(for: $0) } == day
+                other.id != restored.id && other.timelineDate.map { calendar.startOfDay(for: $0) } == day
             }
             if let last = peers.map(\.sortKey).max() { updated[key]!.todos[index].listPosition = max(last + 1, restored.sortKey) }
         }
@@ -482,6 +494,7 @@ public final class JournalStore: ObservableObject {
             if let due = task.dueDate {
                 let offset = JournalDates.calendar.dateComponents([.day], from: JournalDates.calendar.startOfDay(for: date), to: nextDate).day!
                 next.dueDate = JournalDates.calendar.date(byAdding: .day, value: offset, to: due)
+                next.startDate = task.timeRange.flatMap { JournalDates.calendar.date(byAdding: .day, value: offset, to: $0.start) }
             }
             updated[key]!.todos[index].nextOccurrenceID = next.id
             var nextEntry = updated[JournalDates.key(nextDate)] ?? DayEntry()
@@ -959,6 +972,7 @@ public final class JournalStore: ObservableObject {
             guard let index = updated[key]?.todos.firstIndex(where: { $0.id == item.id }) else { continue }
             updated[key]!.todos[index].dueDate = target
             updated[key]!.todos[index].dueHasTime = false
+            updated[key]!.todos[index].startDate = nil
         }
         replaceDays(updated, action: "移到今天")
         return late.count
@@ -1348,7 +1362,7 @@ public final class JournalStore: ObservableObject {
     public var calendarDeadlines: [String: [ScheduledTask]] {
         if indexedDeadlines == nil {
             indexedDeadlines = Dictionary(grouping: tasks().filter { $0.task.dueDate != nil }) {
-                JournalDates.key($0.task.dueDate!)
+                JournalDates.key($0.task.timelineDate!)
             }.mapValues { $0.sorted(by: ScheduledTask.listOrder) }
         }
         return indexedDeadlines!
@@ -1421,7 +1435,7 @@ public final class JournalStore: ObservableObject {
     public func moveTask(_ id: UUID, to day: Date?, order: [UUID]) {
         guard !isReadOnly, let located = locate(id) else { return }
         let calendar = JournalDates.calendar
-        let sameDay = located.task.dueDate.map { calendar.startOfDay(for: $0) } == day.map { calendar.startOfDay(for: $0) }
+        let sameDay = located.task.timelineDate.map { calendar.startOfDay(for: $0) } == day.map { calendar.startOfDay(for: $0) }
         undoManager.beginUndoGrouping()
         if !sameDay { setDeadline(id, to: day) }
         reorderTasks(order)
@@ -1437,7 +1451,11 @@ public final class JournalStore: ObservableObject {
         var due: Date?
         var hasTime = false
         if let date {
-            if keepingTime, located.task.dueHasTime, let old = located.task.dueDate {
+            if keepingTime, let range = located.task.timeRange {
+                let offset = calendar.dateComponents([.day], from: calendar.startOfDay(for: range.start), to: calendar.startOfDay(for: date)).day ?? 0
+                due = calendar.date(byAdding: .day, value: offset, to: range.end)
+                hasTime = true
+            } else if keepingTime, located.task.dueHasTime, let old = located.task.dueDate {
                 let time = calendar.dateComponents([.hour, .minute], from: old)
                 due = calendar.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: 0, of: date)
                 hasTime = true
@@ -1481,15 +1499,23 @@ public final class JournalStore: ObservableObject {
         replaceDays(updated, action: sourceKey == targetKey ? "调整顺序" : "移动任务", debounce: debounce)
     }
 
-    public func updateTodo(_ id: UUID, scheduledDate: Date, dueDate: Date?, dueHasTime: Bool, reminderMinutes: Int?, repeatRule: RepeatRule, calendarName: String? = nil, tags: [String]? = nil, priority: TaskPriority? = nil) {
+    public func updateTodo(_ id: UUID, scheduledDate: Date, dueDate: Date?, dueHasTime: Bool, reminderMinutes: Int?, repeatRule: RepeatRule, calendarName: String? = nil, tags: [String]? = nil, priority: TaskPriority? = nil, startDate: Date?? = nil) {
         guard !isReadOnly, let located = locate(id) else { return }
+        // 未传 startDate 时移动日期保留时间段；显式 .some(nil) 切回单个截止时刻。
+        if let start = startDate ?? nil, dueDate == nil || !dueHasTime || start >= dueDate! { return }
         let sourceKey = JournalDates.key(located.date)
         guard var source = days[sourceKey], let index = source.todos.firstIndex(where: { $0.id == id }) else { return }
         var task = source.todos[index]
         if let priority { task.priority = priority }
         if let calendarName { task.calendarName = calendarName.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
         if let tags { task.tags = TagText.merge([], tags.compactMap(TagText.normalize)) }
+        let oldRange = task.timeRange
         task.dueDate = dueDate.map { dueHasTime ? $0 : JournalDates.calendar.startOfDay(for: $0) }
+        if let explicit = startDate {
+            task.startDate = explicit
+        } else if dueHasTime, let end = task.dueDate, let oldRange {
+            task.startDate = end.addingTimeInterval(-oldRange.duration)
+        } else { task.startDate = nil }
         task.dueHasTime = dueDate != nil && dueHasTime
         task.reminderMinutes = dueDate == nil ? nil : reminderMinutes
         task.repeatRule = repeatRule

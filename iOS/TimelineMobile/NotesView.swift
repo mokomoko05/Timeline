@@ -182,7 +182,9 @@ struct TaskPage: View {
                     .foregroundStyle(task?.completed == true ? Palette.muted : Palette.ink)
             }
             FlowLayout(spacing: 8) {
-                if let due = task?.dueDate {
+                if let range = task?.timeRangeLabel, let start = task?.timelineDate {
+                    Label((DayText.relative(start) ?? DayText.short(start)) + " " + range, systemImage: "clock")
+                } else if let due = task?.dueDate {
                     Label(LF("截止 %@", (DayText.relative(due) ?? DayText.short(due)) + (task!.dueHasTime ? " " + DayText.time(due) : "")), systemImage: "clock")
                         .foregroundStyle(task!.effectiveDeadline.map { $0 < Date() } == true && !task!.completed ? Palette.deadline : Palette.muted)
                 }
@@ -321,6 +323,8 @@ struct TaskEditSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
     @State private var tags = ""
+    @State private var hasTime = false
+    @State private var timing = TaskTimeDraft(task: Todo(title: ""))
 
     var body: some View {
         NavigationStack {
@@ -331,16 +335,10 @@ struct TaskEditSheet: View {
                         TextField("标签（空格分隔）", text: $tags).textInputAutocapitalization(.never)
                     }
                     Section("安排") {
-                        Toggle("截止日期", isOn: Binding(get: { item.task.dueDate != nil }, set: { store.setDeadline(id, to: $0 ? Date() : nil) }))
-                        if let due = item.task.dueDate {
-                            DatePicker("日期", selection: Binding(get: { due }, set: { store.setDeadline(id, to: $0) }), displayedComponents: .date)
-                            Toggle("指定时间", isOn: Binding(get: { item.task.dueHasTime }, set: { update(item, due: due, hasTime: $0) }))
-                            if item.task.dueHasTime {
-                                DatePicker("时间", selection: Binding(get: { due }, set: { update(item, due: $0, hasTime: true) }), displayedComponents: .hourAndMinute)
-                            }
-                        }
+                        Toggle("设置任务时间", isOn: $hasTime)
+                        if hasTime { TaskTimeFields(timing: $timing) }
                         Picker("重复", selection: Binding(get: { item.task.repeatRule }, set: { rule in
-                            store.updateTodo(id, scheduledDate: item.date, dueDate: item.task.dueDate ?? Date(), dueHasTime: item.task.dueHasTime,
+                            store.updateTodo(id, scheduledDate: item.date, dueDate: item.task.dueDate, dueHasTime: item.task.dueHasTime,
                                              reminderMinutes: item.task.reminderMinutes, repeatRule: rule)
                         })) { ForEach(RepeatRule.allCases) { Text(L($0.title)).tag($0) } }
                         Picker("优先级", selection: Binding(get: { item.task.priority }, set: { store.setPriority($0, for: id) })) {
@@ -355,11 +353,25 @@ struct TaskEditSheet: View {
                 .navigationTitle("编辑待办")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .confirmationAction) { Button("完成") { commit(item); dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) { Button("完成") { commit(item); dismiss() }.disabled(hasTime && !timing.isValid) }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+                    switch note.object as? String {
+                    case "taskInterval": hasTime = true; timing.mode = .interval
+                    case "taskIntervalStart": timing.start = timing.end.addingTimeInterval(-7200)
+                    case "taskIntervalEnd": timing.end = timing.start.addingTimeInterval(5400)
+                    case "taskIntervalSave":
+                        commit(item)
+                        print("[perf] TASK_INTERVAL \(store.locate(id)?.task.timeRange != nil ? "PASS" : "FAIL")")
+                        dismiss()
+                    default: break
+                    }
                 }
                 .onAppear {
                     title = item.task.title
                     tags = item.task.tags.map { "#" + $0 }.joined(separator: " ")
+                    hasTime = item.task.dueDate != nil
+                    timing = TaskTimeDraft(task: item.task)
                 }
             } else {
                 ContentUnavailableView("待办已删除", systemImage: "trash")
@@ -367,19 +379,14 @@ struct TaskEditSheet: View {
         }
     }
 
-    private func update(_ item: ScheduledTask, due: Date, hasTime: Bool) {
-        store.updateTodo(id, scheduledDate: item.date, dueDate: due, dueHasTime: hasTime,
-                         reminderMinutes: item.task.reminderMinutes, repeatRule: item.task.repeatRule)
-    }
-
     private func commit(_ item: ScheduledTask) {
         if title != item.task.title, title.nilIfEmpty != nil { store.renameTodo(id, title: title, on: item.date) }
         guard let current = store.locate(id) else { return }
         let parsed = TagText.parseList(tags)
-        if parsed != current.task.tags {
-            store.updateTodo(id, scheduledDate: current.date, dueDate: current.task.dueDate, dueHasTime: current.task.dueHasTime,
-                             reminderMinutes: current.task.reminderMinutes, repeatRule: current.task.repeatRule, tags: parsed)
-        }
+        store.updateTodo(id, scheduledDate: current.date, dueDate: hasTime ? timing.end : nil, dueHasTime: timing.hasTime,
+                         reminderMinutes: current.task.reminderMinutes, repeatRule: current.task.repeatRule, tags: parsed,
+                         startDate: .some(hasTime ? timing.startDate : nil))
+        store.save()
     }
 }
 

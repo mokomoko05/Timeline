@@ -19,12 +19,12 @@ public enum TaskSortMode: String, CaseIterable, Identifiable {
             return lhs.task.priority.rank < rhs.task.priority.rank
         }
         let calendar = JournalDates.calendar
-        let dayA = lhs.task.dueDate.map { calendar.startOfDay(for: $0) } ?? .distantFuture
-        let dayB = rhs.task.dueDate.map { calendar.startOfDay(for: $0) } ?? .distantFuture
+        let dayA = lhs.task.timelineDate.map { calendar.startOfDay(for: $0) } ?? .distantFuture
+        let dayB = rhs.task.timelineDate.map { calendar.startOfDay(for: $0) } ?? .distantFuture
         if dayA != dayB { return dayA < dayB }
         if lhs.task.dueHasTime != rhs.task.dueHasTime { return lhs.task.dueHasTime }
-        let a = lhs.task.effectiveDeadline ?? .distantFuture
-        let b = rhs.task.effectiveDeadline ?? .distantFuture
+        let a = lhs.task.timelineDate ?? .distantFuture
+        let b = rhs.task.timelineDate ?? .distantFuture
         if a != b { return a < b }
         if lhs.task.priority != rhs.task.priority { return lhs.task.priority.rank < rhs.task.priority.rank }
         let x = lhs.task.number ?? .max, y = rhs.task.number ?? .max
@@ -33,7 +33,7 @@ public enum TaskSortMode: String, CaseIterable, Identifiable {
 
     public static func group(for task: Todo, now: Date) -> Int {
         if task.isDropped { return 7 }
-        guard let due = task.dueDate else { return 5 }
+        guard let due = task.timelineDate else { return 5 }
         if task.effectiveDeadline.map({ $0 < now }) == true { return 0 }
         let calendar = JournalDates.calendar
         let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: due)).day ?? 0
@@ -134,10 +134,10 @@ public struct ReminderPlan: Identifiable, Equatable {
         days.flatMap { key, entry in
             entry.todos.compactMap { task -> ReminderPlan? in
                 guard !task.completed, let due = task.dueDate, let minutes = task.reminderMinutes else { return nil }
-                let base = task.dueHasTime ? due : JournalDates.calendar.date(bySettingHour: 9, minute: 0, second: 0, of: due)!
+                let base = task.timeRange?.start ?? (task.dueHasTime ? due : JournalDates.calendar.date(bySettingHour: 9, minute: 0, second: 0, of: due)!)
                 let fire = base.addingTimeInterval(-Double(minutes) * 60)
                 guard fire > now else { return nil }
-                return ReminderPlan(id: "timeline.\(task.id.uuidString)", title: String(TaskText.rendered(task.title).characters), fireDate: fire, dayKey: JournalDates.key(due), taskID: task.id)
+                return ReminderPlan(id: "timeline.\(task.id.uuidString)", title: String(TaskText.rendered(task.title).characters), fireDate: fire, dayKey: JournalDates.key(task.timelineDate ?? due), taskID: task.id)
             }
         }.sorted { $0.fireDate == $1.fireDate ? $0.id < $1.id : $0.fireDate < $1.fireDate }
     }

@@ -26,7 +26,7 @@ struct TaskTimelineItem: Identifiable {
         }
         for task in tasks where !task.task.isDropped {
             if task.task.completed {
-                if let previous = finished.last, !sameDay(previous.task.dueDate, task.task.dueDate) { flush() }
+                if let previous = finished.last, !sameDay(previous.task.timelineDate, task.task.timelineDate) { flush() }
                 finished.append(task)
             } else {
                 flush()
@@ -95,8 +95,8 @@ enum TaskTimelineSection: Identifiable {
     /// 日期顺序固定，每个日期（包括未设日期）内部使用持久化的手动顺序。
     static func precedes(_ lhs: ScheduledTask, _ rhs: ScheduledTask) -> Bool {
         let calendar = JournalDates.calendar
-        let a = lhs.task.dueDate.map { calendar.startOfDay(for: $0) } ?? .distantFuture
-        let b = rhs.task.dueDate.map { calendar.startOfDay(for: $0) } ?? .distantFuture
+        let a = lhs.task.timelineDate.map { calendar.startOfDay(for: $0) } ?? .distantFuture
+        let b = rhs.task.timelineDate.map { calendar.startOfDay(for: $0) } ?? .distantFuture
         if a != b { return a < b }
         return ScheduledTask.listOrder(lhs, rhs)
     }
@@ -105,8 +105,8 @@ enum TaskTimelineSection: Identifiable {
         let calendar = JournalDates.calendar
         let today = calendar.startOfDay(for: today)
         let ordered = tasks.sorted(by: precedes)
-        let dated = ordered.filter { $0.task.dueDate != nil }
-        let byDay = Dictionary(grouping: dated) { calendar.startOfDay(for: $0.task.dueDate!) }
+        let dated = ordered.filter { $0.task.timelineDate != nil }
+        let byDay = Dictionary(grouping: dated) { calendar.startOfDay(for: $0.task.timelineDate!) }
         // 今天和明天是稳定的近期窗口；其余日期只由实际有任务的日期提供。
         let nearTerm = Set((0...1).compactMap { calendar.date(byAdding: .day, value: $0, to: today) })
         var days = nearTerm
@@ -125,7 +125,7 @@ enum TaskTimelineSection: Identifiable {
             previous = day
         }
         result.append(.gap(last, nil))
-        result.append(.undated(ordered.filter { $0.task.dueDate == nil }))
+        result.append(.undated(ordered.filter { $0.task.timelineDate == nil }))
         var compact: [Self] = []
         var finishedDates: [Date] = []
         var finishedTasks: [ScheduledTask] = []
@@ -282,7 +282,7 @@ struct TaskTimelineView: View {
         reorder.commit = { [weak reorder, store] order in
             guard let id = reorder?.activeID, let place = TimelineSlots.placement(of: id, in: order) else { return }
             let calendar = JournalDates.calendar
-            let current = store.locate(id)?.task.dueDate.map { calendar.startOfDay(for: $0) }
+            let current = store.locate(id)?.task.timelineDate.map { calendar.startOfDay(for: $0) }
             NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
             if current == place.day.map({ calendar.startOfDay(for: $0) }) {
                 store.reorderTasks(place.order)
@@ -319,7 +319,7 @@ struct TimelineDayView: View {
         let now = Date()
         let items = TaskTimelineItem.items(for: displayed, expanded: expanded)
         return items.first { item in
-            guard let task = item.tasks.first?.task, !task.completed, task.dueHasTime, let due = task.dueDate else { return false }
+            guard let task = item.tasks.first?.task, !task.completed, task.dueHasTime, let due = task.timelineDate else { return false }
             return due > now
         }?.id ?? TimelineNowMarker.endID
     }
@@ -531,7 +531,7 @@ struct FinishedTimelineDatesView: View {
                             .modifier(TimelineSlotRow(key: "gap-" + JournalDates.key(dates[index - 1]) + "-" + JournalDates.key(date)))
                     }
                     TimelineDayView(store: store, date: date,
-                        tasks: tasks.filter { $0.task.dueDate.map { JournalDates.calendar.isDate($0, inSameDayAs: date) } == true },
+                        tasks: tasks.filter { $0.task.timelineDate.map { JournalDates.calendar.isDate($0, inSameDayAs: date) } == true },
                         selectedDate: selectedDate, expanded: $expanded, requestedEdit: $requestedEdit,
                         navigate: navigate, selectTask: selectTask, next: next, showsFinishedTasks: true)
                         .id(TaskTimelineSection.dayID(date))

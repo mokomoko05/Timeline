@@ -136,7 +136,7 @@ struct DeadlineDayCell: View, Equatable {
                             Color.clear.preference(key: CheckboxFramesKey.self, value: [item.id.uuidString + "-priority": proxy.frame(in: .named(Self.space))])
                         })
                     if item.task.dueHasTime {
-                        TaskDeadlineButton(store: store, task: item.task, compact: true)
+                        TaskDeadlineButton(store: store, task: item.task, compact: true, stacksRange: false)
                             .background(GeometryReader { proxy in
                                 Color.clear.preference(key: CheckboxFramesKey.self, value: [item.id.uuidString + "-time": proxy.frame(in: .named(Self.space))])
                             })

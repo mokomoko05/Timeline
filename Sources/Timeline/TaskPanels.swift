@@ -11,8 +11,7 @@ struct TaskDetailsView: View {
     @EnvironmentObject private var reminders: ReminderScheduler
     @Environment(\.dismiss) private var dismiss
     @State private var hasDue: Bool
-    @State private var due: Date
-    @State private var timed: Bool
+    @State private var timing: TaskTimeDraft
     @State private var reminder: Int
     @State private var recurrence: RepeatRule
     @State private var saving = false
@@ -24,8 +23,7 @@ struct TaskDetailsView: View {
         self.task = task
         self.home = date
         _hasDue = State(initialValue: task.dueDate != nil)
-        _due = State(initialValue: DeadlineSelection.initialDate(task.dueDate ?? Date(), hasTime: task.dueHasTime))
-        _timed = State(initialValue: task.dueHasTime)
+        _timing = State(initialValue: TaskTimeDraft(task: task))
         _reminder = State(initialValue: task.reminderMinutes ?? -1)
         _recurrence = State(initialValue: task.repeatRule)
         _calendarName = State(initialValue: task.calendarName)
@@ -49,15 +47,15 @@ struct TaskDetailsView: View {
                         TextField("", text: $calendarName, prompt: Text("留空使用原标题")).textFieldStyle(.roundedBorder)
                     }
                     Divider()
-                    Toggle("设置截止日期（DDL）", isOn: $hasDue)
+                    Toggle("设置任务时间", isOn: $hasDue)
                     if hasDue {
-                        DeadlineSelectionView(due: $due, timed: $timed).frame(maxWidth: .infinity)
+                        TaskTimeSelectionView(timing: $timing).frame(maxWidth: .infinity)
                         HStack {
                             Text("提醒")
                             Spacer()
                             Picker("提醒", selection: $reminder) {
                                 Text("不提醒").tag(-1)
-                                Text(timed ? "截止时" : "当天 09:00").tag(0)
+                                Text(timing.mode == .interval ? "开始时" : (timing.hasTime ? "截止时" : "当天 09:00")).tag(0)
                                 Text("提前 15 分钟").tag(15)
                                 Text("提前 30 分钟").tag(30)
                                 Text("提前 1 小时").tag(60)
@@ -85,15 +83,15 @@ struct TaskDetailsView: View {
                     saving = true
                     Task { @MainActor in
                         if hasDue && reminder >= 0 { _ = await reminders.requestPermission() }
-                        store.updateTodo(task.id, scheduledDate: home, dueDate: hasDue ? due : nil,
-                                         dueHasTime: timed, reminderMinutes: reminder < 0 ? nil : reminder, repeatRule: recurrence,
-                                         calendarName: calendarName, priority: priority)
+                        store.updateTodo(task.id, scheduledDate: home, dueDate: hasDue ? timing.end : nil,
+                                         dueHasTime: timing.hasTime, reminderMinutes: reminder < 0 ? nil : reminder, repeatRule: recurrence,
+                                         calendarName: calendarName, priority: priority, startDate: .some(hasDue ? timing.startDate : nil))
                         reminders.refresh()
                         dismiss()
                     }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(saving || store.isReadOnly)
+                .disabled(saving || store.isReadOnly || (hasDue && !timing.isValid))
             }
         }
         .padding(20).frame(width: 430).foregroundStyle(Palette.ink).background(Palette.background)
