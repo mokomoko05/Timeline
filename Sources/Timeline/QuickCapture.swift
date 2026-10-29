@@ -78,11 +78,13 @@ enum CaptureDestination: Equatable {
     case log(Date, UUID)
 }
 
+@MainActor
 final class QuickCaptureModel: ObservableObject {
     @Published var mode: QuickCaptureMode = .todo
     @Published var creationOptions = TaskCreationOptions()
     /// 手动收起后仍保留草稿，只有成功提交才清空。
     @Published var text = ""
+    let imageImports = ImageImportQueue()
     @Published var images: [String] = []
     @Published var tags: [String] = []
     @Published var link: UUID?
@@ -134,6 +136,7 @@ final class QuickCaptureModel: ObservableObject {
 
     @MainActor
     func recordLog(in store: JournalStore, on date: Date = Date()) throws -> (command: LogCommand, entry: DailyLogEntry?) {
+        try imageImports.requireReady()
         let paused = store.focusPaused
         return try store.quickLogEntry(text, images: images, taskID: paused ? nil : link,
                                        linkDefault: false, tags: paused ? [] : tags,
@@ -146,6 +149,7 @@ final class QuickCaptureModel: ObservableObject {
     }
 
     func clearDraft() {
+        imageImports.invalidate()
         text = ""
         images = []
         resetLogAssociations()
@@ -510,6 +514,7 @@ struct QuickCaptureView: View {
                                    remove: { name in images.removeAll { $0 == name } },
                                    preview: { NSWorkspace.shared.open(store.imageURL(images[$0])) })
             }
+            ImageImportStatus(queue: model.imageImports)
             Group {
                 if let message {
                     Button { openDestination() } label: {
@@ -610,12 +615,13 @@ struct QuickCaptureView: View {
     }
 
     private func addImages(_ datas: [Data]) {
-        Task { images += await ImageTools.save(datas, in: store) }
+        ImageTools.importImages(datas, in: store, queue: model.imageImports) { [model] names in model.images += names }
         failure = nil
         focused = true
     }
 
     private func submit() {
+        do { try model.imageImports.requireReady() } catch { failure = AppErrorDescription(error); return }
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty || (mode == .log && !images.isEmpty) else { return }
         failure = nil

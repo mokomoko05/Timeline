@@ -1,3 +1,4 @@
+import Combine
 import PhotosUI
 import SwiftUI
 import TimelineCore
@@ -483,19 +484,20 @@ struct ComposeSheet: View {
     var tags: [String] = []
     var sent: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
-    @State private var text: String
+    @StateObject private var draft: ComposeDraftSession
+    private var text: String { get { draft.text } nonmutating set { draft.text = newValue } }
     /// 打开时恢复了草稿：显示一行提示，可以一键清空。
     @State private var restored: Bool
     /// 已经保存：收起时不再留草稿。
     @State private var finished = false
-    @State private var linked: UUID?
+    private var linked: UUID? { get { draft.linked } nonmutating set { draft.linked = newValue } }
     /// 关联的待办的标题：选的时候记一次，打字时不用每次去找。
     @State private var linkedTitle = ""
     /// 用 `@` / `#` 列表选的标签（正文里写的 #标签 发送时另外解析）。
-    @State private var pickedTags: [String]
+    private var pickedTags: [String] { get { draft.tags } nonmutating set { draft.tags = newValue } }
     /// 不订阅：只有列表订阅它，打字时这一页不会因为补全重算。
     @State private var mention = MentionModel()
-    @State private var images: [String]
+    private var images: [String] { get { draft.images } nonmutating set { draft.images = newValue } }
     @State private var picked: [PhotosPickerItem] = []
     @State private var takingPhoto = false
     @State private var error: String?
@@ -507,12 +509,9 @@ struct ComposeSheet: View {
         self.tags = tags
         self.sent = sent
         // 正文在建视图时就放进去：输入框一出现就是草稿，不会先空一帧。
-        let draft = ComposeDraft.load(ComposeDraft.key(taskID: taskID, tags: tags))
-        _text = State(initialValue: draft?.text ?? "")
-        _pickedTags = State(initialValue: draft?.tags ?? [])
-        _images = State(initialValue: draft?.images ?? [])
-        _restored = State(initialValue: draft != nil)
-        _linked = State(initialValue: draft?.linked ?? taskID)
+        let session = ComposeDraftSession.session(store: store, taskID: taskID, tags: tags)
+        _draft = StateObject(wrappedValue: session)
+        _restored = State(initialValue: !session.snapshot.isEmpty)
     }
 
     private var draftKey: String { ComposeDraft.key(taskID: taskID, tags: tags) }
@@ -533,6 +532,21 @@ struct ComposeSheet: View {
         // 草稿只在收起和退到后台时写一次，打字时不碰存储。
         .onChange(of: text) { if restored { restored = false } }
         .onDisappear { if !finished { saveDraft() } }
+        .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+            guard PerfProbe.enabled, note.object as? String == "composeImportRace", let data = PerfProbe.originalImageSample else { return }
+            text = "Attachment lifecycle probe"
+            draft.imports.start({ [store] in
+                // 强制跨过关闭界面的时刻，走真实原图导入和原草稿回写路径。
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+                return [try await store.storeOriginalImage(data)]
+            }, append: { [draft] names in
+                draft.images += names; draft.persist()
+                print("[perf] COMPOSE_IMPORT lateResultPersisted=\(ComposeDraft.load(ComposeDraft.key(taskID: taskID, tags: tags))?.images.contains(names[0]) == true)")
+            })
+            let count = store.allLogs().count
+            send()
+            print("[perf] COMPOSE_IMPORT blockedEarlySave=\(store.allLogs().count == count) pending=\(draft.imports.pending)")
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             if !finished { saveDraft() }
         }
@@ -558,11 +572,13 @@ struct ComposeSheet: View {
     }
 
     private func saveDraft() {
-        // 在待办里写时默认就关联着它，不算写了东西。
-        ComposeDraft.save(ComposeDraft(text: text, linked: linked == taskID ? nil : linked, tags: pickedTags, images: images), key: draftKey)
+        draft.persist()
+
     }
 
     private func clearDraft() {
+        draft.imports.invalidate()
+        draft.pendingEntryID = nil
         text = ""
         pickedTags = []
         images = []
@@ -572,12 +588,12 @@ struct ComposeSheet: View {
         ComposeDraft.save(ComposeDraft(), key: draftKey)
     }
 
-    private var canSend: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty }
+    private var canSend: Bool { draft.imports.pending == 0 && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty) }
 
     @ViewBuilder private func fields(maxLines: Int) -> some View {
         // 列表贴在输入框上面：卡片往上长，正在打字的那一行不动。
         MentionList(model: mention, store: store)
-        AutoFocusTextView(text: $text, placeholder: L("写点什么… @ 关联待办 · # 标签"), minLines: 4, maxLines: maxLines, mention: mention)
+        AutoFocusTextView(text: $draft.text, placeholder: L("写点什么… @ 关联待办 · # 标签"), minLines: 4, maxLines: maxLines, mention: mention)
         if linked != nil || !tags.isEmpty || !pickedTags.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
@@ -604,6 +620,7 @@ struct ComposeSheet: View {
             }
             .font(.caption)
         }
+        ComposeImportStatus(queue: draft.imports)
         if let error { Text(error).font(.caption).foregroundStyle(Palette.danger) }
         HStack(spacing: 16) {
             // 两个按钮在光标处插入 `@` / `#`：弹出同一个列表，接着打字就是搜索。
@@ -626,8 +643,8 @@ struct ComposeSheet: View {
     private func load() {
         if let linked { link(linked) }
         Task { await store.warmLinkMatching() }
-        mention.provider = MentionProviders.make(store: store, chosenTags: { [tags, pickedTags = $pickedTags] in TagText.merge(tags, pickedTags.wrappedValue) })
-        mention.onPick = { [link, pickedTags = $pickedTags] item in
+        mention.provider = MentionProviders.make(store: store, chosenTags: { [tags, pickedTags = $draft.tags] in TagText.merge(tags, pickedTags.wrappedValue) })
+        mention.onPick = { [link, pickedTags = $draft.tags] item in
             switch item {
             case .task(let task): link(task.id)
             case .tag(let tag): pickedTags.wrappedValue = TagText.merge(pickedTags.wrappedValue, [tag.name])
@@ -644,38 +661,87 @@ struct ComposeSheet: View {
     private func take(_ items: [PhotosPickerItem]) {
         guard !items.isEmpty else { return }
         picked = []
-        Task { await attach(items) }
-    }
-
-    private func attach(_ items: [PhotosPickerItem]) async {
         for item in items {
-            guard let data = try? await item.loadTransferable(type: Data.self),
-                  let name = try? await store.storeOriginalImage(data) else { continue }
-            images.append(name)
+            draft.imports.start({ [store] in
+                guard let data = try await item.loadTransferable(type: Data.self) else { throw CocoaError(.fileReadCorruptFile) }
+                return [try await store.storeOriginalImage(data)]
+            }, append: { [draft] names in draft.images += names; draft.persist() })
         }
     }
 
     private func attach(photo: UIImage) {
-        Task {
-            let data = await Task.detached(priority: .userInitiated) { photo.pngData() }.value
-            guard let data, let name = try? await store.storeOriginalImage(data) else { return }
-            images.append(name)
-        }
+        draft.imports.start({ [store] in
+            guard let data = await Task.detached(priority: .userInitiated, operation: { photo.pngData() }).value else { throw CocoaError(.fileReadCorruptFile) }
+            return [try await store.storeOriginalImage(data)]
+        }, append: { [draft] names in draft.images += names; draft.persist() })
     }
 
     private func send() {
         let parsed = TagText.extract(from: text)
         do {
-            try store.quickLog(parsed.title, images: images, taskID: linked, linkDefault: false, tags: TagText.merge(TagText.merge(tags, pickedTags), parsed.tags),
-                               allowInlineTaskReference: linked == nil, on: Date())
+            try draft.imports.requireReady()
+            if draft.pendingEntryID == nil {
+                let result = try store.quickLogEntry(parsed.title, images: images, taskID: linked, linkDefault: false,
+                                                    tags: TagText.merge(TagText.merge(tags, pickedTags), parsed.tags),
+                                                    allowInlineTaskReference: linked == nil, on: Date())
+                draft.pendingEntryID = result.entry?.id
+            }
             store.save()
+            guard !store.hasPendingSave else { error = store.errorMessage; return }
             finished = true
+            draft.imports.invalidate()
+            draft.pendingEntryID = nil
+            draft.text = ""; draft.images = []; draft.tags = []; draft.linked = taskID
             ComposeDraft.save(ComposeDraft(), key: draftKey)
             sent()
             if let closeEditor { closeEditor() } else { dismiss() }
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+/// 状态由草稿拥有，选择器/视图关闭后仍可接收导入结果并保存到原入口。
+@MainActor
+final class ComposeDraftSession: ObservableObject {
+    private final class WeakSession { weak var value: ComposeDraftSession?; init(_ value: ComposeDraftSession) { self.value = value } }
+    private static var sessions: [String: WeakSession] = [:]
+    @Published var text: String
+    @Published var linked: UUID?
+    @Published var tags: [String]
+    @Published var images: [String]
+    let imports = ImageImportQueue()
+    var pendingEntryID: UUID?
+    private let key: String
+    private let taskID: UUID?
+    private var importSubscription: AnyCancellable?
+
+    static func session(store: JournalStore, taskID: UUID?, tags: [String]) -> ComposeDraftSession {
+        let key = ComposeDraft.key(taskID: taskID, tags: tags)
+        let identity = store.directory.path + ":" + key
+        if let existing = sessions[identity]?.value { return existing }
+        let session = ComposeDraftSession(key: key, taskID: taskID)
+        sessions = sessions.filter { $0.value.value != nil }
+        sessions[identity] = WeakSession(session)
+        return session
+    }
+
+    private init(key: String, taskID: UUID?) {
+        self.key = key; self.taskID = taskID
+        let saved = ComposeDraft.load(key) ?? ComposeDraft()
+        text = saved.text; linked = saved.linked ?? taskID; tags = saved.tags; images = saved.images
+        importSubscription = imports.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
+    }
+
+    var snapshot: ComposeDraft { ComposeDraft(text: text, linked: linked == taskID ? nil : linked, tags: tags, images: images) }
+    func persist() { ComposeDraft.save(snapshot, key: key) }
+}
+
+private struct ComposeImportStatus: View {
+    @ObservedObject var queue: ImageImportQueue
+    var body: some View {
+        if queue.pending > 0 { Text("图片正在导入，请完成后再保存。").font(.caption).foregroundStyle(Palette.muted) }
+        if let error = queue.errorMessage { Text(L("图片导入失败：") + error).font(.caption).foregroundStyle(Palette.danger) }
     }
 }
 

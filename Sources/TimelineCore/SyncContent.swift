@@ -96,8 +96,41 @@ struct SyncContent: Equatable {
         result.tags = localTagOrder.compactMap { tagNames[$0] } + tagNames.filter { !localTagOrder.contains($0.key) }.sorted { $0.key < $1.key }.map(\.value)
         result.pinnedTask = pinned
         result.boardFavoriteOrder = favorites
+        result.mergeDuplicateBoards()
         result.renumberDuplicates(stamps: numberStamps)
         return result
+    }
+
+    /// 离线独立创建的同一 owner 必须指向同一页；旧 ID 和原文留作别名及历史。
+    private mutating func mergeDuplicateBoards() {
+        let groups = Dictionary(grouping: boards.filter { !$0.archived || $0.mergedInto != nil }, by: { $0.owner.lookupKey })
+        for group in groups.values where group.count > 1 {
+            let roots = group.filter { !$0.archived && $0.mergedInto == nil }
+            let rootIDs = Set(roots.map(\.id))
+            guard let canonical = roots.min(by: { $0.id.uuidString < $1.id.uuidString }) else { continue }
+            let ordered = [canonical] + group.filter { $0.id != canonical.id && ($0.mergedInto == nil || rootIDs.contains($0.mergedInto!)) }.sorted { $0.id.uuidString < $1.id.uuidString }
+            guard let index = boards.firstIndex(where: { $0.id == canonical.id }) else { continue }
+            var markdown = canonical.markdown
+            for source in ordered.dropFirst() where source.hasContent && (source.mergedInto != canonical.id || source.mergedDigest != IncrementalSync.digest(Data(source.markdown.utf8))) {
+                if !markdown.contains(source.markdown) {
+                    markdown += (markdown.isEmpty ? "" : "\n\n---\n\n") + source.markdown
+                }
+            }
+            boards[index].markdown = markdown
+            boards[index].mergedInto = nil
+            boards[index].mergedDigest = nil
+            boards[index].archived = false
+            boards[index].updatedAt = group.map(\.updatedAt).max() ?? canonical.updatedAt
+            for source in ordered.dropFirst() {
+                if let alias = boards.firstIndex(where: { $0.id == source.id }) {
+                    boards[alias].mergedInto = canonical.id
+                    boards[alias].mergedDigest = IncrementalSync.digest(Data(source.markdown.utf8))
+                    boards[alias].archived = true
+                }
+            }
+        }
+        var seen = Set<UUID>()
+        boardFavoriteOrder = boardFavoriteOrder?.map { id in boards.first(where: { $0.id == id })?.mergedInto ?? id }.filter { seen.insert($0).inserted }
     }
 
     /// 已有的按本机原来的顺序，新来的按 `newOrder` 排在后面。

@@ -90,7 +90,7 @@ final class BoardNavigation: ObservableObject {
     }
 
     func favoriteBoards(in store: JournalStore) -> [Board] {
-        favoriteBoardIDs.compactMap { id in store.boards.first { $0.id == id } }
+        favoriteBoardIDs.compactMap { id in store.board(id: id) }
     }
 
     func moveFavorite(_ id: UUID, to destination: Int) {
@@ -220,7 +220,7 @@ struct BoardWorkspaceView: View {
     @State private var choosing = false
     @StateObject private var toast = ToastCenter()
 
-    private var board: Board? { store.boards.first { $0.id == navigation.selection } }
+    private var board: Board? { store.board(id: navigation.selection) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -310,7 +310,7 @@ struct BoardContentView: View {
     @State private var showingHistory = false
 
     private var markdown: Binding<String> {
-        Binding(get: { store.boards.first { $0.id == board.id }?.markdown ?? board.markdown },
+        Binding(get: { store.board(id: board.id)?.markdown ?? board.markdown },
                 set: { store.setBoardMarkdown($0, for: board.id) })
     }
 

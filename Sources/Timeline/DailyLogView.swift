@@ -160,7 +160,9 @@ struct DailyLogView: View {
 
     private func addImages(_ datas: [Data]) {
         guard !store.isReadOnly else { return }
-        Task { for name in await ImageTools.save(datas, in: store) { store.addDraftImage(name, on: date) } }
+        ImageTools.importImages(datas, in: store, queue: store.imageImports(for: "journal:" + JournalDates.key(date))) { [store, date] names in
+                        for name in names { store.addDraftImage(name, on: date) }
+                    }
         focused = true
     }
 
@@ -491,6 +493,7 @@ struct DailyLogView: View {
                     .disabled(store.isReadOnly)
                     .accessibilityLabel("日志命令输入，回车提交，Shift+回车换行")
                     .onChange(of: focused) { if $0 { interaction.activePane = .summary } else { logDraft.flush() } }
+                ImageImportStatus(queue: store.imageImports(for: "journal:" + JournalDates.key(date)), compact: true)
                 Button(action: submit) { Image(systemName: "arrow.turn.down.left") }
                     .buttonStyle(HitAreaButtonStyle(compact: true)).help("提交日志")
                     .disabled(store.isReadOnly || (logDraft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && entry.logDraftImages.isEmpty))
@@ -535,6 +538,7 @@ struct DailyLogView: View {
     }
 
     private func submit() {
+        do { try store.imageImports(for: "journal:" + JournalDates.key(date)).requireReady() } catch { self.error = AppErrorDescription(error); return }
         guard !store.isReadOnly, !logDraft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !entry.logDraftImages.isEmpty else { return }
         logDraft.flush()
         do {

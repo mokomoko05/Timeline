@@ -78,12 +78,18 @@ extension JournalStore {
 
     /// 这页工作板的历史版本，新的在前（不含当前内容）。
     public func boardVersions(for id: UUID) -> [BoardVersion] {
-        let current = boards.first { $0.id == id }?.markdown
-        return boardHistory.versions(of: id).filter { $0.markdown != current }
+        let canonical = resolvedBoardID(id)
+        let current = board(id: canonical)?.markdown
+        var seen = Set<UUID>()
+        return boards.filter { resolvedBoardID($0.id) == canonical }.flatMap { board in
+            boardHistory.versions(of: board.id) + (board.mergedInto != nil && board.hasContent ? [BoardVersion(id: board.id, savedAt: board.updatedAt, markdown: board.markdown)] : [])
+        }
+            .filter { $0.markdown != current && seen.insert($0.id).inserted }.sorted { $0.savedAt > $1.savedAt }
     }
 
     /// 换回某个历史版本：当前内容先存一版，可以撤销。
     public func restoreBoardVersion(_ version: BoardVersion, for id: UUID) {
+        let id = resolvedBoardID(id)
         guard !isReadOnly, let board = boards.first(where: { $0.id == id }), board.markdown != version.markdown else { return }
         boardHistory.record(board.markdown, for: id, force: true)
         var updated = boards

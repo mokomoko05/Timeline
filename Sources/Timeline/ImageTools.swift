@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import ImageIO
 import UniformTypeIdentifiers
 import Vision
@@ -54,14 +55,13 @@ enum ImageTools {
         return type.conforms(to: .image)
     }
 
-    /// 处理并保存一批图片数据，返回保存后的文件名。
+    /// 每张独立完成：后续失败时已成功的原图仍留在原草稿。
     @MainActor
-    static func save(_ datas: [Data], in store: JournalStore) async -> [String] {
-        var names: [String] = []
+    static func importImages(_ datas: [Data], in store: JournalStore, queue: ImageImportQueue,
+                             append: @escaping @MainActor ([String]) -> Void) {
         for data in datas {
-            if let name = try? await store.storeOriginalImage(data) { names.append(name) }
+            queue.start({ [store] in [try await store.storeOriginalImage(data)] }, append: append)
         }
-        return names
     }
 
     /// 按原始比例缩小到刚好放进 `maxWidth × maxHeight`，不裁剪；比 1x 显示尺寸更小的图不放大。`scale` 为屏幕缩放（视网膜屏按 2 倍像素算）。
@@ -161,6 +161,29 @@ enum ImageIndexer {
             await MainActor.run {
                 store.setImageTexts(results)
                 running = false
+            }
+        }
+    }
+}
+
+/// 只订阅导入状态，正文输入和整页布局不依赖高频工作状态。
+struct ImageImportStatus: View {
+    @ObservedObject var queue: ImageImportQueue
+    var compact = false
+    var body: some View {
+        if queue.pending > 0 {
+            if compact {
+                ProgressView().controlSize(.small).help("图片正在导入，请完成后再保存。")
+            } else {
+                Text("图片正在导入，请完成后再保存。").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        if let error = queue.errorMessage {
+            if compact {
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(.red)
+                    .help(AppLocalized("图片导入失败：") + error).accessibilityLabel(AppLocalized("图片导入失败：") + error)
+            } else {
+                Text(AppLocalized("图片导入失败：") + error).font(.caption).foregroundStyle(.red)
             }
         }
     }

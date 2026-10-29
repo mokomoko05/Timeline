@@ -110,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 AppRouter.openLog(JournalDates.date(for: found.key) ?? found.log.createdAt, id)
             }
         case .board:
-            guard let board = store.boards.first(where: { $0.id == id }) else { return false }
+            guard let board = store.board(id: id) else { return false }
             BoardWindowController.shared.show(store: store, owner: board.owner)
         }
         return true

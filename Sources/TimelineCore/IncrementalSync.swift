@@ -24,6 +24,9 @@ struct SyncReceipt: Codable, Equatable, Sendable {
 }
 
 struct IncrementalState: Codable, Equatable, Sendable {
+    var deviceID: String?
+    var folderPath: String?
+    var commitID: String?
     var revision = 0
     var sequence = 0
     var checkpointSequence = 0

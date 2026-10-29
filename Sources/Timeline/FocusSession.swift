@@ -853,6 +853,7 @@ final class FocusPanelController: NSObject, NSWindowDelegate {
 
 @MainActor
 final class FocusNoteDraft: ObservableObject {
+    let imageImports = ImageImportQueue()
     @Published var text = ""
     @Published var images: [String] = []
     @Published var link: UUID?
@@ -862,6 +863,7 @@ final class FocusNoteDraft: ObservableObject {
 
     @discardableResult
     func save(session: FocusSession, reflection: Bool = false) -> Bool {
+        do { try imageImports.requireReady() } catch { self.error = AppErrorDescription(error); return false }
         guard let store = session.store else { return false }
         if let pendingEntryID, store.allLogs().contains(where: { $0.log.id == pendingEntryID }) {
             store.save()
@@ -906,6 +908,7 @@ final class FocusNoteDraft: ObservableObject {
     }
 
     private func clear() {
+        imageImports.invalidate()
         text = ""
         images = []
         link = nil
@@ -1388,6 +1391,7 @@ struct FocusPanelView: View {
             }
             .frame(minHeight: 42)
             HStack(spacing: 4) {
+                ImageImportStatus(queue: draft.imageImports, compact: true)
                 if let error = draft.error {
                     Button { showingSaveError.toggle() } label: {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -1517,7 +1521,7 @@ struct FocusPanelView: View {
     private func addNoteImages(_ datas: [Data]) {
         guard let store else { return }
         guard draft.pendingEntryID == nil else { return }
-        Task { draft.images += await ImageTools.save(datas, in: store) }
+        ImageTools.importImages(datas, in: store, queue: draft.imageImports) { [draft] names in draft.images += names }
         focused = true
     }
 

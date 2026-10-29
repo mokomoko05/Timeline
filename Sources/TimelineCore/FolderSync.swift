@@ -16,6 +16,8 @@ struct SyncSnapshot: Codable {
 /// 和已经合并过的其他设备文件（没变的就不再读）。
 struct SyncState: Codable, Equatable {
     var device: String
+    var commitID: String?
+    var folderPath: String?
     var records: [String: SyncRecord] = [:]
     var remote: [String: RemoteMark] = [:]
     var names: [String: String] = [:]
@@ -128,13 +130,22 @@ public final class FolderSync: ObservableObject {
         self.folder = folder
         self.deviceName = deviceName
         let url = Self.stateURL(in: store.directory)
-        if let data = try? Data(contentsOf: url), let saved = try? JSONDecoder().decode(SyncState.self, from: data) {
-            state = saved
-        } else {
-            state = SyncState(device: Self.makeDeviceID())
+        // 两个原子文件之间中断时，只接受与正文提交一致的基线。
+        func load(_ file: URL) -> SyncState? {
+            guard let data = try? Data(contentsOf: file),
+                  let saved = try? JSONDecoder().decode(SyncState.self, from: data),
+                  saved.commitID == store.syncCommitID else { return nil }
+            return saved
         }
+        state = load(url) ?? load(url.deletingLastPathComponent().appendingPathComponent("state.previous.json")) ?? SyncState(device: Self.makeDeviceID())
+        let folderPath = folder.standardizedFileURL.resolvingSymlinksInPath().path
+        if let previousFolder = state.folderPath, previousFolder != folderPath {
+            state = SyncState(device: Self.makeDeviceID(), records: state.records)
+        }
+        state.folderPath = folderPath
         let transportURL = url.deletingLastPathComponent().appendingPathComponent("transport.json")
         if let data = try? Data(contentsOf: transportURL), let ledger = try? JSONDecoder().decode(IncrementalState.self, from: data),
+           ledger.deviceID == state.device, ledger.folderPath == folderPath, ledger.commitID == state.commitID,
            ledger.revision >= (state.ledger?.revision ?? -1) { state.ledger = ledger }
         let statusURL = url.deletingLastPathComponent().appendingPathComponent("status.json")
         if let data = try? Data(contentsOf: statusURL), let report = try? JSONDecoder().decode([String: String].self, from: data) {
@@ -359,10 +370,9 @@ public final class FolderSync: ObservableObject {
             try? store.export(to: store.backupsDirectory.appendingPathComponent("before-first-sync-\(JournalDates.key(time)).json"))
         }
         let applied = outcome.content != content
-        if applied { store.applySyncContent(outcome.content) }
+        if applied { store.applySyncContent(outcome.content, persistImmediately: false) }
         if waitingForDownload != outcome.pendingDownload { waitingForDownload = outcome.pendingDownload }
         if !outcome.pendingDownload && !waitingForUpload { downloadWaits = 0 }
-        if applied { store.save() }
         if outcome.stateChanged { needsExport = true }
         let images = store.imagesDirectory, stateURL = self.stateURL
         var snapshotState = outcome.state
@@ -372,21 +382,33 @@ public final class FolderSync: ObservableObject {
             snapshotState.ledger?.imageInventoryComplete = inventory != nil
             snapshotState.ledger?.lastImageInventory = time
         }
-        let names = (localChanged || applied || previous.ledger == nil) ? outcome.content.imageNames : []
+        let imageInventoryDue = time.timeIntervalSince(previous.ledger?.lastImageInventory ?? .distantPast) >= 86400
+        let inspectImages = localChanged || applied || previous.ledger == nil || imageInventoryDue
+        let currentNames = inspectImages ? outcome.content.imageNames : []
+        let names = (previous.ledger == nil || imageInventoryDue) ? currentNames : currentNames.subtracting(inspectImages ? (syncedContent?.imageNames ?? []) : [])
         snapshotState.ledger?.protectedImages?.formUnion(names)
         let queuedImages = (snapshotState.ledger?.queuedImages ?? []).union(names)
         snapshotState.ledger?.queuedImages = queuedImages
         if snapshotState.ledger != outcome.state.ledger { snapshotState.ledger?.revision += 1 }
         let uploadPending = self.uploadPending
-        let recordsChanged = previous.records != snapshotState.records || previous.ledger == nil
+        let recordsChanged = previous.records != snapshotState.records || previous.ledger == nil || previous.commitID == nil
+        if recordsChanged { snapshotState.commitID = UUID().uuidString }
+        snapshotState.ledger?.deviceID = snapshotState.device
+        snapshotState.ledger?.folderPath = snapshotState.folderPath
+        snapshotState.ledger?.commitID = snapshotState.commitID
         await recordProgress("exporting")
         // 先落盘再推进内存基线。写盘失败后下轮仍能认出同一批本机修改；
         // 云端发布失败则保留已落盘的序号、批次和图片队列供重试。
         let durableState = snapshotState
         try await Task.detached(priority: .utility) {
-            if recordsChanged { try Self.write(state: durableState, to: stateURL) }
+            if recordsChanged {
+                try Self.write(state: previous, to: stateURL.deletingLastPathComponent().appendingPathComponent("state.previous.json"))
+                try Self.write(state: durableState, to: stateURL)
+            }
             if let ledger = durableState.ledger, ledger != previous.ledger { try Self.writeTransport(ledger, to: stateURL) }
         }.value
+        // staged state 尚未提交时绝不发布批次/回执；重启会回退到 previous。
+        if recordsChanged || applied || store.hasPendingSave, let commitID = durableState.commitID { try store.saveForSync(commitID: commitID) }
         state = durableState
         syncedContent = outcome.content
         devices = outcome.devices.map { device in
@@ -502,6 +524,25 @@ public final class FolderSync: ObservableObject {
             devices.append(Device(id: peer.device, name: peer.name, exportedAt: peer.date,
                                   hasReceivedLocalChanges: (peer.seen[state.device] ?? 0) >= ledger.sequence && ledger.sequence > 0))
         }
+        let ownBatchMissing = try accessing(folder) {
+            guard let file = ledger.lastBatch, ledger.pending.isEmpty else { return false }
+            let url = folder.appendingPathComponent(IncrementalSync.directory).appendingPathComponent(state.device).appendingPathComponent(file)
+            let placeholder = url.deletingLastPathComponent().appendingPathComponent("." + file + ".icloud")
+            return !FileManager.default.fileExists(atPath: url.path) && !FileManager.default.fileExists(atPath: placeholder.path)
+        }
+        if ownBatchMissing {
+            let batch = SyncBatch(device: state.device, name: deviceName, sequence: ledger.sequence + 1,
+                                  base: ledger.sequence, checkpoint: true, exportedAt: now, records: state.records, seen: ledger.received)
+            ledger.sequence = batch.sequence
+            ledger.checkpointSequence = batch.sequence
+            ledger.deltaCount = 0
+            ledger.deltaBytes = 0
+            ledger.pending.append(batch)
+            ledger.received[state.device] = batch.sequence
+            ledger.markerPublished = false
+            ledger.publishedReceipt = nil
+            ledger.queuedImages = content.imageNames
+        }
         let shouldApply = localChanged || mergedRemote || state.records != previous.records
         var merged = shouldApply ? content.applying(state.records) : content
         if shouldApply {
@@ -580,10 +621,11 @@ public final class FolderSync: ObservableObject {
         var written = 0
         let remote = folder.appendingPathComponent(imagesFolder)
         try manager.createDirectory(at: remote, withIntermediateDirectories: true)
-        for name in names.subtracting(ledger.uploadedImages).sorted() where !name.contains("/") && !name.hasPrefix(".") {
+        for name in names.sorted() where !name.contains("/") && !name.hasPrefix(".") {
             let mine = local.appendingPathComponent(name), theirs = remote.appendingPathComponent(name)
             if manager.fileExists(atPath: mine.path) {
-                if !manager.fileExists(atPath: theirs.path) {
+                let placeholder = remote.appendingPathComponent("." + name + ".icloud")
+                if !manager.fileExists(atPath: theirs.path) && !manager.fileExists(atPath: placeholder.path) {
                     let data = try Data(contentsOf: mine)
                     try coordinatedWrite(data, to: theirs)
                     written += data.count

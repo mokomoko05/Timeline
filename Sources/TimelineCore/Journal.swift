@@ -212,10 +212,13 @@ struct JournalDocument: Codable {
     var pinnedTask: UUID?
     var boards: [Board]?
     var boardFavoriteOrder: [UUID]?
+    var syncCommitID: String?
 }
 
 @MainActor
 public final class JournalStore: ObservableObject {
+    var syncCommitID: String?
+    var draftImageImports: [String: ImageImportQueue] = [:]
     /// 缺失原图由同步器按可见内容请求，不在首次同步下载整座图库。
     var requestImage: ((String) -> Void)?
     var fetchImage: ((String) async throws -> Bool)?
@@ -374,6 +377,7 @@ public final class JournalStore: ObservableObject {
                 guard (1...8).contains(document.version) else {
                     throw CocoaError(.fileReadUnknown)
                 }
+                syncCommitID = document.syncCommitID
                 days = document.days
                 tagRegistry = TagText.merge([], (document.tags ?? []).compactMap(TagText.normalize))
                 pinnedTaskID = document.pinnedTask
@@ -1349,6 +1353,19 @@ public final class JournalStore: ObservableObject {
         finishSave(writer.writeNow(documentSnapshot, version: documentVersion), version: documentVersion)
     }
 
+    /// 同步正文和基线使用同一提交标识；只有确认正文落盘后才允许发布回执。
+    func saveForSync(commitID: String) throws {
+        guard !isReadOnly else { throw FolderSync.SyncError.readOnly }
+        let previous = syncCommitID
+        syncCommitID = commitID
+        pendingSave?.cancel()
+        pendingSave = nil
+        documentVersion += 1
+        let error = writer.writeNow(documentSnapshot, version: documentVersion)
+        finishSave(error, version: documentVersion)
+        if let error { syncCommitID = previous; throw error }
+    }
+
     /// 修改后的保存：开启后台写入时不阻塞界面，否则同 `save()`。
     private func persist() {
         guard writesInBackground else { save(); return }
@@ -1726,7 +1743,7 @@ public final class JournalStore: ObservableObject {
 
     private var documentSnapshot: JournalDocument {
         JournalDocument(days: days, nextTaskNumber: nextTaskNumber, tags: tagRegistry.isEmpty ? nil : tagRegistry,
-                        pinnedTask: pinnedTaskID, boards: boards.isEmpty ? nil : boards, boardFavoriteOrder: boardFavoriteOrder)
+                        pinnedTask: pinnedTaskID, boards: boards.isEmpty ? nil : boards, boardFavoriteOrder: boardFavoriteOrder, syncCommitID: syncCommitID)
     }
 
     /// 同步用的内容快照：值类型，可以交给后台线程整理。
@@ -1736,7 +1753,7 @@ public final class JournalStore: ObservableObject {
 
     /// 用合并了其他设备修改的内容整体替换当前数据。远端修改不进撤销栈，已有的撤销记录也作废，
     /// 免得撤销时把别的设备刚同步过来的内容一起退回去。
-    func applySyncContent(_ content: SyncContent) {
+    func applySyncContent(_ content: SyncContent, persistImmediately: Bool = true) {
         guard !isReadOnly, content != syncContent else { return }
         let tasksChanged = Set(days.keys).union(content.days.keys).contains { (days[$0]?.todos ?? []) != (content.days[$0]?.todos ?? []) }
         let logsChanged = Set(days.keys).union(content.days.keys).contains { (days[$0]?.logs ?? []) != (content.days[$0]?.logs ?? []) }
@@ -1759,7 +1776,7 @@ public final class JournalStore: ObservableObject {
         if boardFavoriteOrder != content.boardFavoriteOrder { boardFavoriteOrder = content.boardFavoriteOrder }
         if tasksChanged { invalidateTaskIndex() }
         hasPendingSave = true
-        persist()
+        if persistImmediately { persist() }
     }
 
     func replaceBoards(_ updated: [Board], action: String, debounce: Bool = false) {

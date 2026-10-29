@@ -129,7 +129,7 @@ final class BoardWebSession: NSObject, ObservableObject {
     /// 数据里现在的正文。
     private func currentSource() -> String? {
         switch document {
-        case .board(let id): return store.boards.first { $0.id == id }?.markdown
+        case .board(let id): return store.board(id: id)?.markdown
         case .log(let id, let date): return store.entry(for: date).logs.first { $0.id == id }?.text
         }
     }

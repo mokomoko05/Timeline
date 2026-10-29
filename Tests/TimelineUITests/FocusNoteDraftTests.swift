@@ -20,6 +20,21 @@ final class FocusNoteDraftTests: XCTestCase {
         return (session, store, task, directory)
     }
 
+    func testPendingImageMustRemainInDraftBeforeFocusNoteCanSave() async throws {
+        let (session, store, _, _) = try fixture()
+        let draft = FocusNoteDraft()
+        draft.text = "Original attachment"
+        var finish: CheckedContinuation<[String], Error>?
+        draft.imageImports.start({ try await withCheckedThrowingContinuation { finish = $0 } }, append: { draft.images += $0 })
+        XCTAssertFalse(draft.save(session: session))
+        XCTAssertNotNil(draft.error)
+        while finish == nil { await Task.yield() }
+        finish?.resume(returning: ["original.png"])
+        while draft.imageImports.pending > 0 { await Task.yield() }
+        XCTAssertTrue(draft.save(session: session))
+        XCTAssertEqual(store.allLogs().first { $0.log.text == "Original attachment" }?.log.images, ["original.png"])
+    }
+
     func testInvalidCommandsAndNonEntryCommandsKeepTheEntireDraft() throws {
         let (session, store, task, _) = try fixture()
         let draft = FocusNoteDraft()

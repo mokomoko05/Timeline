@@ -6,6 +6,25 @@ import TimelineCore
 
 @MainActor
 final class QuickCaptureAssociationTests: XCTestCase {
+    func testImageImportBlocksSubmissionAndDiscardIgnoresLateCompletion() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let model = QuickCaptureModel(defaults: InMemoryDefaults())
+        model.text = "Keep with original"
+        var finish: CheckedContinuation<[String], Error>?
+        model.imageImports.start({ try await withCheckedThrowingContinuation { finish = $0 } }, append: { model.images += $0 })
+        XCTAssertThrowsError(try model.recordLog(in: store))
+        XCTAssertTrue(store.allLogs().isEmpty)
+        while finish == nil { await Task.yield() }
+        model.clearDraft()
+        model.text = "Next draft"
+        finish?.resume(returning: ["late.png"])
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertTrue(model.images.isEmpty)
+        XCTAssertEqual(model.text, "Next draft")
+    }
+
     func testQuickLogDoesNotInheritFocusOrPinnedTaskButKeepsExplicitChoices() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

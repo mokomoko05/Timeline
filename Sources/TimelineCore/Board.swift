@@ -23,6 +23,9 @@ public struct Board: Codable, Equatable, Identifiable {
     public var owner: BoardOwner
     public var title: String
     public var markdown: String
+    /// 合并后的旧 ID 仍可用于导航和写入；原文保留供恢复。
+    public var mergedInto: UUID?
+    public var mergedDigest: String?
     public var archived: Bool
     public var createdAt: Date
     public var updatedAt: Date
@@ -39,7 +42,7 @@ public struct Board: Codable, Equatable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, owner, title, markdown, items, archived, createdAt, updatedAt
+        case id, owner, title, markdown, items, mergedInto, mergedDigest, archived, createdAt, updatedAt
     }
 
     private struct LegacyItem: Decodable {
@@ -63,6 +66,8 @@ public struct Board: Codable, Equatable, Identifiable {
         id = try values.decode(UUID.self, forKey: .id)
         owner = try values.decode(BoardOwner.self, forKey: .owner)
         title = try values.decode(String.self, forKey: .title)
+        mergedInto = try values.decodeIfPresent(UUID.self, forKey: .mergedInto)
+        mergedDigest = try values.decodeIfPresent(String.self, forKey: .mergedDigest)
         archived = try values.decodeIfPresent(Bool.self, forKey: .archived) ?? false
         createdAt = try values.decode(Date.self, forKey: .createdAt)
         updatedAt = try values.decode(Date.self, forKey: .updatedAt)
@@ -80,6 +85,8 @@ public struct Board: Codable, Equatable, Identifiable {
         try values.encode(owner, forKey: .owner)
         try values.encode(title, forKey: .title)
         try values.encode(markdown, forKey: .markdown)
+        try values.encodeIfPresent(mergedInto, forKey: .mergedInto)
+        try values.encodeIfPresent(mergedDigest, forKey: .mergedDigest)
         try values.encode(archived, forKey: .archived)
         try values.encode(createdAt, forKey: .createdAt)
         try values.encode(updatedAt, forKey: .updatedAt)
@@ -87,18 +94,34 @@ public struct Board: Codable, Equatable, Identifiable {
 }
 
 extension JournalStore {
-    public var favoriteBoardIDs: [UUID] { boardFavoriteOrder ?? [] }
+    public func resolvedBoardID(_ id: UUID) -> UUID {
+        var current = id, visited = Set<UUID>()
+        while visited.insert(current).inserted, let next = boards.first(where: { $0.id == current })?.mergedInto { current = next }
+        return current
+    }
+
+    public func board(id: UUID?) -> Board? {
+        guard let id else { return nil }
+        let resolved = resolvedBoardID(id)
+        return boards.first { $0.id == resolved }
+    }
+
+    public var favoriteBoardIDs: [UUID] {
+        var seen = Set<UUID>()
+        return (boardFavoriteOrder ?? []).map(resolvedBoardID).filter { seen.insert($0).inserted }
+    }
 
     public func setBoardFavoriteOrder(_ ids: [UUID]) {
         guard !isReadOnly else { return }
         var seen = Set<UUID>()
-        let order = ids.filter { seen.insert($0).inserted }
+        let order = ids.map(resolvedBoardID).filter { seen.insert($0).inserted }
         guard boardFavoriteOrder != order else { return }
         boardFavoriteOrder = order
         registryChanged()
     }
 
     public func toggleBoardFavorite(_ id: UUID) {
+        let id = resolvedBoardID(id)
         guard boards.contains(where: { $0.id == id }) else { return }
         var order = favoriteBoardIDs
         if order.contains(id) { order.removeAll { $0 == id } } else { order.append(id) }
@@ -106,6 +129,7 @@ extension JournalStore {
     }
 
     public func moveBoardFavorite(_ id: UUID, to destination: Int) {
+        let id = resolvedBoardID(id)
         var order = favoriteBoardIDs
         guard let index = order.firstIndex(of: id) else { return }
         order.remove(at: index)
@@ -160,6 +184,7 @@ extension JournalStore {
     }
 
     public func setBoardMarkdown(_ markdown: String, for id: UUID) {
+        let id = resolvedBoardID(id)
         guard !isReadOnly, let index = boards.firstIndex(where: { $0.id == id }), boards[index].markdown != markdown else { return }
         var updated = boards
         updated[index].markdown = markdown
@@ -168,6 +193,7 @@ extension JournalStore {
     }
 
     public func toggleBoardMarkdownTask(atLine line: Int, in id: UUID) {
+        let id = resolvedBoardID(id)
         guard !isReadOnly, let board = boards.first(where: { $0.id == id }) else { return }
         var lines = board.markdown.components(separatedBy: "\n")
         guard line > 0, line <= lines.count,

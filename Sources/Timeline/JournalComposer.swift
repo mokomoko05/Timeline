@@ -137,6 +137,7 @@ struct JournalComposer: View {
     private var entry: DayEntry { store.entry(for: date) }
 
     private func commit() {
+        guard store.imageImports(for: "journal:" + JournalDates.key(date)).pending == 0 else { return }
         draft.flush()
         submit()
         draft.synchronize(store.entry(for: date).logDraft)
@@ -151,10 +152,13 @@ struct JournalComposer: View {
             }
             HStack(spacing: 8) {
                 Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent)
+                ImageImportStatus(queue: store.imageImports(for: "journal:" + JournalDates.key(date)), compact: true)
                 TaskInput(text: Binding(get: { draft.text }, set: draft.update),
                           focused: $focused, placeholder: "写下日志…", fontSize: 13,
                           submit: commit, onPasteImages: { datas in
-                    Task { for name in await ImageTools.save(datas, in: store) { store.addDraftImage(name, on: date) } }
+                    ImageTools.importImages(datas, in: store, queue: store.imageImports(for: "journal:" + JournalDates.key(date))) { [store, date] names in
+                        for name in names { store.addDraftImage(name, on: date) }
+                    }
                     focused = true
                 }, minHeight: 24, maxLines: 10, mention: mention)
                 .disabled(store.isReadOnly)

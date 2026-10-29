@@ -961,9 +961,10 @@ struct NotesView: View {
                     TaskInput(text: binding, focused: $tagFocused,
                               placeholder: AppLocalizedFormat("写进 #%@…", tag),
                               fontSize: 13, submit: { submitTag(tag) }, onPasteImages: { datas in
-                        Task { addImages(await ImageTools.save(datas, in: store), to: key) }
+                        ImageTools.importImages(datas, in: store, queue: store.imageImports(for: "notes:" + key)) { [nav] names in nav.updateDraft(key) { $0.images += names } }
                         tagFocused = true
                     }, minHeight: 24, maxLines: 10, mention: tagMention).disabled(store.isReadOnly)
+                    ImageImportStatus(queue: store.imageImports(for: "notes:" + key), compact: true)
                     Button { submitTag(tag) } label: { Image(systemName: "arrow.turn.down.left") }
                         .buttonStyle(HitAreaButtonStyle())
                         .disabled(store.isReadOnly || (current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty))
@@ -982,6 +983,7 @@ struct NotesView: View {
     private func submitTag(_ tag: String) {
         let key = tagDraftKey(tag)
         tagText.flush()
+        do { try store.imageImports(for: "notes:" + key).requireReady() } catch { self.error = AppErrorDescription(error); return }
         let draft = nav.draft(key)
         let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !draft.images.isEmpty else { return }
@@ -1039,9 +1041,10 @@ struct NotesView: View {
                     TaskInput(text: binding, focused: $focused,
                               placeholder: topic.deleted ? AppLocalized("任务已删除，无法追加笔记") : AppLocalized("追加笔记…"),
                               fontSize: 13, submit: { submit(topic) }, onPasteImages: { datas in
-                        Task { addImages(await ImageTools.save(datas, in: store), to: key) }
+                        ImageTools.importImages(datas, in: store, queue: store.imageImports(for: "notes:" + key)) { [nav] names in nav.updateDraft(key) { $0.images += names } }
                         focused = true
                     }, minHeight: 24, maxLines: 10, mention: taskMention).disabled(topic.deleted || store.isReadOnly)
+                    ImageImportStatus(queue: store.imageImports(for: "notes:" + key), compact: true)
                     Button { submit(topic) } label: { Image(systemName: "arrow.turn.down.left") }
                         .buttonStyle(HitAreaButtonStyle())
                         .disabled(topic.deleted || store.isReadOnly || (current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty))
@@ -1060,6 +1063,7 @@ struct NotesView: View {
     private func submit(_ topic: JournalStore.NoteTopic) {
         let key = taskDraftKey(topic.id)
         taskText.flush()
+        do { try store.imageImports(for: "notes:" + key).requireReady() } catch { self.error = AppErrorDescription(error); return }
         let draft = nav.draft(key)
         let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !draft.images.isEmpty else { return }

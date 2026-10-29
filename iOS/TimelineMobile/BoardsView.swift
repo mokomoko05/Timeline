@@ -154,7 +154,7 @@ private struct BoardListView: View {
 private struct BoardFavoritesSheet: View {
     @ObservedObject var store: JournalStore
     @Environment(\.dismiss) private var dismiss
-    private var favorites: [Board] { store.favoriteBoardIDs.compactMap { id in store.boards.first { $0.id == id } } }
+    private var favorites: [Board] { store.favoriteBoardIDs.compactMap { id in store.board(id: id) } }
     private var others: [Board] {
         store.boards.filter { !store.isBoardArchived($0) && !store.favoriteBoardIDs.contains($0.id) }
             .sorted { store.boardTitle($0).localizedStandardCompare(store.boardTitle($1)) == .orderedAscending }
@@ -233,7 +233,7 @@ struct BoardPage: View {
         _session = StateObject(wrappedValue: BoardWebSession(store: store, boardID: id))
     }
 
-    private var board: Board? { store.boards.first { $0.id == id } }
+    private var board: Board? { store.board(id: id) }
 
     var body: some View {
         BoardWebEditor(session: session, sourceMode: sourceMode)

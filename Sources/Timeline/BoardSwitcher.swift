@@ -41,16 +41,15 @@ struct BoardSwitcherItem: Identifiable, Equatable {
             if case .tag = owner { return "number" }
             return "list.bullet.rectangle"
         }
-        let boards = Dictionary(store.boards.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for id in favorites {
-            guard let board = boards[id] else { continue }
+            guard let board = store.board(id: id) else { continue }
             owners.insert(key(board.owner))
             let title = store.boardTitle(board)
             guard matches(title) else { continue }
             result.append(BoardSwitcherItem(id: "board:" + id.uuidString, section: .favorites, title: title, symbol: symbol(board.owner),
                                             boardID: id, owner: board.owner, archived: store.isBoardArchived(board)))
         }
-        for board in store.boards.sorted(by: { $0.updatedAt > $1.updatedAt }) where !owners.contains(key(board.owner)) {
+        for board in store.boards.sorted(by: { $0.updatedAt > $1.updatedAt }) where board.mergedInto == nil && !owners.contains(key(board.owner)) {
             owners.insert(key(board.owner))
             let title = store.boardTitle(board)
             guard matches(title) else { continue }

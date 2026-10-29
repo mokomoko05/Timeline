@@ -283,7 +283,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         settings = ["fontSize": fontSize, "readOnly": store.isReadOnly, "colors": Self.colors(dark: dark),
                     "sourceMode": sourceMode, "folds": BoardFolds.load(boardID, defaults: defaults), "key": boardID.uuidString]
         settings["labels"] = Self.labels
-        let current = store.boards.first { $0.id == boardID }?.markdown ?? storedSource
+        let current = store.board(id: boardID)?.markdown ?? storedSource
         if current != storedSource {
             storedSource = current
             source = current

@@ -142,7 +142,7 @@ enum PerfProbe {
     /// 按钮测试（`-perfActions YES`）：依次模拟点常用的按钮（和按钮做的事一样），报每一下从按下到画出下一帧的时间。
     static let action = Notification.Name("PerfProbeAction")
     private static var pendingAction: (String, CFTimeInterval)?
-    private static var originalImageSample: Data?
+    static var originalImageSample: Data?
     private static var importedImageSamples: Set<String> = []
 
     private static func prepareOriginalImageSample() {
@@ -239,6 +239,9 @@ enum PerfProbe {
             ("准备原图测试", { prepareOriginalImageSample() }),
             ("旧版图片导入", { importImageSample(legacy: true) }),
             ("后台原图导入", { importImageSample(legacy: false) }),
+            ("草稿导入并立即保存", { send("composeImportRace") }),
+            ("关闭导入中的草稿", { send("closeSheet") }),
+            ("重新打开导入草稿", { send("compose") }),
             ("清理原图测试", {
                 for name in importedImageSamples { try? FileManager.default.removeItem(at: store.imagesDirectory.appendingPathComponent(name)) }
                 importedImageSamples = []
