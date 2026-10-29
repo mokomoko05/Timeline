@@ -21,6 +21,34 @@ final class WorkspaceTopBarTests: XCTestCase {
         }
     }
 
+    func testAutomaticSyncDoesNotResizeTheToolbarButton() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let folder = directory.appendingPathComponent("cloud")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let defaults = InMemoryDefaults()
+        defaults.set(true, forKey: CloudSyncController.enabledKey)
+        let controller = CloudSyncController(store: JournalStore(directory: directory.appendingPathComponent("data")), defaults: defaults, syncFolder: folder)
+        let sync = try XCTUnwrap(controller.sync)
+        sync.stopAutomaticSync()
+        await sync.syncUntilExported()
+        let previous = AppRouter.cloudSync
+        AppRouter.cloudSync = controller
+        let host = NSHostingView(rootView: WorkspaceSyncButton())
+        defer {
+            AppRouter.cloudSync = previous
+            controller.setEnabled(false)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let idleWidth = host.fittingSize.width
+        sync.prepareForSync = { try? await Task.sleep(for: .milliseconds(120)) }
+        let round = Task { try await sync.sync() }
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertTrue(sync.isSyncing)
+        XCTAssertEqual(host.fittingSize.width, idleWidth, accuracy: 0.5, "Background checks must not replace the label and shift nearby panel buttons")
+        _ = try await round.value
+        XCTAssertEqual(host.fittingSize.width, idleWidth, accuracy: 0.5)
+    }
+
     func testActualMainAndNotesCloseButtonsAlignAndAllPanelsFitAfterResizing() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

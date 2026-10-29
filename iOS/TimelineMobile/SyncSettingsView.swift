@@ -87,18 +87,34 @@ private struct SyncStatusRows: View {
     let syncNow: () -> Void
 
     var body: some View {
-        if state.isSyncing {
-            LabeledContent("状态") { ProgressView() }
-        } else if state.waitingForDownload {
-            Text("等待 iCloud 下载")
-        } else if let error = state.lastError {
-            Text(error).foregroundStyle(.red)
-        } else if let date = state.lastSync {
-            LabeledContent("上次同步", value: DayText.timeWithSeconds(date))
+        Label(LocalizedStringKey(state.statusTitle), systemImage: state.lastError == nil ? "icloud" : "exclamationmark.icloud")
+            .foregroundStyle(state.lastError == nil ? Color.primary : .red)
+        if let error = state.lastError { Text(LocalizedStringKey(error)).font(.caption).foregroundStyle(.red) }
+        if state.waitingForUpload {
+            Text("本机快照已写入共享文件夹，正在等待 iCloud 确认上传。应用不能强制系统立即上传。")
+                .font(.caption).foregroundStyle(.secondary)
+            if let since = state.uploadWaitingSince {
+                LabeledContent("本次上传等待开始", value: since.formatted(date: .abbreviated, time: .standard))
+            }
         }
-        if !state.devices.isEmpty {
-            LabeledContent("其他设备", value: state.devices.map(\.name).joined(separator: "、"))
+        if state.waitingForDownload {
+            Text("已请求下载其他设备的更新，下载完成后会自动合并。")
+                .font(.caption).foregroundStyle(.secondary)
         }
-        Button("立即同步", action: syncNow).disabled(state.isSyncing)
+        if let date = state.lastCheck { LabeledContent("最近检查", value: date.formatted(date: .abbreviated, time: .standard)) }
+        if let date = state.lastExport { LabeledContent("已写入共享文件夹", value: date.formatted(date: .abbreviated, time: .standard)) }
+        if let date = state.lastUpload { LabeledContent("iCloud 确认上传", value: date.formatted(date: .abbreviated, time: .standard)) }
+        ForEach(state.devices) { device in
+            LabeledContent(device.name) {
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text(device.exportedAt.formatted(date: .abbreviated, time: .standard))
+                    Text("对方最近导出的数据").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        }
+        Text("上传完成表示 iCloud 已接收；其他设备需要联网并打开 Timeline，才能读取并合并。上面的设备时间是对方导出数据的时间，不是接收确认。")
+            .font(.caption).foregroundStyle(.secondary)
+        if let code = state.lastErrorCode { Text(code).font(.caption.monospaced()).textSelection(.enabled) }
+        Button("重新检查并重试", action: syncNow)
     }
 }

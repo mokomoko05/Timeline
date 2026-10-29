@@ -199,6 +199,7 @@ enum PerfProbe {
             ("滑动中跳转", { send("flingJump") }),
             ("切到笔记", { switchTab(.notes) }),
             ("切到工作板", { switchTab(.boards) }),
+            ("同步工作板", { Task { await AppServices.shared.sync.syncNow() } }),
             ("准备工作板收藏", { store.setBoardFavoriteOrder(Array(store.boards.prefix(3).map(\.id))) }),
             ("搜索工作板", { send("boardSearch") }),
             ("清空工作板搜索", { send("boardSearchClear") }),

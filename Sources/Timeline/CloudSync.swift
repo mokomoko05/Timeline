@@ -17,15 +17,17 @@ final class CloudSyncController: ObservableObject {
     @Published private(set) var sync: FolderSync?
     private let store: JournalStore
     private let defaults: UserDefaults
+    private let syncFolder: URL
     private var activeObserver: NSObjectProtocol?
     private var forward: AnyCancellable?
 
     var isEnabled: Bool { sync != nil }
-    var iCloudDriveAvailable: Bool { FileManager.default.fileExists(atPath: Self.iCloudDrive.path) }
+    var iCloudDriveAvailable: Bool { FileManager.default.fileExists(atPath: syncFolder.deletingLastPathComponent().path) }
 
-    init(store: JournalStore, defaults: UserDefaults = .standard) {
+    init(store: JournalStore, defaults: UserDefaults = .standard, syncFolder: URL? = nil) {
         self.store = store
         self.defaults = defaults
+        self.syncFolder = syncFolder ?? Self.defaultFolder
         if defaults.bool(forKey: Self.enabledKey) { start() }
         activeObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.sync?.syncSoon() }
@@ -41,7 +43,7 @@ final class CloudSyncController: ObservableObject {
 
     private func start() {
         guard sync == nil, !store.isReadOnly, iCloudDriveAvailable else { return }
-        let sync = FolderSync(store: store, folder: Self.defaultFolder, deviceName: Host.current().localizedName ?? "Mac")
+        let sync = FolderSync(store: store, folder: syncFolder, deviceName: Host.current().localizedName ?? "Mac")
         sync.prepareForSync = {
             if let editor = BoardLiveEditorSession.active {
                 await withCheckedContinuation { continuation in editor.commit(endingEditing: false) { continuation.resume() } }
@@ -60,7 +62,7 @@ final class CloudSyncController: ObservableObject {
     }
 
     func revealFolder() {
-        NSWorkspace.shared.activateFileViewerSelecting([Self.defaultFolder])
+        NSWorkspace.shared.activateFileViewerSelecting([syncFolder])
     }
 
     func syncNow() async {
@@ -92,14 +94,15 @@ private struct WorkspaceCloudSyncButton: View {
         }
         .buttonStyle(HitAreaButtonStyle(compact: true))
         .foregroundStyle(controller.sync?.lastError != nil ? Palette.deadline : Palette.accent)
-        .disabled(working || controller.sync?.isSyncing == true)
-        .help(controller.sync?.lastError.map(AppLocalizedLines) ?? AppLocalized(controller.sync?.waitingForDownload == true ? "等待 iCloud 下载" : "立即同步"))
+        .disabled(working)
+        .help(controller.sync?.lastError.map(AppLocalizedLines) ?? AppLocalized(controller.sync?.waitingForUpload == true ? "等待 iCloud 上传" : (controller.sync?.waitingForDownload == true ? "等待 iCloud 下载" : "立即同步")))
         .accessibilityLabel("立即同步")
         .accessibilityIdentifier("workspace.sync")
+        .contextMenu { Button("同步详情") { AppRouter.showSettings() } }
     }
 
     private var title: String {
-        AppLocalized(working || controller.sync?.isSyncing == true ? "正在同步…" : (controller.sync?.waitingForDownload == true ? "等待下载" : "同步"))
+        AppLocalized(working ? "正在同步…" : (controller.sync?.waitingForUpload == true ? "等待上传" : (controller.sync?.waitingForDownload == true ? "等待下载" : "同步")))
     }
 }
 
@@ -119,25 +122,51 @@ struct CloudSyncSettings: View {
                 Button("立即同步") { Task { await controller.syncNow() } }.disabled(sync.isSyncing)
                 Button("在访达中显示") { controller.revealFolder() }
             }
-            if !sync.devices.isEmpty {
-                Text(AppLocalizedFormat("已连接：%@", sync.devices.map(\.name).joined(separator: ", ")))
+            if sync.waitingForUpload {
+                Text("本机快照已写入共享文件夹，正在等待 iCloud 确认上传。应用不能强制系统立即上传。")
                     .font(.caption).foregroundStyle(Palette.muted)
             }
+            if sync.waitingForDownload {
+                Text("已请求下载其他设备的更新，下载完成后会自动合并。")
+                    .font(.caption).foregroundStyle(Palette.muted)
+            }
+            DisclosureGroup("同步详情") {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let since = sync.uploadWaitingSince { detail("本次上传等待开始", date: since) }
+                    if let date = sync.lastCheck { detail("最近检查", date: date) }
+                    if let date = sync.lastExport { detail("已写入共享文件夹", date: date) }
+                    if let date = sync.lastUpload { detail("iCloud 确认上传", date: date) }
+                    ForEach(sync.devices) { device in
+                        HStack {
+                            Text(device.name)
+                            Spacer()
+                            Text(device.exportedAt.formatted(date: .abbreviated, time: .standard))
+                            Text("对方最近导出的数据").foregroundStyle(Palette.muted)
+                        }
+                    }
+                    Text("上传完成表示 iCloud 已接收；其他设备需要联网并打开 Timeline，才能读取并合并。上面的设备时间是对方导出数据的时间，不是接收确认。")
+                        .foregroundStyle(Palette.muted)
+                    if let code = sync.lastErrorCode { Text(code).font(.caption.monospaced()).textSelection(.enabled) }
+                }.font(.caption).padding(.vertical, 5)
+            }
         }
-        Text("数据放在 iCloud 云盘的「Timeline」文件夹，每台设备只写自己的文件，草稿不同步。")
+        Text("数据放在 iCloud 云盘的「Timeline」文件夹，每台设备只写自己的快照，草稿不同步。")
             .font(.caption).foregroundStyle(Palette.muted)
     }
 
+    private func detail(_ title: String, date: Date) -> some View {
+        HStack {
+            Text(AppLocalized(title))
+            Spacer()
+            Text(date.formatted(date: .abbreviated, time: .standard)).foregroundStyle(Palette.muted)
+        }
+    }
+
     @ViewBuilder private func status(_ sync: FolderSync) -> some View {
-        if sync.isSyncing {
-            Text("正在同步…").font(.caption).foregroundStyle(Palette.muted)
-        } else if sync.waitingForDownload {
-            Text("等待 iCloud 下载").font(.caption).foregroundStyle(Palette.muted)
-        } else if let error = sync.lastError {
-            Text(AppLocalizedLines(error)).font(.caption).foregroundStyle(Palette.deadline)
-        } else if let date = sync.lastSync {
-            Text(AppLocalizedFormat("上次同步：%@", date.formatted(date: .omitted, time: .standard)))
-                .font(.caption).foregroundStyle(Palette.muted)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(AppLocalized(sync.statusTitle)).font(.caption)
+                .foregroundStyle(sync.lastError == nil ? Palette.muted : Palette.deadline)
+            if let error = sync.lastError { Text(AppLocalizedLines(error)).font(.caption).foregroundStyle(Palette.deadline).lineLimit(2) }
         }
     }
 }

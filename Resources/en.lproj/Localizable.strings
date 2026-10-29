@@ -1117,3 +1117,40 @@
 "试试其他标题、标签或正文关键词" = "Try another title, tag, or content keyword";
 "还没有收藏工作板" = "No favorite boards yet";
 "拖动右侧手柄调整顺序，Mac 快捷栏将同步此顺序。" = "Drag the handles to reorder. The Mac shortcuts use the same order.";
+
+"等待上传" = "Waiting for upload";
+
+"等待 iCloud 上传" = "Waiting for iCloud upload";
+
+
+"同步尚未完成，请检查网络和 iCloud 云盘状态后重试。" = "Sync has not finished. Check your connection and iCloud Drive status, then try again.";
+
+"同步未完成" = "Sync incomplete";
+
+"正在检查同步" = "Checking sync";
+
+"尚未完成同步检查" = "No sync check completed yet";
+
+"本轮同步检查已完成" = "Sync check completed";
+
+"同步详情" = "Sync details";
+
+"本机快照已写入共享文件夹，正在等待 iCloud 确认上传。应用不能强制系统立即上传。" = "The local snapshot is in the shared folder and waiting for iCloud to confirm upload. The app cannot force an immediate upload.";
+
+"已请求下载其他设备的更新，下载完成后会自动合并。" = "Updates from other devices have been requested and will merge automatically after download.";
+
+"本次上传等待开始" = "Waiting for this upload since";
+
+"最近检查" = "Last checked";
+
+"已写入共享文件夹" = "Written to shared folder";
+
+"iCloud 确认上传" = "Last upload confirmed by iCloud";
+
+"对方最近导出的数据" = "Latest data exported by this device";
+
+"上传完成表示 iCloud 已接收；其他设备需要联网并打开 Timeline，才能读取并合并。上面的设备时间是对方导出数据的时间，不是接收确认。" = "Upload confirmation means iCloud has received the data. Other devices need a connection and Timeline open to read and merge it. Device times above indicate exported data, not receipt acknowledgements.";
+
+"重新检查并重试" = "Check again and retry";
+
+"数据放在 iCloud 云盘的「Timeline」文件夹，每台设备只写自己的快照，草稿不同步。" = "Data is stored in the Timeline folder in iCloud Drive. Each device writes its own snapshots. Drafts do not sync.";

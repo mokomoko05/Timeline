@@ -109,6 +109,128 @@ final class FolderSyncTests: XCTestCase {
         mac.prepareForSync = nil
     }
 
+    func testPendingUploadDoesNotReportSuccessfulSyncAndRetriesWithoutRewriting() async throws {
+        let phone = makeDevice("iPhone")
+        let board = try XCTUnwrap(phone.store.ensureBoard(for: .tag("Pending")))
+        phone.store.setBoardMarkdown("Waiting for cloud", for: board.id)
+        phone.uploadPending = { _ in true }
+        try await sync(phone)
+        XCTAssertTrue(phone.waitingForUpload)
+        XCTAssertNil(phone.lastSync)
+        XCTAssertEqual(phone.lastCheck, clock)
+        XCTAssertEqual(phone.lastExport, clock)
+        XCTAssertNil(phone.lastUpload)
+        XCTAssertNotNil(phone.uploadWaitingSince)
+        let url = FolderSync.snapshotURL(folder, phone.deviceID)
+        let exported = try Data(contentsOf: url)
+        clock += 10
+        try await phone.sync()
+        XCTAssertEqual(try Data(contentsOf: url), exported, "Polling upload must not restart the upload by rewriting the snapshot")
+        phone.uploadPending = { _ in false }
+        try await sync(phone)
+        XCTAssertFalse(phone.waitingForUpload)
+        XCTAssertEqual(phone.lastSync, clock)
+        XCTAssertEqual(phone.lastUpload, clock)
+        XCTAssertNil(phone.uploadWaitingSince)
+        let uploaded = phone.lastUpload
+        try await sync(phone)
+        XCTAssertEqual(phone.lastUpload, uploaded, "Checking again must not imply another upload")
+        let restored = FolderSync(store: JournalStore(directory: phone.store.directory), folder: folder, deviceName: "iPhone")
+        XCTAssertEqual(restored.lastUpload, uploaded)
+        XCTAssertEqual(restored.lastCheck, phone.lastCheck)
+    }
+
+    func testManualSyncTimeoutKeepsLatestExportAndReportsIncompleteUpload() async throws {
+        let phone = makeDevice("iPhone")
+        let board = try XCTUnwrap(phone.store.ensureBoard(for: .tag("Offline")))
+        phone.store.setBoardMarkdown("Preserve latest", for: board.id)
+        phone.uploadPending = { _ in true }
+        await phone.syncUntilExported(timeout: 0.05)
+        XCTAssertTrue(phone.waitingForUpload)
+        XCTAssertNil(phone.lastSync)
+        XCTAssertNotNil(phone.lastError)
+        let snapshot = try JSONDecoder().decode(SyncSnapshot.self, from: Data(contentsOf: FolderSync.snapshotURL(folder, phone.deviceID)))
+        XCTAssertEqual(snapshot.records["board/" + board.id.uuidString]?.fields["markdown"]?.value, .string("Preserve latest"))
+        let progress = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: phone.stateURL.deletingLastPathComponent().appendingPathComponent("status.json")))
+        XCTAssertEqual(progress["stage"], "timedOut")
+    }
+
+    func testManualDeadlineStillReturnsWhenTheRunningRoundIsBlocked() async throws {
+        let phone = makeDevice("iPhone")
+        var release: CheckedContinuation<Void, Never>?
+        phone.prepareForSync = { await withCheckedContinuation { release = $0 } }
+        let started = Date()
+        await phone.syncUntilExported(timeout: 0.05)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.3)
+        XCTAssertTrue(phone.isSyncing)
+        XCTAssertEqual(phone.lastErrorCode, "Timeline.SyncTimeout")
+        release?.resume()
+        while phone.isSyncing { try await Task.sleep(for: .milliseconds(5)) }
+    }
+
+    func testImmutableRevisionDeliversBoardWhenOverwrittenSnapshotRemainsStale() async throws {
+        let phone = makeDevice("iPhone"), mac = makeDevice("Mac")
+        let board = try XCTUnwrap(phone.store.ensureBoard(for: .tag("VibeAnApp")))
+        phone.store.setBoardMarkdown("Old cloud copy", for: board.id)
+        try await sync(phone, mac)
+        let legacy = FolderSync.snapshotURL(folder, phone.deviceID)
+        let stale = try Data(contentsOf: legacy)
+        phone.store.setBoardMarkdown("Latest text still queued on the overwritten file", for: board.id)
+        try await sync(phone)
+        try stale.write(to: legacy, options: .atomic)
+        try await sync(mac, mac)
+        XCTAssertEqual(mac.store.boards.first { $0.id == board.id }?.markdown, "Latest text still queued on the overwritten file")
+        XCTAssertEqual(mac.devices.map(\.name), ["iPhone"], "Multiple revisions represent one device")
+        mac.store.setBoardMarkdown("Reverse direction", for: board.id)
+        try await sync(mac, phone)
+        XCTAssertEqual(phone.store.boards.first { $0.id == board.id }?.markdown, "Reverse direction")
+    }
+
+    func testRevisionFilesAreImmutableAndOfflineRevisionQueueIsBounded() async throws {
+        let phone = makeDevice("iPhone")
+        let board = try XCTUnwrap(phone.store.ensureBoard(for: .tag("Retention")))
+        phone.uploadPending = { _ in true }
+        for n in 0..<6 {
+            phone.store.setBoardMarkdown("Revision \(n)", for: board.id)
+            try await sync(phone)
+        }
+        let directory = folder.appendingPathComponent(FolderSync.updatesFolder)
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        XCTAssertEqual(files.count, 3)
+        let before = try Dictionary(uniqueKeysWithValues: files.map { ($0, try Data(contentsOf: $0)) })
+        try await sync(phone)
+        for (url, data) in before { XCTAssertEqual(try Data(contentsOf: url), data) }
+    }
+
+    func testRestartWithUnchangedContentDoesNotRewriteCloudFiles() async throws {
+        let phone = makeDevice("iPhone")
+        let board = try XCTUnwrap(phone.store.ensureBoard(for: .tag("Restart")))
+        phone.store.setBoardMarkdown("Already exported", for: board.id)
+        phone.store.save()
+        try await sync(phone)
+        let legacy = FolderSync.snapshotURL(folder, phone.deviceID)
+        let original = try Data(contentsOf: legacy)
+        let revisionDirectory = folder.appendingPathComponent(FolderSync.updatesFolder)
+        let revisions = try FileManager.default.contentsOfDirectory(at: revisionDirectory, includingPropertiesForKeys: nil)
+        let reopened = FolderSync(store: JournalStore(directory: phone.store.directory), folder: folder, deviceName: "iPhone")
+        reopened.now = { [unowned self] in clock }
+        try await sync(reopened)
+        XCTAssertEqual(try Data(contentsOf: legacy), original, "Reopening must not restart the upload of unchanged content")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(at: revisionDirectory, includingPropertiesForKeys: nil), revisions)
+    }
+
+    func testDeviceExportTimeIsPreservedWhenReadingCachedFiles() async throws {
+        let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
+        _ = mac.store.ensureBoard(for: .tag("Receipt"))
+        try await sync(mac)
+        let exportTime = clock
+        let urls = try FileManager.default.contentsOfDirectory(at: folder.appendingPathComponent(FolderSync.updatesFolder), includingPropertiesForKeys: nil) + [FolderSync.snapshotURL(folder, mac.deviceID)]
+        for url in urls { try FileManager.default.setAttributes([.modificationDate: exportTime + 60], ofItemAtPath: url.path) }
+        try await sync(phone, phone)
+        XCTAssertEqual(phone.devices.count, 1)
+        XCTAssertEqual(phone.devices.first?.exportedAt, exportTime, "The peer's export time must not become the cloud download modification time")
+    }
+
     func testNewDeviceReceivesEverything() async throws {
         let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
         let day = clock

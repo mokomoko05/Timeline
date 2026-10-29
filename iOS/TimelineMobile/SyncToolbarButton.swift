@@ -8,7 +8,7 @@ struct SyncToolbarButton: View {
 
     var body: some View {
         if let state = sync.sync {
-            SyncProgressButton(state: state) { await sync.syncNow() }
+            SyncProgressButton(state: state, sync: { await sync.syncNow() }, showDetails: { openSettings?() })
         } else if let openSettings {
             Button { openSettings() } label: { Label("设置同步", systemImage: "icloud.slash") }
         }
@@ -18,6 +18,7 @@ struct SyncToolbarButton: View {
 private struct SyncProgressButton: View {
     @ObservedObject var state: FolderSync
     var sync: () async -> Void
+    var showDetails: () -> Void
     @State private var working = false
     @State private var showingError = false
 
@@ -30,13 +31,18 @@ private struct SyncProgressButton: View {
                 showingError = state.lastError != nil
             }
         } label: {
-            Label(working || state.isSyncing ? "正在同步…" : (state.waitingForDownload ? "等待下载" : "同步"),
+            Label(working ? "正在同步…" : (state.waitingForUpload ? "等待上传" : (state.waitingForDownload ? "等待下载" : "同步")),
                   systemImage: state.lastError == nil ? "arrow.triangle.2.circlepath.icloud" : "exclamationmark.icloud")
         }
-        .disabled(working || state.isSyncing)
+        .disabled(working)
         .accessibilityLabel("立即同步")
         .accessibilityIdentifier("sync-now")
-        .alert("同步失败", isPresented: $showingError) { Button("好", role: .cancel) {} } message: {
+        .accessibilityValue(LocalizedStringKey(state.statusTitle))
+        .contextMenu { Button("同步详情", systemImage: "info.circle", action: showDetails) }
+        .alert("同步未完成", isPresented: $showingError) {
+            Button("同步详情", action: showDetails)
+            Button("好", role: .cancel) {}
+        } message: {
             Text(state.lastError ?? "")
         }
     }
