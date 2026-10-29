@@ -129,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if !snapshotRun { cloudSync = CloudSyncController(store: store) }
         AppIssues.shared.attach(store: store, cloudSync: cloudSync)
         if !snapshotRun { LogKeyboardSelection.shared.install() }
-        settings = SettingsWindowController(loginItem: loginItem, cloudSync: cloudSync, failedHotKeys: { [weak self] in self?.failedHotKeys })
+        settings = SettingsWindowController(loginItem: loginItem, cloudSync: cloudSync, reminders: reminders, failedHotKeys: { [weak self] in self?.failedHotKeys })
         // 切到别的应用就把工作窗口收起来；快速面板和专注计时窗口不在其中。
         autoHide = AutoHideOnResign(windows: { [weak self] in
             [self?.window, ImageViewerController.shared.window, self?.settings.window]

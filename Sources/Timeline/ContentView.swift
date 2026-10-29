@@ -675,7 +675,12 @@ struct ContentView: View {
                     Image(systemName: "bell.slash")
                     Text(reminders.status).lineLimit(2)
                     Spacer()
-                    Button("通知设置") { if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") { NSWorkspace.shared.open(url) } }
+                    Button(LocalizedStringKey(reminders.notificationAccess.actionTitle)) {
+                        Task { @MainActor in
+                            await reminders.notificationAccess.configure()
+                            reminders.refresh()
+                        }
+                    }
                         .buttonStyle(HitAreaButtonStyle())
                 }
                 .font(.system(size: typography.pt(11)))

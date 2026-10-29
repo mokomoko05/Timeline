@@ -448,6 +448,12 @@
 "导出为文件夹…" = "Export as folder…";
 "备份与恢复…" = "Backups & Restore…";
 "通知设置" = "Notification settings";
+"通知" = "Notifications";
+"任务提醒" = "Task reminders";
+"启用通知" = "Enable notifications";
+"正在检查通知权限…" = "Checking notification permission…";
+"尚未申请通知权限，请点击“启用通知”完成授权。" = "Notification permission has not been requested. Click “Enable notifications” to authorize.";
+"通知已开启；请在任务详情中选择提醒时间。" = "Notifications are enabled. Choose a reminder time in task details.";
 "回车添加。先创建，之后再用日历按钮或拖到日历上分配截止日期；也可以直接写「明天 15:00 开会」「每周一」「提前30分钟」，加 #标签 归类。支持 [别名](https://网址)，⌘K 插入链接" = "Press Return to add. Assign a deadline using the calendar button or drag the task onto the calendar. You can also include dates, times, repeats, reminders, and #tags. Supports [title](https://url); ⌘K inserts a link.";
 "设置截止日期（DDL）" = "Set deadline";
 "截止日期" = "Deadline";

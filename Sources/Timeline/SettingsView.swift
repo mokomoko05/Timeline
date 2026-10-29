@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var loginItem: LoginItem
     var cloudSync: CloudSyncController?
+    let reminders: ReminderScheduler
     @ObservedObject private var themes = ThemeStore.shared
     @ObservedObject private var languages = LanguageStore.shared
     let failedHotKeys: () -> Set<HotKeyAction>?
@@ -32,6 +33,9 @@ struct SettingsView: View {
             }
             Section("文字显示") {
                 TypographySettings()
+            }
+            Section("通知") {
+                NotificationSettingsView(access: reminders.notificationAccess, refreshReminders: reminders.refresh)
             }
             Section("专注计时") {
                 Toggle("隐藏专注工作台", isOn: $focusPanelHidden)
@@ -85,6 +89,35 @@ struct SettingsView: View {
         .background(Palette.background)
         .tint(Palette.accent)
         .frame(width: 520, height: 830)
+    }
+}
+
+struct NotificationSettingsView: View {
+    @ObservedObject var access: NotificationAccess
+    var refreshReminders: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("任务提醒")
+                Spacer()
+                Button(LocalizedStringKey(access.actionTitle)) {
+                    Task { @MainActor in
+                        await access.configure()
+                        refreshReminders()
+                    }
+                }.disabled(access.isRequesting || access.authorization == nil)
+            }
+            Text(LocalizedStringKey(access.message)).font(.caption).foregroundStyle(Palette.muted)
+            if !access.error.isEmpty { Text(access.error).font(.caption).foregroundStyle(Palette.danger) }
+        }
+        .task { await access.reload() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { @MainActor in
+                await access.reload()
+                refreshReminders()
+            }
+        }
     }
 }
 
@@ -196,11 +229,13 @@ final class SettingsWindowController {
     private let loginItem: LoginItem
     private let failedHotKeys: () -> Set<HotKeyAction>?
     private let cloudSync: CloudSyncController?
+    private let reminders: ReminderScheduler
     private var languageObserver: NSObjectProtocol?
 
-    init(loginItem: LoginItem, cloudSync: CloudSyncController? = nil, failedHotKeys: @escaping () -> Set<HotKeyAction>?) {
+    init(loginItem: LoginItem, cloudSync: CloudSyncController? = nil, reminders: ReminderScheduler, failedHotKeys: @escaping () -> Set<HotKeyAction>?) {
         self.loginItem = loginItem
         self.cloudSync = cloudSync
+        self.reminders = reminders
         self.failedHotKeys = failedHotKeys
         languageObserver = NotificationCenter.default.addObserver(forName: .appLanguageDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.window?.title = AppLocalized("设置") }
@@ -215,9 +250,9 @@ final class SettingsWindowController {
                                   styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = AppLocalized("设置")
             window.isReleasedWhenClosed = false
-            let loginItem = loginItem, failedHotKeys = failedHotKeys, cloudSync = cloudSync
+            let loginItem = loginItem, failedHotKeys = failedHotKeys, cloudSync = cloudSync, reminders = reminders
             window.contentView = NSHostingView(rootView: LocalizedRoot {
-                SettingsView(loginItem: loginItem, cloudSync: cloudSync, failedHotKeys: failedHotKeys)
+                SettingsView(loginItem: loginItem, cloudSync: cloudSync, reminders: reminders, failedHotKeys: failedHotKeys)
             })
             window.center()
             self.window = window

@@ -8,6 +8,7 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
     @Published var status = ""
     var isEnabled = true
     var onComplete: ((String) -> Void)?
+    let notificationAccess = NotificationAccess()
     private let store: JournalStore
     /// 用到时才取：不在应用包里运行（测试）时没有通知中心，取了会崩溃，所以那时 `isEnabled` 要关掉。
     private lazy var center = UNUserNotificationCenter.current()
@@ -41,14 +42,10 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
     }
 
     func requestPermission() async -> Bool {
-        do {
-            let granted = try await center.requestAuthorization(options: [.alert, .sound])
-            status = granted ? "" : "通知未开启，可在系统设置中允许 Timeline 通知。"
-            return granted
-        } catch {
-            status = AppLocalizedFormat("无法启用通知：%@", error.localizedDescription)
-            return false
-        }
+        guard isEnabled else { return false }
+        let granted = await notificationAccess.requestPermission()
+        status = granted ? "" : (notificationAccess.error.isEmpty ? notificationAccess.message : notificationAccess.error)
+        return granted
     }
 
     static let category = "timeline.reminder"
@@ -61,11 +58,11 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
         pending?.cancel()
         pending = Task { [weak self] in
             guard let self else { return }
-            let settings = await center.notificationSettings()
+            await notificationAccess.reload()
             guard !Task.isCancelled else { return }
-            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+            guard notificationAccess.isAllowed else {
                 if store.days.values.contains(where: { $0.todos.contains { $0.reminderMinutes != nil && !$0.completed } }) {
-                    status = "通知未开启，可在系统设置中允许 Timeline 通知。"
+                    status = notificationAccess.error.isEmpty ? notificationAccess.message : notificationAccess.error
                 }
                 return
             }
