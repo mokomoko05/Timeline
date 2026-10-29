@@ -216,6 +216,7 @@ enum AppCommand {
 /// 别的窗口（笔记、日志）要动主窗口时用的入口；由 AppDelegate 设置，测试里都是空操作。
 @MainActor
 enum AppRouter {
+    static weak var cloudSync: CloudSyncController?
     /// 把主窗口调到前面（它可能被收起了）。
     static var presentMain: () -> Void = {}
     /// 主窗口是不是当前的键盘窗口。

@@ -89,6 +89,8 @@ private struct SyncStatusRows: View {
     var body: some View {
         if state.isSyncing {
             LabeledContent("状态") { ProgressView() }
+        } else if state.waitingForDownload {
+            Text("等待 iCloud 下载")
         } else if let error = state.lastError {
             Text(error).foregroundStyle(.red)
         } else if let date = state.lastSync {

@@ -1,10 +1,13 @@
 import AppKit
+import Combine
 import SwiftUI
 import TimelineCore
 
 @MainActor
 final class BoardNavigation: ObservableObject {
     private let defaults: UserDefaults
+    private weak var favoriteStore: JournalStore?
+    private var favoriteChanges: AnyCancellable?
     private var editorSessions: [UUID: BoardLiveEditorSession] = [:]
     private var editorOrder: [UUID] = []
     /// 最近用过的几个工作板保留编辑器状态（光标、撤销历史、滚动位置）。所有工作板共用一个编辑器网页，
@@ -47,7 +50,10 @@ final class BoardNavigation: ObservableObject {
         didSet { defaults.set(selection?.uuidString, forKey: "board.selection") }
     }
     @Published private(set) var favoriteBoardIDs: [UUID] {
-        didSet { defaults.set(favoriteBoardIDs.map(\.uuidString), forKey: "board.favorites") }
+        didSet {
+            defaults.set(favoriteBoardIDs.map(\.uuidString), forKey: "board.favorites")
+            if favoriteStore?.favoriteBoardIDs != favoriteBoardIDs { favoriteStore?.setBoardFavoriteOrder(favoriteBoardIDs) }
+        }
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -60,6 +66,23 @@ final class BoardNavigation: ObservableObject {
     }
 
     func isFavorite(_ id: UUID) -> Bool { favoriteBoardIDs.contains(id) }
+
+    func connectFavorites(to store: JournalStore) {
+        guard favoriteStore !== store else { return }
+        favoriteChanges = nil
+        // 只迁移一次，不能用旧的本机顺序盖掉另一台设备同步过来的顺序。
+        if store.boardFavoriteOrder == nil, !favoriteBoardIDs.isEmpty { store.setBoardFavoriteOrder(favoriteBoardIDs) }
+        favoriteStore = store
+        favoriteBoardIDs = store.favoriteBoardIDs
+        favoriteChanges = store.$boardFavoriteOrder.dropFirst().sink { [weak self] order in
+            guard let self, self.favoriteBoardIDs != (order ?? []) else { return }
+            // @Published 在 willSet 发出；下一轮读取，避免把旧值写回 store。
+            Task { @MainActor [weak self] in
+                guard let self, let store = self.favoriteStore else { return }
+                self.favoriteBoardIDs = store.favoriteBoardIDs
+            }
+        }
+    }
 
     func toggleFavorite(_ id: UUID) {
         if isFavorite(id) { favoriteBoardIDs.removeAll { $0 == id } }
@@ -107,6 +130,7 @@ final class BoardWindowController: NSObject, NSWindowDelegate {
             self.store?.save()
         }
         self.store = store
+        navigation.connectFavorites(to: store)
         if let owner, let board = store.ensureBoard(for: owner) { navigation.select(board.id) }
         if panel == nil {
             let panel = BoardPanel(contentRect: NSRect(x: 0, y: 0, width: 410, height: 560),
@@ -330,6 +354,7 @@ struct BoardContentView: View {
     /// 一行标题栏：左边是当前工作板（点它切换），右边是一组同样大小的图标按钮。
     private var header: some View {
         HStack(spacing: 2) {
+            WorkspaceSyncButton()
             Button(action: choose) {
                 HStack(spacing: 7) {
                     Image(systemName: ownerSymbol).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.accent)

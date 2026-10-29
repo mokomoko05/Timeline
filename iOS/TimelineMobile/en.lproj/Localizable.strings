@@ -359,3 +359,19 @@
 "设置任务时间" = "Schedule task";
 "按开始时间排列，结束后视为逾期；提醒以开始时间为准。" = "Ordered by start time. Overdue after the end; reminders are based on the start.";
 "结束时间必须晚于开始时间" = "End must be after start";
+
+"同步" = "Sync";
+"等待下载" = "Waiting for download";
+"等待 iCloud 下载" = "Waiting for iCloud download";
+"同步失败" = "Sync failed";
+"设置同步" = "Set up sync";
+"收藏与排序" = "Favorites & order";
+"收藏工作板" = "Favorite boards";
+"取消收藏" = "Remove from favorites";
+"其他工作板" = "Other boards";
+"搜索工作板标题或正文" = "Search board titles or content";
+"没有匹配的工作板" = "No matching boards";
+"试试其他标题、标签或正文关键词" = "Try another title, tag, or content keyword";
+"还没有收藏工作板" = "No favorite boards yet";
+"拖动右侧手柄调整顺序，Mac 快捷栏将同步此顺序。" = "Drag the handles to reorder. The Mac shortcuts use the same order.";
+"正在同步…" = "Syncing…";

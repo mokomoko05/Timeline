@@ -83,7 +83,15 @@ enum PerfProbe {
 
     /// 模拟器测试用（`-demoData YES`）：数据是空的时候放一些待办、日志和标签，拖动排序和 @ / # 搜索才有东西可测。
     static func seedDemo(_ store: JournalStore) {
-        guard UserDefaults.standard.bool(forKey: "demoData"), store.tasks().isEmpty else { return }
+        guard UserDefaults.standard.bool(forKey: "demoData") else { return }
+        if store.boards.count < 3 {
+            for name in ["工作", "学习", "生活"] {
+                if let board = store.ensureBoard(for: .tag(name)), !board.hasContent {
+                    store.setBoardMarkdown("# \(name)计划\n\n- [ ] 整理资料\n- [ ] 完成第一步\n- [x] 确认目标", for: board.id)
+                }
+            }
+        }
+        guard store.tasks().isEmpty else { return }
         let titles = ["查清楚同步的问题 #工作", "整理周报 #工作", "回复邮件", "下午3点 开会 #工作", "买菜 #生活", "跑步 30 分钟 #健康",
                       "明天 读完第三章 #学习", "明天 修自行车 #生活", "后天 准备演示 #工作", "下周一 体检 #健康", "写博客草稿 #写作", "整理照片"]
         for (index, title) in titles.enumerated() {
@@ -191,7 +199,15 @@ enum PerfProbe {
             ("滑动中跳转", { send("flingJump") }),
             ("切到笔记", { switchTab(.notes) }),
             ("切到工作板", { switchTab(.boards) }),
+            ("准备工作板收藏", { store.setBoardFavoriteOrder(Array(store.boards.prefix(3).map(\.id))) }),
+            ("搜索工作板", { send("boardSearch") }),
+            ("清空工作板搜索", { send("boardSearchClear") }),
+            ("管理工作板收藏", { send("boardFavorites") }),
+            ("收藏工作板", { send("boardFavoriteToggle") }),
+            ("调整工作板收藏顺序", { send("boardFavoriteMove") }),
+            ("关闭工作板收藏", { send("boardFavoritesClose") }),
             ("打开工作板", { send("openBoard") }),
+            ("返回工作板列表", { send("boardBack") }),
             ("切到待办", { switchTab(.tasks) }),
             ("打开笔记多的待办", { switchTab(.tasks); send("openNotedTask") }),
             ("节奏条放大镜", { send("railLoupe") }),
@@ -245,7 +261,7 @@ enum PerfProbe {
 
     static func runTyping(switchTab: @escaping (RootView.Tab) -> Void) {
         guard enabled, let typing else { return }
-        switchTab(typing == "compose" || typing == "mention" || typing == "log" ? .journal : (typing == "board" ? .boards : .tasks))
+        switchTab(typing == "compose" || typing == "mention" || typing == "log" ? .journal : (typing == "board" || typing == "boardSearch" ? .boards : .tasks))
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             mark("打开输入框 " + typing)
             // 工作板的编辑器在网页里：工作板页自己跑测试（见 BoardWebSession.runTypingTest）。

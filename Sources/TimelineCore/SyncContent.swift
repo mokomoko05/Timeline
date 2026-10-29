@@ -7,6 +7,7 @@ struct SyncContent: Equatable {
     var tags: [String]
     var pinnedTask: UUID?
     var nextTaskNumber: Int
+    var boardFavoriteOrder: [UUID]?
 
     /// 每天里放在 `days[日期]` 下的字段，存成记录里的一个普通字段。
     static let dayField = "_day"
@@ -30,6 +31,7 @@ struct SyncContent: Equatable {
         for board in boards { records["board/" + board.id.uuidString] = try SyncValue.encoding(board).fields }
         for tag in tags { records["tag/" + TagText.key(tag)] = ["name": .string(tag)] }
         if let pinnedTask { records["meta/pinned"] = ["task": .string(pinnedTask.uuidString)] }
+        if let boardFavoriteOrder { records["meta/boardFavorites"] = ["order": .array(boardFavoriteOrder.map { .string($0.uuidString) })] }
         return records
     }
 
@@ -39,6 +41,7 @@ struct SyncContent: Equatable {
         var todos: [String: [Todo]] = [:], logs: [String: [DailyLogEntry]] = [:], summaries: [String: String] = [:]
         var boardsByID: [UUID: Board] = [:], tagNames: [String: String] = [:]
         var pinned: UUID?
+        var favorites: [UUID]?
         var numberStamps: [UUID: SyncStamp] = [:]
         let localTodos = Dictionary(days.flatMap { day, entry in entry.todos.map { ($0.id, (day, $0)) } }, uniquingKeysWith: { first, _ in first })
         let localLogs = Dictionary(days.flatMap { day, entry in entry.logs.map { ($0.id, (day, $0)) } }, uniquingKeysWith: { first, _ in first })
@@ -70,6 +73,10 @@ struct SyncContent: Equatable {
                 if let name = values["name"]?.string.flatMap(TagText.normalize) { tagNames[TagText.key(name)] = name }
             case "meta":
                 if parts[1] == "pinned" { pinned = values["task"]?.string.flatMap(UUID.init(uuidString:)) }
+                if parts[1] == "boardFavorites", case .array(let order) = values["order"] {
+                    var seen = Set<UUID>()
+                    favorites = order.compactMap { $0.string.flatMap(UUID.init(uuidString:)) }.filter { seen.insert($0).inserted }
+                }
             default: break
             }
         }
@@ -88,6 +95,7 @@ struct SyncContent: Equatable {
         let localTagOrder = tags.map(TagText.key)
         result.tags = localTagOrder.compactMap { tagNames[$0] } + tagNames.filter { !localTagOrder.contains($0.key) }.sorted { $0.key < $1.key }.map(\.value)
         result.pinnedTask = pinned
+        result.boardFavoriteOrder = favorites
         result.renumberDuplicates(stamps: numberStamps)
         return result
     }

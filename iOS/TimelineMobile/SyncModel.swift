@@ -70,6 +70,7 @@ final class SyncModel: ObservableObject {
         // 同步状态（进行中、上次时间）只有同步设置页关心：它直接观察 `FolderSync`。
         // 这里不转发，否则每同步一轮，待办、日记、笔记几个页面都要整个重算一遍。
         let sync = FolderSync(store: store, folder: folder, deviceName: UIDevice.current.model)
+        sync.prepareForSync = { await BoardWebSession.commitActiveEditors() }
         self.sync = sync
         folderName = folder.lastPathComponent
         if active { sync.startAutomaticSync(interval: 15) } else { sync.syncSoon() }
@@ -98,7 +99,8 @@ final class SyncModel: ObservableObject {
     }
 
     func syncNow() async {
-        _ = try? await sync?.sync()
+        store.save()
+        await sync?.syncUntilExported()
     }
 }
 

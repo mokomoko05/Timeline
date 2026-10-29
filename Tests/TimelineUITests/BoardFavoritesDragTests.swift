@@ -7,6 +7,29 @@ import TimelineCore
 
 @MainActor
 final class BoardFavoritesDragTests: XCTestCase {
+    func testLegacyFavoritesMigrateOnceAndRemoteOrderRefreshesTheMacBar() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let boards = try ["A", "B", "C"].map { try XCTUnwrap(store.ensureBoard(for: .tag($0))) }
+        let defaults = InMemoryDefaults()
+        defaults.set(boards.map { $0.id.uuidString }, forKey: "board.favorites")
+        let navigation = BoardNavigation(defaults: defaults)
+        navigation.connectFavorites(to: store)
+        XCTAssertEqual(store.favoriteBoardIDs, boards.map(\.id))
+        store.setBoardFavoriteOrder([boards[2].id, boards[0].id])
+        await Task.yield()
+        XCTAssertEqual(navigation.favoriteBoards(in: store).map(\.id), [boards[2].id, boards[0].id])
+        navigation.moveFavorite(boards[0].id, to: 0)
+        XCTAssertEqual(store.favoriteBoardIDs, [boards[0].id, boards[2].id])
+        // 另一份旧偏好不能覆盖已同步的顺序，包括显式清空的收藏。
+        store.setBoardFavoriteOrder([])
+        let stale = BoardNavigation(defaults: defaults)
+        stale.connectFavorites(to: store)
+        XCTAssertTrue(stale.favoriteBoardIDs.isEmpty)
+        XCTAssertEqual(store.boardFavoriteOrder, [])
+    }
+
     private func event(_ type: NSEvent.EventType, at point: NSPoint, window: NSWindow) throws -> NSEvent {
         try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
                                        timestamp: ProcessInfo.processInfo.systemUptime,

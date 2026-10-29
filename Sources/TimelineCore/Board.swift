@@ -87,6 +87,32 @@ public struct Board: Codable, Equatable, Identifiable {
 }
 
 extension JournalStore {
+    public var favoriteBoardIDs: [UUID] { boardFavoriteOrder ?? [] }
+
+    public func setBoardFavoriteOrder(_ ids: [UUID]) {
+        guard !isReadOnly else { return }
+        var seen = Set<UUID>()
+        let order = ids.filter { seen.insert($0).inserted }
+        guard boardFavoriteOrder != order else { return }
+        boardFavoriteOrder = order
+        registryChanged()
+    }
+
+    public func toggleBoardFavorite(_ id: UUID) {
+        guard boards.contains(where: { $0.id == id }) else { return }
+        var order = favoriteBoardIDs
+        if order.contains(id) { order.removeAll { $0 == id } } else { order.append(id) }
+        setBoardFavoriteOrder(order)
+    }
+
+    public func moveBoardFavorite(_ id: UUID, to destination: Int) {
+        var order = favoriteBoardIDs
+        guard let index = order.firstIndex(of: id) else { return }
+        order.remove(at: index)
+        order.insert(id, at: max(0, min(destination, order.count)))
+        setBoardFavoriteOrder(order)
+    }
+
     public func board(for owner: BoardOwner) -> Board? {
         if cachedBoardIndices == nil {
             var indices: [BoardOwner: Int] = [:]

@@ -1185,6 +1185,7 @@ window.boardEditor = {
     // 就地编辑的网页只用来就地编辑：在建编辑器之前定下来，第一次排版就是就地编辑的样子。
     if (!view && config.inline) inline = true;
     document.documentElement.classList.toggle("dark", !!config.dark);
+    document.documentElement.classList.toggle("touch", !!config.touch);
     // 原生正文量出来的行高、段距等（px）：就地编辑时每一行和渲染好的正文落在同一个位置。
     if (config.metrics) for (const [key, value] of Object.entries(config.metrics)) document.documentElement.style.setProperty("--m-" + key, value + "px");
     if (!view) {

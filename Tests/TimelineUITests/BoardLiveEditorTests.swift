@@ -37,6 +37,68 @@ func waitForBoardEditor(_ current: @autoclosure () -> WKWebView) async throws {
 
 @MainActor
 final class BoardLiveEditorTests: XCTestCase {
+    func testRemoteBoardChangesRefreshVisibleAndCachedEditorWithoutRestoringOldText() async throws {
+        let fixture = try LiveFixture(source: "Before sync")
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        let first = fixture.session
+        let boardID = try XCTUnwrap(fixture.store.board(for: .tag("Editor"))).id
+        fixture.store.setBoardMarkdown("From iPhone", for: boardID)
+        first.configure(fontSize: 13, dark: true)
+        try await Task.sleep(for: .milliseconds(30))
+        var snapshot = try await fixture.snapshot()
+        XCTAssertEqual(snapshot["source"] as? String, "From iPhone")
+        let other = try XCTUnwrap(fixture.store.ensureBoard(for: .tag("Other")))
+        let second = BoardLiveEditorSession(store: fixture.store, board: other, defaults: fixture.defaults)
+        _ = second.makeWebView()
+        second.configure(fontSize: 13, dark: true)
+        try await Task.sleep(for: .milliseconds(30))
+        fixture.store.setBoardMarkdown("Updated again while hidden", for: boardID)
+        _ = first.makeWebView()
+        first.configure(fontSize: 13, dark: true)
+        try await Task.sleep(for: .milliseconds(30))
+        snapshot = try await fixture.snapshot()
+        XCTAssertEqual(snapshot["source"] as? String, "Updated again while hidden")
+        XCTAssertEqual(fixture.store.boards.first { $0.id == boardID }?.markdown, "Updated again while hidden")
+    }
+
+    func testSyncSnapshotCapturesLatestTextWithoutEndingEditing() async throws {
+        let fixture = try LiveFixture(source: "Draft")
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.focus();window.boardEditor.select(5);window.boardEditor.replaceSelection(' latest')")
+        await withCheckedContinuation { continuation in
+            fixture.session.commit(endingEditing: false) { continuation.resume() }
+        }
+        XCTAssertEqual(fixture.store.boards.first?.markdown, "Draft latest")
+        let snapshot = try await fixture.snapshot()
+        XCTAssertEqual(snapshot["head"] as? Int, 12)
+        let focused = try await fixture.webView.evaluateJavaScript("document.activeElement === document.querySelector('.cm-content')") as? Bool
+        XCTAssertEqual(focused, true)
+    }
+
+    func testBoardCheckboxTargetsAreLargeAndAdjacentRowsDoNotOverlap() async throws {
+        let fixture = try LiveFixture(source: "- [ ] First\n- [ ] Second")
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        for (touch, minimum) in [(false, 32.0), (true, 44.0)] {
+            _ = try await fixture.webView.evaluateJavaScript("document.documentElement.classList.toggle('touch', \(touch)); 0")
+            try await Task.sleep(for: .milliseconds(50))
+            let sizes = try await fixture.webView.evaluateJavaScript("[...document.querySelectorAll('.board-check')].map(e=>{const r=e.getBoundingClientRect(); return [r.width,r.height,r.top,r.bottom]})") as? [[Double]]
+            let rects = try XCTUnwrap(sizes)
+            XCTAssertEqual(rects.count, 2)
+            XCTAssertGreaterThanOrEqual(rects[0][0], minimum)
+            XCTAssertGreaterThanOrEqual(rects[0][1], minimum)
+            XCTAssertLessThanOrEqual(rects[0][3], rects[1][2] + 0.5)
+            let hits = try await fixture.webView.evaluateJavaScript("[...document.querySelectorAll('.board-check')].every(e=>{const r=e.getBoundingClientRect(); return document.elementFromPoint(r.left+2,r.top+2)?.closest('.board-check')===e})") as? Bool
+            let hitDetails = try await fixture.webView.evaluateJavaScript("[...document.querySelectorAll('.board-check')].map(e=>{const r=e.getBoundingClientRect(); return [r.left,r.top,document.elementFromPoint(r.left+2,r.top+2)?.outerHTML ?? 'missing']})")
+            XCTAssertEqual(hits, true, "\(hitDetails)")
+        }
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-check').click()")
+        let snapshot = try await fixture.snapshot()
+        XCTAssertEqual(snapshot["source"] as? String, "- [x] First\n- [ ] Second")
+    }
+
     func testSelectionAcrossRenderedTextAndCodeRemainsVisibleAfterCopy() async throws {
         let source = "## Title\n\n**Selected** text\n\n```\ncode to copy\n```\n\nEnd"
         let fixture = try LiveFixture(source: source)

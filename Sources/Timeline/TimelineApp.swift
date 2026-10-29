@@ -123,10 +123,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         store.writesInBackground = true
         reminders = ReminderScheduler(store: store)
         reminders.isEnabled = !snapshotRun
+        BoardWindowController.shared.navigation.connectFavorites(to: store)
         focus.store = store
         focusPanel = FocusPanelController(session: focus)
         loginItem = LoginItem()
         if !snapshotRun { cloudSync = CloudSyncController(store: store) }
+        AppRouter.cloudSync = cloudSync
         AppIssues.shared.attach(store: store, cloudSync: cloudSync)
         if !snapshotRun { LogKeyboardSelection.shared.install() }
         settings = SettingsWindowController(loginItem: loginItem, cloudSync: cloudSync, reminders: reminders, failedHotKeys: { [weak self] in self?.failedHotKeys })

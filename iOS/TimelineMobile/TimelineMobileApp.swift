@@ -141,7 +141,7 @@ extension RootView {
                 SwiftUI.Tab("待办", systemImage: "checklist", value: Tab.tasks) { TasksView(store: store, feed: feeds[.tasks], sync: sync) }
                 SwiftUI.Tab("日记", systemImage: "book", value: Tab.journal) { JournalView(store: store, feed: feeds[.journal], sync: sync) }
                 SwiftUI.Tab("笔记", systemImage: "text.bubble", value: Tab.notes) { NotesView(store: store, feed: feeds[.notes], sync: sync) }
-                SwiftUI.Tab("工作板", systemImage: "doc.text", value: Tab.boards) { BoardsView(store: store, feed: feeds[.boards]) }
+                SwiftUI.Tab("工作板", systemImage: "doc.text", value: Tab.boards) { BoardsView(store: store, feed: feeds[.boards], sync: sync) }
                 SwiftUI.Tab(value: Tab.search, role: .search) { GlobalSearchView(store: store) }
             }
             // 标签栏最多 5 格：设置收进待办页左上角的齿轮，腾出位置给搜索。
@@ -161,7 +161,7 @@ extension RootView {
                 NotesView(store: store, feed: feeds[.notes], sync: sync)
                     .tabItem { Label("笔记", systemImage: "text.bubble") }
                     .tag(Tab.notes)
-                BoardsView(store: store, feed: feeds[.boards])
+                BoardsView(store: store, feed: feeds[.boards], sync: sync)
                     .tabItem { Label("工作板", systemImage: "doc.text") }
                     .tag(Tab.boards)
                 SyncSettingsView(store: store, sync: sync)

@@ -204,7 +204,7 @@ final class BoardWebSession: NSObject, ObservableObject {
                       "success": css(Palette.success), "selection": css(Palette.accent.opacity(dark ? 0.45 : 0.25)),
                       "selection-ink": css(Palette.ink)]
         for level in 1...6 { colors["heading-\(level)"] = css(Palette.heading(level)) }
-        settings = ["fontSize": UIFontMetrics(forTextStyle: .body).scaledValue(for: 16), "readOnly": store.isReadOnly, "colors": colors,
+        settings = ["fontSize": UIFontMetrics(forTextStyle: .body).scaledValue(for: 16), "readOnly": store.isReadOnly, "colors": colors, "touch": true,
                     "sourceMode": sourceMode, "folds": folds, "key": key, "measure": pool == .log,
                     "labels": ["openLink": L("在 Safari 中打开"), "copyCode": L("复制代码"), "copied": L("已复制"),
                                "copyFailed": L("复制失败，请重试"), "expand": L("展开标题下的内容"), "collapse": L("收起标题下的内容")]]
@@ -323,13 +323,22 @@ final class BoardWebSession: NSObject, ObservableObject {
     }
 
     /// 离开这一页、退到后台：编辑器停顿一下才送改动，先直接从编辑器取一次最新的全文，再写回。
-    func commit() {
-        guard ready, Self.owner(pool) === self, let webView else { flush(); return }
+    func commit(completion: @escaping () -> Void = {}) {
+        guard ready, Self.owner(pool) === self, let webView else { flush(); completion(); return }
         let key = self.key
         webView.evaluateJavaScript("window.boardEditor.snapshot()") { [weak self] result, _ in
-            guard let self else { return }
+            guard let self else { completion(); return }
             if let snapshot = result as? [String: Any], snapshot["key"] as? String == key { self.accept(snapshot) }
             self.flush()
+            completion()
+        }
+    }
+
+    static func commitActiveEditors() async {
+        for pool in [Pool.board, .log] {
+            if let session = owner(pool) {
+                await withCheckedContinuation { continuation in session.commit { continuation.resume() } }
+            }
         }
     }
 

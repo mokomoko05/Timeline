@@ -211,10 +211,13 @@ struct JournalDocument: Codable {
     /// 固定关联的待办（不计时）：没有明确指定、也不在专注计时时，新日志记到它名下。
     var pinnedTask: UUID?
     var boards: [Board]?
+    var boardFavoriteOrder: [UUID]?
 }
 
 @MainActor
 public final class JournalStore: ObservableObject {
+    /// nil 表示尚未设置，可从旧版 Mac 的本机收藏迁移；空数组表示用户已清空收藏。
+    @Published public internal(set) var boardFavoriteOrder: [UUID]?
     @Published public private(set) var boards: [Board] = [] {
         didSet { cachedBoardIndices = nil }
     }
@@ -371,6 +374,7 @@ public final class JournalStore: ObservableObject {
                 tagRegistry = TagText.merge([], (document.tags ?? []).compactMap(TagText.normalize))
                 pinnedTaskID = document.pinnedTask
                 boards = document.boards ?? []
+                boardFavoriteOrder = document.boardFavoriteOrder
                 if !readOnlySnapshot { try data.write(to: backupURL, options: .atomic) }
                 if document.version < 8, !boards.isEmpty {
                     if !readOnlySnapshot {
@@ -1575,6 +1579,7 @@ public final class JournalStore: ObservableObject {
         assignMissingNumbers(in: &restored)
         undoManager.beginUndoGrouping()
         replaceBoards(document.boards ?? [], action: "恢复备份")
+        setBoardFavoriteOrder(document.boardFavoriteOrder ?? [])
         replaceDays(restored, action: "恢复备份", force: true)
         undoManager.endUndoGrouping()
         save()
@@ -1665,12 +1670,12 @@ public final class JournalStore: ObservableObject {
 
     private var documentSnapshot: JournalDocument {
         JournalDocument(days: days, nextTaskNumber: nextTaskNumber, tags: tagRegistry.isEmpty ? nil : tagRegistry,
-                        pinnedTask: pinnedTaskID, boards: boards.isEmpty ? nil : boards)
+                        pinnedTask: pinnedTaskID, boards: boards.isEmpty ? nil : boards, boardFavoriteOrder: boardFavoriteOrder)
     }
 
     /// 同步用的内容快照：值类型，可以交给后台线程整理。
     var syncContent: SyncContent {
-        SyncContent(days: days, boards: boards, tags: tagRegistry, pinnedTask: pinnedTaskID, nextTaskNumber: nextTaskNumber)
+        SyncContent(days: days, boards: boards, tags: tagRegistry, pinnedTask: pinnedTaskID, nextTaskNumber: nextTaskNumber, boardFavoriteOrder: boardFavoriteOrder)
     }
 
     /// 用合并了其他设备修改的内容整体替换当前数据。远端修改不进撤销栈，已有的撤销记录也作废，
@@ -1695,6 +1700,7 @@ public final class JournalStore: ObservableObject {
         if tagRegistry != content.tags { tagRegistry = content.tags }
         nextTaskNumber = max(nextTaskNumber, content.nextTaskNumber)
         if pinnedTaskID != content.pinnedTask { pinnedTaskID = content.pinnedTask }
+        if boardFavoriteOrder != content.boardFavoriteOrder { boardFavoriteOrder = content.boardFavoriteOrder }
         if tasksChanged { invalidateTaskIndex() }
         hasPendingSave = true
         persist()

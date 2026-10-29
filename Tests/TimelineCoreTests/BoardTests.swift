@@ -11,6 +11,33 @@ final class BoardTests: XCTestCase {
         return JournalStore(directory: directory)
     }
 
+    func testFavoritesPersistDeduplicateAndKeepContentUnchanged() throws {
+        let store = makeStore()
+        let first = try XCTUnwrap(store.ensureBoard(for: .tag("A")))
+        let second = try XCTUnwrap(store.ensureBoard(for: .tag("B")))
+        XCTAssertNil(store.boardFavoriteOrder)
+        let original = store.boards
+        store.setBoardFavoriteOrder([first.id, second.id, first.id])
+        store.moveBoardFavorite(second.id, to: 0)
+        XCTAssertEqual(store.favoriteBoardIDs, [second.id, first.id])
+        XCTAssertEqual(store.boards, original)
+        XCTAssertEqual(JournalStore(directory: store.directory).favoriteBoardIDs, [second.id, first.id])
+        store.toggleBoardFavorite(first.id)
+        XCTAssertEqual(store.favoriteBoardIDs, [second.id])
+    }
+
+    func testBoardSearchFindsTitleBodyAndMultipleWordsWithoutMatchingUnrelatedBoards() {
+        let board = Board(owner: .tag("阅读"), title: "Paper", markdown: "# Résumé\n\n- [ ] Read DESIGN\n- [x] 写摘要")
+        let entry = BoardListEntry(board: board, title: "#阅读 Paper")
+        XCTAssertTrue(entry.matches("  阅读 resume "))
+        XCTAssertTrue(entry.matches("paper design"))
+        XCTAssertTrue(entry.matches("写摘要"))
+        XCTAssertFalse(entry.matches("paper missing"))
+        XCTAssertEqual(entry.headings, ["Résumé"])
+        XCTAssertEqual(entry.openTasks, 1)
+        XCTAssertEqual(entry.doneTasks, 1)
+    }
+
     func testTaskBoardPersistsWithoutCreatingTasksLogsOrChangingContext() throws {
         let store = makeStore()
         let task = try XCTUnwrap(store.addParsedTodo("阅读论文 #研究", on: day))

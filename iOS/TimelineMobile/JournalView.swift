@@ -44,6 +44,7 @@ struct JournalView: View {
             .navigationTitle("日记")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) { SyncToolbarButton(sync: sync) }
                 ToolbarItem(placement: .topBarLeading) {
                     Button { calendar.isOpen.toggle() } label: { Image(systemName: "calendar") }
                         .accessibilityLabel("日历")

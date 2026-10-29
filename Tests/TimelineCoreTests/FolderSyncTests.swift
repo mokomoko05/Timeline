@@ -56,6 +56,59 @@ final class FolderSyncTests: XCTestCase {
         sync.store.tasks().first { $0.task.title == title }
     }
 
+    func testBoardFavoritesAndOrderSyncBothWaysWithoutChangingMarkdown() async throws {
+        let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
+        let boards = try ["A", "B", "C"].map { try XCTUnwrap(mac.store.ensureBoard(for: .tag($0))) }
+        mac.store.setBoardFavoriteOrder(boards.map(\.id))
+        try await sync(mac, phone)
+        XCTAssertEqual(phone.store.favoriteBoardIDs, boards.map(\.id))
+        phone.store.moveBoardFavorite(boards[0].id, to: 2)
+        mac.store.setBoardMarkdown("Mac changes while iPhone reorders", for: boards[0].id)
+        try await sync(phone, mac, phone)
+        XCTAssertEqual(mac.store.favoriteBoardIDs, [boards[1].id, boards[2].id, boards[0].id])
+        XCTAssertEqual(phone.store.boards.first { $0.id == boards[0].id }?.markdown, "Mac changes while iPhone reorders")
+        phone.store.setBoardFavoriteOrder([])
+        try await sync(phone, mac)
+        XCTAssertEqual(mac.store.boardFavoriteOrder, [])
+        XCTAssertEqual(JournalStore(directory: mac.store.directory).boardFavoriteOrder, [])
+    }
+
+    func testEqualSizeRemoteBoardUpdateWithUnchangedModificationTimeIsRead() async throws {
+        let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
+        let board = try XCTUnwrap(phone.store.ensureBoard(for: .tag("Read")))
+        phone.store.setBoardMarkdown("AAAA", for: board.id)
+        try await sync(phone, mac)
+        let url = FolderSync.snapshotURL(folder, phone.deviceID)
+        let original = try Data(contentsOf: url)
+        let modified = try XCTUnwrap(url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+        // 只把正文替换成等长内容，再还原修改时间；新时间戳仍与原值有相同的编码长度。
+        let text = String(decoding: original, as: UTF8.self).replacingOccurrences(of: "AAAA", with: "BBBB")
+        var snapshot = try JSONDecoder().decode(SyncSnapshot.self, from: Data(text.utf8))
+        let key = "board/" + board.id.uuidString
+        var field = try XCTUnwrap(snapshot.records[key]?.fields["markdown"])
+        field.stamp.time += 1
+        snapshot.records[key]?.fields["markdown"] = field
+        let updated = try JSONEncoder().encode(snapshot)
+        XCTAssertEqual(original.count, updated.count)
+        try updated.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+        try await sync(mac)
+        let received = try XCTUnwrap(mac.store.boards.first { $0.id == board.id }).markdown
+        XCTAssertTrue(received.contains("BBBB"), received)
+    }
+
+    func testSyncWaitsForEditorSnapshotBeforeCapturingBoardContent() async throws {
+        let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
+        let board = try XCTUnwrap(mac.store.ensureBoard(for: .tag("Draft")))
+        mac.prepareForSync = {
+            try? await Task.sleep(for: .milliseconds(30))
+            mac.store.setBoardMarkdown("Latest editor text", for: board.id)
+        }
+        try await sync(mac, phone)
+        XCTAssertEqual(phone.store.boards.first { $0.id == board.id }?.markdown, "Latest editor text")
+        mac.prepareForSync = nil
+    }
+
     func testNewDeviceReceivesEverything() async throws {
         let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
         let day = clock

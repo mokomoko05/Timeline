@@ -25,6 +25,11 @@ final class WorkspaceTopBarTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = JournalStore(directory: directory)
+        let previousSync = AppRouter.cloudSync
+        let sync = CloudSyncController(store: store, defaults: InMemoryDefaults())
+        AppRouter.cloudSync = sync
+        defer { AppRouter.cloudSync = previousSync }
+        let syncWidth = NSHostingView(rootView: WorkspaceSyncButton()).fittingSize.width
         let main = NSHostingView(rootView: LocalizedRoot {
             ContentView(store: store, loginItem: LoginItem())
                 .environmentObject(ReminderScheduler(store: store))
@@ -76,7 +81,7 @@ final class WorkspaceTopBarTests: XCTestCase {
                 if page == .main {
                     // 对实际像素检查六个独立图标，防止按钮被标题栏遮挡或在最小窗口被挤掉。
                     for index in 0..<6 {
-                        let region = NSRect(x: 16 + CGFloat(index) * 34, y: close.minY / scale - 2,
+                        let region = NSRect(x: 16 + syncWidth + 8 + CGFloat(index) * 34, y: close.minY / scale - 2,
                                             width: 28, height: close.height / scale + 4)
                         XCTAssertNotNil(inkBounds(in: bitmap, region: region, scale: scale), "面板按钮 \(index) 必须实际画出")
                     }

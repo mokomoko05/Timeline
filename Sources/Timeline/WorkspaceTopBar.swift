@@ -97,6 +97,7 @@ struct WorkspaceTopBar<Leading: View>: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            WorkspaceSyncButton()
             leading()
             Spacer(minLength: 8)
             WorkspaceIconButton(symbol: "xmark", title: "隐藏", help: shortcuts.help("隐藏", action: closeAction),

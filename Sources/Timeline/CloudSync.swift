@@ -42,6 +42,11 @@ final class CloudSyncController: ObservableObject {
     private func start() {
         guard sync == nil, !store.isReadOnly, iCloudDriveAvailable else { return }
         let sync = FolderSync(store: store, folder: Self.defaultFolder, deviceName: Host.current().localizedName ?? "Mac")
+        sync.prepareForSync = {
+            if let editor = BoardLiveEditorSession.active {
+                await withCheckedContinuation { continuation in editor.commit(endingEditing: false) { continuation.resume() } }
+            }
+        }
         // 同步状态变了让设置界面跟着刷新。
         forward = sync.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         self.sync = sync
@@ -56,6 +61,45 @@ final class CloudSyncController: ObservableObject {
 
     func revealFolder() {
         NSWorkspace.shared.activateFileViewerSelecting([Self.defaultFolder])
+    }
+
+    func syncNow() async {
+        guard let sync else { AppRouter.showSettings(); return }
+        NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
+        store.save()
+        await sync.syncUntilExported()
+    }
+}
+
+/// 放在共用顶栏左端；同步状态只刷新这个控件。
+struct WorkspaceSyncButton: View {
+    var body: some View {
+        if let controller = AppRouter.cloudSync { WorkspaceCloudSyncButton(controller: controller) }
+    }
+}
+
+private struct WorkspaceCloudSyncButton: View {
+    @ObservedObject var controller: CloudSyncController
+    @State private var working = false
+
+    var body: some View {
+        Button {
+            working = true
+            Task { @MainActor in await controller.syncNow(); working = false }
+        } label: {
+            Label(title, systemImage: controller.sync?.lastError != nil ? "exclamationmark.icloud" : "arrow.triangle.2.circlepath.icloud")
+                .font(.system(size: 11, weight: .medium)).frame(minHeight: 24)
+        }
+        .buttonStyle(HitAreaButtonStyle(compact: true))
+        .foregroundStyle(controller.sync?.lastError != nil ? Palette.deadline : Palette.accent)
+        .disabled(working || controller.sync?.isSyncing == true)
+        .help(controller.sync?.lastError.map(AppLocalizedLines) ?? AppLocalized(controller.sync?.waitingForDownload == true ? "等待 iCloud 下载" : "立即同步"))
+        .accessibilityLabel("立即同步")
+        .accessibilityIdentifier("workspace.sync")
+    }
+
+    private var title: String {
+        AppLocalized(working || controller.sync?.isSyncing == true ? "正在同步…" : (controller.sync?.waitingForDownload == true ? "等待下载" : "同步"))
     }
 }
 
@@ -72,7 +116,7 @@ struct CloudSyncSettings: View {
             HStack {
                 status(sync)
                 Spacer()
-                Button("立即同步") { sync.syncSoon() }.disabled(sync.isSyncing)
+                Button("立即同步") { Task { await controller.syncNow() } }.disabled(sync.isSyncing)
                 Button("在访达中显示") { controller.revealFolder() }
             }
             if !sync.devices.isEmpty {
@@ -87,6 +131,8 @@ struct CloudSyncSettings: View {
     @ViewBuilder private func status(_ sync: FolderSync) -> some View {
         if sync.isSyncing {
             Text("正在同步…").font(.caption).foregroundStyle(Palette.muted)
+        } else if sync.waitingForDownload {
+            Text("等待 iCloud 下载").font(.caption).foregroundStyle(Palette.muted)
         } else if let error = sync.lastError {
             Text(AppLocalizedLines(error)).font(.caption).foregroundStyle(Palette.deadline)
         } else if let date = sync.lastSync {

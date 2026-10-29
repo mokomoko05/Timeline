@@ -62,6 +62,16 @@ body { font: var(--font-size)/1.65 -apple-system, BlinkMacSystemFont, sans-serif
 .board-check { display: inline-flex; vertical-align: -.16em; align-items: center; justify-content: center; width: 1.1em; height: 1.1em; margin-right: .45em; padding: 0; border: 1.4px solid var(--muted); border-radius: 50%; background: transparent; cursor: pointer; }
 .board-check[aria-checked="true"] { border-color: var(--success); background: var(--success); }
 .board-check svg { width: 80%; height: 80%; stroke: white; stroke-width: 2; fill: none; }
+/* 工作板勾选框的整个按钮均可点击；视觉方框和触控范围分开，临近行不会重叠。 */
+html:not(.inline) .board-check { position: relative; width: 32px; height: 32px; margin: 0 4px 0 -4px; vertical-align: middle; border: 0; border-radius: 4px; background: transparent; touch-action: manipulation; }
+html:not(.inline) .board-check::before { content: ""; position: absolute; inset: 6px; border: 1.5px solid var(--muted); border-radius: 5px; }
+html:not(.inline) .board-check[aria-checked="true"]::before { background: var(--success); border-color: var(--success); }
+html:not(.inline) .board-check svg { position: relative; width: 16px; height: 16px; pointer-events: none; }
+html:not(.inline) .board-check:hover::before { border-color: var(--accent); }
+html:not(.inline) .board-check:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 6px; }
+html.touch:not(.inline) .board-check { width: 44px; height: 44px; margin-left: -8px; margin-right: 0; }
+html.touch:not(.inline) .board-check::before { inset: 10px; border-radius: 6px; }
+html.touch:not(.inline) .board-check svg { width: 18px; height: 18px; }
 .board-details { display: inline-flex; align-items: flex-start; gap: 7px; width: 100%; min-height: 1.65em; padding: 0; border: 0; background: transparent; color: var(--ink); text-align: left; font: inherit; font-weight: 550; cursor: pointer; }
 .board-details .arrow { flex: 0 0 12px; display: flex; align-items: center; justify-content: center; height: 1.65em; color: var(--muted); }
 .board-details .arrow svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform .16s ease; }

@@ -382,11 +382,11 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         store.setBoardMarkdown(source, for: boardID)
     }
 
-    func commit(completion: @escaping () -> Void) {
+    func commit(endingEditing: Bool = true, completion: @escaping () -> Void) {
         guard ready, let webView else { flush(); completion(); return }
-        webView.evaluateJavaScript("document.activeElement?.blur(); window.boardEditor.snapshot()") { [weak self] result, _ in
+        webView.evaluateJavaScript((endingEditing ? "document.activeElement?.blur(); " : "") + "window.boardEditor.snapshot()") { [weak self] result, _ in
             if let snapshot = result as? [String: Any] { self?.accept(snapshot) }
-            self?.composing = false
+            if endingEditing { self?.composing = false }
             self?.flush()
             completion()
         }

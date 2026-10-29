@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 
 /// 一台设备在共享文件夹里留下的完整状态。每台设备只写自己的这一份，所以文件本身不会冲突。
@@ -22,6 +23,7 @@ struct SyncState: Codable {
     struct RemoteMark: Codable, Equatable {
         var modified: Date
         var size: Int
+        var digest: String?
     }
 }
 
@@ -57,6 +59,8 @@ public final class FolderSync: ObservableObject {
     public let store: JournalStore
     public let folder: URL
     public let deviceName: String
+    /// 网页编辑器先取回尚未通过防抖写入的正文，再捕获同步快照；同步和进后台都必须等待。
+    public var prepareForSync: (() async -> Void)?
     @Published public private(set) var isSyncing = false
     @Published public private(set) var lastSync: Date?
     @Published public private(set) var lastError: String?
@@ -142,8 +146,9 @@ public final class FolderSync: ObservableObject {
             else if waitingForDownload, downloadWaits < 40 { downloadWaits += 1; syncSoon(after: 3) }
         }
         do {
+            await prepareForSync?()
             let changed = try await runOnce()
-            lastSync = now()
+            if !rerun && !waitingForDownload { lastSync = now() }
             lastError = nil
             if failureStreak != 0 { failureStreak = 0 }
             return changed
@@ -212,6 +217,7 @@ public final class FolderSync: ObservableObject {
             }
         }.value
         if exporting, state.records == snapshotState.records { needsExport = false }
+        if store.syncContent != syncedContent { rerun = true }
         // 新下载的图片：让界面重新读取。
         if downloaded > 0 { store.objectWillChange.send() }
         return applied
@@ -234,7 +240,6 @@ public final class FolderSync: ObservableObject {
             pendingDownload = placeholders
             for file in files {
                 let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey, .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
-                let mark = SyncState.RemoteMark(modified: values?.contentModificationDate ?? .distantPast, size: values?.fileSize ?? 0)
                 let id = file.deletingPathExtension().lastPathComponent
                 // iCloud 云盘不会主动把别的设备更新过的文件拉到本机（iOS 上尤其如此）：本机这份不是最新的，
                 // 就请系统下载，这一轮先用手上的，下载完修改时间变了再合并。
@@ -242,11 +247,15 @@ public final class FolderSync: ObservableObject {
                     try? FileManager.default.startDownloadingUbiquitousItem(at: file)
                     pendingDownload = true
                 }
-                if state.remote[id] == mark, let name = state.names[id] {
+                // iCloud 替换文件时可能保留修改时间和字节数。必须按实际内容判断，
+                // 否则等长的 Board 编辑会一直被当成“已经同步过”。读取、摘要均在后台。
+                guard let data = try coordinatedRead(file) else { continue }
+                let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                let mark = SyncState.RemoteMark(modified: values?.contentModificationDate ?? .distantPast, size: data.count, digest: digest)
+                if state.remote[id]?.digest == digest, let name = state.names[id] {
                     devices.append(Device(id: id, name: name, exportedAt: mark.modified))
                     continue
                 }
-                guard let data = try coordinatedRead(file) else { continue }
                 let snapshot = try JSONDecoder().decode(SyncSnapshot.self, from: data)
                 guard snapshot.format <= SyncSnapshot.currentFormat else { throw SyncError.newerFormat(snapshot.name) }
                 state.names[snapshot.device] = snapshot.name
