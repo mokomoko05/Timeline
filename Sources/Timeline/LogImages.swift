@@ -8,8 +8,22 @@ final class ThumbnailLoader: ObservableObject {
     enum State: Equatable { case loading, loaded(NSImage), missing }
     @Published private(set) var state: State = .loading
     private var key: String?
+    private var requested: (URL, Int)?
+    private var imageObserver: NSObjectProtocol?
+
+    init() {
+        imageObserver = NotificationCenter.default.addObserver(forName: JournalStore.imageAvailable, object: nil, queue: .main) { [weak self] notification in
+            MainActor.assumeIsolated {
+                guard let self, let (url, pixels) = self.requested, notification.object as? URL == url else { return }
+                self.key = nil
+                self.load(url, maxPixel: pixels)
+            }
+        }
+    }
+    deinit { if let imageObserver { NotificationCenter.default.removeObserver(imageObserver) } }
 
     func load(_ url: URL, maxPixel: Int) {
+        requested = (url, maxPixel)
         let key = "\(url.path)#\(maxPixel)"
         guard key != self.key else { return }
         self.key = key

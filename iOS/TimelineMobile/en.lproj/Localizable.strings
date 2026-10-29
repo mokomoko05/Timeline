@@ -412,3 +412,13 @@
 "重新检查并重试" = "Check again and retry";
 
 "数据放在 iCloud 云盘的「Timeline」文件夹，每台设备只写自己的快照，草稿不同步。" = "Data is stored in the Timeline folder in iCloud Drive. Each device writes its own snapshots. Drafts do not sync.";
+
+// Incremental sync and original images
+"本机更新已写入共享文件夹，正在等待 iCloud 确认上传。应用不能强制系统立即上传。" = "Local changes are in the shared folder, waiting for iCloud to confirm upload. The app cannot force an immediate upload.";
+"本轮读取 / 写入" = "Read / written this round";
+"待上传文件" = "Files waiting for upload";
+"已接收本机最新修改" = "Latest local changes received";
+"尚未确认接收本机最新修改" = "Latest local changes not yet acknowledged";
+"上传完成表示 iCloud 已接收；设备接收确认表示对方已合并本机最新修改。原图保留质量，查看时下载。" = "Upload confirmation means iCloud has received the data. A device acknowledgement means it has merged your latest changes. Originals keep their quality and download when viewed.";
+"数据放在 iCloud 云盘的「Timeline」文件夹，日常只传变更，草稿不同步。增量同步需要各设备更新到最新版。" = "Data is stored in the Timeline folder in iCloud Drive. Only changes transfer during regular sync. Drafts do not sync. Update Timeline on all devices to use incremental sync.";
+"部分原图尚未下载，备份未完成。请联网等待图片下载后重试。" = "Some originals have not downloaded, so the backup is incomplete. Connect to the internet, wait for images to download, and try again.";

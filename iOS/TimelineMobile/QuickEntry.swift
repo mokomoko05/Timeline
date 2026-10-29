@@ -82,8 +82,7 @@ struct AddLogIntent: AppIntent {
         let store = AppServices.shared.store
         var names: [String] = []
         for file in images ?? [] {
-            guard let image = UIImage(data: file.data), let jpeg = image.scaledForLog().jpegData(compressionQuality: 0.85),
-                  let name = try? store.storeImage(jpeg, fileExtension: "jpg") else { continue }
+            guard let name = try? await store.storeOriginalImage(file.data) else { continue }
             names.append(name)
         }
         let body = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

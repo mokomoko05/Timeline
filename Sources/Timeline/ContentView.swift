@@ -750,9 +750,12 @@ struct ContentView: View {
         panel.message = AppLocalized("将导出为一个文件夹，包含 journal.json 和日志图片（Images）。")
         panel.prompt = AppLocalized("导出")
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            try store.exportFolder(to: url)
-            toast.show(AppLocalizedFormat("已导出到「%@」", url.lastPathComponent), actionTitle: "显示") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-        } catch { actionError = error.localizedDescription }
+        Task {
+            do {
+                try await store.prepareImageExport()
+                try store.exportFolder(to: url)
+                toast.show(AppLocalizedFormat("已导出到「%@」", url.lastPathComponent), actionTitle: "显示") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            } catch { actionError = error.localizedDescription }
+        }
     }
 }

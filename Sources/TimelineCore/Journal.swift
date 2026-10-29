@@ -216,6 +216,10 @@ struct JournalDocument: Codable {
 
 @MainActor
 public final class JournalStore: ObservableObject {
+    /// 缺失原图由同步器按可见内容请求，不在首次同步下载整座图库。
+    var requestImage: ((String) -> Void)?
+    var fetchImage: ((String) async throws -> Bool)?
+    public static let imageAvailable = Notification.Name("TimelineImageAvailable")
     /// nil 表示尚未设置，可从旧版 Mac 的本机收藏迁移；空数组表示用户已清空收藏。
     @Published public internal(set) var boardFavoriteOrder: [UUID]?
     @Published public private(set) var boards: [Board] = [] {
@@ -1146,15 +1150,26 @@ public final class JournalStore: ObservableObject {
 
     public var imagesDirectory: URL { directory.appendingPathComponent("Images", isDirectory: true) }
 
-    public func imageURL(_ name: String) -> URL { imagesDirectory.appendingPathComponent(name) }
+    public func imageURL(_ name: String) -> URL {
+        let url = imagesDirectory.appendingPathComponent(name)
+        if !FileManager.default.fileExists(atPath: url.path) { requestImage?(name) }
+        return url
+    }
 
     /// 保存已处理好的图片数据，返回文件名。
     public func storeImage(_ data: Data, fileExtension: String) throws -> String {
         guard !isReadOnly else { throw LogInputError.readOnly }
-        try FileManager.default.createDirectory(at: imagesDirectory, withIntermediateDirectories: true)
-        let name = UUID().uuidString.lowercased() + "." + fileExtension
-        try data.write(to: imageURL(name), options: .atomic)
-        return name
+        return try OriginalImage.store(data, extension: fileExtension, directory: imagesDirectory)
+    }
+
+    /// 原图校验、摘要和磁盘写入都在后台完成，避免大照片阻塞打字和动画。
+    public func storeOriginalImage(_ data: Data) async throws -> String {
+        guard !isReadOnly else { throw LogInputError.readOnly }
+        let directory = imagesDirectory
+        return try await Task.detached(priority: .userInitiated) {
+            guard let ext = OriginalImage.fileExtension(for: data) else { throw CocoaError(.fileReadUnknown) }
+            return try OriginalImage.store(data, extension: ext, directory: directory)
+        }.value
     }
 
     public func addDraftImage(_ name: String, on date: Date) {
@@ -1200,10 +1215,21 @@ public final class JournalStore: ObservableObject {
     }
 
     /// 导出为文件夹：journal.json 加上被引用的全部图片。
+    public func prepareImageExport() async throws {
+        for name in referencedImageNames(in: days).sorted() {
+            if FileManager.default.fileExists(atPath: imagesDirectory.appendingPathComponent(name).path) { continue }
+            guard try await fetchImage?(name) == true else { throw ImageExportError.unavailable }
+        }
+    }
+
     public func exportFolder(to folder: URL) throws {
+        let names = referencedImageNames(in: days)
+        // 按需下载后，备份不能静默漏掉还在云端的原图。
+        guard names.allSatisfy({ FileManager.default.fileExists(atPath: imagesDirectory.appendingPathComponent($0).path) }) else {
+            throw ImageExportError.unavailable
+        }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try export(to: folder.appendingPathComponent("journal.json"))
-        let names = referencedImageNames(in: days)
         guard !names.isEmpty else { return }
         let target = folder.appendingPathComponent("Images", isDirectory: true)
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
@@ -1249,6 +1275,36 @@ public final class JournalStore: ObservableObject {
             for name in files where !keep.contains(name) && text.contains(name) { keep.insert(name) }
         }
         return files.filter { !keep.contains($0) }
+    }
+
+    /// 云端清理也必须保护本机草稿、最近删除和可恢复备份中的图片。
+    func retainedImagesForSync() async -> Set<String>? {
+        let keep = referencedImageNames(in: days)
+        let backup = backupURL, backups = backupsDirectory
+        return await Task.detached(priority: .utility) {
+            var result = keep
+            let manager = FileManager.default
+            var documents: [URL] = manager.fileExists(atPath: backup.path) ? [backup] : []
+            if manager.fileExists(atPath: backups.path) {
+                guard let files = try? manager.contentsOfDirectory(at: backups, includingPropertiesForKeys: nil) else { return nil as Set<String>? }
+                documents += files.filter { $0.pathExtension == "json" }
+            }
+            // 提取备份中的文件名，包含从未下载到本机的远端原图。
+            // 一次解析一份备份，避免每张图片都重新搜索整份备份文本。
+            func collect(_ value: Any) {
+                if let object = value as? [String: Any] {
+                    for (key, child) in object {
+                        if ["images", "logDraftImages"].contains(key), let names = child as? [String] { result.formUnion(names) }
+                        else { collect(child) }
+                    }
+                } else if let array = value as? [Any] { for child in array { collect(child) } }
+            }
+            for document in documents {
+                guard let data = try? Data(contentsOf: document), let value = try? JSONSerialization.jsonObject(with: data) else { return nil }
+                collect(value)
+            }
+            return result
+        }.value
     }
 
     /// 启动维护只在后台读取、扫描备份；回到主线程后重新检查引用。

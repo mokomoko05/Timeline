@@ -11,6 +11,34 @@ final class LogImageTests: XCTestCase {
         return (JournalStore(directory: directory), directory)
     }
 
+    func testCloudOnlyImagesInBackupsAreProtectedAndInvalidBackupsDeferCleanup() async throws {
+        let (store, _) = makeStore()
+        try FileManager.default.createDirectory(at: store.backupsDirectory, withIntermediateDirectories: true)
+        let backup = store.backupsDirectory.appendingPathComponent("retained.json")
+        try Data(#"{"days":{"old":{"logs":[{"images":["cloud-only.jpg"]}]}}}"#.utf8).write(to: backup)
+        let retained = await store.retainedImagesForSync()
+        XCTAssertEqual(retained, ["cloud-only.jpg"])
+        try Data("corrupt backup".utf8).write(to: backup)
+        let invalid = await store.retainedImagesForSync()
+        XCTAssertNil(invalid)
+    }
+
+    func testExportRefusesIncompleteImageBackupAndCanFetchRequiredOriginals() async throws {
+        let (store, directory) = makeStore()
+        _ = try store.quickLog("Cloud image", images: ["cloud.png"], on: day)
+        let destination = directory.appendingPathComponent("export")
+        XCTAssertThrowsError(try store.exportFolder(to: destination))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        store.fetchImage = { name in
+            try FileManager.default.createDirectory(at: store.imagesDirectory, withIntermediateDirectories: true)
+            try Data([2, 3]).write(to: store.imagesDirectory.appendingPathComponent(name))
+            return true
+        }
+        try await store.prepareImageExport()
+        try store.exportFolder(to: destination)
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("Images/cloud.png")), Data([2, 3]))
+    }
+
     func testOldLogsDecodeWithoutImagesAndEncodeWithoutNewKeys() throws {
         let json = #"{"id":"4CC72FA1-6824-43AF-82D8-345E9C48588F","createdAt":0,"kind":"note","text":"旧日志"}"#
         let log = try JSONDecoder().decode(DailyLogEntry.self, from: Data(json.utf8))

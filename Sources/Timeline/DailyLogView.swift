@@ -160,7 +160,7 @@ struct DailyLogView: View {
 
     private func addImages(_ datas: [Data]) {
         guard !store.isReadOnly else { return }
-        for name in ImageTools.save(datas, in: store) { store.addDraftImage(name, on: date) }
+        Task { for name in await ImageTools.save(datas, in: store) { store.addDraftImage(name, on: date) } }
         focused = true
     }
 

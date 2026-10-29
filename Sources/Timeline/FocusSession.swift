@@ -1517,7 +1517,7 @@ struct FocusPanelView: View {
     private func addNoteImages(_ datas: [Data]) {
         guard let store else { return }
         guard draft.pendingEntryID == nil else { return }
-        draft.images += ImageTools.save(datas, in: store)
+        Task { draft.images += await ImageTools.save(datas, in: store) }
         focused = true
     }
 

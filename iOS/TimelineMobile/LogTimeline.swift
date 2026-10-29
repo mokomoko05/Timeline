@@ -1,4 +1,5 @@
 import SwiftUI
+import ImageIO
 import TimelineCore
 import UIKit
 
@@ -385,17 +386,21 @@ private struct Thumbnail: View {
                 Palette.line.opacity(0.25)
             }
         }
-        .task(id: url) {
-            guard ImageCache.cached(url) == nil else { return }
-            // 解码大图放到后台：在主线程上一张照片要几十毫秒，一天几张就是明显的卡顿。
-            let loaded = await Task.detached(priority: .userInitiated) { [url] in ImageCache.thumbnail(url) }.value
-            image = loaded
-            missing = loaded == nil
+        .task(id: url) { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: JournalStore.imageAvailable)) { notification in
+            guard notification.object as? URL == url else { return }
+            Task { await load() }
         }
         .frame(width: 110, height: 110)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Palette.line.opacity(0.6)))
     }
+    private func load() async {
+        let loaded = await Task.detached(priority: .userInitiated) { [url] in ImageCache.thumbnail(url) }.value
+        image = loaded
+        missing = loaded == nil
+    }
+
 }
 
 /// 按下时缩一点、变暗一点：点缩略图有手感。
@@ -563,9 +568,11 @@ private struct ZoomableImage: View {
     let close: () -> Void
     @State private var scale: CGFloat = 1
     @State private var settled: CGFloat = 1
+    @State private var original: UIImage?
 
     var body: some View {
-        if let image = UIImage(contentsOfFile: url.path) {
+        Group {
+        if let image = original {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFit()
@@ -581,6 +588,17 @@ private struct ZoomableImage: View {
             ProgressView().tint(.white)
         }
     }
+        .task(id: url) { await loadOriginal() }
+        .onReceive(NotificationCenter.default.publisher(for: JournalStore.imageAvailable)) { notification in
+            guard notification.object as? URL == url else { return }
+            Task { await loadOriginal() }
+        }
+    }
+
+    private func loadOriginal() async {
+        original = await Task.detached(priority: .userInitiated) { [url] in UIImage(contentsOfFile: url.path)?.preparingForDisplay() }.value
+    }
+
 }
 
 /// 缩略图缓存：列表来回滚动时不重复解码大图。
@@ -592,11 +610,14 @@ enum ImageCache {
     /// 读出并缩小一张图（可以在后台线程调用）。
     nonisolated static func thumbnail(_ url: URL) -> UIImage? {
         if let cached = cache.object(forKey: url as NSURL) { return cached }
-        guard let image = UIImage(contentsOfFile: url.path) else { return nil }
-        let side: CGFloat = 330
-        let scale = side / min(image.size.width, image.size.height)
-        let thumbnail = scale < 1 ? image.preparingThumbnail(of: CGSize(width: image.size.width * scale, height: image.size.height * scale)) ?? image
-            : image.preparingForDisplay() ?? image
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 660,
+                kCGImageSourceShouldCacheImmediately: true,
+              ] as CFDictionary) else { return nil }
+        let thumbnail = UIImage(cgImage: cgImage)
         cache.setObject(thumbnail, forKey: url as NSURL)
         return thumbnail
     }

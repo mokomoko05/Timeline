@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import TimelineCore
+import ImageIO
 
 struct ZoomableImage: NSViewRepresentable {
     let url: URL
@@ -20,6 +22,8 @@ final class ImageZoomScrollView: NSScrollView {
     private var url: URL?
     private var relativeZoom: CGFloat = 1
     private var fitting = false
+    private var loadingURL: URL?
+    private var imageObserver: NSObjectProtocol?
     private let missingLabel = NSTextField(labelWithString: AppLocalized("找不到这张图片的文件"))
     var onZoom: ((CGFloat) -> Void)?
 
@@ -41,25 +45,65 @@ final class ImageZoomScrollView: NSScrollView {
         missingLabel.alignment = .center
         missingLabel.isHidden = true
         addSubview(missingLabel)
+        imageObserver = NotificationCenter.default.addObserver(forName: JournalStore.imageAvailable, object: nil, queue: .main) { [weak self] notification in
+            MainActor.assumeIsolated {
+                guard let self, let url = self.url, notification.object as? URL == url else { return }
+                self.loadingURL = nil
+                self.loadOriginal(url)
+            }
+        }
     }
+
+    deinit { if let imageObserver { NotificationCenter.default.removeObserver(imageObserver) } }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func clear() {
         url = nil
+        loadingURL = nil
         picture.image = nil
     }
 
     func display(_ url: URL, zoom: CGFloat) {
         if self.url != url {
             self.url = url
-            picture.image = NSImage(contentsOf: url)
-            picture.frame = NSRect(origin: .zero, size: picture.image?.size ?? NSSize(width: 1, height: 1))
+            picture.image = nil
+            loadOriginal(url)
+            picture.frame = NSRect(origin: .zero, size: NSSize(width: 1, height: 1))
             picture.toolTip = picture.image == nil ? AppLocalized("找不到这张图片的文件") : nil
             missingLabel.isHidden = picture.image != nil
         }
         relativeZoom = zoom
         fitIfNeeded()
+    }
+
+    private func loadOriginal(_ url: URL) {
+        guard loadingURL != url else { return }
+        loadingURL = url
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let source = CGImageSourceCreateWithURL(url as CFURL, nil)
+            let decoded = source.flatMap { source -> CGImage? in
+                let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+                let width = properties?[kCGImagePropertyPixelWidth] as? Int ?? 1
+                let height = properties?[kCGImagePropertyPixelHeight] as? Int ?? 1
+                return CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: max(width, height),
+                    kCGImageSourceShouldCacheImmediately: true,
+                ] as CFDictionary)
+            }
+            DispatchQueue.main.async {
+                guard let self, self.url == url else { return }
+                self.picture.image = decoded.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
+                self.picture.frame = NSRect(origin: .zero, size: self.picture.image?.size ?? NSSize(width: 1, height: 1))
+                self.missingLabel.isHidden = self.picture.image != nil
+                self.picture.toolTip = self.picture.image == nil ? AppLocalized("找不到这张图片的文件") : nil
+                self.needsLayout = true
+                self.layoutSubtreeIfNeeded()
+                self.fitIfNeeded()
+            }
+        }
     }
 
     private var fitScale: CGFloat {
@@ -68,7 +112,7 @@ final class ImageZoomScrollView: NSScrollView {
     }
 
     private func fitIfNeeded() {
-        guard !fitting, contentView.frame.width > 0, contentView.frame.height > 0 else { return }
+        guard !fitting, picture.image != nil, contentView.frame.width > 0, contentView.frame.height > 0 else { return }
         fitting = true
         defer { fitting = false }
         let target = min(maxMagnification, max(minMagnification, fitScale * relativeZoom))

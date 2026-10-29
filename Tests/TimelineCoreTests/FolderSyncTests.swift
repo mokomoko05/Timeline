@@ -56,6 +56,155 @@ final class FolderSyncTests: XCTestCase {
         sync.store.tasks().first { $0.task.title == title }
     }
 
+    private func streamFiles(_ sync: FolderSync) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: folder.appendingPathComponent(IncrementalSync.directory).appendingPathComponent(sync.deviceID), includingPropertiesForKeys: nil).sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    private func legacy(_ device: FolderSync) throws -> SyncSnapshot {
+        var records: [String: SyncRecord] = [:]
+        SyncMerge(device: device.deviceID, now: clock).stampLocalChanges(try device.store.syncContent.records(), into: &records)
+        return SyncSnapshot(device: device.deviceID, name: device.deviceName, exportedAt: clock, records: records)
+    }
+
+    func testLargeLibraryTransfersOnlyChangedBoardAndIdlePollTransfersNothing() async throws {
+        let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
+        let text = String(repeating: "Original board content. ", count: 700)
+        var ids: [UUID] = []
+        for index in 0..<80 {
+            let board = try XCTUnwrap(mac.store.ensureBoard(for: .tag("Large\(index)")))
+            ids.append(board.id)
+            mac.store.setBoardMarkdown(text, for: board.id)
+        }
+        try await sync(mac, phone)
+        let initialBytes = mac.lastWrittenBytes
+        XCTAssertGreaterThan(initialBytes, 1_000_000)
+        mac.store.setBoardMarkdown(text + "Changed.", for: ids[0])
+        try await sync(mac, phone)
+        XCTAssertLessThan(mac.lastWrittenBytes, initialBytes / 40)
+        XCTAssertLessThan(phone.lastReadBytes, initialBytes / 40)
+        XCTAssertEqual(phone.store.boards.first { $0.id == ids[0] }?.markdown, text + "Changed.")
+        print("Sync transfer: initial=\(initialBytes) bytes, edit=\(mac.lastWrittenBytes) bytes, receiver=\(phone.lastReadBytes) bytes")
+        // 先交换回执，随后空闲轮询不重读内容，不发布额外云端文件。
+        try await sync(mac, phone, mac, phone)
+        XCTAssertEqual(mac.lastReadBytes, 0)
+        XCTAssertEqual(mac.lastWrittenBytes, 0)
+        XCTAssertEqual(phone.lastReadBytes, 0)
+        XCTAssertEqual(phone.lastWrittenBytes, 0)
+    }
+
+    func testInterruptedPublicationRetainsBatchAndImageQueueAcrossRestart() async throws {
+        let mac = makeDevice("Mac")
+        let name = try mac.store.storeImage(Data([8, 9, 10]), fileExtension: "png")
+        let day = JournalDates.date(for: "2026-10-10")!
+        _ = try mac.store.quickLog("Offline original", images: [name], on: day)
+        mac.store.save()
+        // 原图与批次写入后，在迁移标记发布时失败；自己的标记不参与读取。
+        let obstruction = FolderSync.snapshotURL(folder, mac.deviceID)
+        try FileManager.default.createDirectory(at: obstruction, withIntermediateDirectories: true)
+        do { try await mac.sync(); XCTFail("Publication should fail") } catch { }
+        let batch = try XCTUnwrap(streamFiles(mac).first)
+        let original = try Data(contentsOf: batch)
+        let reopened = FolderSync(store: JournalStore(directory: mac.store.directory), folder: folder, deviceName: "Mac")
+        reopened.now = { [unowned self] in clock }
+        reopened.uploadPending = { $0.lastPathComponent == name }
+        try FileManager.default.removeItem(at: obstruction)
+        try await sync(reopened)
+        XCTAssertEqual(try streamFiles(reopened).count, 1)
+        XCTAssertEqual(try Data(contentsOf: batch), original, "Retry must preserve sequence and bytes")
+        XCTAssertTrue(reopened.waitingForUpload, "The interrupted image upload still needs confirmation")
+        XCTAssertEqual(reopened.pendingUploadFiles, 1)
+        let phone = makeDevice("iPhone")
+        try await sync(phone)
+        XCTAssertEqual(phone.store.allLogs().first?.log.images, [name])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: phone.store.imagesDirectory.appendingPathComponent(name).path))
+        let downloaded = try await phone.downloadImage(name)
+        XCTAssertTrue(downloaded)
+        XCTAssertEqual(try Data(contentsOf: phone.store.imagesDirectory.appendingPathComponent(name)), Data([8, 9, 10]))
+    }
+
+    func testMissingDeltaWaitsWithoutSkippingAndRecoversWhenItArrives() async throws {
+        let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
+        let board = try XCTUnwrap(mac.store.ensureBoard(for: .tag("Gap")))
+        mac.store.setBoardMarkdown("One", for: board.id)
+        try await sync(mac, phone)
+        mac.store.setBoardMarkdown("Two", for: board.id)
+        try await sync(mac)
+        let middle = try XCTUnwrap(streamFiles(mac).last)
+        let saved = try Data(contentsOf: middle)
+        mac.store.setBoardMarkdown("Three", for: board.id)
+        try await sync(mac)
+        try FileManager.default.removeItem(at: middle)
+        try await sync(phone)
+        XCTAssertTrue(phone.waitingForDownload)
+        XCTAssertEqual(phone.store.boards.first { $0.id == board.id }?.markdown, "One")
+        try saved.write(to: middle)
+        try await sync(phone)
+        XCTAssertFalse(phone.waitingForDownload)
+        XCTAssertEqual(phone.store.boards.first { $0.id == board.id }?.markdown, "Three")
+    }
+
+    func testCorruptedBatchIsRejectedWithoutAdvancingReceiver() async throws {
+        let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
+        let board = try XCTUnwrap(mac.store.ensureBoard(for: .tag("Integrity")))
+        mac.store.setBoardMarkdown("Safe", for: board.id)
+        try await sync(mac, phone)
+        mac.store.setBoardMarkdown("Latest", for: board.id)
+        try await sync(mac)
+        let file = try XCTUnwrap(streamFiles(mac).last)
+        let valid = try Data(contentsOf: file)
+        try Data("corrupted".utf8).write(to: file)
+        do { try await phone.sync(); XCTFail("Corruption should fail verification") } catch { }
+        XCTAssertEqual(phone.store.boards.first { $0.id == board.id }?.markdown, "Safe")
+        try valid.write(to: file)
+        try await sync(phone)
+        XCTAssertEqual(phone.store.boards.first { $0.id == board.id }?.markdown, "Latest")
+    }
+
+    func testFailedLocalStateWriteDoesNotForgetUnpublishedChanges() async throws {
+        let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
+        let board = try XCTUnwrap(mac.store.ensureBoard(for: .tag("Durability")))
+        mac.store.setBoardMarkdown("Must survive a failed save", for: board.id)
+        try FileManager.default.createDirectory(at: mac.stateURL, withIntermediateDirectories: true)
+        do { try await mac.sync(); XCTFail("Blocked state file must fail") } catch { }
+        try FileManager.default.removeItem(at: mac.stateURL)
+        try await sync(mac, phone)
+        XCTAssertEqual(phone.store.boards.first { $0.id == board.id }?.markdown, "Must survive a failed save")
+    }
+
+    func testTamperedOriginalIsRejectedAndCanBeRetriedWithoutQualityLoss() async throws {
+        let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
+        let original = Data([1, 2, 3, 4])
+        let name = try mac.store.storeImage(original, fileExtension: "png")
+        _ = try mac.store.quickLog("Original", images: [name], on: clock)
+        try await sync(mac, phone)
+        let remote = folder.appendingPathComponent("images").appendingPathComponent(name)
+        try Data([0]).write(to: remote)
+        do { _ = try await phone.downloadImage(name); XCTFail("Tampered original must be rejected") } catch { }
+        let local = phone.store.imagesDirectory.appendingPathComponent(name)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: local.path))
+        try original.write(to: remote)
+        let downloaded = try await phone.downloadImage(name)
+        XCTAssertTrue(downloaded)
+        XCTAssertEqual(try Data(contentsOf: local), original)
+    }
+
+    func testVisibleImageRequestDownloadsAndNotifiesWithoutAnotherContentMerge() async throws {
+        let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
+        let name = try mac.store.storeImage(Data([5, 6, 7]), fileExtension: "png")
+        _ = try mac.store.quickLog("Visible image", images: [name], on: clock)
+        try await sync(mac, phone)
+        let local = phone.store.imagesDirectory.appendingPathComponent(name)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: local.path))
+        let downloaded = expectation(description: "Visible image arrives")
+        let observer = NotificationCenter.default.addObserver(forName: JournalStore.imageAvailable, object: nil, queue: .main) { note in
+            if note.object as? URL == local { downloaded.fulfill() }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        XCTAssertEqual(phone.store.imageURL(name), local)
+        await fulfillment(of: [downloaded], timeout: 3)
+        XCTAssertEqual(try Data(contentsOf: local), Data([5, 6, 7]))
+    }
+
     func testBoardFavoritesAndOrderSyncBothWaysWithoutChangingMarkdown() async throws {
         let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
         let boards = try ["A", "B", "C"].map { try XCTUnwrap(mac.store.ensureBoard(for: .tag($0))) }
@@ -77,8 +226,9 @@ final class FolderSyncTests: XCTestCase {
         let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
         let board = try XCTUnwrap(phone.store.ensureBoard(for: .tag("Read")))
         phone.store.setBoardMarkdown("AAAA", for: board.id)
-        try await sync(phone, mac)
         let url = FolderSync.snapshotURL(folder, phone.deviceID)
+        try FolderSync.coordinatedWrite(JSONEncoder().encode(legacy(phone)), to: url)
+        try await sync(mac)
         let original = try Data(contentsOf: url)
         let modified = try XCTUnwrap(url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
         // 只把正文替换成等长内容，再还原修改时间；新时间戳仍与原值有相同的编码长度。
@@ -121,7 +271,7 @@ final class FolderSyncTests: XCTestCase {
         XCTAssertEqual(phone.lastExport, clock)
         XCTAssertNil(phone.lastUpload)
         XCTAssertNotNil(phone.uploadWaitingSince)
-        let url = FolderSync.snapshotURL(folder, phone.deviceID)
+        let url = try XCTUnwrap(streamFiles(phone).last)
         let exported = try Data(contentsOf: url)
         clock += 10
         try await phone.sync()
@@ -149,7 +299,7 @@ final class FolderSyncTests: XCTestCase {
         XCTAssertTrue(phone.waitingForUpload)
         XCTAssertNil(phone.lastSync)
         XCTAssertNotNil(phone.lastError)
-        let snapshot = try JSONDecoder().decode(SyncSnapshot.self, from: Data(contentsOf: FolderSync.snapshotURL(folder, phone.deviceID)))
+        let snapshot = try JSONDecoder().decode(SyncBatch.self, from: Data(contentsOf: XCTUnwrap(streamFiles(phone).last)))
         XCTAssertEqual(snapshot.records["board/" + board.id.uuidString]?.fields["markdown"]?.value, .string("Preserve latest"))
         let progress = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: phone.stateURL.deletingLastPathComponent().appendingPathComponent("status.json")))
         XCTAssertEqual(progress["stage"], "timedOut")
@@ -174,7 +324,8 @@ final class FolderSyncTests: XCTestCase {
         phone.store.setBoardMarkdown("Old cloud copy", for: board.id)
         try await sync(phone, mac)
         let legacy = FolderSync.snapshotURL(folder, phone.deviceID)
-        let stale = try Data(contentsOf: legacy)
+        let first = try JSONDecoder().decode(SyncBatch.self, from: Data(contentsOf: XCTUnwrap(streamFiles(phone).first)))
+        let stale = try JSONEncoder().encode(SyncSnapshot(device: phone.deviceID, name: "iPhone", exportedAt: clock, records: first.records))
         phone.store.setBoardMarkdown("Latest text still queued on the overwritten file", for: board.id)
         try await sync(phone)
         try stale.write(to: legacy, options: .atomic)
@@ -186,20 +337,33 @@ final class FolderSyncTests: XCTestCase {
         XCTAssertEqual(phone.store.boards.first { $0.id == board.id }?.markdown, "Reverse direction")
     }
 
-    func testRevisionFilesAreImmutableAndOfflineRevisionQueueIsBounded() async throws {
+    func testBatchHistoryCompactsOnlyAfterCheckpointsUpload() async throws {
         let phone = makeDevice("iPhone")
+        let offline = makeDevice("Offline Mac")
         let board = try XCTUnwrap(phone.store.ensureBoard(for: .tag("Retention")))
+        let day = JournalDates.date(for: "2026-10-10")!
+        let task = try XCTUnwrap(phone.store.addParsedTodo("Remove before compaction", on: day))
+        try await sync(phone, offline)
+        phone.store.deleteTodo(task.id, on: day)
         phone.uploadPending = { _ in true }
-        for n in 0..<6 {
+        for n in 0..<140 {
             phone.store.setBoardMarkdown("Revision \(n)", for: board.id)
             try await sync(phone)
         }
-        let directory = folder.appendingPathComponent(FolderSync.updatesFolder)
-        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-        XCTAssertEqual(files.count, 3)
+        XCTAssertEqual(try streamFiles(phone).count, 141, "Unconfirmed checkpoints must not discard history")
+        phone.uploadPending = { _ in false }
+        try await sync(phone)
+        let files = try streamFiles(phone)
+        XCTAssertLessThanOrEqual(files.count, IncrementalSync.checkpointInterval * 2 + 2)
         let before = try Dictionary(uniqueKeysWithValues: files.map { ($0, try Data(contentsOf: $0)) })
         try await sync(phone)
         for (url, data) in before { XCTAssertEqual(try Data(contentsOf: url), data) }
+        let newDevice = makeDevice("New phone")
+        try await sync(newDevice)
+        XCTAssertEqual(newDevice.store.boards.first { $0.id == board.id }?.markdown, "Revision 139")
+        XCTAssertNil(newDevice.store.locate(task.id), "A compacted checkpoint retains deletion tombstones")
+        try await sync(offline)
+        XCTAssertNil(offline.store.locate(task.id), "An offline device must not resurrect deleted tasks")
     }
 
     func testRestartWithUnchangedContentDoesNotRewriteCloudFiles() async throws {
@@ -210,7 +374,7 @@ final class FolderSyncTests: XCTestCase {
         try await sync(phone)
         let legacy = FolderSync.snapshotURL(folder, phone.deviceID)
         let original = try Data(contentsOf: legacy)
-        let revisionDirectory = folder.appendingPathComponent(FolderSync.updatesFolder)
+        let revisionDirectory = folder.appendingPathComponent(IncrementalSync.directory).appendingPathComponent(phone.deviceID)
         let revisions = try FileManager.default.contentsOfDirectory(at: revisionDirectory, includingPropertiesForKeys: nil)
         let reopened = FolderSync(store: JournalStore(directory: phone.store.directory), folder: folder, deviceName: "iPhone")
         reopened.now = { [unowned self] in clock }
@@ -224,7 +388,7 @@ final class FolderSyncTests: XCTestCase {
         _ = mac.store.ensureBoard(for: .tag("Receipt"))
         try await sync(mac)
         let exportTime = clock
-        let urls = try FileManager.default.contentsOfDirectory(at: folder.appendingPathComponent(FolderSync.updatesFolder), includingPropertiesForKeys: nil) + [FolderSync.snapshotURL(folder, mac.deviceID)]
+        let urls = try streamFiles(mac) + [FolderSync.snapshotURL(folder, mac.deviceID)]
         for url in urls { try FileManager.default.setAttributes([.modificationDate: exportTime + 60], ofItemAtPath: url.path) }
         try await sync(phone, phone)
         XCTAssertEqual(phone.devices.count, 1)
@@ -408,6 +572,9 @@ final class FolderSyncTests: XCTestCase {
         let name = try mac.store.storeImage(Data([1, 2, 3]), fileExtension: "png")
         _ = try mac.store.quickLog("截图", images: [name], on: day, now: day)
         try await sync(mac, phone)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: phone.store.imagesDirectory.appendingPathComponent(name).path), "Initial sync must not download the whole original image library")
+        let downloaded = try await phone.downloadImage(name)
+        XCTAssertTrue(downloaded)
         XCTAssertEqual(try Data(contentsOf: phone.store.imageURL(name)), Data([1, 2, 3]))
     }
 

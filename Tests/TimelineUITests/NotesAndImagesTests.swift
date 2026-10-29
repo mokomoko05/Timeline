@@ -155,7 +155,7 @@ final class NotesAndImagesTests: XCTestCase {
         XCTAssertEqual(viewer.model.zoom, 1)
     }
 
-    func testImageCopyWritesImageDataAndZoomViewKeepsImageLoaded() throws {
+    func testImageCopyWritesImageDataAndZoomViewKeepsImageLoaded() async throws {
         let store = makeStore()
         let url = store.imageURL("copy.tiff")
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -172,6 +172,9 @@ final class NotesAndImagesTests: XCTestCase {
         let scroll = ImageZoomScrollView(frame: NSRect(x: 0, y: 0, width: 480, height: 320))
         scroll.layoutSubtreeIfNeeded()
         scroll.display(url, zoom: 1)
+        for _ in 0..<100 where (scroll.documentView as? NSImageView)?.image == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         let original = try XCTUnwrap((scroll.documentView as? NSImageView)?.image)
         let fitted = scroll.magnification
         scroll.display(url, zoom: 2)

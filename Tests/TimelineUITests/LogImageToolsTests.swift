@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import TimelineCore
 @testable import Timeline
 
 final class LogImageToolsTests: XCTestCase {
@@ -16,14 +17,30 @@ final class LogImageToolsTests: XCTestCase {
         return rep.representation(using: .png, properties: [:])!
     }
 
-    func testLargeImagesAreDownscaledAndSmallOnesKeepTheirSize() throws {
-        let large = try XCTUnwrap(ImageTools.process(pngData(width: 4000, height: 1000)))
+    func testOriginalImageBytesAndFullResolutionArePreserved() throws {
+        let original = pngData(width: 4000, height: 1000)
+        let large = try XCTUnwrap(ImageTools.process(original))
+        XCTAssertEqual(large.data, original)
         let image = try XCTUnwrap(NSBitmapImageRep(data: large.data))
-        XCTAssertEqual(max(image.pixelsWide, image.pixelsHigh), ImageTools.maxPixel)
+        XCTAssertEqual(max(image.pixelsWide, image.pixelsHigh), 4000)
         let small = try XCTUnwrap(ImageTools.process(pngData(width: 300, height: 200)))
         XCTAssertEqual(NSBitmapImageRep(data: small.data)?.pixelsWide, 300)
         XCTAssertEqual(small.fileExtension, "png")
         XCTAssertNil(ImageTools.process(Data([1, 2, 3])))
+    }
+
+    @MainActor
+    func testOriginalImportsDeduplicateWithoutChangingBytes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let data = pngData(width: 4000, height: 1000)
+        let first = try await store.storeOriginalImage(data)
+        let second = try await store.storeOriginalImage(data)
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(try Data(contentsOf: store.imageURL(first)), data)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.imagesDirectory.path).count, 1)
+        do { _ = try await store.storeOriginalImage(Data([0])); XCTFail("Invalid image must be rejected") } catch { }
     }
 
     func testPasteboardImagesIgnoreMixedTextContent() {

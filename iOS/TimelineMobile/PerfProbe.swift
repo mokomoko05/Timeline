@@ -142,6 +142,46 @@ enum PerfProbe {
     /// 按钮测试（`-perfActions YES`）：依次模拟点常用的按钮（和按钮做的事一样），报每一下从按下到画出下一帧的时间。
     static let action = Notification.Name("PerfProbeAction")
     private static var pendingAction: (String, CFTimeInterval)?
+    private static var originalImageSample: Data?
+    private static var importedImageSamples: Set<String> = []
+
+    private static func prepareOriginalImageSample() {
+        guard originalImageSample == nil else { return }
+        Task {
+            originalImageSample = await Task.detached(priority: .utility) {
+                autoreleasepool {
+                    let format = UIGraphicsImageRendererFormat()
+                    format.scale = 1
+                    format.opaque = true
+                    return UIGraphicsImageRenderer(size: CGSize(width: 4000, height: 3000), format: format).image { context in
+                        for x in stride(from: 0, to: 4000, by: 10) {
+                            UIColor(hue: CGFloat(x) / 4000, saturation: 0.8, brightness: 0.9, alpha: 1).setFill()
+                            context.fill(CGRect(x: x, y: 0, width: 10, height: 3000))
+                        }
+                    }.pngData()
+                }
+            }.value
+            print("[perf] ORIGINAL_SAMPLE bytes=\(originalImageSample?.count ?? 0) pixels=4000x3000")
+        }
+    }
+
+    /// 同一张 1200 万像素图片比较旧的主线程缩放/压缩路径与原图后台导入。
+    private static func importImageSample(legacy: Bool) {
+        guard let data = originalImageSample else { print("[perf] ORIGINAL_IMPORT sample not ready"); return }
+        let store = AppServices.shared.store, start = CACurrentMediaTime()
+        if legacy {
+            guard let image = UIImage(data: data), let jpeg = image.scaledForLog().jpegData(compressionQuality: 0.85),
+                  let name = try? store.storeImage(jpeg, fileExtension: "jpg") else { return }
+            importedImageSamples.insert(name)
+            print("[perf] ORIGINAL_IMPORT legacy totalMS=\(Int((CACurrentMediaTime() - start) * 1000)) bytes=\(jpeg.count)")
+        } else {
+            Task {
+                guard let name = try? await store.storeOriginalImage(data) else { return }
+                importedImageSamples.insert(name)
+                print("[perf] ORIGINAL_IMPORT background totalMS=\(Int((CACurrentMediaTime() - start) * 1000)) bytes=\(data.count)")
+            }
+        }
+    }
 
     static func runActions(switchTab: @escaping (RootView.Tab) -> Void) {
         guard enabled, UserDefaults.standard.bool(forKey: "perfActions") else { return }
@@ -196,6 +236,13 @@ enum PerfProbe {
             }),
             ("记一笔", { send("compose") }),
             ("关掉记一笔", { send("closeSheet") }),
+            ("准备原图测试", { prepareOriginalImageSample() }),
+            ("旧版图片导入", { importImageSample(legacy: true) }),
+            ("后台原图导入", { importImageSample(legacy: false) }),
+            ("清理原图测试", {
+                for name in importedImageSamples { try? FileManager.default.removeItem(at: store.imagesDirectory.appendingPathComponent(name)) }
+                importedImageSamples = []
+            }),
             ("滑动中跳转", { send("flingJump") }),
             ("切到笔记", { switchTab(.notes) }),
             ("切到工作板", { switchTab(.boards) }),

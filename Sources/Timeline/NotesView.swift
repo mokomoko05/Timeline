@@ -961,7 +961,7 @@ struct NotesView: View {
                     TaskInput(text: binding, focused: $tagFocused,
                               placeholder: AppLocalizedFormat("写进 #%@…", tag),
                               fontSize: 13, submit: { submitTag(tag) }, onPasteImages: { datas in
-                        addImages(ImageTools.save(datas, in: store), to: key)
+                        Task { addImages(await ImageTools.save(datas, in: store), to: key) }
                         tagFocused = true
                     }, minHeight: 24, maxLines: 10, mention: tagMention).disabled(store.isReadOnly)
                     Button { submitTag(tag) } label: { Image(systemName: "arrow.turn.down.left") }
@@ -1039,7 +1039,7 @@ struct NotesView: View {
                     TaskInput(text: binding, focused: $focused,
                               placeholder: topic.deleted ? AppLocalized("任务已删除，无法追加笔记") : AppLocalized("追加笔记…"),
                               fontSize: 13, submit: { submit(topic) }, onPasteImages: { datas in
-                        addImages(ImageTools.save(datas, in: store), to: key)
+                        Task { addImages(await ImageTools.save(datas, in: store), to: key) }
                         focused = true
                     }, minHeight: 24, maxLines: 10, mention: taskMention).disabled(topic.deleted || store.isReadOnly)
                     Button { submit(topic) } label: { Image(systemName: "arrow.turn.down.left") }

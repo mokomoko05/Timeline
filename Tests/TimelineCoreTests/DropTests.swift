@@ -46,7 +46,7 @@ final class DropTests: XCTestCase {
         XCTAssertFalse(store.locate(id)!.task.dropped)
     }
 
-    func testDroppedKeepsNotesNumberAndLeavesOpenListsAndPin() throws {
+    func testDroppedKeepsNotesNumberAndPinButLeavesOpenLists() throws {
         let store = makeStore()
         let id = try XCTUnwrap(store.addParsedTodo("方案 B #调研", on: day)).task.id
         _ = store.addParsedTodo("方案 A #调研", on: day)
@@ -60,7 +60,7 @@ final class DropTests: XCTestCase {
         let topic = try XCTUnwrap(store.noteTopics().first { $0.id == id })
         XCTAssertTrue(topic.dropped)
         XCTAssertFalse(topic.deleted)
-        XCTAssertNil(store.pinnedTask, "放弃后固定自动取消")
+        XCTAssertEqual(store.pinnedTask?.id, id, "完成或放弃后仍允许固定关联")
         XCTAssertFalse(store.linkCandidates().contains { $0.id == id }, "不再出现在 @ 候选里")
         XCTAssertTrue(store.linkCandidates(includeCompleted: true).contains { $0.id == id })
         let chapter = try XCTUnwrap(store.chapters(forTag: "调研").first { $0.taskID == id })

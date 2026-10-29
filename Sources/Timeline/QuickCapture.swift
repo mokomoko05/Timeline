@@ -610,7 +610,7 @@ struct QuickCaptureView: View {
     }
 
     private func addImages(_ datas: [Data]) {
-        images += ImageTools.save(datas, in: store)
+        Task { images += await ImageTools.save(datas, in: store) }
         failure = nil
         focused = true
     }

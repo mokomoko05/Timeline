@@ -609,7 +609,7 @@ struct ComposeSheet: View {
             // 两个按钮在光标处插入 `@` / `#`：弹出同一个列表，接着打字就是搜索。
             Button { mention.start(.task) } label: { Label("关联待办", systemImage: "at") }
             Button { mention.start(.tag) } label: { Label("标签", systemImage: "number") }
-            PhotosPicker(selection: $picked, maxSelectionCount: 6, matching: .images) {
+            PhotosPicker(selection: $picked, maxSelectionCount: 6, matching: .images, preferredItemEncoding: .current) {
                 Label("图片", systemImage: "photo")
             }
             Spacer()
@@ -649,17 +649,18 @@ struct ComposeSheet: View {
 
     private func attach(_ items: [PhotosPickerItem]) async {
         for item in items {
-            guard let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data),
-                  let jpeg = image.scaledForLog().jpegData(compressionQuality: 0.85),
-                  let name = try? store.storeImage(jpeg, fileExtension: "jpg") else { continue }
+            guard let data = try? await item.loadTransferable(type: Data.self),
+                  let name = try? await store.storeOriginalImage(data) else { continue }
             images.append(name)
         }
     }
 
     private func attach(photo: UIImage) {
-        guard let jpeg = photo.scaledForLog().jpegData(compressionQuality: 0.85),
-              let name = try? store.storeImage(jpeg, fileExtension: "jpg") else { return }
-        images.append(name)
+        Task {
+            let data = await Task.detached(priority: .userInitiated) { photo.pngData() }.value
+            guard let data, let name = try? await store.storeOriginalImage(data) else { return }
+            images.append(name)
+        }
     }
 
     private func send() {

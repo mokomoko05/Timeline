@@ -123,7 +123,7 @@ struct CloudSyncSettings: View {
                 Button("在访达中显示") { controller.revealFolder() }
             }
             if sync.waitingForUpload {
-                Text("本机快照已写入共享文件夹，正在等待 iCloud 确认上传。应用不能强制系统立即上传。")
+                Text("本机更新已写入共享文件夹，正在等待 iCloud 确认上传。应用不能强制系统立即上传。")
                     .font(.caption).foregroundStyle(Palette.muted)
             }
             if sync.waitingForDownload {
@@ -136,21 +136,37 @@ struct CloudSyncSettings: View {
                     if let date = sync.lastCheck { detail("最近检查", date: date) }
                     if let date = sync.lastExport { detail("已写入共享文件夹", date: date) }
                     if let date = sync.lastUpload { detail("iCloud 确认上传", date: date) }
+                    HStack {
+                        Text("本轮读取 / 写入")
+                        Spacer()
+                        Text("\(ByteCountFormatter.string(fromByteCount: Int64(sync.lastReadBytes), countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: Int64(sync.lastWrittenBytes), countStyle: .file))")
+                    }
+                    if sync.pendingUploadFiles > 0 {
+                        HStack {
+                            Text("待上传文件")
+                            Spacer()
+                            Text("\(sync.pendingUploadFiles) · \(ByteCountFormatter.string(fromByteCount: Int64(sync.pendingUploadBytes), countStyle: .file))")
+                        }
+                    }
                     ForEach(sync.devices) { device in
                         HStack {
                             Text(device.name)
                             Spacer()
                             Text(device.exportedAt.formatted(date: .abbreviated, time: .standard))
                             Text("对方最近导出的数据").foregroundStyle(Palette.muted)
+                            if let received = device.hasReceivedLocalChanges {
+                                Text(AppLocalized(received ? "已接收本机最新修改" : "尚未确认接收本机最新修改"))
+                                    .foregroundStyle(received ? Palette.muted : Palette.deadline)
+                            }
                         }
                     }
-                    Text("上传完成表示 iCloud 已接收；其他设备需要联网并打开 Timeline，才能读取并合并。上面的设备时间是对方导出数据的时间，不是接收确认。")
+                    Text("上传完成表示 iCloud 已接收；设备接收确认表示对方已合并本机最新修改。原图保留质量，查看时下载。")
                         .foregroundStyle(Palette.muted)
                     if let code = sync.lastErrorCode { Text(code).font(.caption.monospaced()).textSelection(.enabled) }
                 }.font(.caption).padding(.vertical, 5)
             }
         }
-        Text("数据放在 iCloud 云盘的「Timeline」文件夹，每台设备只写自己的快照，草稿不同步。")
+        Text("数据放在 iCloud 云盘的「Timeline」文件夹，日常只传变更，草稿不同步。增量同步需要各设备更新到最新版。")
             .font(.caption).foregroundStyle(Palette.muted)
     }
 

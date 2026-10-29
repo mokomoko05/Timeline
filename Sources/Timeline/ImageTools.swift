@@ -4,9 +4,8 @@ import UniformTypeIdentifiers
 import Vision
 import TimelineCore
 
-/// 日志图片的处理：从剪贴板或文件取图、缩放压缩、缩略图缓存、本地文字识别。
+/// 日志图片的处理：从剪贴板或文件保留原图、缩略图缓存、本地文字识别。
 enum ImageTools {
-    static let maxPixel = 2048
     /// 解码好的缩略图。按显示尺寸 × 屏幕倍率解码，一张常见的日志配图约 1MB；24MB 够来回翻几天的日记。
     private static let thumbnails: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
@@ -23,24 +22,10 @@ enum ImageTools {
     /// 清空缩略图缓存（系统内存紧张、窗口内容释放时）。
     static func purgeThumbnails() { thumbnails.removeAllObjects() }
 
-    /// 把任意图片数据缩放到长边不超过 `maxPixel`，并编码成 PNG（小图）或 JPEG。
+    /// 保留原文件；缩略图仅在本机按显示尺寸生成。
     static func process(_ data: Data) -> (data: Data, fileExtension: String)? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
-        ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
-        let hasAlpha = ![CGImageAlphaInfo.none, .noneSkipFirst, .noneSkipLast].contains(image.alphaInfo)
-        let usePNG = hasAlpha || image.width * image.height <= 1_500_000
-        let type = usePNG ? UTType.png : UTType.jpeg
-        let output = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(output, type.identifier as CFString, 1, nil) else { return nil }
-        let properties: [CFString: Any] = usePNG ? [:] : [kCGImageDestinationLossyCompressionQuality: 0.88]
-        CGImageDestinationAddImage(destination, image, properties as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else { return nil }
-        return (output as Data, usePNG ? "png" : "jpg")
+        guard let ext = OriginalImage.fileExtension(for: data) else { return nil }
+        return (data, ext)
     }
 
     /// 剪贴板里要作为图片处理的内容：Finder 复制的图片文件，或没有文字的图片数据（截图、网页复制的图片）。
@@ -71,11 +56,12 @@ enum ImageTools {
 
     /// 处理并保存一批图片数据，返回保存后的文件名。
     @MainActor
-    static func save(_ datas: [Data], in store: JournalStore) -> [String] {
-        datas.compactMap { data in
-            guard let processed = process(data) else { return nil }
-            return try? store.storeImage(processed.data, fileExtension: processed.fileExtension)
+    static func save(_ datas: [Data], in store: JournalStore) async -> [String] {
+        var names: [String] = []
+        for data in datas {
+            if let name = try? await store.storeOriginalImage(data) { names.append(name) }
         }
+        return names
     }
 
     /// 按原始比例缩小到刚好放进 `maxWidth × maxHeight`，不裁剪；比 1x 显示尺寸更小的图不放大。`scale` 为屏幕缩放（视网膜屏按 2 倍像素算）。
@@ -154,14 +140,16 @@ enum ImageIndexer {
         let pending = store.imagesMissingText()
         guard !pending.isEmpty else { return }
         running = true
-        let urls = pending.map { ($0, store.imageURL($0)) }
+        // OCR 只处理已在本地的图片，不触发整座云端图库下载。
+        let urls = pending.map { ($0, store.imagesDirectory.appendingPathComponent($0)) }
         Task.detached(priority: .utility) {
             // 结果攒一批再写回：每 8 张或每 2 秒一次，大量图片也只触发少量界面刷新和保存。
             var batch: [String: String] = [:]
             var lastFlush = Date()
             for (name, url) in urls {
                 let exists = FileManager.default.fileExists(atPath: url.path)
-                batch[name] = exists ? autoreleasepool { ImageTools.recognizeText(at: url) } : ""
+                guard exists else { continue }
+                batch[name] = autoreleasepool { ImageTools.recognizeText(at: url) }
                 if batch.count >= 8 || Date().timeIntervalSince(lastFlush) >= 2 {
                     let results = batch
                     batch = [:]

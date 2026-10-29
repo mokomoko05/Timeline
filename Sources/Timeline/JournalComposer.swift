@@ -154,7 +154,7 @@ struct JournalComposer: View {
                 TaskInput(text: Binding(get: { draft.text }, set: draft.update),
                           focused: $focused, placeholder: "写下日志…", fontSize: 13,
                           submit: commit, onPasteImages: { datas in
-                    for name in ImageTools.save(datas, in: store) { store.addDraftImage(name, on: date) }
+                    Task { for name in await ImageTools.save(datas, in: store) { store.addDraftImage(name, on: date) } }
                     focused = true
                 }, minHeight: 24, maxLines: 10, mention: mention)
                 .disabled(store.isReadOnly)
