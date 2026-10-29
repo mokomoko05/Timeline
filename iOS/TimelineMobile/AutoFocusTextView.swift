@@ -12,6 +12,8 @@ struct AutoFocusTextView: UIViewRepresentable {
     var submit: (() -> Void)?
     /// 输入 `@` / `#` 时弹出的补全：改字、挪光标时报给它。
     var mention: MentionModel?
+    /// 保存等待期间拒绝输入，保留焦点到正常退场；不要用 disabled 强迫键盘切换。
+    var acceptsEdits: () -> Bool = { true }
 
     func makeUIView(context: Context) -> AutoFocusUITextView {
         let started = CACurrentMediaTime()
@@ -23,6 +25,7 @@ struct AutoFocusTextView: UIViewRepresentable {
         view.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
         view.textContainer.lineFragmentPadding = 0
         view.delegate = context.coordinator
+        view.acceptsEdits = acceptsEdits
         view.returnKeyType = submit == nil ? .default : .done
         view.placeholder.text = placeholder
         view.text = text
@@ -39,6 +42,7 @@ struct AutoFocusTextView: UIViewRepresentable {
 
     func updateUIView(_ view: AutoFocusUITextView, context: Context) {
         context.coordinator.parent = self
+        view.acceptsEdits = acceptsEdits
         if view.text != text, view.markedTextRange == nil { view.text = text }
         view.placeholder.text = placeholder
         view.placeholder.isHidden = !view.text.isEmpty
@@ -60,6 +64,7 @@ struct AutoFocusTextView: UIViewRepresentable {
             coordinator.parent.mention?.textEdited = {}
         }
         view.delegate = nil
+        view.acceptsEdits = { true }
         EditorInputPool.recycle(view)
     }
 
@@ -71,6 +76,7 @@ struct AutoFocusTextView: UIViewRepresentable {
         init(parent: AutoFocusTextView) { self.parent = parent }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            guard parent.acceptsEdits() else { return false }
             guard text == "\n", let submit = parent.submit, textView.markedTextRange == nil else { return true }
             submit()
             return false
@@ -91,6 +97,7 @@ struct AutoFocusTextView: UIViewRepresentable {
 
 final class AutoFocusUITextView: UITextView {
     let placeholder = UILabel()
+    var acceptsEdits: () -> Bool = { true }
     private var focusedOnce = false
     private static var keyboardActivated = false
     private var focusLink: CADisplayLink?
@@ -120,6 +127,22 @@ final class AutoFocusUITextView: UITextView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    // UITextInput 的直接输入路径未必经过 UITextViewDelegate；保存时两层都要拦住。
+    override func insertText(_ text: String) {
+        guard acceptsEdits() else { return }
+        super.insertText(text)
+    }
+
+    override func deleteBackward() {
+        guard acceptsEdits() else { return }
+        super.deleteBackward()
+    }
+
+    override func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
+        guard acceptsEdits() else { return }
+        super.setMarkedText(markedText, selectedRange: selectedRange)
+    }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()

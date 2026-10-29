@@ -40,7 +40,7 @@ final class FocusTimer: ObservableObject {
     private var endTimer: Timer?
     private var storeSink: AnyCancellable?
 
-    init(store: JournalStore, defaults: UserDefaults = .standard) {
+    init(store: JournalStore, defaults: UserDefaults = .standard, restoresSystemActivity: Bool = true) {
         self.store = store
         self.defaults = defaults
         if let data = defaults.data(forKey: Self.sessionKey), let saved = try? JSONDecoder().decode(Session.self, from: data) {
@@ -49,7 +49,7 @@ final class FocusTimer: ObservableObject {
             store.setFocusPaused(saved.pausedAt != nil)
             watch()
             refresh()
-        } else {
+        } else if restoresSystemActivity {
             // 上次没收尾的实时活动（比如应用被删掉重装）。
             Task { for activity in Activity<FocusActivityAttributes>.activities { await activity.end(nil, dismissalPolicy: .immediate) } }
         }

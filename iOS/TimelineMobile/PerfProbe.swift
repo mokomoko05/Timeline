@@ -8,6 +8,15 @@ import TimelineCore
 @MainActor
 enum PerfProbe {
     static let enabled = UserDefaults.standard.bool(forKey: "perfProbe")
+    /// 真机沿用已签名的 Bundle ID 时，测试数据与日常数据、草稿、同步配置隔离。
+    static let isolated = enabled && UserDefaults.standard.bool(forKey: "perfIsolated")
+    static let defaults: UserDefaults = {
+        guard isolated else { return .standard }
+        guard let value = UserDefaults(suiteName: (Bundle.main.bundleIdentifier ?? "Timeline") + ".performance") else {
+            preconditionFailure("Unable to isolate performance defaults")
+        }
+        return value
+    }()
     static let scripted = UserDefaults.standard.bool(forKey: "perfScript")
     static let previousDay = Notification.Name("PerfProbePreviousDay")
     static let openCalendar = Notification.Name("PerfProbeOpenCalendar")
@@ -17,6 +26,12 @@ enum PerfProbe {
     private static var label = "launch"
     private static var marked = CACurrentMediaTime()
     private static var monitor: FrameMonitor?
+    static var journalProjectionIDs: Set<UUID> = []
+    static var lastSavedComposeID: UUID?
+
+    static func journalProjected(_ ids: @autoclosure () -> [UUID]) {
+        if enabled { journalProjectionIDs = Set(ids()) }
+    }
     private static var focusNoteID: UUID?
     private static var focusNoteMarker: String?
     private static var focusNoteIsGray = false
@@ -41,7 +56,7 @@ enum PerfProbe {
 
     static func start() {
         guard enabled, monitor == nil else { return }
-        if UserDefaults.standard.bool(forKey: "perfFreshCompose") { UserDefaults.standard.removeObject(forKey: "composeDraft.journal") }
+        if UserDefaults.standard.bool(forKey: "perfFreshCompose") { defaults.removeObject(forKey: "composeDraft.journal") }
         setvbuf(stdout, nil, _IOLBF, 0)
         monitor = FrameMonitor()
     }
@@ -244,6 +259,9 @@ enum PerfProbe {
             ("关闭导入中的草稿", { send("closeSheet") }),
             ("重新打开导入草稿", { send("compose") }),
             ("保存记一笔", { send("composeSave") }),
+            ("保存时继续输入", { send("composeSaveWhileTyping") }),
+            ("保存后重新打开", { send("compose") }),
+            ("检查已保存草稿", { send("composeVerifyEmpty") }),
             ("清理原图测试", {
                 for name in importedImageSamples { try? FileManager.default.removeItem(at: store.imagesDirectory.appendingPathComponent(name)) }
                 importedImageSamples = []

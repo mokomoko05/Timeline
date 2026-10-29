@@ -973,9 +973,6 @@ public final class JournalStore: ObservableObject {
             body = split.rest
         }
         guard !body.isEmpty || !images.isEmpty else { throw LogInputError.empty }
-        var updated = days
-        let key = JournalDates.key(date)
-        var entry = updated[key] ?? DayEntry()
         let linked = taskID.flatMap(locate) ?? inline ?? (linkDefault ? defaultLinkTask : nil)
         let created = DailyLogEntry(createdAt: now, kind: kind, text: body,
                                     taskID: linked?.id, taskTitle: linked.map { String(TaskText.rendered($0.task.title).characters) },
@@ -983,9 +980,7 @@ public final class JournalStore: ObservableObject {
                                     tags: TagText.merge([], tags.compactMap(TagText.normalize)), images: images,
                                     focusEvent: focusEvent ?? (!focusPaused && linked?.id != nil && linked?.id == focusTaskID ? .note : nil),
                                     focusGoal: focusGoal, focusPlannedSeconds: focusPlannedSeconds)
-        entry.logs.append(created)
-        updated[key] = entry
-        replaceDays(updated, action: "添加日志")
+        change(date, action: "添加日志") { $0.logs.append(created) }
         return (command, created)
     }
 
@@ -1378,13 +1373,14 @@ public final class JournalStore: ObservableObject {
     }
 
     /// 交互界面确认保存时等待写队列，不在主线程上等待编码、磁盘和旧队列任务。
-    public func saveAndWait() async throws {
+    /// 可选 timing 回调在主线程报告排队、写入及回调等待的毫秒数，供性能探针使用。
+    public func saveAndWait(timing: (@Sendable (TimeInterval, TimeInterval, TimeInterval) -> Void)? = nil) async throws {
         guard !isReadOnly else { throw FolderSync.SyncError.readOnly }
         pendingSave?.cancel(); pendingSave = nil
         documentVersion += 1
         let version = documentVersion, document = documentSnapshot
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            writer.write(document, version: version) { [weak self] error in
+            writer.write(document, version: version, timing: timing) { [weak self] error in
                 MainActor.assumeIsolated { self?.finishSave(error, version: version) }
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             }

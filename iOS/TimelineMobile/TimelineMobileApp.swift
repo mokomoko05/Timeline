@@ -44,7 +44,7 @@ struct TimelineMobileApp: App {
             case .background:
                 store.save()
                 sync.setActive(false)
-                BackgroundRefresh.schedule()
+                if !PerfProbe.isolated { BackgroundRefresh.schedule() }
             default: break
             }
         }
@@ -66,14 +66,15 @@ final class AppServices {
     let spotlight: SpotlightIndexer
 
     private init() {
-        let store = JournalStore()
+        let directory = PerfProbe.isolated ? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Timeline-Performance", isDirectory: true) : nil
+        let store = JournalStore(directory: directory)
         store.writesInBackground = true
         self.store = store
-        sync = SyncModel(store: store)
-        focus = FocusTimer(store: store)
-        reminders = ReminderScheduler(store: store)
+        sync = SyncModel(store: store, defaults: PerfProbe.defaults)
+        focus = FocusTimer(store: store, defaults: PerfProbe.defaults, restoresSystemActivity: !PerfProbe.isolated)
+        reminders = ReminderScheduler(store: store, schedulesNotifications: !PerfProbe.isolated)
         spotlight = SpotlightIndexer(store: store)
-        spotlight.start()
+        if !PerfProbe.isolated { spotlight.start() }
     }
 }
 
@@ -189,14 +190,32 @@ extension RootView {
 @MainActor final class TabFeed: ObservableObject {
     fileprivate var visible = false
     private var stale = false
+    private var editorPresented = false
+    private var suspended = false
+    private var resumeTask: Task<Void, Never>?
 
     fileprivate func storeWillChange() {
-        if visible { objectWillChange.send() } else { stale = true }
+        if visible, !suspended { objectWillChange.send() } else { stale = true }
     }
 
     fileprivate func setVisible(_ value: Bool) {
         visible = value
-        if value, stale { stale = false; objectWillChange.send() }
+        if value, stale, !suspended { stale = false; objectWillChange.send() }
+    }
+
+    /// 输入卡盖住日记时合并底页刷新；关闭后等卡片和键盘退场再更新一次。
+    func setEditorPresented(_ value: Bool) {
+        guard editorPresented != value else { return }
+        editorPresented = value
+        resumeTask?.cancel()
+        if value { suspended = true; return }
+        resumeTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+            guard let self else { return }
+            self.suspended = false
+            if self.visible, self.stale { self.stale = false; self.objectWillChange.send() }
+            self.resumeTask = nil
+        }
     }
 }
 

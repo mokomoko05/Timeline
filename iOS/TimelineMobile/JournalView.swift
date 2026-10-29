@@ -25,6 +25,7 @@ struct JournalView: View {
 
     var body: some View {
         let (byDay, keys) = index.update(store.allLogs(includeFocus: true), tasks: store.tasks())
+        let _ = PerfProbe.journalProjected((byDay[selection] ?? []).map(\.id))
         NavigationStack {
             VStack(spacing: 0) {
                 if query.isEmpty {
@@ -62,7 +63,12 @@ struct JournalView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 FocusBar()
             }
-            .onAppear { prewarm(around: selection, keys: keys, byDay: byDay) }
+            .onAppear {
+                prewarm(around: selection, keys: keys, byDay: byDay)
+                feed.setEditorPresented(composePresentation.shown)
+            }
+            .onDisappear { feed.setEditorPresented(false) }
+            .onReceive(composePresentation.$shown.removeDuplicates()) { feed.setEditorPresented($0) }
             .onChange(of: selection) { _, key in prewarm(around: key, keys: keys, byDay: byDay) }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { if $0.object as? String == "compose" { composePresentation.shown = true } }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
@@ -108,7 +114,10 @@ struct JournalView: View {
             }
         }
         .floatingEditor(presentation: composePresentation) {
-            ComposeSheet(store: store) { selection = JournalDates.key(Date()) }
+            ComposeSheet(store: store) {
+                let today = JournalDates.key(Date())
+                if selection != today { selection = today }
+            }
         }
     }
 
@@ -522,7 +531,7 @@ struct ComposeSheet: View {
             if let close = closeEditor {
                 VStack(alignment: .leading, spacing: 10) {
                     EditorCardHeader(title: "记一笔", confirm: "保存", canConfirm: canSend, cancel: close.close, action: send)
-                    fields(maxLines: 8).disabled(draft.saving)
+                    fields(maxLines: 8)
                 }
             } else {
                 sheet
@@ -532,12 +541,31 @@ struct ComposeSheet: View {
         .onChange(of: picked) { _, items in take(items) }
         // 草稿只在收起和退到后台时写一次，打字时不碰存储。
         .onReceive(draft.$edited.removeDuplicates()) { if $0 && restored { restored = false } }
+        .onReceive(draft.$completed) { completed in
+            // 保存等待期间收起又重开了同一草稿，也要在确认成功后收起这一份。
+            if completed, visible, !finished {
+                finished = true
+                if let closeEditor { closeEditor() } else { dismiss() }
+            }
+        }
         .onDisappear { visible = false; if !finished { saveDraft() } }
         .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
             guard PerfProbe.enabled else { return }
             if note.object as? String == "composeSave" {
                 if !draft.hasText && images.isEmpty { text = "Compose persistence probe" }
                 send()
+                return
+            }
+            if note.object as? String == "composeVerifyEmpty" {
+                print("[perf] COMPOSE_REOPEN cleared=\(draft.snapshot.isEmpty) pending=\(draft.pendingEntryID != nil)")
+                print("[perf] COMPOSE_PANE projectionContainsSavedEntry=\(PerfProbe.lastSavedComposeID.map { PerfProbe.journalProjectionIDs.contains($0) } ?? false)")
+                return
+            }
+            if note.object as? String == "composeSaveWhileTyping", let view = mention.textView {
+                let before = view.text
+                send()
+                view.insertText("Unexpected input during save")
+                print("[perf] COMPOSE_SAVE inputBlocked=\(view.text == before)")
                 return
             }
             guard note.object as? String == "composeImportRace", let data = PerfProbe.originalImageSample else { return }
@@ -563,7 +591,7 @@ struct ComposeSheet: View {
         Group {
             NavigationStack {
                 VStack(alignment: .leading, spacing: 12) {
-                    fields(maxLines: 14).disabled(draft.saving)
+                    fields(maxLines: 14)
                     Spacer()
                 }
                 .padding()
@@ -595,12 +623,16 @@ struct ComposeSheet: View {
         ComposeDraft.save(ComposeDraft(), key: draftKey)
     }
 
-    private var canSend: Bool { !draft.saving && draft.imports.pending == 0 && (draft.hasText || !images.isEmpty) }
+    private var canSend: Bool { !draft.completed && !draft.saving && draft.imports.pending == 0 && (draft.hasText || !images.isEmpty) }
 
     @ViewBuilder private func fields(maxLines: Int) -> some View {
         // 列表贴在输入框上面：卡片往上长，正在打字的那一行不动。
-        MentionList(model: mention, store: store)
-        ComposeTextInput(input: draft.input, maxLines: maxLines, mention: mention).disabled(draft.saving)
+        MentionList(model: mention, store: store).disabled(draft.saving || draft.completed)
+        ComposeTextInput(input: draft.input, maxLines: maxLines, mention: mention, acceptsEdits: { !draft.saving && !draft.completed })
+        controls.disabled(draft.saving || draft.completed)
+    }
+
+    @ViewBuilder private var controls: some View {
         if linked != nil || !tags.isEmpty || !pickedTags.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
@@ -684,12 +716,18 @@ struct ComposeSheet: View {
     }
 
     private func send() {
-        guard !draft.saving else { return }
+        guard !draft.saving, !draft.completed else { return }
         do { try draft.imports.requireReady() } catch { self.error = error.localizedDescription; return }
         let started = CACurrentMediaTime()
         draft.saving = true
         let parsed = TagText.extract(from: text)
-        Task { @MainActor in
+        let timing: (@Sendable (TimeInterval, TimeInterval, TimeInterval) -> Void)?
+        if PerfProbe.enabled {
+            timing = { queue, write, callback in
+                print("[perf] COMPOSE_SAVE queueMS=\(queue) writeMS=\(write) callbackMS=\(callback)")
+            }
+        } else { timing = nil }
+        Task<Void, Never> { @MainActor in
             defer { draft.saving = false }
             do {
                 if draft.pendingEntryID == nil {
@@ -698,11 +736,13 @@ struct ComposeSheet: View {
                                                         allowInlineTaskReference: linked == nil, on: Date())
                     draft.pendingEntryID = result.entry?.id
                 }
-                try await store.saveAndWait()
+                if PerfProbe.enabled { print("[perf] COMPOSE_SAVE mutationMS=\((CACurrentMediaTime() - started) * 1000)") }
+                let persistStarted = CACurrentMediaTime()
+                try await store.saveAndWait(timing: timing)
+                if PerfProbe.enabled { print("[perf] COMPOSE_SAVE persistWaitMS=\((CACurrentMediaTime() - persistStarted) * 1000)") }
                 finished = true
-                draft.imports.invalidate()
-                draft.pendingEntryID = nil
-                draft.text = ""; draft.images = []; draft.tags = []; draft.linked = taskID
+                if PerfProbe.enabled { PerfProbe.lastSavedComposeID = draft.pendingEntryID }
+                draft.complete()
                 ComposeDraft.save(ComposeDraft(), key: draftKey)
                 if PerfProbe.enabled {
                     print("[perf] COMPOSE_SAVE completed=true pending=\(store.hasPendingSave) totalMS=\((CACurrentMediaTime() - started) * 1000)")
@@ -726,8 +766,9 @@ private struct ComposeTextInput: View {
     @ObservedObject var input: ComposeInputBuffer
     let maxLines: Int
     let mention: MentionModel
+    let acceptsEdits: () -> Bool
     var body: some View {
-        AutoFocusTextView(text: $input.text, placeholder: L("写点什么… @ 关联待办 · # 标签"), minLines: 4, maxLines: maxLines, mention: mention)
+        AutoFocusTextView(text: $input.text, placeholder: L("写点什么… @ 关联待办 · # 标签"), minLines: 4, maxLines: maxLines, mention: mention, acceptsEdits: acceptsEdits)
     }
 }
 
@@ -746,6 +787,7 @@ final class ComposeDraftSession: ObservableObject {
     @Published var images: [String]
     let imports = ImageImportQueue()
     var pendingEntryID: UUID?
+    @Published private(set) var completed = false
     private let key: String
     private let taskID: UUID?
     private var importSubscription: AnyCancellable?
@@ -754,7 +796,7 @@ final class ComposeDraftSession: ObservableObject {
     static func session(store: JournalStore, taskID: UUID?, tags: [String]) -> ComposeDraftSession {
         let key = ComposeDraft.key(taskID: taskID, tags: tags)
         let identity = store.directory.path + ":" + key
-        if let existing = sessions[identity]?.value { return existing }
+        if let existing = sessions[identity]?.value, !existing.completed { return existing }
         let session = ComposeDraftSession(key: key, taskID: taskID)
         sessions = sessions.filter { $0.value.value != nil }
         sessions[identity] = WeakSession(session)
@@ -777,7 +819,15 @@ final class ComposeDraftSession: ObservableObject {
     }
 
     var snapshot: ComposeDraft { ComposeDraft(text: text, linked: linked == taskID ? nil : linked, tags: tags, images: images) }
-    func persist() { ComposeDraft.save(snapshot, key: key) }
+    func persist() { if !completed { ComposeDraft.save(snapshot, key: key) } }
+
+    /// 退场时继续显示原文，不让仍持有焦点的输入框先清空、重新排版再关闭。
+    /// 下次打开另建会话；旧视图的迟到回调也不能把已提交草稿写回来。
+    func complete() {
+        completed = true
+        imports.invalidate()
+        pendingEntryID = nil
+    }
 }
 
 private struct ComposeImportStatus: View {
@@ -801,13 +851,13 @@ struct ComposeDraft: Codable {
         "composeDraft." + (taskID.map { "task." + $0.uuidString } ?? tags.first.map { "tag." + TagText.key($0) } ?? "journal")
     }
 
-    static func load(_ key: String) -> ComposeDraft? {
-        UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(ComposeDraft.self, from: $0) }.flatMap { $0.isEmpty ? nil : $0 }
+    @MainActor static func load(_ key: String) -> ComposeDraft? {
+        PerfProbe.defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(ComposeDraft.self, from: $0) }.flatMap { $0.isEmpty ? nil : $0 }
     }
 
-    static func save(_ draft: ComposeDraft, key: String) {
-        if draft.isEmpty { UserDefaults.standard.removeObject(forKey: key) }
-        else if let data = try? JSONEncoder().encode(draft) { UserDefaults.standard.set(data, forKey: key) }
+    @MainActor static func save(_ draft: ComposeDraft, key: String) {
+        if draft.isEmpty { PerfProbe.defaults.removeObject(forKey: key) }
+        else if let data = try? JSONEncoder().encode(draft) { PerfProbe.defaults.set(data, forKey: key) }
     }
 }
 

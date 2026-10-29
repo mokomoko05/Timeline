@@ -85,10 +85,18 @@ final class JournalWriter: @unchecked Sendable {
         queue.sync { write(document, version: version, state: state) }
     }
 
-    func write(_ document: JournalDocument, version: Int, completion: @escaping @Sendable (Error?) -> Void) {
+    func write(_ document: JournalDocument, version: Int,
+               timing: (@Sendable (TimeInterval, TimeInterval, TimeInterval) -> Void)? = nil,
+               completion: @escaping @Sendable (Error?) -> Void) {
+        let queued = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
         queue.async { [self] in
+            let started = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
             let error = write(document, version: version)
-            DispatchQueue.main.async { completion(error) }
+            let finished = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
+            DispatchQueue.main.async {
+                timing?((started - queued) * 1000, (finished - started) * 1000, (ProcessInfo.processInfo.systemUptime - finished) * 1000)
+                completion(error)
+            }
         }
     }
 

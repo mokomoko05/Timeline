@@ -20,6 +20,7 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
     private let center = UNUserNotificationCenter.current()
     private var changes: AnyCancellable?
     private var pending: Task<Void, Never>?
+    private let schedulesNotifications: Bool
 
     var isEnabled: Bool {
         get { UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? true }
@@ -30,8 +31,9 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
         }
     }
 
-    init(store: JournalStore) {
+    init(store: JournalStore, schedulesNotifications: Bool = true) {
         self.store = store
+        self.schedulesNotifications = schedulesNotifications
         super.init()
         center.delegate = self
         center.setNotificationCategories([
@@ -51,12 +53,14 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
 
     /// 按当前数据重排通知。第一次遇到带提醒的待办时请求通知权限。
     func refresh(requesting: Bool = true) {
+        guard schedulesNotifications else { return }
         pending?.cancel()
         pending = Task { [weak self] in await self?.reschedule(requesting: requesting) }
     }
 
     /// 等这一轮排完（后台刷新用）。
     func refreshNow() async {
+        guard schedulesNotifications else { return }
         pending?.cancel()
         await reschedule(requesting: false)
     }

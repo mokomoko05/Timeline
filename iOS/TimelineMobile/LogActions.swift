@@ -58,7 +58,8 @@ extension View {
 }
 
 private struct LogActionsHost: ViewModifier {
-    @ObservedObject var store: JournalStore
+    // 操作闭包读取的是实时 store；宿主本身不因每次内容修改重建整页环境。
+    let store: JournalStore
     @StateObject private var actions = LogActions()
 
     func body(content: Content) -> some View {
