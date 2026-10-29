@@ -1083,3 +1083,6 @@
 "输入框为空时选中最后一条" = "Select the last entry when the input is empty";
 "就地编辑选中的那条" = "Edit the selected entry in place";
 "删除选中的那条（可撤销）" = "Delete the selected entry (undoable)";
+
+"固定标签" = "Pin tag";
+"固定快速日志的关联任务" = "Pin task for quick entries";

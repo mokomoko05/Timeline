@@ -15,7 +15,7 @@ struct LinkPickerView: View {
     let pick: (UUID?) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
-    @State private var showCompleted = false
+    @State private var showCompleted = true
     @State private var selection = 0
     @FocusState private var searching: Bool
 
@@ -146,6 +146,10 @@ struct LogChipsBar: View {
     /// 什么都没选时显示的提示。
     var hint = ""
     var size: CGFloat = 11
+    var taskPin: ((UUID) -> Bool)?
+    var toggleTaskPin: ((UUID) -> Void)?
+    var tagPin: ((String) -> Bool)?
+    var toggleTagPin: ((String) -> Void)?
     static let height: CGFloat = 22
 
     private var explicit: ScheduledTask? { link.flatMap(store.locate) }
@@ -163,7 +167,16 @@ struct LogChipsBar: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     if showsLink { linkChips }
-                    ForEach(tags, id: \.self) { tag in tagChip(tag) }
+                    ForEach(tags, id: \.self) { tag in
+                        HStack(spacing: 1) {
+                            tagChip(tag)
+                            if let toggleTagPin {
+                                let pinned = tagPin?(tag) == true
+                                small(pinned ? "pin.fill" : "pin", pinned ? "取消固定" : "固定标签",
+                                      tint: pinned ? Palette.accent : Palette.muted) { toggleTagPin(tag) }
+                            }
+                        }
+                    }
                     if !hasChips, !hint.isEmpty {
                         Text(LocalizedStringKey(hint)).font(.system(size: typography.pt(size))).foregroundStyle(Palette.muted).lineLimit(1)
                     }
@@ -188,9 +201,11 @@ struct LogChipsBar: View {
     private var linkChips: some View {
         if let task = explicit {
             pill("link", FocusHint.label(task), tint: Palette.accent)
-            let pinned = store.pinnedTask?.id == task.id
-            small(pinned ? "pin.fill" : "pin", pinned ? "取消固定" : "固定为当前待办：之后的日志默认都记到它名下（不计时），再点一次取消",
-                  tint: pinned ? Palette.accent : Palette.muted) { store.pinTask(pinned ? nil : task.id) }
+            let pinned = taskPin?(task.id) ?? (store.pinnedTask?.id == task.id)
+            small(pinned ? "pin.fill" : "pin", pinned ? "取消固定" : (toggleTaskPin == nil ? "固定为当前待办：之后的日志默认都记到它名下（不计时），再点一次取消" : "固定快速日志的关联任务"),
+                  tint: pinned ? Palette.accent : Palette.muted) {
+                if let toggleTaskPin { toggleTaskPin(task.id) } else { store.pinTask(pinned ? nil : task.id) }
+            }
             small("xmark", "取消这次的关联") { link = nil }
         } else if automaticallyLinks && unlinked {
             small("arrow.uturn.backward", "恢复自动关联") { unlinked = false }

@@ -159,9 +159,11 @@ final class ScreenBoundDraggingTests: XCTestCase {
                     XCTAssertEqual(window.frame, edgeFrame, "顶住边缘时，过时事件不能把窗口拉回去")
                 }
                 XCTAssertEqual(window.moves, 0, "目标没有变化时不重复提交窗口移动")
-                pointer = start
+                pointer = NSPoint(x: target.x + (target.x < area.midX ? 10 : -10),
+                                  y: target.y + (target.y < area.midY ? 10 : -10))
                 _ = dragging.filter(stale, in: window)
-                XCTAssertEqual(window.frame.origin, initial.origin, "拉回来后正常跟随当前指针")
+                XCTAssertNotEqual(window.frame.origin, edgeFrame.origin, "到边缘后反向移动立即跟手，不累计越界距离")
+                XCTAssertTrue(area.contains(window.frame))
                 _ = dragging.filter(try mouse(.leftMouseUp, at: start, in: window), in: window)
             }
         }

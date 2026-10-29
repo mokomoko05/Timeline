@@ -72,12 +72,18 @@ final class ScreenBoundDragging {
                 let dx = mouse.x - current.mouse.x, dy = mouse.y - current.mouse.y
                 if !current.moving && hypot(dx, dy) < 3 { return current.titlebar ? nil : event }
                 current.moving = true
-                drag = current
                 var target = window.frame
                 // NSWindow 的屏幕原点会取整；先使用相同粒度，避免半点目标不断触发无效移动。
                 target.origin = NSPoint(x: (current.origin.x + dx).rounded(), y: (current.origin.y + dy).rounded())
                 target = window.constrainFrameRect(target, to: nil)
                 if target.origin != window.frame.origin { window.setFrameOrigin(target.origin) }
+                // 到边缘就丢弃越界位移；否则反向拖动还要先走完累计的越界距离。
+                // 保留未取整的小数位移，慢拖时也不会一顿一顿地丢掉半像素。
+                let proposed = NSPoint(x: current.origin.x + dx, y: current.origin.y + dy)
+                current.origin = NSPoint(x: target.origin.x == proposed.x.rounded() ? proposed.x : window.frame.minX,
+                                         y: target.origin.y == proposed.y.rounded() ? proposed.y : window.frame.minY)
+                current.mouse = mouse
+                drag = current
                 return nil
             }
         case .leftMouseUp:

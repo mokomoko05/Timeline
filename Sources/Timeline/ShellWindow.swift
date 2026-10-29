@@ -157,7 +157,16 @@ enum TerminalLayout: String {
 }
 
 /// 终端窗口：一个窗口（或原生标签页）包含一个或三个窗格，每个窗格是独立的 zsh。
-final class TerminalWindow: QuietWindow {
+class TerminalWindow: QuietWindow {
+    var terminalIsPresented = true
+
+    override func sendEvent(_ event: NSEvent) {
+        if terminalIsPresented, event.type == .keyDown, firstResponder is PaneTerminalView {
+            TerminalPointerHiding.shared.hide(in: self)
+        }
+        super.sendEvent(event)
+    }
+
     /// 按「左上、左下、右」的顺序。
     var panes: [PaneTerminalView] = []
     weak var focusedPane: PaneTerminalView?
@@ -356,6 +365,16 @@ enum ShellProcessInfo {
 final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTerminalViewDelegate {
     private(set) var windows: [TerminalWindow] = []
     private weak var lastKey: TerminalWindow?
+    /// 常用终端直接装进工作区窗口；额外显式新建的终端仍可独立使用。
+    weak var workspaceWindow: TerminalWindow?
+    var installWorkspaceContent: (NSView?) -> Void = { _ in }
+    var presentWorkspace: () -> Void = {}
+    var hideWorkspace: () -> Void = {}
+    var finishWorkspace: () -> Void = {}
+
+    func isTerminal(_ window: NSWindow?) -> Bool {
+        (window as? TerminalWindow)?.terminalIsPresented == true
+    }
     /// 终端收起后，Timeline 别的窗口（主窗口）如果还开着，焦点交给它；由 AppDelegate 设置。
     var handoffWindow: () -> NSWindow? = { nil }
     /// 启动 shell 的命令，测试里可替换。
@@ -378,13 +397,13 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
     /// 前台有程序时关闭前的确认；测试里可替换。
     var confirmClose: (TerminalWindow) -> Bool = { ShellWindowController.askToClose($0) }
 
-    var isFrontmost: Bool { NSApplication.shared.isActive && NSApplication.shared.keyWindow is TerminalWindow }
+    var isFrontmost: Bool { NSApplication.shared.isActive && isTerminal(NSApplication.shared.keyWindow) }
     /// 当前可见的终端窗口（优先正在用的那个），给主窗口收起时交接焦点。
     var visibleWindow: NSWindow? {
         let candidates = [keyTerminal].compactMap { $0 } + windows
-        return candidates.first { $0.isVisible && !$0.isMiniaturized }.map { $0.tabGroup?.selectedWindow ?? $0 }
+        return candidates.first { $0.isVisible && !$0.isMiniaturized && $0.terminalIsPresented }.map { $0.tabGroup?.selectedWindow ?? $0 }
     }
-    var keyTerminal: TerminalWindow? { (NSApplication.shared.keyWindow as? TerminalWindow) ?? lastKey ?? windows.last }
+    var keyTerminal: TerminalWindow? { (isTerminal(NSApplication.shared.keyWindow) ? NSApplication.shared.keyWindow as? TerminalWindow : nil) ?? lastKey ?? windows.last }
 
     /// 前台正在运行程序的终端数量。
     var busyCount: Int { windows.filter(isBusy).count }
@@ -411,6 +430,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
         PreviousApp.remember()
         NSApplication.shared.unhide(nil)
         guard !windows.isEmpty else { newWindow(); return }
+        if windows.contains(where: { $0 === workspaceWindow }) { presentWorkspace() }
         var shown = Set<ObjectIdentifier>()
         for window in windows {
             let representative = window.tabGroup?.selectedWindow ?? window
@@ -428,7 +448,8 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
 
     /// 只收起，不结束 shell。
     func hide() {
-        let visible = windows.filter(\.isVisible)
+        if let workspaceWindow, workspaceWindow.terminalIsPresented { hideWorkspace() }
+        let visible = windows.filter { $0.isVisible && $0 !== workspaceWindow }
         guard !visible.isEmpty else { return }
         let finish: () -> Void = { [weak self] in
             for window in visible { window.orderOut(nil); WindowFade.reset(window) }
@@ -459,7 +480,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
     func newWindow() -> TerminalWindow {
         let anchor = keyTerminal
         let window = makeWindow(directory: anchor.flatMap(currentDirectory(of:)), size: anchor?.frame.size)
-        if let anchor, anchor.isVisible {
+        if let anchor, anchor.isVisible, window !== workspaceWindow {
             let origin = anchor.cascadeTopLeft(from: NSPoint(x: anchor.frame.minX, y: anchor.frame.maxY))
             window.setFrameTopLeftPoint(origin)
         }
@@ -518,7 +539,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
     func closePane() {
         guard let window = keyTerminal, let pane = window.terminal as? PaneTerminalView else { return }
         if window.panes.count <= 1 {
-            if windowShouldClose(window) { window.close() }
+            if windowShouldClose(window) { closeTerminal(window) }
             return
         }
         if let process = pane.process, ShellProcessInfo.hasForegroundProgram(fd: process.childfd, shellPid: process.shellPid), !confirmClose(window) { return }
@@ -537,7 +558,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
         }
         window.ended = true
         let wasAlone = window.tabbedWindows?.count ?? 1 <= 1
-        window.close()
+        closeTerminal(window)
         if wasAlone, windows.isEmpty { PreviousApp.restore(handoff: handoffWindow()) }
     }
 
@@ -547,6 +568,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
     }
 
     private func present(_ window: TerminalWindow) {
+        if window === workspaceWindow { presentWorkspace() }
         NSApplication.shared.unhide(nil)
         window.makeKeyAndOrderFront(nil)
         Headless.activateApp()
@@ -567,18 +589,20 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
         let frame = NSRect(origin: .zero, size: size ?? (three ? NSSize(width: 1240, height: 780) : NSSize(width: 920, height: 580)))
         let panes = (0..<(three ? 3 : 1)).map { _ in makePane() }
         let frames = panes.map { PaneFrameView(terminal: $0) }
-        let window = TerminalWindow(contentRect: frame, styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let embedded = workspaceWindow.map { host in !windows.contains(where: { $0 === host }) } == true
+        let window = embedded ? workspaceWindow! : TerminalWindow(contentRect: frame, styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window.ended = false
         window.panes = panes
         window.title = "zsh"
         window.titlebarAppearsTransparent = true
         window.backgroundColor = NativePalette.background
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: three ? 640 : 420, height: three ? 360 : 240)
+        if !embedded { window.minSize = NSSize(width: three ? 640 : 420, height: three ? 360 : 240) }
         window.collectionBehavior.insert(.moveToActiveSpace)
         window.tabbingIdentifier = "timeline.shell"
-        window.tabbingMode = .preferred
+        window.tabbingMode = embedded ? .automatic : .preferred
         [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].forEach { window.standardWindowButton($0)?.isHidden = true }
-        window.delegate = self
+        if !embedded { window.delegate = self }
         window.onNewTab = { [weak self] in self?.newTab() }
         // 工具条放在窗口自己的内容区顶部（不用标题栏附件：标签页组会把各页的附件合并共享，会叠出多条工具条）。
         let toolbar = NSHostingView(rootView: LocalizedRoot { ShellToolbar(
@@ -587,8 +611,9 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
             splitRight: { [weak self, weak window] in window?.makeKeyAndOrderFront(nil); self?.splitPane(sideBySide: true) },
             splitDown: { [weak self, weak window] in window?.makeKeyAndOrderFront(nil); self?.splitPane(sideBySide: false) },
             close: { [weak self, weak window] in
-                guard let self, let window, windowShouldClose(window) else { return }
-                window.close()
+                guard let self, let window else { return }
+                if window === workspaceWindow { hideWorkspace() }
+                else if windowShouldClose(window) { window.close() }
             }) })
         // 三窗格：左边上下两格，右边一整栏。
         let body: NSView
@@ -627,7 +652,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
             bodyHost.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             bodyHost.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
-        window.contentView = container
+        if embedded { installWorkspaceContent(container) } else { window.contentView = container }
         window.toolbarView = toolbar
         window.bodyHost = bodyHost
         window.setRoot(body)
@@ -638,7 +663,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
             leftSplit.layoutSubtreeIfNeeded()
             leftSplit.setPosition(leftSplit.bounds.height * 0.5, ofDividerAt: 0)
         }
-        if windows.isEmpty {
+        if windows.isEmpty, !embedded {
             window.center()
             window.setFrameAutosaveName("TimelineShellWindow")
         }
@@ -657,6 +682,18 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
         guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }), window.screen != screen else { return }
         let area = screen.visibleFrame
         window.setFrameOrigin(NSPoint(x: area.midX - window.frame.width / 2, y: area.midY - window.frame.height / 2))
+    }
+
+    private func closeTerminal(_ window: TerminalWindow) {
+        if window === workspaceWindow {
+            window.panes.forEach { $0.end() }
+            window.panes = []
+            window.focusedPane = nil
+            windows.removeAll { $0 === window }
+            if lastKey === window { lastKey = windows.last }
+            installWorkspaceContent(nil)
+            finishWorkspace()
+        } else { window.close() }
     }
 
     /// 退出 Timeline 前结束全部 shell。
@@ -701,7 +738,10 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
 
     nonisolated func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         DispatchQueue.main.async { MainActor.assumeIsolated { [weak self] in
-            if let window = self?.window(for: source), window.terminal === source { window.title = title.isEmpty ? "zsh" : title }
+            if let window = self?.window(for: source), window.terminal === source, window.terminalIsPresented {
+                let title = title.isEmpty ? "zsh" : title
+                if window.title != title { window.title = title }
+            }
         } }
     }
 

@@ -53,8 +53,8 @@ private final class MenuAction: NSObject {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
     private var window: NSWindow!
-    /// 主窗口里的两页：主界面和笔记 / 日记，互斥显示，共用窗口的位置和大小。
-    private let pages = WorkspacePagesView()
+    /// 主界面、笔记 / 日记和常用终端共用窗口的位置和大小。
+    private let pages = WorkspacePagesView(defaults: .standard)
     private var store: JournalStore!
     private var reminders: ReminderScheduler!
     private var loginItem: LoginItem!
@@ -140,13 +140,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         languageObserver = NotificationCenter.default.addObserver(forName: .appLanguageDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.buildMenu()
-                self?.window?.title = AppLocalized(self?.pages.showsNotes == true ? "笔记 / 日记" : "Timeline")
+                self?.window?.title = AppLocalized(self?.pages.showsTerminal == true ? "终端" : (self?.pages.showsNotes == true ? "笔记 / 日记" : "Timeline"))
             }
         }
         AppRouter.presentMain = { [unowned self] in
-            if !(window.isVisible && !window.isMiniaturized) || NSApp.keyWindow !== window || pages.showsNotes { showMainWindowSoftly() }
+            if !(window.isVisible && !window.isMiniaturized) || NSApp.keyWindow !== window || pages.page != .main { showMainWindowSoftly() }
         }
-        AppRouter.mainIsKey = { [unowned self] in NSApp.keyWindow === window && !pages.showsNotes }
+        AppRouter.mainIsKey = { [unowned self] in NSApp.keyWindow === window && pages.page == .main }
         AppRouter.showSettings = { [unowned self] in settings.show() }
         AppRouter.showQuickCapture = { [unowned self] in quickCapture.toggle(.todo) }
         AppRouter.openNotes = { [unowned self] id in commands.send(.notesForTask(id)) }
@@ -160,8 +160,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             backing: .buffered, defer: false
         )
         window = mainWindow
-        // 笔记 / 日记和主界面共用这个窗口：Esc 在笔记页上收起窗口。
+        // 笔记 / 日记、终端和主界面共用窗口。
         mainWindow.cancel = { [unowned self] in
+            if pages.showsTerminal { hideMainWindowSoftly(); return true }
             guard pages.showsNotes else { return false }
             NotesWindowController.shared.close()
             return true
@@ -177,6 +178,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.collectionBehavior.insert(.moveToActiveSpace)
         window.delegate = self
         window.contentView = pages
+        shell.workspaceWindow = mainWindow
+        shell.installWorkspaceContent = { [weak self] in self?.pages.setTerminal($0) }
+        shell.presentWorkspace = { [weak self] in self?.showTerminalPage() }
+        shell.hideWorkspace = { [weak self] in self?.hideMainWindowSoftly() }
+        shell.finishWorkspace = { [weak self] in self?.showMainWindowSoftly() }
         pages.setMain(makeMainContent())
         NotesWindowController.shared.host = self
         // 只释放主界面那一页；笔记页很小，一直留着。
@@ -194,8 +200,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 if mainWindow?.keepsCentered != centered { mainWindow?.keepsCentered = centered }
             }
         }
-        window.makeKeyAndOrderFront(nil)
-        Headless.activateApp()
+        if !snapshotRun, pages.savedPage == .terminal {
+            shell.show()
+        } else if !snapshotRun, pages.savedPage == .notes {
+            NotesWindowController.shared.show(store: store, taskID: nil, reveal: { _ in }, openDay: { _ in })
+        } else {
+            window.makeKeyAndOrderFront(nil)
+            Headless.activateApp()
+        }
         reminders.onComplete = { [weak self] in self?.toast.show(AppLocalizedFormat("已从通知完成「%@」", $0)) }
         // 专注期间允许自由切换网页和应用；任务链接只用于开始时打开，不再需要 Safari 自动化权限。
         if CommandLine.arguments.contains("--enable-login") { loginItem.setEnabled(true) }
@@ -286,13 +298,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showMainWindow()
+        if pages.showsTerminal { shell.show() }
+        else if pages.showsNotes { showWindowSoftly(notes: true) }
+        else { showMainWindow() }
         return true
     }
 
     /// ⌘W：按窗口代理的规则关闭当前窗口（终端有程序在运行时会先确认）。红绿灯被隐藏后，performClose 可能没有反应，所以直接判断。
     private func closeKeyWindow() {
         guard let target = NSApp.keyWindow ?? window else { return }
+        if target === window, pages.showsTerminal { hideMainWindowSoftly(); return }
         // 笔记页上 ⌘W 和 Esc 一样收起窗口。
         if target === window, pages.showsNotes { NotesWindowController.shared.close(); return }
         if target.delegate?.windowShouldClose?(target) ?? true { target.close() }
@@ -320,9 +335,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// 全局快捷键：Timeline 不在前台就在**当前桌面**淡入并调到最前面（不会把你切到 Timeline 所在的桌面）；
     /// 已经在前台就淡出隐藏，焦点回到刚才的应用。
     private func toggleMainWindow() {
-        // 只有「主窗口正是当前键盘窗口、显示的是主界面」才算在前台；终端在前台、主窗口在后面时，按键是把主窗口调上来；
-        // 窗口显示的是笔记 / 日记，按键是切回主界面。
-        if NSApp.isActive, NSApp.keyWindow === window, !pages.showsNotes, window.isVisible, !window.isMiniaturized {
+        // 正显示主界面时收起；在笔记 / 日记或终端页时切回主界面。
+        if NSApp.isActive, NSApp.keyWindow === window, pages.page == .main, window.isVisible, !window.isMiniaturized {
             hideMainWindowSoftly()
         } else {
             showMainWindowSoftly()
@@ -360,17 +374,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if Motion.reduced { finish() } else { fadeWindow(to: 0, duration: 0.14, completion: finish) }
     }
 
-    /// 换页：窗口钉在屏幕中央，两页都不能拖动；窗口标题跟着页面走（任务切换、窗口菜单里看得到）。
+    /// 换页时保留共用窗口的几何信息，标题跟着页面走。
     private func switchPage(notes: Bool) {
-        if notes != pages.showsNotes { NotificationCenter.default.post(name: .timelineCommitEditing, object: nil) }
+        if pages.page != (notes ? .notes : .main) { NotificationCenter.default.post(name: .timelineCommitEditing, object: nil) }
         pages.show(notes: notes)
         window.title = AppLocalized(pages.showsNotes ? "笔记 / 日记" : "Timeline")
     }
 
-    /// 一组窗口收起后，焦点可以交给的 Timeline 别的可见窗口：主窗口（含笔记页）和终端各自独立，谁还开着就交给谁。
+    private func showTerminalPage() {
+        PreviousApp.remember()
+        NSApp.unhide(nil)
+        if !window.isVisible { moveToMouseScreenIfNeeded() }
+        if !pages.showsTerminal { NotificationCenter.default.post(name: .timelineCommitEditing, object: nil) }
+        pages.show(.terminal)
+        window.title = AppLocalized("终端")
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        WindowFade.reset(window)
+        window.makeKeyAndOrderFront(nil)
+        Headless.activateApp()
+    }
+
+    /// 收起工作区后，把焦点交给仍可见的额外终端窗口。
     private func otherWindowForHandoff(excluding: NSWindow?) -> NSWindow? {
         if window !== excluding, window.isVisible, !window.isMiniaturized { return window }
-        return shell.visibleWindow
+        return shell.visibleWindow.flatMap { $0 === excluding ? nil : $0 }
     }
 
     private func fadeWindow(to alpha: CGFloat, duration: TimeInterval, completion: (() -> Void)? = nil) {
@@ -488,7 +515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     private func handleKey(_ event: NSEvent) -> Bool {
-        guard let keyWindow = NSApp.keyWindow, keyWindow === window, !pages.showsNotes, window.attachedSheet == nil, !isEditingText,
+        guard let keyWindow = NSApp.keyWindow, keyWindow === window, pages.page == .main, window.attachedSheet == nil, !isEditingText,
               event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
         let shift = event.modifierFlags.contains(.shift)
         switch event.keyCode {
@@ -614,7 +641,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             let on = defaults.object(forKey: key) == nil ? action.toggleDefault : defaults.bool(forKey: key)
             item.state = on ? .on : .off
         }
-        if action.disabledWhileTyping { return !isEditingText && NSApp.keyWindow === window && !pages.showsNotes }
+        if action.disabledWhileTyping { return !isEditingText && NSApp.keyWindow === window && pages.page == .main }
         return true
     }
 
@@ -677,14 +704,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private func buildMenu() {
         let mainMenu = NSMenu()
-        let send = { [commands] (command: AppCommand) in { if !(NSApp.keyWindow is TerminalWindow) { commands.send(command) } } }
+        let send = { [commands, shell] (command: AppCommand) in { if !(shell.isTerminal(NSApp.keyWindow)) { commands.send(command) } } }
         /// 同一个快捷键：终端是当前窗口时做终端的事，否则做 Timeline 的事。
         let shell = self.shell
         let either = { (terminal: @escaping (ShellWindowController) -> Void, other: @escaping () -> Void) in {
-            if NSApp.keyWindow is TerminalWindow { terminal(shell) } else { other() }
+            if shell.isTerminal(NSApp.keyWindow) { terminal(shell) } else { other() }
         } }
         let onlyInTerminal = { (action: @escaping (ShellWindowController) -> Void) in {
-            guard NSApp.keyWindow is TerminalWindow else { return }
+            guard shell.isTerminal(NSApp.keyWindow) else { return }
             action(shell)
         } }
         let notes = NotesWindowController.shared
@@ -744,7 +771,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             // ⌘N：在终端里是新建终端窗口；在其他窗口里打开笔记（选中了任务就打开它的笔记）。
             menuItem("新建终端窗口 / 打开笔记", key: "n") { [weak self] in
                 guard let self else { return }
-                if NSApp.keyWindow is TerminalWindow { shell.newWindow() }
+                if shell.isTerminal(NSApp.keyWindow) { shell.newWindow() }
                 else if NotesWindowController.shared.isKey { NotesWindowController.shared.close() }
                 else { commands.send(.notes) }
             },
@@ -754,9 +781,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             })),
             menuItem("关闭标签页 / 窗口", key: "w") { [weak self] in self?.closeKeyWindow() },
             .separator(),
-            menuItem("向右分栏", key: "d") { [weak self] in if NSApp.keyWindow is TerminalWindow { self?.shell.splitPane(sideBySide: true) } },
-            menuItem("向下分栏", key: "d", modifiers: [.command, .shift]) { [weak self] in if NSApp.keyWindow is TerminalWindow { self?.shell.splitPane(sideBySide: false) } },
-            menuItem("关闭窗格", key: "w", modifiers: [.command, .option]) { [weak self] in if NSApp.keyWindow is TerminalWindow { self?.shell.closePane() } },
+            menuItem("向右分栏", key: "d") { [weak self] in if shell.isTerminal(NSApp.keyWindow) { self?.shell.splitPane(sideBySide: true) } },
+            menuItem("向下分栏", key: "d", modifiers: [.command, .shift]) { [weak self] in if shell.isTerminal(NSApp.keyWindow) { self?.shell.splitPane(sideBySide: false) } },
+            menuItem("关闭窗格", key: "w", modifiers: [.command, .option]) { [weak self] in if shell.isTerminal(NSApp.keyWindow) { self?.shell.closePane() } },
             .separator(),
             // ⌘[ ⌘]：终端里切窗格；其他窗口里切月份。
             menuItem("上一个窗格（终端）/ 上个月", key: "[", either({ $0.selectPane(-1) }, send(.shiftMonth(-1)))),

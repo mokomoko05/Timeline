@@ -3,7 +3,7 @@ import AppKit
 /// 主窗口：Esc 在笔记 / 日记页上收起窗口（没有文字框先处理它时），和原来独立的笔记窗口一致。
 /// 窗口钉在所在屏幕的中央，拖不动；拉边缘缩放时以中心为基准对称缩放，被拉的那条边始终跟着鼠标。
 /// 关掉「固定在屏幕中央」后就是普通窗口，可以拖到一边和别的应用并排。
-final class MainWindow: QuietWindow {
+final class MainWindow: TerminalWindow {
     var cancel: (() -> Bool)?
     var keepsCentered = true {
         didSet {
@@ -21,6 +21,7 @@ final class MainWindow: QuietWindow {
 
     override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
+        terminalIsPresented = false
         isMovable = false
         isMovableByWindowBackground = false
         NotificationCenter.default.addObserver(forName: NSWindow.willStartLiveResizeNotification, object: self, queue: nil) { [weak self] _ in
@@ -48,7 +49,7 @@ final class MainWindow: QuietWindow {
     }
 
     override func setFrameOrigin(_ point: NSPoint) {
-        setFrame(NSRect(origin: point, size: frame.size), display: true)
+        setFrame(NSRect(origin: point, size: frame.size), display: false)
     }
 
     override func setFrameTopLeftPoint(_ point: NSPoint) {
@@ -94,52 +95,73 @@ final class MainWindow: QuietWindow {
     }
 }
 
-/// 主窗口的内容：主界面和笔记 / 日记两页叠在一起，一次只显示一页，窗口的位置和大小两页共用。
-/// 藏起来的那页视图和状态（草稿、滚动位置、打开的笔记本）都留着，切回来是原样。
-/// 每页记住自己的键盘焦点：切走时记下，切回来时还给它，打字不会落进看不见的那页。
+/// 工作区页面共用一个窗口；切换时保留各页内容、滚动位置和键盘焦点。
+enum WorkspacePage: String { case main, notes, terminal }
+
 @MainActor
 final class WorkspacePagesView: NSView {
     private(set) var main: NSView?
     private(set) var notes: NSView?
-    private(set) var showsNotes = false
-    private weak var mainResponder: NSResponder?
-    private weak var notesResponder: NSResponder?
+    private(set) var terminal: NSView?
+    private(set) var page: WorkspacePage = .main
+    private let defaults: UserDefaults?
+    var savedPage: WorkspacePage {
+        defaults?.string(forKey: Prefs.lastWorkspacePage).flatMap(WorkspacePage.init(rawValue:)) ?? .main
+    }
 
-    /// 换上（或释放掉）主界面。
+    init(defaults: UserDefaults? = nil) {
+        self.defaults = defaults
+        super.init(frame: .zero)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    var showsNotes: Bool { page == .notes }
+    var showsTerminal: Bool { page == .terminal }
+    private final class SavedResponder {
+        weak var value: NSResponder?
+        init(_ value: NSResponder) { self.value = value }
+    }
+    private var responders: [WorkspacePage: SavedResponder] = [:]
+
     func setMain(_ view: NSView?) {
         main?.removeFromSuperview()
         main = view
         if let view { add(view) }
         update()
     }
-
     func setNotes(_ view: NSView) {
         notes?.removeFromSuperview()
         notes = view
         add(view)
         update()
     }
+    func setTerminal(_ view: NSView?) {
+        terminal?.removeFromSuperview()
+        terminal = view
+        if let view { add(view) }
+        update()
+    }
 
-    /// 切到笔记页（`true`）或主界面。
-    func show(notes showNotes: Bool) {
-        guard showNotes != showsNotes, !showNotes || notes != nil else { return }
-        let leaving = showsNotes ? notes : main
-        // 文字框在编辑时，焦点在共用的字段编辑器上（离开后它会被拿走）：记下文字框本身。
+    func show(notes: Bool) { show(notes ? .notes : .main) }
+
+    func show(_ next: WorkspacePage) {
+        guard next != page, next != .notes || notes != nil, next != .terminal || terminal != nil else { return }
         let current = window?.firstResponder
         let field = (current as? NSTextView).flatMap { $0.isFieldEditor ? $0.delegate as? NSView : nil }
-        if let responder = field ?? current as? NSView, let leaving, responder.isDescendant(of: leaving) {
-            if showsNotes { notesResponder = responder } else { mainResponder = responder }
+        if let responder = field ?? current as? NSView, let leaving = view(for: page), responder.isDescendant(of: leaving) {
+            responders[page] = SavedResponder(responder)
         }
-        showsNotes = showNotes
+        TerminalPointerHiding.shared.restore()
+        page = next
+        defaults?.set(next.rawValue, forKey: Prefs.lastWorkspacePage)
         update()
         guard let window else { return }
-        let page = showNotes ? notes : main
-        let saved = showNotes ? notesResponder : mainResponder
-        if let saved = saved as? NSView, let page, saved.isDescendant(of: page), saved.window === window {
+        if let saved = responders[next]?.value as? NSView, let page = view(for: next), saved.isDescendant(of: page), saved.window === window {
             window.makeFirstResponder(saved)
-        } else {
-            window.makeFirstResponder(nil)
-        }
+        } else { window.makeFirstResponder(nil) }
+    }
+
+    private func view(for page: WorkspacePage) -> NSView? {
+        switch page { case .main: return main; case .notes: return notes; case .terminal: return terminal }
     }
 
     private func add(_ view: NSView) {
@@ -149,7 +171,9 @@ final class WorkspacePagesView: NSView {
     }
 
     private func update() {
-        main?.isHidden = showsNotes
-        notes?.isHidden = !showsNotes
+        main?.isHidden = page != .main
+        notes?.isHidden = page != .notes
+        terminal?.isHidden = page != .terminal
+        (window as? TerminalWindow)?.terminalIsPresented = showsTerminal
     }
 }

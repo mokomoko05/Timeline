@@ -90,6 +90,46 @@ final class QuickCaptureModel: ObservableObject {
     /// 每次呼出加一：面板复用，视图据此重置提示和焦点（相当于重新出现）。
     @Published private(set) var presentation = 0
 
+    private let defaults: UserDefaults
+    @Published private(set) var pinnedLink: UUID?
+    @Published private(set) var pinnedTags: [String]
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        pinnedLink = defaults.string(forKey: "quickCapture.pinnedTask").flatMap(UUID.init(uuidString:))
+        pinnedTags = defaults.stringArray(forKey: "quickCapture.pinnedTags") ?? []
+        link = pinnedLink
+        tags = pinnedTags
+    }
+
+    func togglePinnedTask(_ id: UUID) {
+        pinnedLink = pinnedLink == id ? nil : id
+        defaults.set(pinnedLink?.uuidString, forKey: "quickCapture.pinnedTask")
+    }
+
+    func togglePinnedTag(_ tag: String) {
+        if isTagPinned(tag) { pinnedTags.removeAll { TagText.key($0) == TagText.key(tag) } }
+        else { pinnedTags = TagText.merge(pinnedTags, [tag]) }
+        defaults.set(pinnedTags, forKey: "quickCapture.pinnedTags")
+    }
+
+    func isTagPinned(_ tag: String) -> Bool { pinnedTags.contains { TagText.key($0) == TagText.key(tag) } }
+
+    func resetLogAssociations() {
+        link = pinnedLink
+        tags = pinnedTags
+        unlinked = false
+    }
+
+    @MainActor
+    func validateTask(in store: JournalStore) {
+        if let pinnedLink, store.locate(pinnedLink) == nil {
+            self.pinnedLink = nil
+            defaults.removeObject(forKey: "quickCapture.pinnedTask")
+        }
+        if let link, store.locate(link) == nil { self.link = nil }
+    }
+
     func presented() { presentation += 1 }
 
     @MainActor
@@ -101,15 +141,14 @@ final class QuickCaptureModel: ObservableObject {
     }
 
     var hasDraft: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !tags.isEmpty || link != nil
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty
+            || tags.contains { !isTagPinned($0) } || (link != nil && link != pinnedLink)
     }
 
     func clearDraft() {
         text = ""
         images = []
-        tags = []
-        link = nil
-        unlinked = false
+        resetLogAssociations()
         creationOptions = TaskCreationOptions()
     }
 }
@@ -500,7 +539,9 @@ struct QuickCaptureView: View {
                     }
                 } else {
                     LogChipsBar(store: store, link: $model.link, unlinked: $model.unlinked, tags: $model.tags, contextTags: model.tags,
-                                automaticallyLinks: false, hint: "⌘Enter 记录")
+                                automaticallyLinks: false, hint: "⌘Enter 记录",
+                                taskPin: { model.pinnedLink == $0 }, toggleTaskPin: model.togglePinnedTask,
+                                tagPin: model.isTagPinned, toggleTagPin: model.togglePinnedTag)
                 }
             }.font(.system(size: typography.pt(12))).frame(height: LogChipsBar.height, alignment: .leading)
         }
@@ -524,12 +565,14 @@ struct QuickCaptureView: View {
             } catch {}
         }
         .onChange(of: model.presentation) { _ in
+            model.validateTask(in: store)
             message = nil
             failure = nil
             restored = model.hasDraft
             focused = true
         }
         .onAppear {
+            model.validateTask(in: store)
             restored = model.hasDraft
             mention.triggers = [.task, .tag]
             mention.provider = MentionProviders.make(store: store, contextTags: { [model] in model.tags }, chosenTags: { [model] in model.tags })
@@ -591,9 +634,7 @@ struct QuickCaptureView: View {
                 message = (images.isEmpty ? AppLocalized("已记录") : AppLocalizedFormat("已记录，含 %lld 张图片", images.count)) + linked
                     + (paused ? AppLocalized(" · 专注暂停，未关联任务或标签") : (tags.isEmpty ? "" : AppLocalized("，标签 ") + tags.map { "#" + $0 }.joined(separator: " ")))
                 images = []
-                tags = []
-                model.link = nil
-                model.unlinked = false
+                model.resetLogAssociations()
                 if let entry = result.entry { destination = .log(Date(), entry.id) }
                 ImageIndexer.run(store: store)
             } catch { failure = AppErrorDescription(error); return }

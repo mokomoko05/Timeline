@@ -50,20 +50,22 @@ final class PinAndMentionTests: XCTestCase {
         XCTAssertEqual(store.allLogs().last?.log.taskID, focused)
     }
 
-    func testPinSurvivesReloadAndClearsWhenTaskCompletesOrIsDeleted() throws {
+    func testPinSurvivesCompletionAndReloadButClearsWhenDeleted() throws {
         let store = makeStore()
         store.pinTask(id(store, 2))
         XCTAssertEqual(JournalStore(directory: directory).pinnedTask?.task.number, 2, "固定写进数据文件，重启后还在")
 
         store.toggleTodo(id(store, 2), on: day)
-        XCTAssertNil(store.pinnedTask, "完成后固定自动取消")
-        XCTAssertNil(store.pinnedTaskID)
+        XCTAssertEqual(store.pinnedTask?.id, id(store, 2), "完成后仍固定")
+        XCTAssertEqual(JournalStore(directory: directory).pinnedTask?.id, id(store, 2))
+        _ = try store.quickLog("完成后的补记", on: day)
+        XCTAssertEqual(store.allLogs().last?.log.taskID, id(store, 2))
         store.toggleTodo(id(store, 2), on: day)
-        XCTAssertNil(store.pinnedTask, "撤销完成也不会悄悄恢复固定")
+        XCTAssertEqual(store.pinnedTask?.id, id(store, 2))
 
         XCTAssertFalse(store.pinTask(UUID()), "不存在的待办不能固定")
         store.toggleTodo(id(store, 3), on: day)
-        XCTAssertFalse(store.pinTask(id(store, 3)), "已完成的待办不能固定")
+        XCTAssertTrue(store.pinTask(id(store, 3)), "已完成的待办也能固定")
 
         store.pinTask(id(store, 4))
         store.deleteTodo(id(store, 4), on: store.locate(number: 4)!.date)

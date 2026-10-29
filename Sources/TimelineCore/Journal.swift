@@ -222,7 +222,7 @@ public final class JournalStore: ObservableObject {
     @Published public internal(set) var tagRegistry: [String] = [] {
         didSet { cachedTagSummaries = nil }
     }
-    /// 固定关联的待办（不计时）。读 `pinnedTask` 才会排除已删除、已完成的。
+    /// 固定关联的待办（不计时）。读 `pinnedTask` 才会排除已删除的。
     @Published public internal(set) var pinnedTaskID: UUID?
     /// 最近删除（本机保留 30 天，不同步），新删的在前。
     @Published public internal(set) var recentlyDeleted: [DeletedItem] = []
@@ -874,18 +874,18 @@ public final class JournalStore: ObservableObject {
     /// 专注中的任务；任务已被删除时为 nil（日志照常记录，只是不再关联）。
     public var focusTask: ScheduledTask? { focusTaskID.flatMap(locate) }
 
-    /// 固定关联的待办（不计时的「当前待办」）。已完成、已删除的不算。
-    public var pinnedTask: ScheduledTask? { pinnedTaskID.flatMap(locate).flatMap { $0.task.completed ? nil : $0 } }
+    /// 固定关联的待办（不计时的「当前待办」）。已删除的不算；完成状态不影响固定。
+    public var pinnedTask: ScheduledTask? { pinnedTaskID.flatMap(locate) }
 
     /// 没有明确指定任务时，新日志默认记到哪：专注中的任务优先，其次是固定关联的。
     public var defaultLinkTask: ScheduledTask? { focusPaused ? nil : (focusTask ?? pinnedTask) }
 
-    /// 固定 / 取消固定一个待办。只有未完成的待办能固定；返回是否生效。固定不进撤销栈。
+    /// 固定 / 取消固定一个待办。任何仍存在的待办都能固定；返回是否生效。固定不进撤销栈。
     @discardableResult
     public func pinTask(_ id: UUID?) -> Bool {
         guard !isReadOnly else { return false }
         if let id {
-            guard let located = locate(id), !located.task.completed else { return false }
+            guard locate(id) != nil else { return false }
             guard pinnedTaskID != id else { return true }
             pinnedTaskID = id
         } else {
@@ -1358,8 +1358,8 @@ public final class JournalStore: ObservableObject {
         indexedTasks = nil
         taskPositions = nil
         indexedDeadlines = nil
-        // 固定关联的待办完成或删除后，固定自动取消（之后即使撤销完成，也不会悄悄恢复）。
-        if let pinnedTaskID, locate(pinnedTaskID).map({ $0.task.completed }) != false { self.pinnedTaskID = nil }
+        // 只有删除才取消固定，完成或放弃后仍可继续往该任务记录日志。
+        if let pinnedTaskID, locate(pinnedTaskID) == nil { self.pinnedTaskID = nil }
     }
 
     private func taskIndex() -> (tasks: [ScheduledTask], byID: [UUID: Int], byNumber: [Int: Int]) {
