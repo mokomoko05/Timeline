@@ -36,7 +36,25 @@ extension EnvironmentValues {
     }
 }
 
+/// 开关卡片只通知 overlay，避免让底下的日记全文随之重新计算。
+@MainActor
+final class EditorPresentation: ObservableObject {
+    @Published var shown = false
+}
+
+private struct PresentedEditor<Content: View>: View {
+    @ObservedObject var presentation: EditorPresentation
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        FloatingEditorHost(shown: presentation.shown, close: { presentation.shown = false }, content: content)
+    }
+}
+
 extension View {
+    func floatingEditor<Content: View>(presentation: EditorPresentation, @ViewBuilder content: @escaping () -> Content) -> some View {
+        overlay { PresentedEditor(presentation: presentation, content: content) }
+    }
+
     func floatingEditor<Content: View>(isPresented: Binding<Bool>, @ViewBuilder content: @escaping () -> Content) -> some View {
         overlay { FloatingEditorHost(shown: isPresented.wrappedValue, close: { isPresented.wrappedValue = false }, content: content) }
     }

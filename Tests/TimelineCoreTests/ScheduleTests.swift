@@ -170,14 +170,14 @@ final class ScheduleTests: XCTestCase {
         let store = try store()
         store.addTodo("task", on: date(6))
         let saved = store.lastSaved
-        let data = try Data(contentsOf: store.fileURL)
+        let data = try store.exportedJSONForTesting()
         for day in 1...31 {
             _ = store.entry(for: date(day))
             _ = store.calendarDeadlines[JournalDates.key(date(day))]
         }
         XCTAssertEqual(store.lastSaved, saved)
         XCTAssertFalse(store.hasPendingSave)
-        XCTAssertEqual(try Data(contentsOf: store.fileURL), data)
+        XCTAssertEqual(try store.exportedJSONForTesting(), data)
     }
 
     @MainActor
@@ -407,7 +407,7 @@ final class ScheduleTests: XCTestCase {
         let snapshot = original.directory.appendingPathComponent("valid.json")
         try original.export(to: snapshot)
         let broken = Data("broken json".utf8)
-        try broken.write(to: original.fileURL)
+        try broken.write(to: original.databaseURL)
         let damaged = JournalStore(directory: original.directory)
         XCTAssertTrue(damaged.isReadOnly)
         try damaged.restore(from: snapshot)

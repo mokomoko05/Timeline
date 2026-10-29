@@ -144,13 +144,13 @@ final class BoardTests: XCTestCase {
         store.undo()
         XCTAssertEqual(store.boards[0].markdown, "Later")
         store.save()
-        let before = try Data(contentsOf: store.fileURL)
+        let before = try store.exportedJSONForTesting()
         let snapshot = JournalStore(directory: store.directory, readOnlySnapshot: true)
         XCTAssertNotNil(snapshot.ensureBoard(for: .tag("Project")))
         XCTAssertNil(snapshot.ensureBoard(for: .tag("Other")))
         snapshot.setBoardMarkdown("Modified", for: board.id)
         XCTAssertEqual(snapshot.boards[0].markdown, "Later")
-        XCTAssertEqual(try Data(contentsOf: store.fileURL), before)
+        XCTAssertEqual(try store.exportedJSONForTesting(), before)
     }
 
     func testVersionSixLoadsWithoutBoardsAndUpgradesOnSave() throws {
@@ -160,7 +160,7 @@ final class BoardTests: XCTestCase {
         XCTAssertFalse(reloaded.isReadOnly)
         XCTAssertTrue(reloaded.boards.isEmpty)
         XCTAssertNotNil(reloaded.ensureBoard(for: .tag("New")))
-        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as? [String: Any])
+        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: store.exportedJSONForTesting()) as? [String: Any])
         XCTAssertEqual(raw["version"] as? Int, 8)
     }
 
@@ -194,7 +194,7 @@ final class BoardTests: XCTestCase {
         XCTAssertEqual(board.updatedAt, Date(timeIntervalSinceReferenceDate: 200))
         XCTAssertEqual(board.markdown, "- [x] Intro\n\n  line one\n  [Paper](https://example.com)\n\n## Notes\n\n## Background\n\nDetails\n\n- [ ] Design")
         XCTAssertEqual(try Data(contentsOf: migrated.backupsDirectory.appendingPathComponent("before-board-markdown-v7.json")), original)
-        let document = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: migrated.fileURL)) as? [String: Any])
+        let document = try XCTUnwrap(JSONSerialization.jsonObject(with: migrated.exportedJSONForTesting()) as? [String: Any])
         XCTAssertEqual(document["version"] as? Int, 8)
         let saved = try XCTUnwrap((document["boards"] as? [[String: Any]])?.first)
         XCTAssertNil(saved["items"])

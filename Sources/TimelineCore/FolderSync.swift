@@ -12,8 +12,8 @@ struct SyncSnapshot: Codable {
     var records: [String: SyncRecord]
 }
 
-/// 本机的同步状态，存在数据目录的 `Sync/state.json`：上次同步后的全部记录（用来认出本机改了什么）
-/// 和已经合并过的其他设备文件（没变的就不再读）。
+/// 本机的同步状态，与正文一起存在 SQLite：上次同步后的全部记录（用来认出本机改了什么）
+/// 和已经合并过的其他设备文件（没变的就不再读）。旧 state.json 仅作为迁移源。
 struct SyncState: Codable, Equatable {
     var device: String
     var commitID: String?
@@ -130,23 +130,12 @@ public final class FolderSync: ObservableObject {
         self.folder = folder
         self.deviceName = deviceName
         let url = Self.stateURL(in: store.directory)
-        // 两个原子文件之间中断时，只接受与正文提交一致的基线。
-        func load(_ file: URL) -> SyncState? {
-            guard let data = try? Data(contentsOf: file),
-                  let saved = try? JSONDecoder().decode(SyncState.self, from: data),
-                  saved.commitID == store.syncCommitID else { return nil }
-            return saved
-        }
-        state = load(url) ?? load(url.deletingLastPathComponent().appendingPathComponent("state.previous.json")) ?? SyncState(device: Self.makeDeviceID())
+        state = (try? store.persistedSyncState()) ?? SyncState(device: Self.makeDeviceID())
         let folderPath = folder.standardizedFileURL.resolvingSymlinksInPath().path
         if let previousFolder = state.folderPath, previousFolder != folderPath {
             state = SyncState(device: Self.makeDeviceID(), records: state.records)
         }
         state.folderPath = folderPath
-        let transportURL = url.deletingLastPathComponent().appendingPathComponent("transport.json")
-        if let data = try? Data(contentsOf: transportURL), let ledger = try? JSONDecoder().decode(IncrementalState.self, from: data),
-           ledger.deviceID == state.device, ledger.folderPath == folderPath, ledger.commitID == state.commitID,
-           ledger.revision >= (state.ledger?.revision ?? -1) { state.ledger = ledger }
         let statusURL = url.deletingLastPathComponent().appendingPathComponent("status.json")
         if let data = try? Data(contentsOf: statusURL), let report = try? JSONDecoder().decode([String: String].self, from: data) {
             let formatter = ISO8601DateFormatter()
@@ -357,11 +346,12 @@ public final class FolderSync: ObservableObject {
         guard !store.isReadOnly else { throw SyncError.readOnly }
         let content = store.syncContent
         let previous = state
+        let baseline = syncedContent
         let localChanged = content != syncedContent
         let folder = self.folder, deviceName = self.deviceName, time = now()
         await recordProgress("readingRemote")
         let outcome = try await Task.detached(priority: .utility) {
-            try Self.merge(content: content, state: previous, localChanged: localChanged, folder: folder, deviceName: deviceName, now: time)
+            try Self.merge(content: content, state: previous, localChanged: localChanged, baseline: baseline, folder: folder, deviceName: deviceName, now: time)
         }.value
         // 合并期间本机又改了：作废这次结果，稍后重来。
         guard store.syncContent == content else { rerun = true; return false }
@@ -374,7 +364,7 @@ public final class FolderSync: ObservableObject {
         if waitingForDownload != outcome.pendingDownload { waitingForDownload = outcome.pendingDownload }
         if !outcome.pendingDownload && !waitingForUpload { downloadWaits = 0 }
         if outcome.stateChanged { needsExport = true }
-        let images = store.imagesDirectory, stateURL = self.stateURL
+        let images = store.imagesDirectory
         var snapshotState = outcome.state
         if time.timeIntervalSince(snapshotState.ledger?.lastImageInventory ?? .distantPast) >= 86400 {
             let inventory = await store.retainedImagesForSync()
@@ -397,18 +387,10 @@ public final class FolderSync: ObservableObject {
         snapshotState.ledger?.folderPath = snapshotState.folderPath
         snapshotState.ledger?.commitID = snapshotState.commitID
         await recordProgress("exporting")
-        // 先落盘再推进内存基线。写盘失败后下轮仍能认出同一批本机修改；
-        // 云端发布失败则保留已落盘的序号、批次和图片队列供重试。
         let durableState = snapshotState
-        try await Task.detached(priority: .utility) {
-            if recordsChanged {
-                try Self.write(state: previous, to: stateURL.deletingLastPathComponent().appendingPathComponent("state.previous.json"))
-                try Self.write(state: durableState, to: stateURL)
-            }
-            if let ledger = durableState.ledger, ledger != previous.ledger { try Self.writeTransport(ledger, to: stateURL) }
-        }.value
-        // staged state 尚未提交时绝不发布批次/回执；重启会回退到 previous。
-        if recordsChanged || applied || store.hasPendingSave, let commitID = durableState.commitID { try store.saveForSync(commitID: commitID) }
+        if recordsChanged || applied || store.hasPendingSave || durableState.ledger != previous.ledger {
+            try await store.saveForSync(state: durableState)
+        }
         state = durableState
         syncedContent = outcome.content
         devices = outcome.devices.map { device in
@@ -437,10 +419,13 @@ public final class FolderSync: ObservableObject {
                     total + ((try? folder.appendingPathComponent(relative).resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
                 }
                 if ledger != persisted.ledger { ledger.revision += 1 }
-                if ledger != persisted.ledger { try Self.writeTransport(ledger, to: stateURL) }
+
                 return (pendingCount, pendingBytes, publication.url, ledger, publication.bytes + imageBytes + leaseBytes, publication.batches)
             }
         }.value
+        var transferredState = snapshotState
+        transferredState.ledger = transfer.3
+        if transfer.3 != snapshotState.ledger { try store.saveSyncTransport(transferredState) }
         let revisionChanged = exportedRevision != transfer.2
         exportedRevision = transfer.2
         state.ledger = transfer.3
@@ -463,11 +448,16 @@ public final class FolderSync: ObservableObject {
 
     // MARK: - 后台部分
 
-    nonisolated private static func merge(content: SyncContent, state previous: SyncState, localChanged: Bool,
+    nonisolated private static func merge(content: SyncContent, state previous: SyncState, localChanged: Bool, baseline: SyncContent?,
                                           folder: URL, deviceName: String, now: Date) throws -> Outcome {
         var state = previous
         var merge = SyncMerge(device: state.device, now: now)
-        if localChanged || state.records.isEmpty { merge.stampLocalChanges(try content.records(), into: &state.records) }
+        if localChanged || state.records.isEmpty {
+            if let baseline, !state.records.isEmpty {
+                let changes = try content.recordChanges(since: baseline)
+                merge.stampLocalChanges(changes.values, into: &state.records, scope: changes.scope)
+            } else { merge.stampLocalChanges(try content.records(), into: &state.records) }
+        }
         let hadRemote = !previous.remote.isEmpty || (previous.ledger?.received.keys.contains { $0 != state.device } ?? false)
         var devices: [Device] = []
         var mergedRemote = false
@@ -544,9 +534,10 @@ public final class FolderSync: ObservableObject {
             ledger.queuedImages = content.imageNames
         }
         let shouldApply = localChanged || mergedRemote || state.records != previous.records
-        var merged = shouldApply ? content.applying(state.records) : content
+        var merged = shouldApply ? (mergedRemote ? content.applying(state.records) : content.normalizing(using: state.records)) : content
         if shouldApply {
-            merge.stampLocalChanges(try merged.records(), into: &state.records)
+            let changes = try merged.recordChanges(since: content)
+            merge.stampLocalChanges(changes.values, into: &state.records, scope: changes.scope)
             merged.nextTaskNumber = max(merged.nextTaskNumber, content.nextTaskNumber)
         }
         if shouldApply || ledger.sequence == 0 {
@@ -558,12 +549,6 @@ public final class FolderSync: ObservableObject {
         return Outcome(state: state, content: merged, stateChanged: state.records != previous.records,
                        devices: uniqueDevices(devices), firstMerge: mergedRemote && !hadRemote && !content.days.isEmpty && merged != content,
                        pendingDownload: pendingDownload, readBytes: readBytes)
-    }
-
-    nonisolated private static func writeTransport(_ ledger: IncrementalState, to stateURL: URL) throws {
-        let url = stateURL.deletingLastPathComponent().appendingPathComponent("transport.json")
-        let data = try IncrementalSync.encode(ledger)
-        if (try? Data(contentsOf: url)) != data { try data.write(to: url, options: .atomic) }
     }
 
     nonisolated private static func uniqueDevices(_ devices: [Device]) -> [Device] {
@@ -608,11 +593,6 @@ public final class FolderSync: ObservableObject {
     nonisolated private static func placeholderTarget(_ name: String) -> String? {
         guard name.hasPrefix("."), name.hasSuffix(".icloud") else { return nil }
         return String(name.dropFirst().dropLast(".icloud".count))
-    }
-
-    nonisolated private static func write(state: SyncState, to url: URL) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONEncoder().encode(state).write(to: url, options: .atomic)
     }
 
     /// 原图仅上传一次；未查看的远端原图保持在云端。

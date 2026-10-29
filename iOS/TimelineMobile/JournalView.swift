@@ -11,7 +11,7 @@ struct JournalView: View {
     @ObservedObject var feed: TabFeed
     let sync: SyncModel
     @State private var selection = JournalDates.key(Date())
-    @State private var composing = false
+    @State private var composePresentation = EditorPresentation()
     @State private var query = ""
     /// 要滚到的那条日志（从别处跳过来、截图检查）。
     @State private var jump: UUID?
@@ -57,17 +57,17 @@ struct JournalView: View {
                 }
             }
             .overlay(alignment: .bottomTrailing) {
-                if query.isEmpty { FloatingButtons(edges: edges) { composing = true } }
+                if query.isEmpty { FloatingButtons(edges: edges) { composePresentation.shown = true } }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 FocusBar()
             }
             .onAppear { prewarm(around: selection, keys: keys, byDay: byDay) }
             .onChange(of: selection) { _, key in prewarm(around: key, keys: keys, byDay: byDay) }
-            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { if $0.object as? String == "compose" { composing = true } }
+            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openEditor)) { if $0.object as? String == "compose" { composePresentation.shown = true } }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
-                if note.object as? String == "compose" { composing = true }
-                if note.object as? String == "closeSheet" { composing = false }
+                if note.object as? String == "compose" { composePresentation.shown = true }
+                if note.object as? String == "closeSheet" { composePresentation.shown = false }
                 if note.object as? String == "flingJump", let view = edges.scrollView {
                     // 滚动动画还在走的时候点「跳到底部」/「回到顶部」：报落点和真正的底 / 顶差多少。
                     view.setContentOffset(CGPoint(x: 0, y: view.contentSize.height / 3), animated: true)
@@ -85,7 +85,7 @@ struct JournalView: View {
                 }
             }
             .onReceive(QuickEntry.shared.$request) { _ in
-                if QuickEntry.shared.take(.log) { selection = JournalDates.key(Date()); composing = true }
+                if QuickEntry.shared.take(.log) { selection = JournalDates.key(Date()); composePresentation.shown = true }
             }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.openCalendar)) { _ in calendar.isOpen = true }
             .onReceive(Navigator.shared.$target) { _ in
@@ -107,7 +107,7 @@ struct JournalView: View {
                 if let target = neighbor(of: selection, in: keys, by: -1) { go(to: target, keys: keys) }
             }
         }
-        .floatingEditor(isPresented: $composing) {
+        .floatingEditor(presentation: composePresentation) {
             ComposeSheet(store: store) { selection = JournalDates.key(Date()) }
         }
     }
@@ -478,7 +478,7 @@ private struct MonthCalendar: View {
 /// 打字时只有这一页跟着刷新，所以这一页的正文要便宜：可关联的待办在打开时整理一次，菜单放在单独的视图里。
 /// 没保存就收起（点暗处、取消、切走应用）时留草稿，下次从同一个地方打开时接着写。
 struct ComposeSheet: View {
-    @ObservedObject var store: JournalStore
+    let store: JournalStore
     var taskID: UUID?
     /// 固定加上的标签（在标签笔记本里写）。
     var tags: [String] = []
@@ -490,6 +490,7 @@ struct ComposeSheet: View {
     @State private var restored: Bool
     /// 已经保存：收起时不再留草稿。
     @State private var finished = false
+    @State private var visible = false
     private var linked: UUID? { get { draft.linked } nonmutating set { draft.linked = newValue } }
     /// 关联的待办的标题：选的时候记一次，打字时不用每次去找。
     @State private var linkedTitle = ""
@@ -521,19 +522,25 @@ struct ComposeSheet: View {
             if let close = closeEditor {
                 VStack(alignment: .leading, spacing: 10) {
                     EditorCardHeader(title: "记一笔", confirm: "保存", canConfirm: canSend, cancel: close.close, action: send)
-                    fields(maxLines: 8)
+                    fields(maxLines: 8).disabled(draft.saving)
                 }
             } else {
                 sheet
             }
         }
-        .onAppear(perform: load)
+        .onAppear { visible = true; load() }
         .onChange(of: picked) { _, items in take(items) }
         // 草稿只在收起和退到后台时写一次，打字时不碰存储。
-        .onChange(of: text) { if restored { restored = false } }
-        .onDisappear { if !finished { saveDraft() } }
+        .onReceive(draft.$edited.removeDuplicates()) { if $0 && restored { restored = false } }
+        .onDisappear { visible = false; if !finished { saveDraft() } }
         .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
-            guard PerfProbe.enabled, note.object as? String == "composeImportRace", let data = PerfProbe.originalImageSample else { return }
+            guard PerfProbe.enabled else { return }
+            if note.object as? String == "composeSave" {
+                if !draft.hasText && images.isEmpty { text = "Compose persistence probe" }
+                send()
+                return
+            }
+            guard note.object as? String == "composeImportRace", let data = PerfProbe.originalImageSample else { return }
             text = "Attachment lifecycle probe"
             draft.imports.start({ [store] in
                 // 强制跨过关闭界面的时刻，走真实原图导入和原草稿回写路径。
@@ -556,7 +563,7 @@ struct ComposeSheet: View {
         Group {
             NavigationStack {
                 VStack(alignment: .leading, spacing: 12) {
-                    fields(maxLines: 14)
+                    fields(maxLines: 14).disabled(draft.saving)
                     Spacer()
                 }
                 .padding()
@@ -588,12 +595,12 @@ struct ComposeSheet: View {
         ComposeDraft.save(ComposeDraft(), key: draftKey)
     }
 
-    private var canSend: Bool { draft.imports.pending == 0 && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty) }
+    private var canSend: Bool { !draft.saving && draft.imports.pending == 0 && (draft.hasText || !images.isEmpty) }
 
     @ViewBuilder private func fields(maxLines: Int) -> some View {
         // 列表贴在输入框上面：卡片往上长，正在打字的那一行不动。
         MentionList(model: mention, store: store)
-        AutoFocusTextView(text: $draft.text, placeholder: L("写点什么… @ 关联待办 · # 标签"), minLines: 4, maxLines: maxLines, mention: mention)
+        ComposeTextInput(input: draft.input, maxLines: maxLines, mention: mention).disabled(draft.saving)
         if linked != nil || !tags.isEmpty || !pickedTags.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
@@ -677,27 +684,50 @@ struct ComposeSheet: View {
     }
 
     private func send() {
+        guard !draft.saving else { return }
+        do { try draft.imports.requireReady() } catch { self.error = error.localizedDescription; return }
+        let started = CACurrentMediaTime()
+        draft.saving = true
         let parsed = TagText.extract(from: text)
-        do {
-            try draft.imports.requireReady()
-            if draft.pendingEntryID == nil {
-                let result = try store.quickLogEntry(parsed.title, images: images, taskID: linked, linkDefault: false,
-                                                    tags: TagText.merge(TagText.merge(tags, pickedTags), parsed.tags),
-                                                    allowInlineTaskReference: linked == nil, on: Date())
-                draft.pendingEntryID = result.entry?.id
-            }
-            store.save()
-            guard !store.hasPendingSave else { error = store.errorMessage; return }
-            finished = true
-            draft.imports.invalidate()
-            draft.pendingEntryID = nil
-            draft.text = ""; draft.images = []; draft.tags = []; draft.linked = taskID
-            ComposeDraft.save(ComposeDraft(), key: draftKey)
-            sent()
-            if let closeEditor { closeEditor() } else { dismiss() }
-        } catch {
-            self.error = error.localizedDescription
+        Task { @MainActor in
+            defer { draft.saving = false }
+            do {
+                if draft.pendingEntryID == nil {
+                    let result = try store.quickLogEntry(parsed.title, images: images, taskID: linked, linkDefault: false,
+                                                        tags: TagText.merge(TagText.merge(tags, pickedTags), parsed.tags),
+                                                        allowInlineTaskReference: linked == nil, on: Date())
+                    draft.pendingEntryID = result.entry?.id
+                }
+                try await store.saveAndWait()
+                finished = true
+                draft.imports.invalidate()
+                draft.pendingEntryID = nil
+                draft.text = ""; draft.images = []; draft.tags = []; draft.linked = taskID
+                ComposeDraft.save(ComposeDraft(), key: draftKey)
+                if PerfProbe.enabled {
+                    print("[perf] COMPOSE_SAVE completed=true pending=\(store.hasPendingSave) totalMS=\((CACurrentMediaTime() - started) * 1000)")
+                }
+                sent()
+                if visible { if let closeEditor { closeEditor() } else { dismiss() } }
+            } catch { self.error = error.localizedDescription; draft.persist() }
         }
+    }
+
+}
+
+/// 每字只刷新输入桥接；附件选择器、标题行及整页不订阅文字。
+@MainActor
+final class ComposeInputBuffer: ObservableObject {
+    @Published var text: String
+    init(text: String) { self.text = text }
+}
+
+private struct ComposeTextInput: View {
+    @ObservedObject var input: ComposeInputBuffer
+    let maxLines: Int
+    let mention: MentionModel
+    var body: some View {
+        AutoFocusTextView(text: $input.text, placeholder: L("写点什么… @ 关联待办 · # 标签"), minLines: 4, maxLines: maxLines, mention: mention)
     }
 }
 
@@ -706,7 +736,11 @@ struct ComposeSheet: View {
 final class ComposeDraftSession: ObservableObject {
     private final class WeakSession { weak var value: ComposeDraftSession?; init(_ value: ComposeDraftSession) { self.value = value } }
     private static var sessions: [String: WeakSession] = [:]
-    @Published var text: String
+    let input: ComposeInputBuffer
+    var text: String { get { input.text } set { input.text = newValue } }
+    @Published private(set) var hasText: Bool
+    @Published private(set) var edited = false
+    @Published var saving = false
     @Published var linked: UUID?
     @Published var tags: [String]
     @Published var images: [String]
@@ -715,6 +749,7 @@ final class ComposeDraftSession: ObservableObject {
     private let key: String
     private let taskID: UUID?
     private var importSubscription: AnyCancellable?
+    private var textSubscription: AnyCancellable?
 
     static func session(store: JournalStore, taskID: UUID?, tags: [String]) -> ComposeDraftSession {
         let key = ComposeDraft.key(taskID: taskID, tags: tags)
@@ -729,7 +764,15 @@ final class ComposeDraftSession: ObservableObject {
     private init(key: String, taskID: UUID?) {
         self.key = key; self.taskID = taskID
         let saved = ComposeDraft.load(key) ?? ComposeDraft()
-        text = saved.text; linked = saved.linked ?? taskID; tags = saved.tags; images = saved.images
+        input = ComposeInputBuffer(text: saved.text)
+        hasText = !saved.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        linked = saved.linked ?? taskID; tags = saved.tags; images = saved.images
+        textSubscription = input.$text.dropFirst().sink { [weak self] text in
+            guard let self else { return }
+            let hasText = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if self.hasText != hasText { self.hasText = hasText }
+            if !self.edited { self.edited = true }
+        }
         importSubscription = imports.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
 
@@ -842,7 +885,8 @@ enum HorizontalScrollers {
 
 /// 系统相机：拍一张，用这张就交回来，取消就收起。
 struct CameraPicker: UIViewControllerRepresentable {
-    static var available: Bool { UIImagePickerController.isSourceTypeAvailable(.camera) }
+    static let available = UIImagePickerController.isSourceTypeAvailable(.camera)
+
     let taken: (UIImage) -> Void
     @Environment(\.dismiss) private var dismiss
 

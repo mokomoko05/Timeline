@@ -125,6 +125,10 @@ struct RootView: View {
             PerfProbe.seedDemo(store)
             PerfProbe.start()
             prewarmJournal()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                EditorInputPool.warmUp()
+                _ = CameraPicker.available
+            }
             PerfProbe.runScript { tab = $0 }
             PerfProbe.runTyping { tab = $0 }
             PerfProbe.runActions { tab = $0 }

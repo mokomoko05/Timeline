@@ -217,7 +217,7 @@ final class DeadlineModelTests: XCTestCase {
         XCTAssertEqual(tasks.first { $0.task.title == "已有截止" }?.task.dueDate, Date(timeIntervalSinceReferenceDate: 813000000), "已有截止日期不改")
         XCTAssertEqual(tasks.compactMap(\.task.number).sorted(), [1, 2])
         XCTAssertTrue(FileManager.default.fileExists(atPath: store.backupsDirectory.appendingPathComponent("before-ddl-migration-v5.json").path))
-        let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("journal.json"))) as? [String: Any]
+        let raw = try JSONSerialization.jsonObject(with: store.exportedJSONForTesting()) as? [String: Any]
         XCTAssertEqual(raw?["version"] as? Int, 8)
         // 再次打开不会重复迁移：清除截止日期后保持无日期。
         store.setDeadline(migrated.id, to: nil)

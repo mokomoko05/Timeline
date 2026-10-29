@@ -41,6 +41,7 @@ enum PerfProbe {
 
     static func start() {
         guard enabled, monitor == nil else { return }
+        if UserDefaults.standard.bool(forKey: "perfFreshCompose") { UserDefaults.standard.removeObject(forKey: "composeDraft.journal") }
         setvbuf(stdout, nil, _IOLBF, 0)
         monitor = FrameMonitor()
     }
@@ -242,6 +243,7 @@ enum PerfProbe {
             ("草稿导入并立即保存", { send("composeImportRace") }),
             ("关闭导入中的草稿", { send("closeSheet") }),
             ("重新打开导入草稿", { send("compose") }),
+            ("保存记一笔", { send("composeSave") }),
             ("清理原图测试", {
                 for name in importedImageSamples { try? FileManager.default.removeItem(at: store.imagesDirectory.appendingPathComponent(name)) }
                 importedImageSamples = []
@@ -310,11 +312,32 @@ enum PerfProbe {
     /// `-perfTyping mention`：在记一笔里打 `@` 和 `#` 搜索，候选列表跟着每个字刷新。
     static let mentionText = UserDefaults.standard.string(forKey: "perfTypingText") ?? "@zhengli 今天 #gong 再测一下"
 
+    private static weak var typingTarget: UITextView?
+    private static var insertedCharacters = 0
+
+    private static func insertTypingCharacter(_ character: Character) {
+        if typingTarget?.isFirstResponder != true {
+            func find(_ view: UIView) -> UITextView? {
+                if view.isFirstResponder, let input = view as? UITextView { return input }
+                for child in view.subviews { if let found = find(child) { return found } }
+                return nil
+            }
+            typingTarget = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).compactMap(find).first
+        }
+        if let typingTarget, typingTarget.isFirstResponder {
+            typingTarget.insertText(String(character))
+            insertedCharacters += 1
+        } else {
+            UIApplication.shared.sendAction(#selector(UIKeyInput.insertText(_:)), to: nil, from: String(character), for: nil)
+        }
+    }
+
     static func runTyping(switchTab: @escaping (RootView.Tab) -> Void) {
-        guard enabled, let typing else { return }
+        guard enabled, let typing, typing != "off" else { return }
         switchTab(typing == "compose" || typing == "mention" || typing == "log" ? .journal : (typing == "board" || typing == "boardSearch" ? .boards : .tasks))
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             mark("打开输入框 " + typing)
+            pendingAction = ("打开输入框 " + typing, CACurrentMediaTime())
             // 工作板的编辑器在网页里：工作板页自己跑测试（见 BoardWebSession.runTypingTest）。
             NotificationCenter.default.post(name: openEditor, object: typing == "mention" ? "compose" : typing)
         }
@@ -324,23 +347,28 @@ enum PerfProbe {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { NotificationCenter.default.post(name: action, object: "editLog") }
             return
         }
-        for (index, character) in text.enumerated() where typing != "board" {
-            let delay: Double = 6 + Double(index) * 0.1
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                if index == 0 { mark("开始输入") }
-                keyDown = CACurrentMediaTime()
-                UIApplication.shared.sendAction(#selector(UIKeyInput.insertText(_:)), to: nil, from: String(character), for: nil)
-            }
-        }
-        let end: Double = 7 + Double(text.count) * 0.1
-        if typing != "board" { DispatchQueue.main.asyncAfter(deadline: .now() + end) {
+        guard typing != "board" else { return }
+        func report() {
+            print("[perf] INPUT delivered=\(insertedCharacters) expected=\(text.count)")
             let sorted: [Double] = latencies.sorted()
             guard let slowest = sorted.last else { print("[perf] 没有输入（没找到输入框）"); return }
             let total: Double = sorted.reduce(0, +)
             let average = total / Double(sorted.count)
             let median = sorted[sorted.count / 2]
             print(String(format: "[perf] 输入 %d 个字：平均 %.1f ms · 中位 %.1f ms · 最慢 %.1f ms", sorted.count, average, median, slowest))
-        } }
+        }
+        // 相对上一个字安排下一次输入，避免大量远期 asyncAfter 被系统合并成一批。
+        func typeCharacter(_ index: Int) {
+            guard index < text.count else { report(); return }
+            keyDown = CACurrentMediaTime()
+            insertTypingCharacter(text[index])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { typeCharacter(index + 1) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+            latencies = []; insertedCharacters = 0; typingTarget = nil
+            mark("开始输入")
+            typeCharacter(0)
+        }
     }
 
     /// 自动操作脚本：每一步之间留足时间让上一步的卡顿结束。

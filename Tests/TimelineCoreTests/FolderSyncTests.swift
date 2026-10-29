@@ -164,9 +164,9 @@ final class FolderSyncTests: XCTestCase {
         let mac = makeDevice("Mac"), phone = makeDevice("iPhone")
         let board = try XCTUnwrap(mac.store.ensureBoard(for: .tag("Durability")))
         mac.store.setBoardMarkdown("Must survive a failed save", for: board.id)
-        try FileManager.default.createDirectory(at: mac.stateURL, withIntermediateDirectories: true)
+        try mac.store.setDatabaseWriteFailure(true)
         do { try await mac.sync(); XCTFail("Blocked state file must fail") } catch { }
-        try FileManager.default.removeItem(at: mac.stateURL)
+        try mac.store.setDatabaseWriteFailure(false)
         try await sync(mac, phone)
         XCTAssertEqual(phone.store.boards.first { $0.id == board.id }?.markdown, "Must survive a failed save")
     }

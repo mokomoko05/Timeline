@@ -20,19 +20,20 @@ final class LegacyMigrationTests: XCTestCase {
         store.save()
         try FileManager.default.createDirectory(at: store.imagesDirectory, withIntermediateDirectories: true)
         try Data([1, 2, 3]).write(to: store.imageURL("test.png"))
-        let original = try Data(contentsOf: store.fileURL)
+        let original = try store.exportedJSONForTesting()
         XCTAssertTrue(try JournalStore.migrateLegacyDirectory(applicationSupport: support))
         let migrated = JournalStore(directory: support.appendingPathComponent("Timeline"))
         XCTAssertEqual(migrated.tasks().map(\.id), store.tasks().map(\.id))
         XCTAssertEqual(migrated.allLogs().map(\.log.id), store.allLogs().map(\.log.id))
         XCTAssertEqual(try Data(contentsOf: migrated.imageURL("test.png")), Data([1, 2, 3]))
+        migrated.waitForPendingWrites()
         XCTAssertTrue(FileManager.default.fileExists(atPath: migrated.backupURL.path))
         _ = migrated.addParsedTodo("New app task", on: Date())
         migrated.save()
-        let updated = try Data(contentsOf: migrated.fileURL)
+        let updated = try migrated.exportedJSONForTesting()
         XCTAssertFalse(try JournalStore.migrateLegacyDirectory(applicationSupport: support))
-        XCTAssertEqual(try Data(contentsOf: migrated.fileURL), updated)
-        XCTAssertEqual(try Data(contentsOf: store.fileURL), original)
+        XCTAssertEqual(try migrated.exportedJSONForTesting(), updated)
+        XCTAssertEqual(try store.exportedJSONForTesting(), original)
     }
 
     func testCorruptLegacyDataDoesNotPublishPartialMigration() throws {
@@ -43,6 +44,18 @@ final class LegacyMigrationTests: XCTestCase {
         XCTAssertThrowsError(try JournalStore.migrateLegacyDirectory(applicationSupport: support))
         XCTAssertFalse(FileManager.default.fileExists(atPath: support.appendingPathComponent("Timeline").path))
         XCTAssertEqual(try String(contentsOf: legacy.appendingPathComponent("journal.json")), "broken")
+    }
+
+    func testLegacyDatabaseWithoutJournalHeaderFailsWithoutFallbackOrPartialCopy() throws {
+        let support = try supportDirectory()
+        let legacy = support.appendingPathComponent("Dayleaf")
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        let database = try JournalDatabase(url: legacy.appendingPathComponent("journal.sqlite"))
+        XCTAssertNil(try database.load())
+        try JSONEncoder().encode(JournalDocument()).write(to: legacy.appendingPathComponent("journal.json"))
+        XCTAssertThrowsError(try JournalStore.migrateLegacyDirectory(applicationSupport: support))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: support.appendingPathComponent("Timeline").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: database.url.path))
     }
 
     func testExistingEmptyDestinationIsNeverSilentlyTreatedAsMigrated() throws {

@@ -64,11 +64,8 @@ final class SyncRecoveryTests: XCTestCase {
         let board = try XCTUnwrap(mac.store.ensureBoard(for: .tag("Save")))
         mac.store.setBoardMarkdown("Old content", for: board.id)
         try await sync(mac, phone)
-        let journal = phone.store.directory.appendingPathComponent("journal.json")
-        let oldData = try Data(contentsOf: journal)
         phone.store.saveRetryDelays = [3600]
-        try FileManager.default.removeItem(at: journal)
-        try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: true)
+        try phone.store.setDatabaseWriteFailure(true)
         mac.store.setBoardMarkdown("Latest remote content", for: board.id)
         try await sync(mac)
         do { try await sync(phone); XCTFail("Failed persistence must fail sync") } catch {}
@@ -77,9 +74,9 @@ final class SyncRecoveryTests: XCTestCase {
         XCTAssertNotNil(phone.store.errorMessage)
         XCTAssertNotNil(phone.lastError)
         XCTAssertFalse(mac.devices.first?.hasReceivedLocalChanges == true)
-        // 模拟进程退出，磁盘恢复可写但只留下旧正文；同步状态已推进。
-        try FileManager.default.removeItem(at: journal)
-        try oldData.write(to: journal)
+        // 事务已回滚，磁盘自然保留旧正文和旧基线，无需人为恢复文件。
+        XCTAssertEqual(JournalStore(directory: phone.store.directory, readOnlySnapshot: true).board(id: board.id)?.markdown, "Old content")
+        try phone.store.setDatabaseWriteFailure(false)
         let reopened = device("Phone", folder: folder, store: JournalStore(directory: phone.store.directory))
         try await sync(reopened, mac)
         print("AUDIT journal-save finalMac=\(mac.store.boards.first { $0.id == board.id }?.markdown ?? "missing")")
@@ -93,7 +90,8 @@ final class SyncRecoveryTests: XCTestCase {
         mac.store.setBoardMarkdown("Original", for: board.id)
         mac.store.save()
         try await sync(mac)
-        try FileManager.default.removeItem(at: mac.stateURL)
+        let db = try JournalDatabase(url: mac.store.databaseURL)
+        try db.execute("DELETE FROM metadata WHERE key = 'sync'")
         let reopened = device("Mac", folder: folder, store: JournalStore(directory: mac.store.directory))
         reopened.store.setBoardMarkdown("Recovered latest", for: board.id)
         try await sync(reopened, phone)
@@ -116,17 +114,20 @@ final class SyncRecoveryTests: XCTestCase {
     }
 
 
-    func testUncommittedStateUsesPreviousBaselineAfterRestart() async throws {
+    func testLegacyUncommittedStateUsesPreviousBaselineDuringMigration() async throws {
         let mac = device("Mac", folder: directory())
         let board = try XCTUnwrap(mac.store.ensureBoard(for: .tag("Crash")))
         mac.store.setBoardMarkdown("Durable", for: board.id)
         try await sync(mac)
-        let committed = try Data(contentsOf: mac.stateURL)
-        var staged = try JSONDecoder().decode(SyncState.self, from: committed)
+        let committed = try XCTUnwrap(mac.store.persistedSyncState())
+        var staged = committed
         staged.commitID = "not-in-journal"
-        try committed.write(to: mac.stateURL.deletingLastPathComponent().appendingPathComponent("state.previous.json"))
-        try JSONEncoder().encode(staged).write(to: mac.stateURL)
-        let reopened = device("Mac", folder: mac.folder, store: JournalStore(directory: mac.store.directory))
+        let legacy = directory()
+        try FileManager.default.createDirectory(at: legacy.appendingPathComponent("Sync"), withIntermediateDirectories: true)
+        try mac.store.export(to: legacy.appendingPathComponent("journal.json"))
+        try JSONEncoder().encode(committed).write(to: legacy.appendingPathComponent("Sync/state.previous.json"))
+        try JSONEncoder().encode(staged).write(to: legacy.appendingPathComponent("Sync/state.json"))
+        let reopened = device("Mac", folder: mac.folder, store: JournalStore(directory: legacy))
         XCTAssertEqual(reopened.deviceID, mac.deviceID)
         try await sync(reopened)
         XCTAssertEqual(reopened.store.board(id: board.id)?.markdown, "Durable")

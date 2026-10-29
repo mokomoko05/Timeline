@@ -1,8 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// 面板一出现就要输入的文本框：加进窗口的那一刻就成为第一响应者，键盘和面板一起升起来。
-/// SwiftUI 的 `@FocusState` 要等面板的动画走完才生效：面板先停在半高，键盘再出来把它顶上去，看起来是两段动画。
+/// 面板输入框：首次先呈现卡片再初始化系统键盘，后续挂入窗口立即获取焦点。
+/// 高度和焦点由 UIKit 桥接控制，避免等待 SwiftUI 的面板动画完成才进入输入状态。
 /// 高度随内容在 `minLines`…`maxLines` 行之间变化，超过后在框里滚动。`submit` 不为 nil 时回车是提交、不换行。
 struct AutoFocusTextView: UIViewRepresentable {
     @Binding var text: String
@@ -14,7 +14,9 @@ struct AutoFocusTextView: UIViewRepresentable {
     var mention: MentionModel?
 
     func makeUIView(context: Context) -> AutoFocusUITextView {
-        let view = AutoFocusUITextView()
+        let started = CACurrentMediaTime()
+        defer { if PerfProbe.enabled { print("[perf] EDITOR makeTextViewMS=\((CACurrentMediaTime() - started) * 1000)") } }
+        let view = EditorInputPool.take()
         view.font = UIFont.preferredFont(forTextStyle: .body)
         view.adjustsFontForContentSizeCategory = true
         view.backgroundColor = .clear
@@ -52,6 +54,15 @@ struct AutoFocusTextView: UIViewRepresentable {
         return CGSize(width: width, height: ceil(height))
     }
 
+    static func dismantleUIView(_ view: AutoFocusUITextView, coordinator: Coordinator) {
+        if coordinator.parent.mention?.textView === view {
+            coordinator.parent.mention?.textView = nil
+            coordinator.parent.mention?.textEdited = {}
+        }
+        view.delegate = nil
+        EditorInputPool.recycle(view)
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     final class Coordinator: NSObject, UITextViewDelegate {
@@ -81,6 +92,17 @@ struct AutoFocusTextView: UIViewRepresentable {
 final class AutoFocusUITextView: UITextView {
     let placeholder = UILabel()
     private var focusedOnce = false
+    private static var keyboardActivated = false
+    private var focusLink: CADisplayLink?
+    private var focusFrames = 0
+
+    func prepareForReuse() {
+        focusedOnce = false
+        text = ""
+        placeholder.isHidden = false
+        contentOffset = .zero
+        undoManager?.removeAllActions()
+    }
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
@@ -101,8 +123,61 @@ final class AutoFocusUITextView: UITextView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        if window == nil { focusLink?.invalidate(); focusLink = nil; return }
+        guard !focusedOnce, focusLink == nil else { return }
+        if Self.keyboardActivated { activateKeyboard(); return }
+        // 先提交卡片首帧，再初始化系统键盘，避免两项主线程工作挤在同一帧。
+        focusFrames = 0
+        let link = CADisplayLink(target: self, selector: #selector(focusAfterFrame))
+        focusLink = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    @objc private func focusAfterFrame() {
+        focusFrames += 1
+        guard focusFrames >= 2 else { return }
+        focusLink?.invalidate(); focusLink = nil
         guard window != nil, !focusedOnce else { return }
-        focusedOnce = true
-        becomeFirstResponder()
+        activateKeyboard()
+    }
+
+    private func activateKeyboard() {
+        let started = CACurrentMediaTime()
+        focusedOnce = becomeFirstResponder()
+        if focusedOnce { Self.keyboardActivated = true }
+        if PerfProbe.enabled { print("[perf] EDITOR focusMS=\((CACurrentMediaTime() - started) * 1000)") }
+    }
+
+}
+
+/// 只预热未挂载的输入框和公开输入模式查询，不抢焦点、不显示键盘。
+@MainActor
+enum EditorInputPool {
+    private static var cached: AutoFocusUITextView?
+    private static var warmed = false
+
+    static func warmUp() {
+        guard !warmed else { return }
+        warmed = true
+        let start = CACurrentMediaTime()
+        let view = AutoFocusUITextView()
+        view.font = UIFont.preferredFont(forTextStyle: .body)
+        _ = UITextInputMode.activeInputModes
+        _ = view.textInputMode
+        _ = view.sizeThatFits(CGSize(width: 320, height: 200))
+        cached = view
+        if PerfProbe.enabled { print("[perf] EDITOR warmInputMS=\((CACurrentMediaTime() - start) * 1000)") }
+    }
+
+    static func take() -> AutoFocusUITextView {
+        let view = cached ?? AutoFocusUITextView()
+        cached = nil
+        return view
+    }
+
+    static func recycle(_ view: AutoFocusUITextView) {
+        guard !view.isFirstResponder, cached == nil else { return }
+        view.prepareForReuse()
+        cached = view
     }
 }

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
-import TimelineCore
+@testable import TimelineCore
 @testable import Timeline
 
 @MainActor
@@ -87,8 +87,8 @@ final class FocusNoteDraftTests: XCTestCase {
         draft.images = ["draft.png"]
         draft.link = task.id
         draft.tags = ["reading"]
-        try FileManager.default.removeItem(at: directory)
-        try Data("blocking file".utf8).write(to: directory)
+        let fault = try JournalDatabase(url: store.databaseURL)
+        try fault.execute("CREATE TRIGGER test_failure BEFORE INSERT ON metadata BEGIN SELECT RAISE(ABORT, 'injected disk failure'); END")
         draft.save(session: session)
         XCTAssertNotNil(draft.error)
         XCTAssertNotNil(draft.pendingEntryID)
@@ -99,8 +99,7 @@ final class FocusNoteDraftTests: XCTestCase {
         draft.save(session: session)
         XCTAssertEqual(store.allLogs().count, 1)
         XCTAssertEqual(draft.text, "Keep this note")
-        try FileManager.default.removeItem(at: directory)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try fault.execute("DROP TRIGGER test_failure")
         draft.save(session: session)
         XCTAssertEqual(JournalStore(directory: directory).allLogs().count, 1)
         XCTAssertEqual(store.allLogs().first?.log.text, "Keep this note")
@@ -134,14 +133,13 @@ final class FocusNoteDraftTests: XCTestCase {
         session.tick(now: Date().addingTimeInterval(3600))
         let draft = FocusNoteDraft()
         draft.text = "Finished methods; next: experiments"
-        try FileManager.default.removeItem(at: directory)
-        try Data("blocking file".utf8).write(to: directory)
+        let fault = try JournalDatabase(url: store.databaseURL)
+        try fault.execute("CREATE TRIGGER test_failure BEFORE INSERT ON metadata BEGIN SELECT RAISE(ABORT, 'injected disk failure'); END")
         XCTAssertFalse(draft.save(session: session, reflection: true))
         XCTAssertNotNil(draft.pendingEntryID)
         XCTAssertTrue(session.needsReflection)
         XCTAssertFalse(draft.text.isEmpty)
-        try FileManager.default.removeItem(at: directory)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try fault.execute("DROP TRIGGER test_failure")
         XCTAssertTrue(draft.save(session: session, reflection: true))
         XCTAssertEqual(store.allLogs().count, 1)
         XCTAssertEqual(JournalStore(directory: directory).allLogs().first?.log.taskID, task.id)

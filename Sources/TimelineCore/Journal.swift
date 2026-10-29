@@ -202,7 +202,7 @@ public struct ActionEvent: Equatable {
     public let name: String
 }
 
-struct JournalDocument: Codable {
+struct JournalDocument: Codable, Equatable {
     var version = 8
     var days: [String: DayEntry] = [:]
     var nextTaskNumber: Int?
@@ -325,7 +325,9 @@ public final class JournalStore: ObservableObject {
     private var indexedDeadlines: [String: [ScheduledTask]]?
     private var nextTaskNumber = 1
     public var backupsDirectory: URL { directory.appendingPathComponent("Backups", isDirectory: true) }
+    /// 旧版 JSON 入口；迁移后仅用于导出/恢复，SQLite 为权威存储。
     public var fileURL: URL { directory.appendingPathComponent("journal.json") }
+    public var databaseURL: URL { directory.appendingPathComponent("journal.sqlite") }
     public var backupURL: URL { directory.appendingPathComponent("journal.backup.json") }
 
     /// 默认的数据目录；`TIMELINE_DATA_DIR` 可以覆盖。
@@ -340,25 +342,41 @@ public final class JournalStore: ObservableObject {
         let source = applicationSupport.appendingPathComponent("Dayleaf", isDirectory: true)
         let target = applicationSupport.appendingPathComponent("Timeline", isDirectory: true)
         let journal = source.appendingPathComponent("journal.json")
-        guard manager.fileExists(atPath: journal.path) else { return false }
+        let sqlite = source.appendingPathComponent("journal.sqlite")
+        let hasDatabase = manager.fileExists(atPath: sqlite.path)
+        guard hasDatabase || manager.fileExists(atPath: journal.path) else { return false }
         if manager.fileExists(atPath: target.path) {
-            guard manager.fileExists(atPath: target.appendingPathComponent("journal.json").path) else {
+            guard manager.fileExists(atPath: target.appendingPathComponent("journal.json").path) || manager.fileExists(atPath: target.appendingPathComponent("journal.sqlite").path) else {
                 throw CocoaError(.fileWriteFileExists)
             }
             return false
         }
-        let original = try Data(contentsOf: journal)
-        let document = try JSONDecoder().decode(JournalDocument.self, from: original)
+        let sourceDB = try hasDatabase ? JournalDatabase(url: sqlite, readOnly: true) : nil
+        let original = try hasDatabase ? nil : Data(contentsOf: journal)
+        let document: JournalDocument
+        if let sourceDB {
+            guard let loaded = try sourceDB.load() else { throw CocoaError(.fileReadCorruptFile) }
+            document = loaded
+        } else {
+            guard let original else { throw CocoaError(.fileReadCorruptFile) }
+            document = try JSONDecoder().decode(JournalDocument.self, from: original)
+        }
         guard (1...8).contains(document.version) else { throw CocoaError(.fileReadUnknown) }
         let staging = applicationSupport.appendingPathComponent(".Timeline-migration-\(UUID().uuidString)", isDirectory: true)
         try manager.createDirectory(at: staging, withIntermediateDirectories: false)
         defer { try? manager.removeItem(at: staging) }
         for item in try manager.contentsOfDirectory(at: source, includingPropertiesForKeys: nil) {
-            if item.lastPathComponent == "scheduler.sock" || item.lastPathComponent == "timeline.sock" { continue }
+            if ["scheduler.sock", "timeline.sock", "journal.sqlite", "journal.sqlite-wal", "journal.sqlite-shm"].contains(item.lastPathComponent) { continue }
             try manager.copyItem(at: item, to: staging.appendingPathComponent(item.lastPathComponent))
         }
-        guard try Data(contentsOf: staging.appendingPathComponent("journal.json")) == original,
-              (try Data(contentsOf: journal)) == original else { throw CocoaError(.fileReadCorruptFile) }
+        if let sourceDB {
+            let destination = staging.appendingPathComponent("journal.sqlite")
+            try sourceDB.backup(to: destination)
+            guard try JournalDatabase(url: destination, readOnly: true).load() == document else { throw CocoaError(.fileReadCorruptFile) }
+        } else {
+            guard try Data(contentsOf: staging.appendingPathComponent("journal.json")) == original,
+                  (try Data(contentsOf: journal)) == original else { throw CocoaError(.fileReadCorruptFile) }
+        }
         try manager.moveItem(at: staging, to: target)
         return true
     }
@@ -371,9 +389,10 @@ public final class JournalStore: ObservableObject {
         undoManager.levelsOfUndo = 100
         do {
             if !readOnlySnapshot { try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true) }
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                let data = try Data(contentsOf: fileURL)
-                let document = try JSONDecoder().decode(JournalDocument.self, from: data)
+            let storedDocument = try writer.load(readOnly: readOnlySnapshot)
+            if storedDocument != nil || FileManager.default.fileExists(atPath: fileURL.path) {
+                let data = try storedDocument.map { $0.version < 8 ? try JournalWriter.encode($0) : Data() } ?? Data(contentsOf: fileURL)
+                let document = try storedDocument ?? JSONDecoder().decode(JournalDocument.self, from: data)
                 guard (1...8).contains(document.version) else {
                     throw CocoaError(.fileReadUnknown)
                 }
@@ -383,7 +402,12 @@ public final class JournalStore: ObservableObject {
                 pinnedTaskID = document.pinnedTask
                 boards = document.boards ?? []
                 boardFavoriteOrder = document.boardFavoriteOrder
-                if !readOnlySnapshot { try data.write(to: backupURL, options: .atomic) }
+                if !readOnlySnapshot {
+                    if storedDocument == nil {
+                        hasPendingSave = true
+                        try data.write(to: backupURL, options: .atomic)
+                    }
+                }
                 if document.version < 8, !boards.isEmpty {
                     if !readOnlySnapshot {
                         try FileManager.default.createDirectory(at: backupsDirectory, withIntermediateDirectories: true)
@@ -406,7 +430,7 @@ public final class JournalStore: ObservableObject {
             if readOnlySnapshot { isReadOnly = true; hasPendingSave = false } else { loadRecentlyDeleted() }
         } catch {
             isReadOnly = true
-            errorMessage = "无法读取日记，已停止写入以保护原文件。请在数据文件夹中检查 journal.json 和备份。\n\(error.localizedDescription)"
+            errorMessage = "无法读取日记，已停止写入以保护原文件。请在数据文件夹中检查 journal.sqlite、journal.json 和备份。\n\(error.localizedDescription)"
         }
         if hasPendingSave, !isReadOnly { save() }
     }
@@ -1353,18 +1377,46 @@ public final class JournalStore: ObservableObject {
         finishSave(writer.writeNow(documentSnapshot, version: documentVersion), version: documentVersion)
     }
 
-    /// 同步正文和基线使用同一提交标识；只有确认正文落盘后才允许发布回执。
-    func saveForSync(commitID: String) throws {
+    /// 交互界面确认保存时等待写队列，不在主线程上等待编码、磁盘和旧队列任务。
+    public func saveAndWait() async throws {
         guard !isReadOnly else { throw FolderSync.SyncError.readOnly }
-        let previous = syncCommitID
-        syncCommitID = commitID
-        pendingSave?.cancel()
-        pendingSave = nil
+        pendingSave?.cancel(); pendingSave = nil
         documentVersion += 1
-        let error = writer.writeNow(documentSnapshot, version: documentVersion)
-        finishSave(error, version: documentVersion)
-        if let error { syncCommitID = previous; throw error }
+        let version = documentVersion, document = documentSnapshot
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            writer.write(document, version: version) { [weak self] error in
+                MainActor.assumeIsolated { self?.finishSave(error, version: version) }
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
     }
+
+    /// 正文、字段基线、接收游标和 outbox 在同一事务中提交，提交前不发回执。
+    func saveForSync(state: SyncState) async throws {
+        guard !isReadOnly else { throw FolderSync.SyncError.readOnly }
+        pendingSave?.cancel(); pendingSave = nil
+        documentVersion += 1
+        let version = documentVersion
+        var document = documentSnapshot
+        document.syncCommitID = state.commitID
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                writer.commit(document, version: version, state: state) { error in
+                    if let error { continuation.resume(throwing: error) }
+                    else { continuation.resume() }
+                }
+            }
+            syncCommitID = state.commitID
+            finishSave(nil, version: version)
+        } catch {
+            finishSave(error, version: version)
+            throw error
+        }
+    }
+
+    func persistedSyncState() throws -> SyncState? { try writer.loadSyncState() }
+    func saveSyncTransport(_ state: SyncState) throws { try writer.saveTransport(state) }
+    var persistenceStatistics: (rows: Int, bytes: Int) { writer.statistics() }
 
     /// 修改后的保存：开启后台写入时不阻塞界面，否则同 `save()`。
     private func persist() {
@@ -1639,10 +1691,13 @@ public final class JournalStore: ObservableObject {
     public func restore(from url: URL) throws {
         let document = try readBackup(url)
         try FileManager.default.createDirectory(at: backupsDirectory, withIntermediateDirectories: true)
-        let current = isReadOnly && FileManager.default.fileExists(atPath: fileURL.path)
-            ? try Data(contentsOf: fileURL) : try JSONEncoder().encode(documentSnapshot)
-        let recovery = backupsDirectory.appendingPathComponent("before-restore-\(JournalDates.key(Date()))-\(UUID().uuidString).json")
+        let recoveryID = "before-restore-\(JournalDates.key(Date()))-\(UUID().uuidString)"
+        let current = isReadOnly && FileManager.default.fileExists(atPath: databaseURL.path)
+            ? try Data(contentsOf: databaseURL) : (isReadOnly && FileManager.default.fileExists(atPath: fileURL.path)
+                ? try Data(contentsOf: fileURL) : try JSONEncoder().encode(documentSnapshot))
+        let recovery = backupsDirectory.appendingPathComponent(recoveryID + ".json")
         try current.write(to: recovery, options: .atomic)
+        if isReadOnly { try writer.prepareForRestore(archive: backupsDirectory.appendingPathComponent(recoveryID + "-database")) }
         isReadOnly = false
         // 旧版本的备份同样要迁移：所在日期成为截止日期，并补上永久编号。编号只增不减，不会和现有日志里的引用冲突。
         var restored = document.days

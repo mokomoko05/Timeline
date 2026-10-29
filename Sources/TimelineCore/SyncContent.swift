@@ -35,6 +35,79 @@ struct SyncContent: Equatable {
         return records
     }
 
+    struct RecordChanges {
+        var values: [String: [String: SyncValue]] = [:]
+        var scope: Set<String> = []
+    }
+
+    /// 比较模型值，仅编码变更实体；删除范围显式传入，不能把未编码的实体当作删除。
+    func recordChanges(since previous: SyncContent) throws -> RecordChanges {
+        var changes = RecordChanges()
+        func located<T: Encodable & Equatable & Identifiable>(_ before: [T], _ after: [T], prefix: String, day: String) throws where T.ID == UUID {
+            let old = Dictionary(before.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let current = Dictionary(after.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for id in Set(old.keys).union(current.keys) where old[id] != current[id] {
+                let key = prefix + id.uuidString
+                changes.scope.insert(key)
+                if let item = current[id] {
+                    var fields = try SyncValue.encoding(item).fields
+                    if !day.isEmpty { fields[Self.dayField] = .string(day) }
+                    changes.values[key] = fields
+                }
+            }
+        }
+        let changedDays = Set(days.keys).union(previous.days.keys).filter { days[$0] != previous.days[$0] }
+        // 跨日期移动必须同时编码新的 _day；源日期的删除不能盖掉目标日期的新增。
+        for day in changedDays {
+            let a = previous.days[day] ?? DayEntry(), b = days[day] ?? DayEntry()
+            if a.todos != b.todos { try located(a.todos, b.todos, prefix: "todo/", day: day) }
+            if a.logs != b.logs { try located(a.logs, b.logs, prefix: "log/", day: day) }
+            if a.summary != b.summary {
+                let key = "summary/" + day; changes.scope.insert(key)
+                if !b.summary.isEmpty { changes.values[key] = ["text": .string(b.summary)] }
+            }
+        }
+        for day in changedDays {
+            for todo in days[day]?.todos ?? [] where changes.scope.contains("todo/" + todo.id.uuidString) {
+                var fields = try SyncValue.encoding(todo).fields; fields[Self.dayField] = .string(day)
+                changes.values["todo/" + todo.id.uuidString] = fields
+            }
+            for log in days[day]?.logs ?? [] where changes.scope.contains("log/" + log.id.uuidString) {
+                var fields = try SyncValue.encoding(log).fields; fields[Self.dayField] = .string(day)
+                changes.values["log/" + log.id.uuidString] = fields
+            }
+        }
+        if boards != previous.boards { try located(previous.boards, boards, prefix: "board/", day: "") }
+        if tags != previous.tags {
+            let old = Dictionary(previous.tags.map { (TagText.key($0), $0) }, uniquingKeysWith: { first, _ in first })
+            let current = Dictionary(tags.map { (TagText.key($0), $0) }, uniquingKeysWith: { first, _ in first })
+            for id in Set(old.keys).union(current.keys) where old[id] != current[id] {
+                let key = "tag/" + id; changes.scope.insert(key)
+                if let tag = current[id] { changes.values[key] = ["name": .string(tag)] }
+            }
+        }
+        if pinnedTask != previous.pinnedTask {
+            changes.scope.insert("meta/pinned")
+            if let pinnedTask { changes.values["meta/pinned"] = ["task": .string(pinnedTask.uuidString)] }
+        }
+        if boardFavoriteOrder != previous.boardFavoriteOrder {
+            changes.scope.insert("meta/boardFavorites")
+            if let boardFavoriteOrder { changes.values["meta/boardFavorites"] = ["order": .array(boardFavoriteOrder.map { .string($0.uuidString) })] }
+        }
+        return changes
+    }
+
+    func normalizing(using records: [String: SyncRecord]) -> SyncContent {
+        var result = self
+        result.mergeDuplicateBoards()
+        var stamps: [UUID: SyncStamp] = [:]
+        for entry in days.values {
+            for todo in entry.todos { stamps[todo.id] = records["todo/" + todo.id.uuidString]?.fields["number"]?.stamp }
+        }
+        result.renumberDuplicates(stamps: stamps)
+        return result
+    }
+
     /// 由合并后的记录还原内容。已有的待办、日志、工作板和标签保持本机原来的顺序，新来的排在后面；
     /// 草稿取自本机。解不开的记录（比如更新版本的应用写的新格式）跳过，本机原有的那份保留。
     func applying(_ state: [String: SyncRecord]) -> SyncContent {

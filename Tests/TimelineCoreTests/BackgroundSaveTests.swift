@@ -72,9 +72,8 @@ final class BackgroundSaveTests: XCTestCase {
         let store = makeStore()
         store.addTodo("Saved", on: Date())
         store.waitForPendingWrites()
-        // 把 journal.json 换成目录，原子写入必然失败。
-        try FileManager.default.removeItem(at: store.fileURL)
-        try FileManager.default.createDirectory(at: store.fileURL, withIntermediateDirectories: false)
+        // 实体写入之后、事务提交之前让 SQLite 报错，验证整个事务回滚。
+        try store.setDatabaseWriteFailure(true)
         store.addTodo("Unsaved", on: Date())
         store.waitForPendingWrites()
         for _ in 0..<20 where store.errorMessage == nil { try await Task.sleep(for: .milliseconds(10)) }
@@ -88,14 +87,13 @@ final class BackgroundSaveTests: XCTestCase {
         store.saveRetryDelays = [0.05]
         store.addTodo("Saved", on: Date())
         store.waitForPendingWrites()
-        try FileManager.default.removeItem(at: store.fileURL)
-        try FileManager.default.createDirectory(at: store.fileURL, withIntermediateDirectories: false)
+        try store.setDatabaseWriteFailure(true)
         store.addTodo("Later", on: Date())
         store.waitForPendingWrites()
         for _ in 0..<20 where store.errorMessage == nil { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertNotNil(store.errorMessage)
         // 问题排除后不用再改什么，自动重试就写进去了。
-        try FileManager.default.removeItem(at: store.fileURL)
+        try store.setDatabaseWriteFailure(false)
         for _ in 0..<100 where store.errorMessage != nil {
             try await Task.sleep(for: .milliseconds(20))
             store.waitForPendingWrites()
@@ -104,4 +102,16 @@ final class BackgroundSaveTests: XCTestCase {
         XCTAssertFalse(store.hasPendingSave)
         XCTAssertEqual(Set(reloaded(store).tasks().map(\.task.title)), ["Saved", "Later"])
     }
+    func testAwaitedSaveDoesNotLoseEditsQueuedImmediatelyAfterIt() async throws {
+        let store = makeStore()
+        store.addTodo("Before barrier", on: Date())
+        let barrier = Task { @MainActor in try await store.saveAndWait() }
+        await Task.yield()
+        store.addTodo("After barrier", on: Date())
+        try await barrier.value
+        try await store.saveAndWait()
+        XCTAssertFalse(store.hasPendingSave)
+        XCTAssertEqual(Set(reloaded(store).tasks().map(\.task.title)), ["Before barrier", "After barrier"])
+    }
+
 }

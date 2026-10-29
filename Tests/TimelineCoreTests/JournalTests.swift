@@ -211,7 +211,7 @@ final class JournalTests: XCTestCase {
         let restored = JournalStore(directory: directory)
         XCTAssertEqual(restored.entry(for: today), store.entry(for: today))
         XCTAssertEqual(restored.entry(for: today).todos.count, 2)
-        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as? [String: Any])
+        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: store.exportedJSONForTesting()) as? [String: Any])
         XCTAssertEqual(raw["version"] as? Int, 8)
     }
 
@@ -322,9 +322,10 @@ final class JournalTests: XCTestCase {
         let today = date(2026, 10, 6)
         original.setSummary("第一次保存", on: today)
         original.save()
-        let firstData = try Data(contentsOf: original.fileURL)
+        let firstData = try original.exportedJSONForTesting()
         let nextSession = JournalStore(directory: directory)
         nextSession.setSummary("第二次保存", on: today)
+        nextSession.waitForPendingWrites()
         XCTAssertEqual(try Data(contentsOf: nextSession.backupURL), firstData)
         let exportDirectory = try temporaryDirectory()
         try nextSession.export(to: exportDirectory.appendingPathComponent("journal.json"))

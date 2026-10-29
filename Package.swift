@@ -17,7 +17,8 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-markdown.git", .upToNextMinor(from: "0.5.0")),
     ],
     targets: [
-        .target(name: "TimelineCore"),
+        .systemLibrary(name: "CSQLite"),
+        .target(name: "TimelineCore", dependencies: ["CSQLite"]),
         // 公式（$…$、$$…$$）用 CoreText 原生排版，不起 WebView。
         .target(name: "TimelineMath", exclude: ["LICENSE-SwiftMath.txt"], resources: [.copy("mathFonts.bundle")]),
         .executableTarget(name: "Timeline", dependencies: ["TimelineCore", .product(name: "SwiftTerm", package: "SwiftTerm"), .product(name: "Markdown", package: "swift-markdown"), "TimelineMath"], resources: [.copy("EditorAssets")]),

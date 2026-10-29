@@ -143,7 +143,7 @@ struct SyncMerge {
 
     /// 把本机当前的内容和上次同步时的状态比较：改了的字段、新建和删除的记录盖上本机的新时间戳。
     @discardableResult
-    func stampLocalChanges(_ current: [String: [String: SyncValue]], into state: inout [String: SyncRecord]) -> Bool {
+    func stampLocalChanges(_ current: [String: [String: SyncValue]], into state: inout [String: SyncRecord], scope: Set<String>? = nil) -> Bool {
         var changed = false
         for (key, fields) in current {
             var record = state[key] ?? SyncRecord()
@@ -164,7 +164,7 @@ struct SyncMerge {
             state[key] = record
             changed = true
         }
-        for (key, record) in state where current[key] == nil && record.isAlive {
+        for (key, record) in state where current[key] == nil && record.isAlive && (scope?.contains(key) ?? true) {
             state[key]!.deleted = stamp(after: record)
             changed = true
         }
