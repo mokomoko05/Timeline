@@ -32,6 +32,14 @@ final class ScreenBoundDragging {
         }
     }
 
+    /// AppKit 自己认定可拖的按下（标题栏里的主题框架、透明标题栏下没接住点击的内容）会同步调用 performDrag；
+    /// 默认实现把整段拖动交给窗口服务器，不经过 constrainFrameRect，窗口能拖出屏幕边缘。
+    /// 这里改为接管随后的拖动事件，和标题栏拖动一样按屏幕边界移动。
+    func performDrag(with event: NSEvent, in window: NSWindow, native: (NSEvent) -> Void) {
+        guard event.type == .leftMouseDown, !window.styleMask.contains(.fullScreen) else { return native(event) }
+        drag = (mouseLocation(), window.frame.origin, false, true)
+    }
+
     func filter(_ event: NSEvent, in window: NSWindow) -> NSEvent? {
         switch event.type {
         case .leftMouseDown:
@@ -140,6 +148,10 @@ class ScreenBoundWindow: NSWindow {
     override func sendEvent(_ event: NSEvent) {
         dragging.send(event, in: self) { super.sendEvent($0) }
     }
+
+    override func performDrag(with event: NSEvent) {
+        dragging.performDrag(with: event, in: self) { super.performDrag(with: $0) }
+    }
 }
 
 class QuietPanel: NSPanel {
@@ -190,5 +202,9 @@ class QuietPanel: NSPanel {
 
     override func sendEvent(_ event: NSEvent) {
         dragging.send(event, in: self) { super.sendEvent($0) }
+    }
+
+    override func performDrag(with event: NSEvent) {
+        dragging.performDrag(with: event, in: self) { super.performDrag(with: $0) }
     }
 }

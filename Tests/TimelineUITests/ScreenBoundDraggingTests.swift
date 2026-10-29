@@ -204,6 +204,42 @@ final class ScreenBoundDraggingTests: XCTestCase {
         XCTAssertTrue(window.isMovable)
     }
 
+    func testNativeTitlebarDragIsTakenOverInsteadOfHandedToWindowServer() throws {
+        _ = Headless.active
+        let area = try XCTUnwrap(NSScreen.main?.visibleFrame)
+        // 终端：标题栏点在主题框架上；透明全尺寸标题栏：点在不接住点击、也不声明可拖的内容上。
+        // 两种都由 AppKit 自己判定为窗口拖动，过滤器不拦截。
+        let cases: [(NSWindow.StyleMask, NSView)] = [
+            ([.titled, .closable, .miniaturizable, .resizable], NSHostingView(rootView: Color.clear)),
+            ([.titled, .closable, .resizable, .fullSizeContentView], PassThroughView())
+        ]
+        for (style, content) in cases {
+            let window = NativeDragWindow(contentRect: NSRect(x: area.midX - 200, y: area.midY - 150, width: 400, height: 300),
+                                          styleMask: style, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.titlebarAppearsTransparent = true
+            window.contentView = content
+            window.orderFront(nil)
+            defer { window.close() }
+            let initial = window.frame
+            for target in [NSPoint(x: area.minX - 500, y: area.midY), NSPoint(x: area.maxX + 500, y: area.midY),
+                           NSPoint(x: area.midX, y: area.minY - 500), NSPoint(x: area.midX, y: area.maxY + 500)] {
+                window.setFrameOrigin(initial.origin)
+                let start = NSPoint(x: initial.midX, y: initial.maxY - 12)
+                window.pointer = start
+                window.sendEvent(try mouse(.leftMouseDown, at: start, in: window))
+                XCTAssertEqual(window.nativeDrags, 1, "\(style): AppKit 应当发起原生拖动")
+                XCTAssertEqual(window.handedToSystem, 0, "\(style): 原生拖动不能交给窗口服务器")
+                window.pointer = target
+                window.sendEvent(try mouse(.leftMouseDragged, at: target, in: window))
+                XCTAssertTrue(area.contains(window.frame), "\(style): \(window.frame)")
+                XCTAssertNotEqual(window.frame.origin, initial.origin)
+                window.sendEvent(try mouse(.leftMouseUp, at: target, in: window))
+                window.nativeDrags = 0
+            }
+        }
+    }
+
     func testNativeCloseButtonEventsArePassedThrough() throws {
         _ = Headless.active
         let window = QuietWindow(contentRect: NSRect(x: 200, y: 200, width: 240, height: 160),
@@ -237,6 +273,39 @@ final class ScreenBoundDraggingTests: XCTestCase {
 private final class DraggableBackground: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
     override func mouseDown(with event: NSEvent) {}
+}
+
+private final class PassThroughView: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
+}
+
+/// 与两个窗口基类相同的接线，只是指针位置由测试提供。
+private final class NativeDragWindow: NSWindow {
+    var pointer = NSPoint.zero
+    var nativeDrags = 0, handedToSystem = 0
+    private lazy var dragging = ScreenBoundDragging(mouseLocation: { [unowned self] in pointer })
+
+    override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
+        ignoresMouseEvents = true
+    }
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        WindowScreenBounds.constrain(frameRect, to: NSScreen.screens.map(\.visibleFrame), fallback: NSScreen.main?.visibleFrame)
+    }
+
+    override func setFrameOrigin(_ point: NSPoint) {
+        super.setFrame(constrainFrameRect(NSRect(origin: point, size: frame.size), to: nil), display: false)
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        dragging.send(event, in: self) { super.sendEvent($0) }
+    }
+
+    override func performDrag(with event: NSEvent) {
+        nativeDrags += 1
+        dragging.performDrag(with: event, in: self) { _ in handedToSystem += 1 }
+    }
 }
 
 private final class DragRecordingPanel: QuietPanel {
