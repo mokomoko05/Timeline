@@ -4,6 +4,10 @@ import AppKit
 /// 窗口钉在所在屏幕的中央，拖不动；拉边缘缩放时以中心为基准对称缩放，被拉的那条边始终跟着鼠标。
 /// 关掉「固定在屏幕中央」后就是普通窗口，可以拖到一边和别的应用并排。
 final class MainWindow: TerminalWindow {
+    /// 自绘顶栏已包含全部操作，不再额外保留空的系统标题栏。
+    static let workspaceStyle: NSWindow.StyleMask = [.closable, .miniaturizable, .resizable, .fullSizeContentView]
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
     var cancel: (() -> Bool)?
     var keepsCentered = true {
         didSet {
@@ -21,6 +25,11 @@ final class MainWindow: TerminalWindow {
 
     override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
+        if !style.contains(.titled) {
+            isOpaque = false
+            backgroundColor = .clear
+            hasShadow = true
+        }
         terminalIsPresented = false
         allowsScreenBoundDragging = false
         isMovableByWindowBackground = false
@@ -112,6 +121,9 @@ final class WorkspacePagesView: NSView {
     init(defaults: UserDefaults? = nil) {
         self.defaults = defaults
         super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        layer?.masksToBounds = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     var showsNotes: Bool { page == .notes }

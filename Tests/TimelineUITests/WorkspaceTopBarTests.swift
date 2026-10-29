@@ -38,7 +38,7 @@ final class WorkspaceTopBarTests: XCTestCase {
         })
         let pages = WorkspacePagesView()
         let window = MainWindow(contentRect: NSRect(x: 100, y: 100, width: 1280, height: 820),
-                                styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+                                styleMask: MainWindow.workspaceStyle, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.keepsCentered = false
         window.titleVisibility = .hidden
@@ -51,6 +51,8 @@ final class WorkspaceTopBarTests: XCTestCase {
         pages.setNotes(notes)
         window.orderFront(nil)
         defer { window.contentView = nil; window.close() }
+        XCTAssertTrue(window.canBecomeKey)
+        XCTAssertTrue(window.canBecomeMain)
 
         for size in [NSSize(width: 1280, height: 820), NSSize(width: 640, height: 560), NSSize(width: 1000, height: 700)] {
             window.setFrame(NSRect(origin: window.frame.origin, size: size), display: false)
@@ -65,9 +67,10 @@ final class WorkspaceTopBarTests: XCTestCase {
                 let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
                 host.cacheDisplay(in: host.bounds, to: bitmap)
                 let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
-                let closeRegion = NSRect(x: host.bounds.width - 48, y: 0, width: 40, height: 80)
+                let closeRegion = NSRect(x: host.bounds.width - 48, y: 0, width: 40, height: 32)
                 let close = try XCTUnwrap(inkBounds(in: bitmap, region: closeRegion, scale: scale), "X 必须实际画出")
                 closeFrames.append(close)
+                XCTAssertLessThan(close.maxY / scale, 28, "关闭按钮必须位于紧凑顶栏内，上方不再保留空标题栏")
                 XCTAssertGreaterThanOrEqual(close.minY / scale, host.bounds.height - window.contentLayoutRect.maxY,
                                             "X 不能挤进原生标题栏")
                 if page == .main {

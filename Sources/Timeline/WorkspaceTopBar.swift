@@ -103,6 +103,6 @@ struct WorkspaceTopBar<Leading: View>: View {
                                 identifier: "workspace.close", action: close)
         }
         .frame(height: 28)
-        .padding(.horizontal, 16).padding(.top, 5).padding(.bottom, 6)
+        .padding(.horizontal, 16).padding(.vertical, 2)
     }
 }

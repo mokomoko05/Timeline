@@ -51,7 +51,7 @@ final class WorkspaceTerminalTests: XCTestCase {
 
     func testTerminalToolbarRemainsBelowTitlebarAndReceivesClicksAfterPageSwitchAndResize() throws {
         let window = MainWindow(contentRect: NSRect(x: 200, y: 200, width: 1280, height: 820),
-                                styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+                                styleMask: MainWindow.workspaceStyle, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.keepsCentered = false
         window.titleVisibility = .hidden
