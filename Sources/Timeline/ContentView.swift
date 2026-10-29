@@ -82,6 +82,10 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            WorkspaceTopBar(closeAction: .main, close: { AppRouter.hideMain() }) {
+                WorkspacePanelButtons()
+            }
+            Divider()
             ResizableWorkspace(tasksVisible: $tasksVisible) {
                 VStack(alignment: .leading, spacing: 16) {
                     dateHeader
@@ -99,7 +103,7 @@ struct ContentView: View {
         .background(AmbientBackdrop())
         .foregroundStyle(Palette.ink)
         .tint(Palette.accent)
-        .frame(minWidth: 640, minHeight: 560)
+        // 最小尺寸由窗口约束；内容再要求 560 高会在最小窗口下挤进原生标题栏。
         // 点了待办以外的地方（日历、空白、标题栏……）就取消选中。
         .background(ClickAwayDeselect(regions: rowRegions, selection: { interaction.selectedTaskID }, deselect: {
             interaction.selectedTaskID = nil
@@ -336,14 +340,6 @@ struct ContentView: View {
             Button("快速记录…") { commands.send(.quickCapture) }
             Button("插入链接…") { commands.send(.insertLink) }.disabled(store.isReadOnly)
             Divider()
-            Section("面板") {
-                panelButton("专注计时", "timer", .focusPanel)
-                panelButton("笔记与日记", "note.text", .notes)
-                panelButton("工作板", "list.bullet.rectangle", .board)
-                panelButton("内置终端", "terminal", .shell)
-                panelButton("快速写日志", "square.and.pencil", .log)
-            }
-            Divider()
             Button("搜索任务、日志与总结…") { commands.send(.search) }
             Button("未完成事项…") { agenda = .unfinished }
             Button("即将截止…") { agenda = .upcoming }
@@ -368,13 +364,6 @@ struct ContentView: View {
         .frame(width: 34, height: 34)
         .help("更多选项")
         .accessibilityLabel("更多选项")
-    }
-
-    /// 菜单里的面板入口，右侧显示当前的全局快捷键。
-    private func panelButton(_ title: String, _ symbol: String, _ action: HotKeyAction) -> some View {
-        Button { AppRouter.togglePanel(action) } label: {
-            Label(AppLocalized(title) + "    " + HotKeyStore.binding(for: action).label, systemImage: symbol)
-        }
     }
 
     private var dateHeader: some View {
@@ -605,18 +594,9 @@ struct ContentView: View {
                     .buttonStyle(HitAreaButtonStyle()).font(.system(size: typography.pt(11), weight: .medium))
                     .foregroundStyle(Palette.accent).help("回到今天 · ⌘T")
                 Button("未完成") { agenda = .unfinished }.buttonStyle(HitAreaButtonStyle()).font(.system(size: typography.pt(11))).foregroundStyle(Palette.accent)
-                Button { GlobalSearchController.shared.show(store: store) } label: { Image(systemName: "magnifyingglass") }
-                    .buttonStyle(HitAreaButtonStyle()).help("搜索 · ⌘F").accessibilityLabel("搜索")
-                Button { commands.send(.notes) } label: { Image(systemName: "note.text") }
-                    .buttonStyle(HitAreaButtonStyle()).help("笔记 · ⌘N").accessibilityLabel("笔记")
                 navigationButton("chevron.left", help: "上个月") { shiftMonth(-1) }
                 navigationButton("chevron.right", help: "下个月") { shiftMonth(1) }
                 optionsMenu
-                Button { AppRouter.hideMain() } label: {
-                    Image(systemName: "xmark").font(.system(size: typography.pt(12), weight: .medium)).frame(width: 18, height: 18)
-                }
-                .buttonStyle(HitAreaButtonStyle()).foregroundStyle(Palette.muted)
-                .help(AppLocalizedFormat("隐藏 · %@", HotKeyStore.binding(for: .main).label)).accessibilityLabel("隐藏")
             }
             GeometryReader { geometry in
                 let metrics = CalendarGridMetrics(size: geometry.size, counts: previews.map(\.count), scale: typography.scale)

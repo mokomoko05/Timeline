@@ -269,7 +269,7 @@ struct UnifiedNotesView: View {
     }
 
     private var modeBar: some View {
-        HStack(spacing: 8) {
+        WorkspaceTopBar(closeAction: .notes, close: close) {
             PillSegmentedControl(selection: Binding(get: { workspace.mode }, set: { mode in
                 NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
                 NSApp.keyWindow?.makeFirstResponder(nil)
@@ -279,11 +279,7 @@ struct UnifiedNotesView: View {
             height: 28, fontSize: 12)
             .fixedSize()
             .accessibilityLabel("笔记或日记")
-            Spacer()
-            Button(action: close) { Image(systemName: "xmark") }
-                .buttonStyle(HitAreaButtonStyle(compact: true)).foregroundStyle(Palette.muted)
         }
-        .padding(.horizontal, 16).padding(.top, 5).padding(.bottom, 6)
     }
 
     private var journalBody: some View {
