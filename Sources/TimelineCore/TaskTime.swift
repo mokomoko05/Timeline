@@ -12,6 +12,12 @@ public enum TaskTimeMode: String, CaseIterable, Identifiable {
     }
 }
 
+public enum TaskTimeEndpoint: String, CaseIterable, Identifiable {
+    case start, end
+    public var id: String { rawValue }
+    public var title: String { self == .start ? "开始时间" : "结束时间" }
+}
+
 /// 编辑中的值仅在保存时写回任务，取消不改变原有安排。
 public struct TaskTimeDraft: Equatable {
     public var mode: TaskTimeMode
@@ -20,6 +26,11 @@ public struct TaskTimeDraft: Equatable {
     public var hasTime: Bool { mode != .allDay }
     public var startDate: Date? { mode == .interval ? start : nil }
     public var isValid: Bool { mode != .interval || start < end }
+
+    public func date(for endpoint: TaskTimeEndpoint) -> Date { endpoint == .start ? start : end }
+    public mutating func setDate(_ date: Date, for endpoint: TaskTimeEndpoint) {
+        if endpoint == .start { start = date } else { end = date }
+    }
 
     public init(task: Todo, defaultDate: Date = Date()) {
         mode = task.timeRange != nil ? .interval : (task.dueHasTime ? .deadline : .allDay)

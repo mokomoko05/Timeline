@@ -55,13 +55,15 @@ struct DeadlineSelectionView: View {
     @Binding var due: Date
     @Binding var timed: Bool
     var showsTimeToggle: Bool
+    var dateTitle: String
     @Environment(\.locale) private var locale
     @AppStorage(Prefs.weekStartsSunday) private var sundayFirst = false
     @State private var month: Date
 
-    init(due: Binding<Date>, timed: Binding<Bool>, showsTimeToggle: Bool = true) {
+    init(due: Binding<Date>, timed: Binding<Bool>, showsTimeToggle: Bool = true, dateTitle: String = "截止日期") {
         _due = due; _timed = timed
         self.showsTimeToggle = showsTimeToggle
+        self.dateTitle = dateTitle
         _month = State(initialValue: JournalDates.monthStart(due.wrappedValue))
     }
 
@@ -80,7 +82,7 @@ struct DeadlineSelectionView: View {
             }
             calendar
             HStack {
-                Text("截止日期").font(.system(size: 12))
+                Text(LocalizedStringKey(dateTitle)).font(.system(size: 12))
                 Spacer()
                 DeadlineTextInput(due: $due, component: .day).frame(width: 118, height: 26)
             }

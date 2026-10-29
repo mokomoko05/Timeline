@@ -113,4 +113,22 @@ final class TaskTimeTests: XCTestCase {
         draft.mode = .allDay
         XCTAssertFalse(draft.hasTime)
     }
+
+    func testSharedPickerEditsOnlyTheSelectedEndpointAndKeepsBothAcrossModes() {
+        var draft = TaskTimeDraft(task: Todo(title: "Task"), defaultDate: date(29))
+        draft.mode = .interval
+        draft.setDate(date(29, 23), for: .start)
+        draft.setDate(date(30, 1), for: .end)
+        XCTAssertEqual(draft.date(for: .start), date(29, 23))
+        XCTAssertEqual(draft.date(for: .end), date(30, 1))
+        XCTAssertTrue(draft.isValid)
+        draft.mode = .allDay
+        draft.mode = .deadline
+        draft.mode = .interval
+        XCTAssertEqual(draft.startDate, date(29, 23))
+        XCTAssertEqual(draft.end, date(30, 1))
+        draft.setDate(date(29, 22), for: .end)
+        XCTAssertFalse(draft.isValid)
+        XCTAssertEqual(draft.start, date(29, 23))
+    }
 }

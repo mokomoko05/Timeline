@@ -149,6 +149,8 @@ enum PerfProbe {
             ("打开待办笔记页", { send("openTask") }),
             ("任务设置", { send("editTask") }),
             ("切换任务时间段", { send("taskInterval") }),
+            ("选中任务开始时间", { send("taskIntervalSelectStart") }),
+            ("选中任务结束时间", { send("taskIntervalSelectEnd") }),
             ("调整任务开始时间", { send("taskIntervalStart") }),
             ("调整任务结束时间", { send("taskIntervalEnd") }),
             ("保存任务时间段", { send("taskIntervalSave") }),

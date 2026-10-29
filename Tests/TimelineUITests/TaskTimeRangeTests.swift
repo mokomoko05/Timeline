@@ -31,8 +31,14 @@ final class TaskTimeRangeTests: XCTestCase {
         let task = try XCTUnwrap(store.locate(created.id)).task
         var crossDay = task
         crossDay.dueDate = day.addingTimeInterval(25 * 3600)
+        var deadline = task
+        deadline.startDate = nil
+        var allDay = deadline
+        allDay.dueHasTime = false
         for (name, view, width) in [
             ("editor", AnyView(TaskDeadlineEditor(store: store, task: task, close: {})), 360.0),
+            ("editor-deadline", AnyView(TaskDeadlineEditor(store: store, task: deadline, close: {})), 360.0),
+            ("editor-all-day", AnyView(TaskDeadlineEditor(store: store, task: allDay, close: {})), 360.0),
             ("row", AnyView(ManagedTaskRow(store: store, date: day, task: task, requestedEdit: .constant(nil), timeline: true)
                 .environmentObject(WorkspaceInteraction())), 400.0),
             ("cross-day", AnyView(ManagedTaskRow(store: store, date: day, task: crossDay, requestedEdit: .constant(nil), timeline: true)
@@ -47,8 +53,8 @@ final class TaskTimeRangeTests: XCTestCase {
             window.setContentSize(NSSize(width: width, height: host.fittingSize.height))
             host.layoutSubtreeIfNeeded()
             XCTAssertLessThanOrEqual(host.fittingSize.width, width + 1)
-            XCTAssertGreaterThan(host.fittingSize.height, name == "editor" ? 100 : 32)
-            XCTAssertLessThan(host.fittingSize.height, name == "editor" ? 400 : 140)
+            XCTAssertGreaterThan(host.fittingSize.height, name.hasPrefix("editor") ? 100 : 32)
+            XCTAssertLessThan(host.fittingSize.height, name.hasPrefix("editor") ? 650 : 140)
             if let output = ProcessInfo.processInfo.environment["TIMELINE_TIME_PREVIEW"],
                let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
                 host.cacheDisplay(in: host.bounds, to: bitmap)
