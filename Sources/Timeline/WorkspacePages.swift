@@ -8,7 +8,7 @@ final class MainWindow: TerminalWindow {
     var keepsCentered = true {
         didSet {
             guard keepsCentered != oldValue else { return }
-            isMovable = !keepsCentered
+            allowsScreenBoundDragging = !keepsCentered
             if keepsCentered { setFrame(frame, display: true) }
         }
     }
@@ -22,7 +22,7 @@ final class MainWindow: TerminalWindow {
     override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
         terminalIsPresented = false
-        isMovable = false
+        allowsScreenBoundDragging = false
         isMovableByWindowBackground = false
         NotificationCenter.default.addObserver(forName: NSWindow.willStartLiveResizeNotification, object: self, queue: nil) { [weak self] _ in
             MainActor.assumeIsolated { self?.beginResize() }

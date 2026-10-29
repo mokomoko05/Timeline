@@ -49,6 +49,45 @@ final class WorkspaceTerminalTests: XCTestCase {
         XCTAssertFalse(shell.isTerminal(window))
     }
 
+    func testTerminalToolbarRemainsBelowTitlebarAndReceivesClicksAfterPageSwitchAndResize() throws {
+        let window = MainWindow(contentRect: NSRect(x: 200, y: 200, width: 1280, height: 820),
+                                styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.keepsCentered = false
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        for type: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
+            window.standardWindowButton(type)?.isHidden = true
+        }
+        let pages = WorkspacePagesView()
+        window.contentView = pages
+        pages.setMain(NSView())
+        let shell = ShellWindowController()
+        shell.arguments = ["-f", "-i"]
+        shell.layoutOverride = .threePanes
+        shell.workspaceWindow = window
+        shell.installWorkspaceContent = { pages.setTerminal($0) }
+        shell.presentWorkspace = { pages.show(.terminal); window.orderFront(nil) }
+        defer { shell.terminateAll(); window.close() }
+        shell.show()
+        let toolbar = try XCTUnwrap(window.toolbarView)
+        let root = try XCTUnwrap(window.contentView?.superview)
+        let originalFrame = window.frame
+        for size in [NSSize(width: 1280, height: 820), NSSize(width: 640, height: 560), NSSize(width: 1000, height: 700)] {
+            pages.show(.main)
+            window.setFrame(NSRect(origin: originalFrame.origin, size: size), display: false)
+            pages.show(.terminal)
+            window.contentView?.layoutSubtreeIfNeeded()
+            let toolbarRect = toolbar.convert(toolbar.bounds, to: nil)
+            XCTAssertLessThanOrEqual(toolbarRect.maxY, window.contentLayoutRect.maxY + 0.5,
+                                     "终端工具栏不能进入覆盖内容的原生标题栏")
+            XCTAssertEqual(toolbarRect.height, 28, accuracy: 0.5)
+            let center = root.convert(NSPoint(x: 30, y: toolbarRect.midY), from: nil)
+            let hit = try XCTUnwrap(root.hitTest(center))
+            XCTAssertTrue(hit === toolbar || hit.isDescendant(of: toolbar), "新标签页按钮位置必须收到点击")
+        }
+    }
+
     func testExitingLastEmbeddedPaneReturnsToMainAndNextShowCreatesFreshShell() async throws {
         let window = MainWindow(contentRect: NSRect(x: 200, y: 200, width: 800, height: 600),
                                 styleMask: [.titled], backing: .buffered, defer: false)

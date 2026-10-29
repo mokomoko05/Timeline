@@ -643,7 +643,9 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
         container.addSubview(toolbar)
         container.addSubview(bodyHost)
         NSLayoutConstraint.activate([
-            toolbar.topAnchor.constraint(equalTo: container.topAnchor),
+            // 共用窗口使用 fullSizeContentView：最上方仍被原生标题栏覆盖，
+            // 工具栏必须位于安全区域，否则 28pt 高的 SwiftUI 按钮会整条被挤掉。
+            toolbar.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
             toolbar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             toolbar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             toolbar.heightAnchor.constraint(equalToConstant: 28),

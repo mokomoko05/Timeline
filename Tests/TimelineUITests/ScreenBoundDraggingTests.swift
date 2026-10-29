@@ -26,7 +26,6 @@ final class ScreenBoundDraggingTests: XCTestCase {
             window.isReleasedWhenClosed = false
             defer { window.close() }
             (window as? MainWindow)?.keepsCentered = false
-            window.isMovable = true
             window.contentView = DraggableBackground(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
             var pointer = NSPoint.zero
             let dragging = ScreenBoundDragging(mouseLocation: { pointer })
@@ -64,7 +63,7 @@ final class ScreenBoundDraggingTests: XCTestCase {
         XCTAssertNil(dragging.filter(try mouse(.leftMouseDragged, at: target, in: window), in: window))
         XCTAssertTrue(area.contains(window.frame))
         _ = dragging.filter(try mouse(.leftMouseUp, at: target, in: window), in: window)
-        window.isMovable = false
+        window.allowsScreenBoundDragging = false
         let before = window.frame
         _ = dragging.filter(try mouse(.leftMouseDown, at: start, in: window), in: window)
         _ = dragging.filter(try mouse(.leftMouseDragged, at: target, in: window), in: window)
@@ -169,7 +168,7 @@ final class ScreenBoundDraggingTests: XCTestCase {
         }
     }
 
-    func testContentDragDisablesNativeMovementAndRestoresItAfterForwarding() throws {
+    func testContentDragKeepsNativeMovementDisabledWhileManualMovementRemainsEnabled() throws {
         _ = Headless.active
         let window = QuietWindow(contentRect: NSRect(x: 200, y: 200, width: 240, height: 160),
                                  styleMask: [.borderless], backing: .buffered, defer: false)
@@ -187,7 +186,8 @@ final class ScreenBoundDraggingTests: XCTestCase {
             XCTAssertFalse(window.isMovable, "转发内容点击时不能同时启动系统窗口拖动")
             forwarded += 1
         }
-        XCTAssertTrue(window.isMovable)
+        XCTAssertFalse(window.isMovable)
+        XCTAssertTrue(window.allowsScreenBoundDragging)
         for delta in [20.0, 40, 60, 40, 20, 0, -20, 0] {
             pointer = NSPoint(x: start.x + delta, y: start.y)
             dragging.send(try mouse(.leftMouseDragged, at: NSPoint(x: start.x + delta, y: start.y), in: window), in: window) { _ in
@@ -203,14 +203,15 @@ final class ScreenBoundDraggingTests: XCTestCase {
         }
         dragging.send(try mouse(.leftMouseDragged, at: start, in: window), in: window) { _ in forwarded += 1 }
         XCTAssertEqual(forwarded, 3)
-        XCTAssertTrue(window.isMovable)
+        XCTAssertFalse(window.isMovable)
+        XCTAssertTrue(window.allowsScreenBoundDragging)
     }
 
     func testNativeTitlebarDragIsTakenOverInsteadOfHandedToWindowServer() throws {
         _ = Headless.active
         let area = try XCTUnwrap(NSScreen.main?.visibleFrame)
         // 终端：标题栏点在主题框架上；透明全尺寸标题栏：点在不接住点击、也不声明可拖的内容上。
-        // 两种都由 AppKit 自己判定为窗口拖动，过滤器不拦截。
+        // 两种都必须直接接管；即使命中内容，透明标题栏也不能漏给系统移动。
         let cases: [(NSWindow.StyleMask, NSView)] = [
             ([.titled, .closable, .miniaturizable, .resizable], NSHostingView(rootView: Color.clear)),
             ([.titled, .closable, .resizable, .fullSizeContentView], PassThroughView())
@@ -230,7 +231,7 @@ final class ScreenBoundDraggingTests: XCTestCase {
                 let start = NSPoint(x: initial.midX, y: initial.maxY - 12)
                 window.pointer = start
                 window.sendEvent(try mouse(.leftMouseDown, at: start, in: window))
-                XCTAssertEqual(window.nativeDrags, 1, "\(style): AppKit 应当发起原生拖动")
+                XCTAssertEqual(window.nativeDrags, 0, "普通和透明标题栏均直接接管，不启动 AppKit 拖动")
                 XCTAssertEqual(window.handedToSystem, 0, "\(style): 原生拖动不能交给窗口服务器")
                 window.pointer = target
                 window.sendEvent(try mouse(.leftMouseDragged, at: target, in: window))
@@ -238,6 +239,62 @@ final class ScreenBoundDraggingTests: XCTestCase {
                 XCTAssertNotEqual(window.frame.origin, initial.origin)
                 window.sendEvent(try mouse(.leftMouseUp, at: target, in: window))
                 window.nativeDrags = 0
+            }
+        }
+    }
+
+    func testProductionWindowsDisableServerMovementAndStopBeforeEveryEdgeDuringFastDrags() throws {
+        let area = try XCTUnwrap(NSScreen.main?.visibleFrame)
+        let cases: [(NSWindow.StyleMask, NSView)] = [
+            (.borderless, DraggableBackground()),
+            ([.titled, .closable, .resizable], NSHostingView(rootView: Color.clear)),
+            ([.titled, .closable, .resizable, .fullSizeContentView], PassThroughView())
+        ]
+        for (style, content) in cases {
+            for panel in [false, true] {
+                let frame = NSRect(x: area.midX - 180, y: area.midY - 140, width: 360, height: 280)
+                let window: NSWindow = panel
+                    ? PointerDrivenPanel(contentRect: frame, styleMask: style, backing: .buffered, defer: false)
+                    : PointerDrivenWindow(contentRect: frame, styleMask: style, backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.titleVisibility = .hidden
+                window.titlebarAppearsTransparent = true
+                for type: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
+                    window.standardWindowButton(type)?.isHidden = true
+                }
+                window.contentView = content
+                window.orderFront(nil)
+                defer { window.close() }
+                let controlled = try XCTUnwrap(window as? PointerDriven)
+                XCTAssertFalse(window.isMovable, "窗口服务器不得独立移动窗口，否则会先越界再被拉回")
+                XCTAssertTrue((window as? ScreenBoundMovable)?.allowsScreenBoundDragging == true)
+                let initial = window.frame
+                for direction in [NSPoint(x: -1, y: 0), NSPoint(x: 1, y: 0), NSPoint(x: 0, y: -1), NSPoint(x: 0, y: 1)] {
+                    window.setFrame(initial, display: false)
+                    let start = NSPoint(x: initial.midX, y: initial.maxY - 12)
+                    controlled.pointer = start
+                    window.sendEvent(try mouse(.leftMouseDown, at: start, in: window))
+                    controlled.requests = []
+                    let target = NSPoint(x: start.x + direction.x * 10_000, y: start.y + direction.y * 10_000)
+                    controlled.pointer = target
+                    // 事件仍是旧坐标；实际指针已经快速移动到边界外。
+                    let stale = try mouse(.leftMouseDragged, at: start, in: window)
+                    window.sendEvent(stale)
+                    let stopped = window.frame
+                    XCTAssertNotEqual(stopped.origin, initial.origin, "\(style) 必须仍可手动拖动")
+                    XCTAssertTrue(area.contains(stopped))
+                    XCTAssertTrue(controlled.requests.allSatisfy(area.contains), "不能向系统提交越界帧")
+                    controlled.requests = []
+                    for _ in 0..<100 { window.sendEvent(stale) }
+                    XCTAssertEqual(window.frame, stopped)
+                    XCTAssertTrue(controlled.requests.isEmpty, "顶住边缘时不重复移动或回拉")
+                    controlled.pointer = NSPoint(x: target.x - direction.x * 5, y: target.y - direction.y * 5)
+                    window.sendEvent(stale)
+                    XCTAssertEqual(window.frame.minX, stopped.minX - direction.x * 5, accuracy: 0.1)
+                    XCTAssertEqual(window.frame.minY, stopped.minY - direction.y * 5, accuracy: 0.1)
+                    window.sendEvent(try mouse(.leftMouseUp, at: controlled.pointer, in: window))
+                    XCTAssertFalse(window.isMovable, "松手后也不能重新启用系统移动")
+                }
             }
         }
     }
@@ -314,6 +371,32 @@ private final class DragRecordingPanel: QuietPanel {
     var moves = 0
     override func setFrameOrigin(_ point: NSPoint) {
         moves += 1
+        super.setFrameOrigin(point)
+    }
+}
+
+@MainActor
+private protocol PointerDriven: AnyObject {
+    var pointer: NSPoint { get set }
+    var requests: [NSRect] { get set }
+}
+
+private final class PointerDrivenWindow: QuietWindow, PointerDriven {
+    var pointer = NSPoint.zero
+    var requests: [NSRect] = []
+    override var dragMouseLocation: NSPoint { pointer }
+    override func setFrameOrigin(_ point: NSPoint) {
+        requests.append(NSRect(origin: point, size: frame.size))
+        super.setFrameOrigin(point)
+    }
+}
+
+private final class PointerDrivenPanel: QuietPanel, PointerDriven {
+    var pointer = NSPoint.zero
+    var requests: [NSRect] = []
+    override var dragMouseLocation: NSPoint { pointer }
+    override func setFrameOrigin(_ point: NSPoint) {
+        requests.append(NSRect(origin: point, size: frame.size))
         super.setFrameOrigin(point)
     }
 }

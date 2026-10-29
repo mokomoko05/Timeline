@@ -1,5 +1,11 @@
 import AppKit
 
+/// 系统窗口移动始终关闭；是否允许用户拖动，由应用自己的拖动器决定。
+@MainActor
+protocol ScreenBoundMovable: AnyObject {
+    var allowsScreenBoundDragging: Bool { get set }
+}
+
 @MainActor
 final class ScreenBoundDragging {
     private var drag: (mouse: NSPoint, origin: NSPoint, moving: Bool, titlebar: Bool)?
@@ -9,6 +15,10 @@ final class ScreenBoundDragging {
     init(mouseLocation: @escaping () -> NSPoint = { NSEvent.mouseLocation }, defaults: UserDefaults = .standard) {
         self.mouseLocation = mouseLocation
         self.defaults = defaults
+    }
+
+    private func canMove(_ window: NSWindow) -> Bool {
+        (window as? ScreenBoundMovable)?.allowsScreenBoundDragging ?? window.isMovable
     }
 
     func send(_ event: NSEvent, in window: NSWindow, forward: (NSEvent) -> Void) {
@@ -37,6 +47,7 @@ final class ScreenBoundDragging {
     /// 这里改为接管随后的拖动事件，和标题栏拖动一样按屏幕边界移动。
     func performDrag(with event: NSEvent, in window: NSWindow, native: (NSEvent) -> Void) {
         guard event.type == .leftMouseDown, !window.styleMask.contains(.fullScreen) else { return native(event) }
+        guard canMove(window) else { return }
         drag = (mouseLocation(), window.frame.origin, false, true)
     }
 
@@ -44,20 +55,23 @@ final class ScreenBoundDragging {
         switch event.type {
         case .leftMouseDown:
             drag = nil
-            guard window.isMovable, !window.styleMask.contains(.fullScreen), let content = window.contentView else { break }
+            guard canMove(window), !window.styleMask.contains(.fullScreen), let content = window.contentView else { break }
             let point = event.locationInWindow
             if window.styleMask.contains(.resizable),
                point.x < 5 || point.x > window.frame.width - 5 || point.y < 5 || point.y > window.frame.height - 5 { break }
             let inTitlebar = window.styleMask.contains(.titled) && point.y >= window.contentLayoutRect.maxY
             let root = inTitlebar ? content.superview ?? content : content
             let hitPoint = root.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
-            guard let hit = root.hitTest(hitPoint), hit.mouseDownCanMoveWindow else { break }
+            let hit = root.hitTest(hitPoint)
             var ancestor: NSView? = hit
             while let view = ancestor {
-                if view is NSControl { return event }
+                if view is NSControl || view is NSTextView { return event }
                 ancestor = view.superview
             }
-            let titlebar = inTitlebar && !hit.isDescendant(of: content)
+            let titlebar = inTitlebar && (hit.map { !$0.isDescendant(of: content) } ?? true)
+            // 全尺寸透明标题栏可能命中内容本身：先把按下交给按钮，
+            // 超过拖动阈值才移动窗口；不能依赖系统再补发 performDrag。
+            guard inTitlebar || hit?.mouseDownCanMoveWindow == true else { break }
             if titlebar { window.makeKeyAndOrderFront(nil) }
             if titlebar && event.clickCount == 2 {
                 doubleClickTitlebar(in: window)
@@ -105,14 +119,20 @@ final class ScreenBoundDragging {
 
 }
 
-class ScreenBoundWindow: NSWindow {
-    private let dragging = ScreenBoundDragging()
+class ScreenBoundWindow: NSWindow, ScreenBoundMovable {
+    var allowsScreenBoundDragging = true
+    var dragMouseLocation: NSPoint { NSEvent.mouseLocation }
+    private lazy var dragging = ScreenBoundDragging(mouseLocation: { [unowned self] in self.dragMouseLocation })
     private var screenObserver: NSObjectProtocol?
     /// 实际屏幕可用区域；测试替身只替换显示器信息，不替换约束路径。
     var screenVisibleFrames: [NSRect] { NSScreen.screens.map(\.visibleFrame) }
 
     override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
+        // 标题栏的窗口服务器拖动不经过 sendEvent / constrainFrameRect；
+        // 必须在显示前就关闭，不能只在转发 mouseDown 的片刻暂停它。
+        isMovable = false
+        isMovableByWindowBackground = false
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                                object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -160,13 +180,19 @@ class ScreenBoundWindow: NSWindow {
     }
 }
 
-class QuietPanel: NSPanel {
-    private let dragging = ScreenBoundDragging()
+class QuietPanel: NSPanel, ScreenBoundMovable {
+    var allowsScreenBoundDragging = true
+    var dragMouseLocation: NSPoint { NSEvent.mouseLocation }
+    private lazy var dragging = ScreenBoundDragging(mouseLocation: { [unowned self] in self.dragMouseLocation })
     private var screenObserver: NSObjectProtocol?
     var screenVisibleFrames: [NSRect] { NSScreen.screens.map(\.visibleFrame) }
 
     override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
+        // 标题栏的窗口服务器拖动不经过 sendEvent / constrainFrameRect；
+        // 必须在显示前就关闭，不能只在转发 mouseDown 的片刻暂停它。
+        isMovable = false
+        isMovableByWindowBackground = false
         if Headless.active { ignoresMouseEvents = true }
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                                object: nil, queue: .main) { [weak self] _ in

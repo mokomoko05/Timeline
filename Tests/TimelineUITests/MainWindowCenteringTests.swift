@@ -36,7 +36,7 @@ final class MainWindowCenteringTests: XCTestCase {
     func testWindowCannotBeMovedOffCenter() throws {
         let window = MainWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled, .resizable], backing: .buffered, defer: true)
         window.minSize = NSSize(width: 640, height: 560)
-        XCTAssertFalse(window.isMovable)
+        XCTAssertFalse(window.allowsScreenBoundDragging)
         XCTAssertFalse(window.isMovableByWindowBackground)
         let visible = try XCTUnwrap(window.screen ?? NSScreen.main).visibleFrame
         func assertCentered(_ line: UInt = #line) {
@@ -59,12 +59,13 @@ final class MainWindowCenteringTests: XCTestCase {
         let window = MainWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled, .resizable], backing: .buffered, defer: true)
         let visible = try XCTUnwrap(window.screen ?? NSScreen.main).visibleFrame
         window.keepsCentered = false
-        XCTAssertTrue(window.isMovable)
+        XCTAssertTrue(window.allowsScreenBoundDragging)
+        XCTAssertFalse(window.isMovable, "系统移动始终关闭，避免和应用拖动互相拉扯")
         let origin = NSPoint(x: visible.minX + 10, y: visible.minY + 10)
         window.setFrameOrigin(origin)
         XCTAssertEqual(window.frame.origin, origin)
         window.keepsCentered = true
-        XCTAssertFalse(window.isMovable)
+        XCTAssertFalse(window.allowsScreenBoundDragging)
         XCTAssertEqual(window.frame.midX, visible.midX, accuracy: 1)
         XCTAssertEqual(window.frame.midY, visible.midY, accuracy: 1)
     }
