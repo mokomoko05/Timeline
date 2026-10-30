@@ -31,7 +31,9 @@ Ctrl + Option + (D/N/F/L/M) 可以唤起它们：
 
 ## AI generated README
 
-A native macOS + iPhone app for tasks, focus sessions, notes and a daily journal. The Mac app lives in the background and opens panels from global hotkeys or the menu bar. No account and no server: data is a JSON file on disk, and devices sync through a folder in iCloud Drive.
+*(last updated 2026-10-30)*
+
+A native macOS + iPhone app for tasks, focus sessions, notes and a daily journal. The Mac app lives in the background and opens panels from global hotkeys or the menu bar. No account and no server: data lives in a local SQLite database, and devices sync through a folder in iCloud Drive.
 
 <img src="docs/screenshots/main.png" width="720" alt="Main window: task timeline and month calendar">
 
@@ -49,13 +51,14 @@ A native macOS + iPhone app for tasks, focus sessions, notes and a daily journal
 
 | | |
 | --- | --- |
-| **Timeline + calendar** (`⌃⌥D`) | Tasks on a vertical timeline with a "now" marker; a month calendar shows per-day progress and focus time. Drag a task's dot to reorder it, or drop it on another date to reschedule it. Single-key actions on the selected task (`Space` done, `D` date, `M`/`⇧M` shift a day, `F` focus, `?` help). |
+| **Timeline + calendar** (`⌃⌥D`) | Tasks, with optional time ranges, on a vertical timeline with a "now" marker; a month calendar shows per-day progress and focus time. Drag a task's dot to reorder it, or drop it on another date to reschedule it. Single-key actions on the selected task (`Space` done, `D` date, `M`/`⇧M` shift a day, `F` focus, `?` help). |
 | **Quick capture** (`⌃⌥L`) | Add a task or a journal entry from any app. `@` links a task, `#` adds a tag, `⌘V` pastes images; text in images is recognized (Vision) and searchable. |
-| **Focus** (`⌃⌥F`) | Pick a task, set a goal and length. While running, the panel shrinks to a translucent capsule docked to the screen edge; the session ends with a reflection written to the journal. |
-| **Notes & journal** (`⌃⌥N`) | One notebook per task and per tag (grouped by task or by date), plus a day-by-day journal with a rhythm bar. Entries are Markdown with LaTeX math, highlighted code blocks with a copy button, and foldable headings. Click any entry to edit it in place, WYSIWYG. |
-| **Boards** (`⌃⌥M`) | A Markdown page per task or tag, with live-rendered checklists, folds and code. |
+| **Focus** (`⌃⌥F`) | Pick a task, set a goal and length. While running, the panel shrinks to a translucent companion docked to the screen edge, styled as a card, capsule, digits or a dot, or moves to the menu bar; the session ends with a reflection written to the journal. |
+| **Notes & journal** (`⌃⌥N`) | One notebook per task and per tag (grouped by task or by date), plus a day-by-day journal with a rhythm bar and a summary card at the end of each day. Entries are Markdown with LaTeX math, highlighted code blocks with a copy button, tables, and foldable headings and `<details>` blocks. Click an entry to select it and click again to edit it in place, WYSIWYG; edits save as you type. |
+| **Boards** (`⌃⌥M`) | A Markdown page per task or tag, with live-rendered checklists, folds, code and tables, a favorites bar, and version history. |
 | **Terminal** (`⌃Tab`) | Built-in terminal with tabs and splits. |
-| **Search** | One panel across tasks, boards, logs and text in images. |
+| **Search** (`⌃⌥S`) | One panel across tasks, boards, logs and text in images. |
+| **Safety net** | Deleted logs, tasks and boards stay in Recently Deleted for 30 days; backup and restore cover the journal and its images. |
 
 <p>
 <img src="docs/screenshots/journal.png" width="49%" alt="Journal with a focus session and a highlighted code block">
@@ -73,7 +76,7 @@ A native macOS + iPhone app for tasks, focus sessions, notes and a daily journal
 
 ### iPhone
 
-Tasks, journal, notebooks, boards and search over the same data. It adds task reminders, a focus timer, Spotlight indexing, and a composer with `@`/`#` pickers, image paste and the camera. Markdown, math and code render natively, and logs and boards are edited with the same editor as on the Mac.
+Tasks, journal, notebooks, boards and search over the same data. It adds task reminders, a focus timer with a Live Activity, a quick-capture widget, Spotlight indexing, and a composer with `@`/`#` pickers, image paste and the camera. Recently Deleted and full backup and restore with original images are built in. Markdown, math and code render natively, and logs and boards are edited with the same editor as on the Mac.
 
 <img src="docs/screenshots/ios.png" width="100%" alt="iPhone: tasks, journal, task notes, board">
 
@@ -81,21 +84,23 @@ Tasks, journal, notebooks, boards and search over the same data. It adds task re
 
 ```
 Sources/
-  TimelineCore/    Data layer shared by Mac and iPhone (no UI): journal model, tasks, boards,
-                   tags, quick-add parsing, Markdown/math scanning, code highlighting, folder sync
+  TimelineCore/    Data layer shared by Mac and iPhone (no UI): journal model, SQLite storage, tasks,
+                   boards, tags, quick-add parsing, Markdown/math scanning, code highlighting, folder sync
+  CSQLite/         Module map for the system sqlite3 library
   TimelineMath/    LaTeX typesetting on CoreText (vendored SwiftMath + Latin Modern fonts)
   Timeline/        macOS app: AppKit windows/panels hosting SwiftUI views
     EditorAssets/  Bundled CodeMirror editor (built from Editor/)
 Editor/            CodeMirror 6 + KaTeX source, bundled with esbuild into one editor.js
-iOS/               SwiftUI iPhone app (Xcode project) using TimelineCore, TimelineMath, EditorAssets
+iOS/               SwiftUI iPhone app (Xcode project) using TimelineCore, TimelineMath, EditorAssets;
+                   TimelineFocus holds the Live Activity and quick-capture widget
 Tests/             TimelineCoreTests (model) and TimelineUITests (views, rendered offscreen)
 scripts/           build / install / screenshot / test helpers
 ```
 
-- **Storage.** `JournalStore` (TimelineCore) owns one `journal.json` in `~/Library/Application Support/Timeline`. It holds days with tasks and log entries, boards and tags, and is written atomically with a daily backup. Views observe the store; heavy derived data (per-day focus totals, note counts, laid-out text) is cached and invalidated on change.
+- **Storage.** `JournalStore` (TimelineCore) keeps its data in `journal.sqlite` under `~/Library/Application Support/Timeline`, using the system sqlite3 in WAL mode. All writes go through one background queue (`JournalWriter`), and each transaction writes only the entities that changed, along with their sync state. Original images stay as separate files. An older `journal.json` is imported once and backed up; JSON now serves only for exports and daily snapshots, of which the last 30 days are kept in `Backups/`. Views observe the store; heavy derived data (per-day focus totals, note counts, laid-out text) is cached and invalidated on change.
 - **Rendering.** Mac log text is a custom TextKit view (`InteractiveTaskText`) fed by `MarkdownText` (swift-markdown → `NSAttributedString`). Math becomes `NSTextAttachment`s rendered by TimelineMath, and code blocks are colored by `CodeHighlight`. iOS has its own `RichText` canvas on the same pieces. No WebView is used for reading.
-- **Editing.** Boards, plus logs and notes on click, open a CodeMirror 6 editor in a shared, preloaded `WKWebView` (one for boards, one for inline edits). It uses inline Markdown decorations and KaTeX math, and Swift talks to it over a small message bridge. The bundle is checked in, so building needs no Node.
-- **Sync.** `FolderSync` writes `Timeline/devices/<device>.json` in iCloud Drive (only the device's own file) and merges the others field by field: last edit wins, deletions propagate, concurrent board edits keep both versions behind a conflict marker. Images go to `Timeline/images/`. No iCloud entitlement is needed, so a free Apple ID can sign the iPhone build. See [iOS/README.md](iOS/README.md).
+- **Editing.** Boards, plus selected logs and notes on a second click, open a CodeMirror 6 editor in a shared, preloaded `WKWebView` (one for boards, one for inline edits). It uses inline Markdown decorations and KaTeX math, and Swift talks to it over a small message bridge. Inline edits autosave while typing and are flushed before each sync; if the same text changes elsewhere meanwhile, both versions are kept. The bundle is checked in, so building needs no Node.
+- **Sync.** `FolderSync` works in the `Timeline` folder in iCloud Drive. Each device appends immutable field-level batches and periodic full checkpoints to its own `streams/<device>/` and acknowledges what it received in `receipts/`; `devices/` and `updates/` are read only to migrate the old format. Merging is field by field: last edit wins, deletions propagate, and concurrent edits to a board, log or daily summary keep both versions behind a conflict marker. A damaged or unused device can be retired through `retired-devices/`. Original images go to `images/`, deduplicated by content digest, and are downloaded when viewed. The SQLite files never enter the shared folder. No iCloud entitlement is needed, so a free Apple ID can sign the iPhone build. See [iOS/README.md](iOS/README.md).
 - **Mac shell.** Floating `NSPanel`s per feature, global hotkeys (Carbon), a menu-bar item, login item, SwiftTerm for the terminal, and Vision OCR for pasted images. UI strings use Chinese source keys, with English in `Resources/en.lproj`.
 
 ## Build and run
@@ -109,7 +114,7 @@ bash scripts/install-ios.sh      # sign with a free Apple ID and install on a pa
 bash scripts/install-ios.sh --schedule   # re-install automatically before the 7-day signature expires
 ```
 
-Board editor: after changing `Editor/src`, run `cd Editor && npm ci && npm run build` (writes `Sources/Timeline/EditorAssets/editor.js`).
+Editor (boards and inline edits): after changing `Editor/src`, run `cd Editor && npm ci && npm run build` (writes `Sources/Timeline/EditorAssets/editor.js`).
 
 ## Testing
 
@@ -119,7 +124,8 @@ swift test --filter InlineMarkdownEditorTests  # any UI test class
 ```
 
 - UI tests never show windows. `Headless` keeps every test window at alpha 0 and turns off animations, `QuietWindow` ignores the mouse, and `ZZNoVisibleWindowsTests` fails if anything reached the screen. Run `scripts/test-window-monitor.swift` alongside window-related tests to watch the window server.
-- iPhone latency is measured on the simulator with `PerfProbe` (launch args `-perfProbe YES -perfActions YES`, `-perfTyping log|board|compose`, `-demoData YES`). It reports tap-to-next-frame time, per-keystroke latency and hitches.
+- iPhone latency is measured on the simulator with `PerfProbe` (launch args `-perfProbe YES -perfActions YES`, `-perfSteps`, `-perfTyping log|board|compose`, `-demoData YES`). It reports tap-to-next-frame time, per-keystroke latency and hitches.
+- Sync compatibility with an older revision is exercised by `python3 scripts/test-mixed-version-sync.py [revision]`.
 
 ## Screenshots
 
