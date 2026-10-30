@@ -85,13 +85,13 @@ final class JournalWriter: @unchecked Sendable {
         queue.sync { write(document, version: version, state: state, changedDays: changedDays) }
     }
 
-    func write(_ document: JournalDocument, version: Int, changedDays: Set<String>? = nil,
+    func write(_ document: JournalDocument, version: Int, state: SyncState? = nil, changedDays: Set<String>? = nil,
                timing: (@Sendable (TimeInterval, TimeInterval, TimeInterval) -> Void)? = nil,
                completion: @escaping @Sendable (Error?) -> Void) {
         let queued = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
         queue.async { [self] in
             let started = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
-            let error = write(document, version: version, changedDays: changedDays)
+            let error = write(document, version: version, state: state, changedDays: changedDays)
             let finished = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
             DispatchQueue.main.async {
                 timing?((started - queued) * 1000, (finished - started) * 1000, (ProcessInfo.processInfo.systemUptime - finished) * 1000)
@@ -100,13 +100,13 @@ final class JournalWriter: @unchecked Sendable {
         }
     }
 
-    func writeAwaited(_ document: JournalDocument, version: Int, changedDays: Set<String>?,
+    func writeAwaited(_ document: JournalDocument, version: Int, state: SyncState? = nil, changedDays: Set<String>?,
                       timing: (@Sendable (TimeInterval, TimeInterval, TimeInterval) -> Void)?,
                       completion: @escaping @Sendable (Error?) -> Void) {
         let queued = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
         queue.async { [self] in
             let started = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
-            let error = write(document, version: version, changedDays: changedDays)
+            let error = write(document, version: version, state: state, changedDays: changedDays)
             let finished = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
             if let timing {
                 DispatchQueue.main.async { timing((started - queued) * 1000, (finished - started) * 1000, (ProcessInfo.processInfo.systemUptime - finished) * 1000) }

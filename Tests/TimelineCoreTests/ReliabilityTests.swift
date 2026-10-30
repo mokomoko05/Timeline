@@ -348,4 +348,194 @@ final class ReliabilityTests: XCTestCase {
         XCTAssertNotNil(try store.persistedSyncState()?.ledger?.imageLease)
     }
 
+    func testDeferredRemoteDeletionDoesNotStartOrdinaryAutosave() async throws {
+        let store = JournalStore(directory: try directory()), date = Date()
+        let log = try XCTUnwrap(try store.quickLogEntry("Keep until atomic commit", on: date).entry)
+        store.setLogDraft("Previously queued debounce", on: date)
+        var remote = store.syncContent
+        remote.days[JournalDates.key(date)]?.logs = []
+        store.applySyncContent(remote, persistImmediately: false)
+        try await Task.sleep(nanoseconds: 350_000_000)
+        store.waitForPendingWrites()
+        let disk = JournalStore(directory: store.directory, readOnlySnapshot: true)
+        XCTAssertTrue(disk.allLogs().contains { $0.id == log.id })
+        XCTAssertTrue(disk.recentlyDeleted.isEmpty)
+        XCTAssertTrue(store.recentlyDeleted.contains { $0.id == log.id })
+    }
+
+    func testFailedSyncCommitRetriesBaselineWithEverySavePath() async throws {
+        for path in ["save", "await", "background", "retry"] {
+            let store = JournalStore(directory: try directory()), date = Date()
+            store.saveRetryDelays = [0.05]
+            let log = try XCTUnwrap(try store.quickLogEntry("Remote deletion", on: date).entry)
+            let before = store.documentSnapshot
+            var remote = store.syncContent
+            remote.days[JournalDates.key(date)]?.logs = []
+            var records: [String: SyncRecord] = [:]
+            var merge = SyncMerge(device: "atomic", now: date)
+            merge.stampLocalChanges(try store.syncContent.records(), into: &records)
+            merge.stampLocalChanges(try remote.records(), into: &records)
+            let next = SyncState(device: "atomic", commitID: UUID().uuidString, records: records, ledger: IncrementalState())
+            let db = try JournalDatabase(url: store.databaseURL)
+            try db.execute("CREATE TRIGGER fail_sync BEFORE INSERT ON metadata WHEN NEW.key='sync' BEGIN SELECT RAISE(ABORT, 'sync blocked'); END")
+            store.applySyncContent(remote, persistImmediately: false)
+            do { try await store.saveForSync(state: next); XCTFail("Must reject failed sync transaction") } catch { }
+            XCTAssertEqual(JournalStore(directory: store.directory, readOnlySnapshot: true).documentSnapshot, before)
+            try db.execute("DROP TRIGGER fail_sync")
+            // A new edit must be saved alongside, while keeping the remote baseline intact.
+            store.setLogDraft("Edit after failed commit", on: date)
+            switch path {
+            case "save": store.save()
+            case "await": try await store.saveAndWait()
+            case "background": store.saveInBackground(); try await Task.sleep(nanoseconds: 50_000_000)
+            default: try await Task.sleep(nanoseconds: 150_000_000)
+            }
+            store.waitForPendingWrites()
+            let disk = JournalStore(directory: store.directory, readOnlySnapshot: true)
+            XCTAssertTrue(disk.allLogs().isEmpty, path)
+            XCTAssertEqual(disk.recentlyDeleted.map(\.id), [log.id], path)
+            XCTAssertEqual(disk.entry(for: date).logDraft, "Edit after failed commit", path)
+            XCTAssertEqual(disk.documentSnapshot.syncCommitID, next.commitID, path)
+            XCTAssertEqual(try disk.persistedSyncState(), next, path)
+            XCTAssertNil(store.errorMessage, path)
+        }
+    }
+
+    func testRestoreRejectsEditsDuringInitialPackagePreparation() async throws {
+        let source = JournalStore(directory: try directory()), target = JournalStore(directory: try directory()), date = Date()
+        let image = try source.storeImage(Data(repeating: 42, count: 20_000_000), fileExtension: "png")
+        _ = try source.quickLog("Backup", images: [image], on: date)
+        let package = try await source.createBackupPackage()
+        defer { try? FileManager.default.removeItem(at: package) }
+        let started = expectation(description: "Restore entered")
+        let restoring = Task { @MainActor in
+            started.fulfill()
+            try await target.restoreBackupPackage(package)
+        }
+        await fulfillment(of: [started], timeout: 2)
+        _ = try target.quickLog("Edit during preparation", on: date)
+        do { try await restoring.value; XCTFail("Preparation-time edits must cancel restore") }
+        catch BackupRestoreError.changedWhilePreparing { }
+        XCTAssertEqual(target.allLogs().map { $0.log.text }, ["Edit during preparation"])
+        XCTAssertTrue(target.recentlyDeleted.isEmpty)
+        XCTAssertEqual(JournalStore(directory: target.directory, readOnlySnapshot: true).days, target.days)
+    }
+
+    func testRestoreUndoRedoPreservesPinnedTaskAndFavoriteOrder() async throws {
+        let source = JournalStore(directory: try directory()), target = JournalStore(directory: try directory()), date = Date()
+        source.addTodo("Backup pinned", on: date)
+        let backupTask = try XCTUnwrap(source.tasks().first)
+        source.pinTask(backupTask.id)
+        let backupBoard = try XCTUnwrap(source.ensureBoard(for: .tag("Backup")))
+        source.setBoardFavoriteOrder([backupBoard.id])
+        target.addTodo("Original pinned", on: date)
+        let original = try XCTUnwrap(target.tasks().first)
+        target.pinTask(original.id)
+        let originalBoard = try XCTUnwrap(target.ensureBoard(for: .tag("Original")))
+        target.setBoardFavoriteOrder([originalBoard.id])
+        let package = try await source.createBackupPackage()
+        defer { try? FileManager.default.removeItem(at: package) }
+        try await target.restoreBackupPackage(package)
+        for _ in 0..<2 {
+            XCTAssertEqual(target.pinnedTask?.id, backupTask.id)
+            XCTAssertEqual(target.favoriteBoardIDs, [backupBoard.id])
+            target.undo()
+            XCTAssertEqual(target.pinnedTask?.id, original.id)
+            XCTAssertEqual(target.favoriteBoardIDs, [originalBoard.id])
+            target.redo()
+        }
+        try await target.saveAndWait()
+        let disk = JournalStore(directory: target.directory, readOnlySnapshot: true)
+        XCTAssertEqual(disk.pinnedTask?.id, backupTask.id)
+        XCTAssertEqual(disk.favoriteBoardIDs, [backupBoard.id])
+    }
+
+    func testRetirementWriteFailureSurvivesRestartAndRetriesWithoutRewriting() async throws {
+        let cloud = try directory(), local = try directory(), date = Date()
+        let a = FolderSync(store: JournalStore(directory: local), folder: cloud, deviceName: "A")
+        let b = FolderSync(store: JournalStore(directory: try directory()), folder: cloud, deviceName: "B")
+        _ = try a.store.quickLog("Published data", on: date)
+        try await a.sync(); try await b.sync(); try await a.sync()
+        let path = cloud.appendingPathComponent("retired-devices")
+        try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: path.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path) }
+        do { try await a.retireDevice(b.deviceID); XCTFail("Retirement write must fail") } catch { }
+        a.stopAutomaticSync()
+        XCTAssertNotNil(try a.store.persistedSyncState()?.ledger?.pendingRetirements?[b.deviceID])
+        XCTAssertNotNil(a.fileErrors["retired-devices/" + b.deviceID + ".json"])
+        // Drain the already scheduled follow-up while failure is still injected.
+        try await Task.sleep(nanoseconds: 50_000_000)
+        a.stopAutomaticSync()
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
+        let restarted = FolderSync(store: JournalStore(directory: local), folder: cloud, deviceName: "A")
+        try await restarted.sync()
+        let marker = path.appendingPathComponent(b.deviceID + ".json")
+        let data = try Data(contentsOf: marker), modified = try marker.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        XCTAssertTrue(try restarted.store.persistedSyncState()?.ledger?.pendingRetirements?.isEmpty == true)
+        XCTAssertTrue(restarted.fileErrors.isEmpty)
+        try await restarted.sync()
+        XCTAssertTrue(restarted.devices.contains { $0.id == b.deviceID && $0.isRetired })
+        XCTAssertEqual(try Data(contentsOf: marker), data)
+        XCTAssertEqual(try marker.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, modified)
+    }
+
+    func testLateFailedSaveCallbackCannotOverwriteNewerSuccess() async throws {
+        let store = JournalStore(directory: try directory()), date = Date()
+        _ = try store.quickLog("Initial", on: date)
+        let db = try JournalDatabase(url: store.databaseURL)
+        try db.execute("CREATE TRIGGER block_write BEFORE INSERT ON entities BEGIN SELECT RAISE(ABORT, 'blocked'); END")
+        store.writesInBackground = true
+        _ = try store.quickLog("Retry me", on: date)
+        // Keep the main actor occupied so the old failure callback remains queued.
+        store.waitForPendingWrites()
+        try db.execute("DROP TRIGGER block_write")
+        store.save()
+        XCTAssertNil(store.errorMessage)
+        try await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertNil(store.errorMessage)
+        XCTAssertFalse(store.hasPendingSave)
+        XCTAssertEqual(JournalStore(directory: store.directory, readOnlySnapshot: true).allLogs().count, 2)
+    }
+
+    func testSyncAfterFailedCommitKeepsRemoteDeletionAndNewLocalEdit() async throws {
+        let cloud = try directory(), date = Date()
+        let a = FolderSync(store: JournalStore(directory: try directory()), folder: cloud, deviceName: "A")
+        let b = FolderSync(store: JournalStore(directory: try directory()), folder: cloud, deviceName: "B")
+        let log = try XCTUnwrap(try a.store.quickLogEntry("Delete remotely", on: date).entry)
+        try await a.sync(); try await b.sync(); try await a.sync()
+        let db = try JournalDatabase(url: b.store.databaseURL)
+        try db.execute("CREATE TRIGGER block_sync BEFORE INSERT ON metadata WHEN NEW.key='sync' BEGIN SELECT RAISE(ABORT, 'blocked'); END")
+        a.store.deleteLog(log.id, on: date)
+        try await a.sync()
+        do { try await b.sync(); XCTFail("Must fail atomic commit") } catch { }
+        XCTAssertTrue(JournalStore(directory: b.store.directory, readOnlySnapshot: true).allLogs().contains { $0.id == log.id })
+        try db.execute("DROP TRIGGER block_sync")
+        _ = try b.store.quickLog("New local edit", on: date)
+        try await b.sync(); try await a.sync()
+        for store in [a.store, b.store, JournalStore(directory: b.store.directory, readOnlySnapshot: true)] {
+            XCTAssertFalse(store.allLogs().contains { $0.id == log.id })
+            XCTAssertTrue(store.allLogs().contains { $0.log.text == "New local edit" })
+        }
+        XCTAssertNil(b.store.errorMessage)
+    }
+
+    func testLateSuccessfulSaveCannotCancelNewerFailureRetry() async throws {
+        let store = JournalStore(directory: try directory()), date = Date()
+        store.saveRetryDelays = [0.05]
+        _ = try store.quickLog("Initial", on: date)
+        store.saveInBackground()
+        store.waitForPendingWrites()
+        let db = try JournalDatabase(url: store.databaseURL)
+        try db.execute("CREATE TRIGGER fail_newer BEFORE INSERT ON entities BEGIN SELECT RAISE(ABORT, 'newer blocked'); END")
+        _ = try store.quickLog("Newer failed save", on: date)
+        XCTAssertNotNil(store.errorMessage)
+        try db.execute("DROP TRIGGER fail_newer")
+        // The old successful background completion now runs before the retry timer.
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertNil(store.errorMessage)
+        XCTAssertFalse(store.hasPendingSave)
+        XCTAssertEqual(JournalStore(directory: store.directory, readOnlySnapshot: true).allLogs().count, 2)
+    }
+
 }

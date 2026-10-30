@@ -55,6 +55,7 @@ struct IncrementalState: Codable, Equatable, Sendable {
     var imageCandidates: [String: Date]?
     var streamErrors: [String: String]?
     var attachmentErrors: [String: String]?
+    var pendingRetirements: [String: SyncRetirement]?
     var retiredDevices: Set<String>?
     var waitingFiles: Set<String>?
 }

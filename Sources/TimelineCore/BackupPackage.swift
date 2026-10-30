@@ -115,6 +115,7 @@ extension JournalStore {
     }
 
     public func restoreBackupPackage(_ folder: URL) async throws {
+        let initial = documentSnapshot
         // 任何摘要、缺图、格式校验失败都发生在修改正式内容之前。
         let (staging, validated) = try await Task.detached(priority: .utility) { try BackupFiles.stage(folder) }.value
         defer { Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: staging) } }
@@ -129,9 +130,11 @@ extension JournalStore {
                 } else { try data.write(to: target, options: .atomic) }
             }
         }.value
+        guard documentSnapshot == initial else { throw BackupRestoreError.changedWhilePreparing }
         if !isReadOnly {
             try await saveAndWait()
-            let current = documentSnapshot, backups = backupsDirectory
+            guard documentSnapshot == initial else { throw BackupRestoreError.changedWhilePreparing }
+            let current = initial, backups = backupsDirectory
             try await Task.detached(priority: .utility) {
                 try FileManager.default.createDirectory(at: backups, withIntermediateDirectories: true)
                 try JournalWriter.encode(current).write(to: backups.appendingPathComponent("before-restore-" + UUID().uuidString + ".json"), options: .atomic)

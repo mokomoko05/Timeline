@@ -424,6 +424,9 @@ public final class FolderSync: ObservableObject {
 
     private func runOnce() async throws -> Bool {
         guard !store.isReadOnly else { throw SyncError.readOnly }
+        if let retryable = try store.retryableSyncState(), retryable.folderPath == state.folderPath {
+            state = retryable
+        }
         let content = store.syncContent
         let previous = state
         let baseline = syncedContent
@@ -446,12 +449,6 @@ public final class FolderSync: ObservableObject {
             guard store.syncContent == content else { rerun = true; return false }
         }
         let applied = outcome.content != content
-        if applied {
-            applyingRemoteContent = true
-            store.applySyncContent(outcome.content, persistImmediately: false)
-            applyingRemoteContent = false
-            observedContent = store.syncContent
-        }
         if waitingForDownload != outcome.pendingDownload { waitingForDownload = outcome.pendingDownload }
         if !outcome.pendingDownload && !waitingForUpload { downloadWaits = 0 }
         if outcome.stateChanged { needsExport = true }
@@ -478,6 +475,13 @@ public final class FolderSync: ObservableObject {
         snapshotState.ledger?.folderPath = snapshotState.folderPath
         snapshotState.ledger?.commitID = snapshotState.commitID
         await recordProgress("exporting")
+        guard store.syncContent == content else { rerun = true; return false }
+        if applied {
+            applyingRemoteContent = true
+            store.applySyncContent(outcome.content, persistImmediately: false)
+            applyingRemoteContent = false
+            observedContent = store.syncContent
+        }
         let durableState = snapshotState
         if !previous.records.isEmpty, (durableState.ledger?.sequence ?? 0) > (previous.ledger?.sequence ?? 0), !hasLocalChanges { hasLocalChanges = true }
         if recordsChanged || applied || store.hasPendingSave || durableState.ledger != previous.ledger {
@@ -504,6 +508,7 @@ public final class FolderSync: ObservableObject {
                 let publication = try IncrementalSync.publish(folder: folder, device: persisted.device, name: deviceName, now: time, state: &ledger)
                 var imageBytes = 0
                 ledger.attachmentErrors = [:]
+                Self.publishRetirements(folder: folder, ledger: &ledger)
                 var leaseBytes = 0
                 do { leaseBytes = try SyncImageMaintenance.publish(protected: ledger.protectedImages ?? names, folder: folder, device: persisted.device, now: time, state: &ledger) }
                 catch { ledger.attachmentErrors?["image-leases/" + persisted.device] = error.localizedDescription }
@@ -527,7 +532,7 @@ public final class FolderSync: ObservableObject {
                 }
                 if ledger != persisted.ledger { ledger.revision += 1 }
 
-                return (pendingCount + (ledger.queuedImages?.count ?? 0), pendingBytes, publication.url, ledger, publication.bytes + imageBytes + leaseBytes, publication.batches)
+                return (pendingCount + (ledger.queuedImages?.count ?? 0) + (ledger.pendingRetirements?.count ?? 0), pendingBytes, publication.url, ledger, publication.bytes + imageBytes + leaseBytes, publication.batches)
             }
         }.value
         var transferredState = snapshotState
@@ -828,7 +833,7 @@ extension FolderSync {
         guard !isSyncing, !waitingForDownload, fileErrors.isEmpty else { throw SyncError.timeout }
         isSyncing = true
         defer { isSyncing = false; syncSoon() }
-        let own = deviceID, folder = folder
+        let own = deviceID
         var next = state
         var ledger = next.ledger ?? IncrementalState()
         let batch = SyncBatch(device: own, name: deviceName, sequence: ledger.sequence + 1,
@@ -837,17 +842,17 @@ extension FolderSync {
         ledger.deltaCount = 0; ledger.deltaBytes = 0
         ledger.received[own] = batch.sequence
         ledger.pending.append(batch)
-        let relative = "retired-devices/" + id + ".json"
-        ledger.pendingCloud.insert(relative)
+        let marker = SyncRetirement(device: id, retiredBy: own, date: now())
+        ledger.pendingRetirements = (ledger.pendingRetirements ?? [:]).merging([id: marker]) { _, new in new }
         ledger.revision += 1
         next.ledger = ledger
         try await store.saveForSync(state: next)
         state = next
-        let marker = SyncRetirement(device: id, retiredBy: own, date: now())
-        try await Task.detached(priority: .utility) {
-            try Self.accessing(folder) {
-                try Self.coordinatedWrite(IncrementalSync.encode(marker), to: folder.appendingPathComponent(relative))
-            }
-        }.value
+        // 统一发布先写检查点，再写标记；写入失败的完整操作仍在 SQLite 中。
+        isSyncing = false
+        try await sync()
+        if let message = fileErrors["retired-devices/" + id + ".json"] {
+            throw NSError(domain: "Timeline.Retirement", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        }
     }
 }
