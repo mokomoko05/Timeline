@@ -1202,3 +1202,6 @@
 "备份已恢复" = "Backup restored";
 "内容及原图校验通过。恢复会替换当前内容，并向其他设备同步；恢复前自动保留本机快照。" = "Content and original images verified. Restoring replaces current content and syncs to other devices. A local snapshot is kept first.";
 "备份校验通过：%lld 条日志" = "Backup verified: %lld logs";
+"正在同步或找不到这台设备，请稍后再试。" = "Syncing, or this device can't be found. Try again shortly.";
+"还有其他内容没有同步完，暂时不能停用这台设备。请等同步完成后再试。" = "Other content hasn't finished syncing, so this device can't be retired yet. Try again after sync completes.";
+"有 %lld 张原图在本机和同步文件夹里都找不到。其他内容不受影响，找回后会自动补传。" = "%lld original images can't be found on this device or in the sync folder. Other content isn't affected, and they'll upload automatically if found.";

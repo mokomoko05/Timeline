@@ -56,10 +56,14 @@ public final class FolderSync: ObservableObject {
         case newerFormat(String)
         case timeout
         case upgradeRequired
+        case retirementUnavailable
+        case retirementBlocked
 
         public var errorDescription: String? {
             switch self {
             case .upgradeRequired: return "这台设备需要先升级 Timeline 并完成同步，才能安全停用。旧版设备仍可正常同步。"
+            case .retirementUnavailable: return "正在同步或找不到这台设备，请稍后再试。"
+            case .retirementBlocked: return "还有其他内容没有同步完，暂时不能停用这台设备。请等同步完成后再试。"
             case .timeout: return "同步尚未完成，请检查网络和 iCloud 云盘状态后重试。"
             case .readOnly: return "当前数据只读，已暂停同步。"
             case .folderUnavailable(let path): return "无法访问同步文件夹：\(path)"
@@ -73,6 +77,10 @@ public final class FolderSync: ObservableObject {
     public let deviceName: String
     /// 网页编辑器先取回尚未通过防抖写入的正文，再捕获同步快照；同步和进后台都必须等待。
     public var prepareForSync: (() async -> Void)?
+    /// 编辑器可能被系统挂起、永远不回话：等这么久就用已经写回的内容同步，没取到的修改下一轮再带上。
+    var prepareDeadline: TimeInterval = 5
+    /// 正在停用这台数据已损坏的设备：这一轮不再因为它报错或等待。
+    private var retiringDevice: String?
     @Published public private(set) var isSyncing = false
     @Published public private(set) var phase: SyncPhase = .idle
     @Published public private(set) var hasLocalChanges = false
@@ -90,6 +98,8 @@ public final class FolderSync: ObservableObject {
     @Published public private(set) var stageDurations: [String: Double] = [:]
     @Published public private(set) var blockingFiles: [String] = []
     @Published public private(set) var localSavedAt: Date?
+    /// 本机和同步文件夹里都找不到的原图：不算同步失败，也不挡住「已同步」；每轮重试，找回后自动补传。
+    @Published public private(set) var missingImages: Set<String> = []
     private var stageStarted = ProcessInfo.processInfo.systemUptime
     private var timedPhase: SyncPhase = .idle
 
@@ -156,6 +166,7 @@ public final class FolderSync: ObservableObject {
         state.folderPath = folderPath
         hasLocalChanges = state.ledger?.pending.isEmpty == false || state.ledger?.pendingCloud.contains(where: { $0.hasPrefix("streams/" + state.device + "/") }) == true
         fileErrors = (state.ledger?.streamErrors ?? [:]).merging(state.ledger?.attachmentErrors ?? [:]) { _, b in b }
+        missingImages = state.ledger?.missingImages ?? []
         blockingFiles = Array((state.ledger?.pendingCloud ?? []).union(state.ledger?.waitingFiles ?? []).union(fileErrors.keys)).sorted()
         let statusURL = url.deletingLastPathComponent().appendingPathComponent("status.json")
         if let data = try? Data(contentsOf: statusURL), let report = try? JSONDecoder().decode([String: String].self, from: data) {
@@ -312,7 +323,7 @@ public final class FolderSync: ObservableObject {
         }
         do {
             await recordProgress("preparing")
-            await prepareForSync?()
+            if let prepareForSync { await waitAtMost(prepareDeadline, prepareForSync) }
             checkLocalChanges()
             let changed = try await runOnce()
             for name in deferredImageRequests { enqueueImage(name) }
@@ -432,10 +443,10 @@ public final class FolderSync: ObservableObject {
         let previous = state
         let baseline = syncedContent
         let localChanged = content != syncedContent
-        let folder = self.folder, deviceName = self.deviceName, time = now()
+        let folder = self.folder, deviceName = self.deviceName, time = now(), retiring = retiringDevice
         await recordProgress("readingRemote")
         let outcome = try await Task.detached(priority: .utility) {
-            try Self.merge(content: content, state: previous, localChanged: localChanged, baseline: baseline, folder: folder, deviceName: deviceName, now: time)
+            try Self.merge(content: content, state: previous, localChanged: localChanged, baseline: baseline, folder: folder, deviceName: deviceName, now: time, retiring: retiring)
         }.value
         setPhase(.merging)
         // 合并期间本机又改了：作废这次结果，稍后重来。
@@ -513,13 +524,15 @@ public final class FolderSync: ObservableObject {
                 var leaseBytes = 0
                 do { leaseBytes = try SyncImageMaintenance.publish(protected: ledger.protectedImages ?? names, folder: folder, device: persisted.device, now: time, state: &ledger) }
                 catch { ledger.attachmentErrors?["image-leases/" + persisted.device] = error.localizedDescription }
-                let imageQueue = ledger.queuedImages ?? []
-                var remaining = Set<String>()
+                let imageQueue = (ledger.queuedImages ?? []).union(ledger.missingImages ?? [])
+                var remaining = Set<String>(), missing = Set<String>()
                 for name in imageQueue.sorted() {
                     do { imageBytes += try Self.syncImages([name], local: images, folder: folder, ledger: &ledger) }
+                    catch ImageExportError.unavailable { missing.insert(name) }
                     catch { remaining.insert(name); ledger.attachmentErrors?["images/" + name] = error.localizedDescription }
                 }
                 ledger.queuedImages = remaining
+                ledger.missingImages = missing
                 try IncrementalSync.compact(folder: folder, device: persisted.device, uploadPending: uploadPending)
                 for relative in ledger.pendingCloud {
                     let url = folder.appendingPathComponent(relative)
@@ -544,6 +557,7 @@ public final class FolderSync: ObservableObject {
         state.ledger = transfer.3
         let problems = (transfer.3.streamErrors ?? [:]).merging(transfer.3.attachmentErrors ?? [:]) { _, new in new }
         if fileErrors != problems { fileErrors = problems }
+        if missingImages != (transfer.3.missingImages ?? []) { missingImages = transfer.3.missingImages ?? [] }
         let blocked = Array(transfer.3.pendingCloud.union(Set(problems.keys)).union(transfer.3.waitingFiles ?? [])).sorted()
         if blockingFiles != blocked { blockingFiles = blocked }
         needsExport = !transfer.3.pending.isEmpty
@@ -567,7 +581,7 @@ public final class FolderSync: ObservableObject {
     // MARK: - 后台部分
 
     nonisolated private static func merge(content: SyncContent, state previous: SyncState, localChanged: Bool, baseline: SyncContent?,
-                                          folder: URL, deviceName: String, now: Date) throws -> Outcome {
+                                          folder: URL, deviceName: String, now: Date, retiring: String? = nil) throws -> Outcome {
         var state = previous
         let retirement = try accessing(folder) { try retiredDevices(in: folder) }
         let retired = retirement.devices
@@ -591,7 +605,9 @@ public final class FolderSync: ObservableObject {
         ledger.retiredDevices = retired
         var readBytes = 0
         try accessing(folder) {
-            let incoming = try IncrementalSync.read(folder: folder, device: state.device, state: &ledger, merge: &merge, records: &state.records)
+            // 已停用的设备还读（迟到的内容照样合并），但它的损坏和等待不再影响其他设备的同步状态。
+            let quiet = retired.union((ledger.pendingRetirements ?? [:]).keys).union(retiring.map { [$0] } ?? [])
+            let incoming = try IncrementalSync.read(folder: folder, device: state.device, state: &ledger, merge: &merge, records: &state.records, quiet: quiet)
             readBytes = incoming.bytes
             mergedRemote = incoming.changed
             pendingDownload = incoming.waiting || !retirement.waiting.isEmpty || !retirement.errors.isEmpty
@@ -823,15 +839,56 @@ public final class FolderSync: ObservableObject {
     }
 }
 
+/// 等 `operation` 完成，最多等 `seconds` 秒；到时间就继续往下走，`operation` 留在后台自己结束。
+@MainActor
+public func waitAtMost(_ seconds: TimeInterval, _ operation: @escaping () async -> Void) async {
+    final class Latch {
+        var continuation: CheckedContinuation<Void, Never>?
+        var work: Task<Void, Never>?
+        var timer: Task<Void, Never>?
+        func finish() {
+            continuation?.resume()
+            continuation = nil
+            work = nil
+            timer?.cancel()
+            timer = nil
+        }
+    }
+    let latch = Latch()
+    await withCheckedContinuation { continuation in
+        latch.continuation = continuation
+        latch.work = Task { @MainActor in
+            await operation()
+            latch.finish()
+        }
+        latch.timer = Task { @MainActor in
+            do { try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000)) } catch { return }
+            latch.finish()
+        }
+    }
+}
+
 extension FolderSync {
+    nonisolated private static func path(_ path: String, belongsTo device: String) -> Bool {
+        path == "streams/" + device || path.hasPrefix("streams/" + device + "/")
+            || path == "receipts/" + device || path.hasPrefix("receipts/" + device + "-")
+    }
+
     /// 显式退役；先持久化完整检查点，保留旧流，离线旧设备仍可安全重新接入。
     public func retireDevice(_ id: String) async throws {
         guard !store.isReadOnly else { throw SyncError.readOnly }
         guard !isSyncing, IncrementalSync.safe(id), id != deviceID,
-              devices.contains(where: { $0.id == id && !$0.isRetired }) else { throw SyncError.timeout }
+              devices.contains(where: { $0.id == id && !$0.isRetired }) else { throw SyncError.retirementUnavailable }
         guard devices.first(where: { $0.id == id })?.supportsRetirement == true else { throw SyncError.upgradeRequired }
         try await sync()
-        guard !isSyncing, !waitingForDownload, fileErrors.isEmpty else { throw SyncError.timeout }
+        // 这台设备自己的数据坏了正是要停用它的原因：能读的已经合并，只看其他内容是否同步完。
+        // 它只是还没下载完不算损坏，要继续等，免得漏掉它的内容。
+        defer { retiringDevice = nil }
+        if fileErrors.keys.contains(where: { Self.path($0, belongsTo: id) }) {
+            retiringDevice = id
+            try await sync()
+        }
+        guard !isSyncing, !waitingForDownload, fileErrors.isEmpty else { throw SyncError.retirementBlocked }
         isSyncing = true
         defer { isSyncing = false; syncSoon() }
         let own = deviceID

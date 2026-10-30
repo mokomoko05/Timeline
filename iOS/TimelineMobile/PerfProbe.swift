@@ -311,6 +311,7 @@ enum PerfProbe {
             ("打开同步设置", { switchTab(.settings) }),
             ("打开备份与恢复", { send("openBackup") }),
             ("校验完整备份", { send("backupValidation") }),
+            ("恢复完整备份", { send("backupRestoreRoundTrip") }),
             ("切到全局搜索", { switchTab(.search) }),
             ("输入全局搜索", { send("globalSearch") }),
             ("清空全局搜索", { send("globalSearchClear") }),

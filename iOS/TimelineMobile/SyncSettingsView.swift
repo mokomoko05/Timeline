@@ -110,6 +110,10 @@ private struct SyncStatusRows: View {
             Text("已请求下载其他设备的更新，下载完成后会自动合并。")
                 .font(.caption).foregroundStyle(.secondary)
         }
+        if !state.missingImages.isEmpty {
+            Text(LF("有 %lld 张原图在本机和同步文件夹里都找不到。其他内容不受影响，找回后会自动补传。", state.missingImages.count))
+                .font(.caption).foregroundStyle(.secondary)
+        }
         if let date = state.localSavedAt { LabeledContent("本机已保存", value: date.formatted(date: .omitted, time: .standard)) }
         ForEach(state.fileErrors.keys.sorted(), id: \.self) { path in
             VStack(alignment: .leading) { Text(path).font(.caption.monospaced()); Text(state.fileErrors[path] ?? "").font(.caption).foregroundStyle(.red) }

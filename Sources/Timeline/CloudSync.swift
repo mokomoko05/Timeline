@@ -187,6 +187,9 @@ struct CloudSyncSettings: View {
             }
             DisclosureGroup("同步详情") {
                 VStack(alignment: .leading, spacing: 6) {
+                    if !sync.missingImages.isEmpty {
+                        Text(AppLocalizedFormat("有 %lld 张原图在本机和同步文件夹里都找不到。其他内容不受影响，找回后会自动补传。", sync.missingImages.count))
+                    }
                     if let date = sync.localSavedAt { detail("本机已保存", date: date) }
                     ForEach(sync.fileErrors.keys.sorted(), id: \.self) { path in
                         Text(path + ": " + (sync.fileErrors[path] ?? "")).foregroundStyle(Palette.deadline).textSelection(.enabled)

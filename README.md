@@ -33,6 +33,14 @@ A native macOS + iPhone app for tasks, focus sessions, notes and a daily journal
 
 <img src="docs/screenshots/main.png" width="720" alt="Main window: task timeline and month calendar">
 
+## News
+
+- **2026-10-30**
+  - Local data moved to incremental SQLite storage; saves now write only what changed.
+  - iPhone: full backup and restore with original images, faster background search, and a quiet sync icon that stays out of the way while typing.
+  - Sync: a damaged device no longer blocks the others and can be retired; the status now separates local save, upload and delivery.
+  - Headings inside blockquotes can be folded on both platforms.
+
 ## Features
 
 ### Mac

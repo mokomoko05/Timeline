@@ -36,7 +36,8 @@ final class JournalDatabase {
                 try execute("CREATE TABLE IF NOT EXISTS entities (key TEXT PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID")
                 try execute("CREATE TABLE IF NOT EXISTS recovery (key TEXT PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID")
                 try execute("CREATE TABLE IF NOT EXISTS outbox (key TEXT PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID")
-                try execute("CREATE INDEX IF NOT EXISTS entity_dates ON entities(json_extract(CAST(value AS TEXT), '$.day'))")
+                // 日期索引没有用户：所有内容启动时都在内存里，它只让每次写入多解析一遍 JSON。以后真要分页再加回来。
+                try execute("DROP INDEX IF EXISTS entity_dates")
                 try execute("CREATE TABLE IF NOT EXISTS sync_records (key TEXT PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID")
                 if version == 0 { try execute("PRAGMA user_version=1") }
             }
@@ -74,13 +75,10 @@ final class JournalDatabase {
         guard sqlite3_exec(output, "PRAGMA journal_mode=DELETE", nil, nil, nil) == SQLITE_OK else { throw CocoaError(.fileWriteUnknown) }
     }
 
-    private func rows(_ table: String, predicate: String = "", parameters: [String] = []) throws -> [String: Data] {
+    private func rows(_ table: String) throws -> [String: Data] {
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(connection, "SELECT key,value FROM \(table) \(predicate)", -1, &statement, nil) == SQLITE_OK else { throw failure() }
+        guard sqlite3_prepare_v2(connection, "SELECT key,value FROM \(table)", -1, &statement, nil) == SQLITE_OK else { throw failure() }
         defer { sqlite3_finalize(statement) }
-        for (index, value) in parameters.enumerated() {
-            guard sqlite3_bind_text(statement, Int32(index + 1), value, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) == SQLITE_OK else { throw failure() }
-        }
         var result: [String: Data] = [:]
         while true {
             let code = sqlite3_step(statement)
@@ -274,28 +272,4 @@ final class JournalDatabase {
         try put("metadata", key: "transport", data: metadata.map { try IncrementalSync.encode($0) })
         try put("metadata", key: "transportOutbox", data: Data([1]))
     }
-
-    /// 日期范围走 SQLite 索引；不解码区间外的正文。
-    func loadDays(from start: String, through end: String) throws -> [String: DayEntry] {
-        guard JournalDates.date(for: start) != nil, JournalDates.date(for: end) != nil, start <= end else { throw CocoaError(.fileReadInvalidFileName) }
-        var entities = try rows("entities", predicate: "WHERE key BETWEEN ? AND ?", parameters: ["day/" + start, "day/" + end])
-        entities.merge(try rows("entities", predicate: "WHERE json_extract(CAST(value AS TEXT), '$.day') BETWEEN ? AND ?", parameters: [start, end])) { _, b in b }
-        var days: [String: DayEntry] = [:]
-        var todos: [String: [(Int, Todo)]] = [:], logs: [String: [(Int, DailyLogEntry)]] = [:]
-        let decoder = JSONDecoder()
-        for (key, data) in entities {
-            if key.hasPrefix("day/") { days[String(key.dropFirst(4))] = try decoder.decode(DayEntry.self, from: data) }
-            else if key.hasPrefix("todo/") {
-                let item = try decoder.decode(Located<Todo>.self, from: data)
-                todos[item.day, default: []].append((item.position, item.value))
-            } else if key.hasPrefix("log/") {
-                let item = try decoder.decode(Located<DailyLogEntry>.self, from: data)
-                logs[item.day, default: []].append((item.position, item.value))
-            }
-        }
-        for (key, values) in todos { days[key, default: DayEntry()].todos = values.sorted { $0.0 < $1.0 }.map(\.1) }
-        for (key, values) in logs { days[key, default: DayEntry()].logs = values.sorted { $0.0 < $1.0 }.map(\.1) }
-        return days
-    }
-
 }

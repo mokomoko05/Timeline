@@ -1133,13 +1133,6 @@ public final class JournalStore: ObservableObject {
         return day.logs.filter { includeFocus || !$0.focus }.sorted { $0.createdAt < $1.createdAt }.map { LoggedLog(key: key, date: date, log: $0) }
     }
 
-    /// 后台读取已提交的日期范围，供归档/批量处理；不等待主线程。
-    public func loadSavedDays(from start: String, through end: String) async throws -> [String: DayEntry] {
-        try await withCheckedThrowingContinuation { continuation in
-            writer.loadDays(from: start, through: end) { continuation.resume(with: $0) }
-        }
-    }
-
     /// 全部日志（跨日期），按时间从早到晚；`includeFocus` 为 false 时不含专注计时的开始、结束记录。
     public func allLogs(includeFocus: Bool = false) -> [LoggedLog] {
         let all = chronology()

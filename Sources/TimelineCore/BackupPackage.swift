@@ -6,12 +6,22 @@ public struct BackupPackagePreview: Sendable {
     public let boards: Int
     public let images: Int
     public let bytes: Int
+    /// 导出时就缺的原图张数（用户确认过），恢复后这些图片仍然打不开。
+    public let missingImages: Int
+}
+
+public enum BackupPackageError: LocalizedError {
+    /// 这些原图找不到：可以补齐后重试，或确认后不带它们导出。
+    case missingImages([String])
+    public var errorDescription: String? { ImageExportError.unavailable.errorDescription }
 }
 
 private struct BackupManifest: Codable {
     var format = 1
     var createdAt: Date
     var files: [String: String]
+    /// 导出时用户确认可以缺的原图；没列在这里又不在 `files` 里的算备份损坏。
+    var missingImages: [String]? = nil
 }
 
 private enum BackupFiles {
@@ -53,8 +63,10 @@ private enum BackupFiles {
             }
         }
         let names = imageNames(document)
-        guard names.allSatisfy({ safe($0) && manifest.files["Images/" + $0] != nil }) else { throw ImageExportError.unavailable }
-        return (document, BackupPackagePreview(tasks: tasks.count, logs: logs.count, boards: document.boards?.count ?? 0, images: names.count, bytes: bytes))
+        let declared = Set(manifest.missingImages ?? [])
+        guard declared.allSatisfy(safe), names.allSatisfy({ safe($0) && (manifest.files["Images/" + $0] != nil || declared.contains($0)) }) else { throw ImageExportError.unavailable }
+        let missing = names.intersection(declared).filter { manifest.files["Images/" + $0] == nil }.count
+        return (document, BackupPackagePreview(tasks: tasks.count, logs: logs.count, boards: document.boards?.count ?? 0, images: names.count - missing, bytes: bytes, missingImages: missing))
     }
     static func stage(_ folder: URL) throws -> (URL, JournalDocument) {
         let target = FileManager.default.temporaryDirectory.appendingPathComponent("Timeline-Restore-" + UUID().uuidString)
@@ -79,16 +91,20 @@ private enum BackupFiles {
 
 extension JournalStore {
     /// 导出固定快照及其原图；下载、编码、复制和摘要计算均不占用主线程。
-    public func createBackupPackage() async throws -> URL {
+    /// 找不到的原图默认中止（`BackupPackageError.missingImages` 列出它们）；用户确认后可以不带它们导出，其余内容照常备份。
+    public func createBackupPackage(allowingMissingImages: Bool = false) async throws -> URL {
         let document = documentSnapshot
-        let names = BackupFiles.imageNames(document)
-        for name in names {
+        var names = BackupFiles.imageNames(document)
+        var missing: [String] = []
+        for name in names.sorted() {
             guard BackupFiles.safe(name) else { throw CocoaError(.fileReadInvalidFileName) }
             if !FileManager.default.fileExists(atPath: imagesDirectory.appendingPathComponent(name).path) {
-                guard try await fetchImage?(name) == true else { throw ImageExportError.unavailable }
+                if (try? await fetchImage?(name)) != true { missing.append(name) }
             }
         }
-        let images = imagesDirectory
+        if !missing.isEmpty, !allowingMissingImages { throw BackupPackageError.missingImages(missing) }
+        names.subtract(missing)
+        let images = imagesDirectory, declaredMissing = missing
         return try await Task.detached(priority: .utility) {
             let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Timeline-" + UUID().uuidString + ".timelinebackup")
             do {
@@ -103,7 +119,7 @@ extension JournalStore {
                     try data.write(to: folder.appendingPathComponent("Images").appendingPathComponent(name), options: .atomic)
                     files["Images/" + name] = IncrementalSync.digest(data)
                 }
-                try IncrementalSync.encode(BackupManifest(createdAt: Date(), files: files)).write(to: folder.appendingPathComponent("manifest.json"), options: .atomic)
+                try IncrementalSync.encode(BackupManifest(createdAt: Date(), files: files, missingImages: declaredMissing.isEmpty ? nil : declaredMissing)).write(to: folder.appendingPathComponent("manifest.json"), options: .atomic)
                 _ = try BackupFiles.validate(folder)
                 return folder
             } catch { try? FileManager.default.removeItem(at: folder); throw error }
@@ -123,7 +139,10 @@ extension JournalStore {
         try await Task.detached(priority: .utility) {
             try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
             for name in BackupFiles.imageNames(validated) {
-                let data = try Data(contentsOf: staging.appendingPathComponent("Images").appendingPathComponent(name))
+                // 校验已确认：不在备份里的都是导出时声明过缺失的。
+                let source = staging.appendingPathComponent("Images").appendingPathComponent(name)
+                guard FileManager.default.fileExists(atPath: source.path) else { continue }
+                let data = try Data(contentsOf: source)
                 let target = images.appendingPathComponent(name)
                 if FileManager.default.fileExists(atPath: target.path) {
                     guard IncrementalSync.digest(try Data(contentsOf: target)) == IncrementalSync.digest(data) else { throw CocoaError(.fileReadCorruptFile) }

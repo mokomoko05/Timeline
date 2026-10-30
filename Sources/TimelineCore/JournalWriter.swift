@@ -132,12 +132,6 @@ final class JournalWriter: @unchecked Sendable {
         }
     }
 
-    func loadDays(from start: String, through end: String, completion: @escaping @Sendable (Result<[String: DayEntry], Error>) -> Void) {
-        queue.async { [self] in
-            completion(Result { guard let database else { throw CocoaError(.fileNoSuchFile) }; return try database.loadDays(from: start, through: end) })
-        }
-    }
-
     func waitUntilIdle() { queue.sync {} }
     func statistics() -> (rows: Int, bytes: Int) { queue.sync { (database?.lastChangedRows ?? 0, database?.lastPayloadBytes ?? 0) } }
 

@@ -170,7 +170,7 @@ final class ReliabilityTests: XCTestCase {
         XCTAssertEqual(try db.scalar("SELECT count(*) FROM outbox"), 0)
     }
 
-    func testDateScopedPersistenceAndIndexedRangeKeepMovesCorrect() async throws {
+    func testDateScopedPersistenceKeepsMovesCorrect() async throws {
         let db = try JournalDatabase(url: try directory().appendingPathComponent("journal.sqlite"))
         var document = JournalDocument()
         for index in 0..<1000 {
@@ -184,10 +184,121 @@ final class ReliabilityTests: XCTestCase {
         document.days[to]!.logs.append(moving)
         try db.save(document, changedDays: [from, to])
         XCTAssertEqual(db.lastComparedDays, 2)
-        let range = try db.loadDays(from: from, through: to)
-        XCTAssertEqual(range, document.days.filter { $0.key >= from && $0.key <= to })
         XCTAssertEqual(try db.load(), document)
     }
+    /// 数据坏掉的设备正是最需要停用的：能停用，停用后不再报错，其他设备照常同步。
+    func testCorruptDeviceCanBeRetiredAndStopsReportingErrors() async throws {
+        let cloud = try directory()
+        let a = FolderSync(store: JournalStore(directory: try directory()), folder: cloud, deviceName: "A")
+        let b = FolderSync(store: JournalStore(directory: try directory()), folder: cloud, deviceName: "B")
+        let c = FolderSync(store: JournalStore(directory: try directory()), folder: cloud, deviceName: "C")
+        try await a.sync(); try await b.sync(); try await c.sync(); try await a.sync()
+        _ = try b.store.quickLog("From B", on: Date()); try await b.sync()
+        for file in try FileManager.default.contentsOfDirectory(at: cloud.appendingPathComponent("streams").appendingPathComponent(b.deviceID), includingPropertiesForKeys: nil) {
+            try Data("bad".utf8).write(to: file)
+        }
+        try await a.sync()
+        XCTAssertFalse(a.fileErrors.isEmpty)
+        try await a.retireDevice(b.deviceID)
+        XCTAssertTrue(a.fileErrors.isEmpty, "\(a.fileErrors)")
+        XCTAssertFalse(a.waitingForDownload)
+        while a.isSyncing { try await Task.sleep(for: .milliseconds(5)) }
+        try await a.sync()
+        XCTAssertTrue(a.devices.contains { $0.id == b.deviceID && $0.isRetired })
+        _ = try c.store.quickLog("From C", on: Date()); try await c.sync(); try await a.sync()
+        XCTAssertTrue(a.store.allLogs().contains { $0.log.text == "From C" })
+        XCTAssertTrue(a.fileErrors.isEmpty)
+        try await c.sync()
+        XCTAssertTrue(c.fileErrors.isEmpty, "第三台设备读到停用标记后也不再报错：\(c.fileErrors)")
+    }
+
+    /// 只放过要停用的那台：别的设备坏了还是不能停用，提示也要说清楚，不能说成网络问题。
+    func testRetiringIsStillBlockedByAnotherDevicesProblem() async throws {
+        let cloud = try directory()
+        let a = FolderSync(store: JournalStore(directory: try directory()), folder: cloud, deviceName: "A")
+        let b = FolderSync(store: JournalStore(directory: try directory()), folder: cloud, deviceName: "B")
+        let c = FolderSync(store: JournalStore(directory: try directory()), folder: cloud, deviceName: "C")
+        try await a.sync(); try await b.sync(); try await c.sync(); try await a.sync()
+        _ = try c.store.quickLog("From C", on: Date()); try await c.sync()
+        for file in try FileManager.default.contentsOfDirectory(at: cloud.appendingPathComponent("streams").appendingPathComponent(c.deviceID), includingPropertiesForKeys: nil) {
+            try Data("bad".utf8).write(to: file)
+        }
+        do { try await a.retireDevice(b.deviceID); XCTFail("C 的数据还没合并，不能停用 B") }
+        catch { XCTAssertEqual(error.localizedDescription, FolderSync.SyncError.retirementBlocked.localizedDescription) }
+        XCTAssertFalse(a.devices.contains { $0.id == b.deviceID && $0.isRetired })
+    }
+
+    /// 哪里都找不到的原图不算同步失败，也不挡住「已同步」；找回后自动补传。
+    func testImageMissingEverywhereIsNotAFailureAndUploadsOnceFound() async throws {
+        let cloud = try directory()
+        let store = JournalStore(directory: try directory())
+        let sync = FolderSync(store: store, folder: cloud, deviceName: "A")
+        let name = "lost.png"
+        _ = try store.quickLog("With image", images: [name], on: Date())
+        try await sync.sync()
+        XCTAssertEqual(sync.missingImages, [name])
+        XCTAssertTrue(sync.fileErrors.isEmpty, "\(sync.fileErrors)")
+        XCTAssertFalse(sync.hasLocalChanges)
+        XCTAssertFalse(sync.waitingForUpload)
+        XCTAssertNotNil(sync.lastSync)
+        try FileManager.default.createDirectory(at: store.imagesDirectory, withIntermediateDirectories: true)
+        try Data("found".utf8).write(to: store.imagesDirectory.appendingPathComponent(name))
+        try await sync.sync()
+        XCTAssertTrue(sync.missingImages.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cloud.appendingPathComponent("images").appendingPathComponent(name).path))
+    }
+
+    /// 缺原图默认中止并列出来；确认后可以不带它们导出，恢复后其余内容和原图都在。
+    func testBackupCanSkipMissingImagesOnlyWhenConfirmed() async throws {
+        let source = JournalStore(directory: try directory())
+        try FileManager.default.createDirectory(at: source.imagesDirectory, withIntermediateDirectories: true)
+        try Data("kept".utf8).write(to: source.imagesDirectory.appendingPathComponent("kept.png"))
+        _ = try source.quickLog("Two images", images: ["kept.png", "lost.png"], on: Date())
+        do { _ = try await source.createBackupPackage(); XCTFail("默认不能悄悄漏图") }
+        catch BackupPackageError.missingImages(let names) { XCTAssertEqual(names, ["lost.png"]) }
+        let package = try await source.createBackupPackage(allowingMissingImages: true)
+        defer { try? FileManager.default.removeItem(at: package) }
+        let preview = try await JournalStore.inspectBackupPackage(package)
+        XCTAssertEqual(preview.images, 1)
+        XCTAssertEqual(preview.missingImages, 1)
+        let target = JournalStore(directory: try directory())
+        try await target.restoreBackupPackage(package)
+        XCTAssertTrue(target.allLogs().contains { $0.log.text == "Two images" })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.imagesDirectory.appendingPathComponent("kept.png").path))
+        // 没声明过却缺文件的备份仍然算损坏。
+        try FileManager.default.removeItem(at: package.appendingPathComponent("Images/kept.png"))
+        do { _ = try await JournalStore.inspectBackupPackage(package); XCTFail("未声明的缺图必须拒绝") } catch { }
+    }
+
+    /// 编辑器不回话（网页进程被系统挂起）时同步不能一直卡住；回话后的内容下一轮带上。
+    func testHungEditorDoesNotWedgeSync() async throws {
+        let sync = FolderSync(store: JournalStore(directory: try directory()), folder: try directory(), deviceName: "A")
+        var release: CheckedContinuation<Void, Never>?
+        sync.prepareDeadline = 0.05
+        sync.prepareForSync = { await withCheckedContinuation { release = $0 } }
+        let started = Date()
+        try await sync.sync()
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+        XCTAssertFalse(sync.isSyncing)
+        XCTAssertNotNil(sync.lastCheck)
+        release?.resume()
+    }
+
+    func testStoppingFolderAccessWhileCallbacksRunDoesNotDeadlock() async throws {
+        let folder = try directory()
+        let finished = expectation(description: "stopped")
+        DispatchQueue.global().async {
+            for index in 0..<30 {
+                let access = SyncFolderAccess(folder: folder) { }
+                access.start()
+                try? FolderSync.coordinatedWrite(Data("x".utf8), to: folder.appendingPathComponent("file\(index)"))
+                access.stop()
+            }
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 20)
+    }
+
     func testCorruptPeerDoesNotBlockOtherPeerOrLocalPublicationAndRecovers() async throws {
         let cloud = try directory()
         let a = FolderSync(store: JournalStore(directory: try directory()), folder: cloud, deviceName: "A")

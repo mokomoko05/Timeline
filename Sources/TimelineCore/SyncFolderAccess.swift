@@ -22,20 +22,24 @@ final class SyncFolderAccess: NSObject, NSFilePresenter, @unchecked Sendable {
     }
 
     func start() {
-        lock.lock(); defer { lock.unlock() }
-        guard !registered else { return }
+        lock.lock()
+        guard !registered else { lock.unlock(); return }
         scoped = presentedItemURL?.startAccessingSecurityScopedResource() == true
         registered = true
+        lock.unlock()
         NSFileCoordinator.addFilePresenter(self)
     }
 
     func stop() {
-        lock.lock(); defer { lock.unlock() }
-        guard registered else { return }
-        NSFileCoordinator.removeFilePresenter(self)
+        lock.lock()
+        guard registered else { lock.unlock(); return }
         registered = false
-        if scoped { presentedItemURL?.stopAccessingSecurityScopedResource() }
+        let wasScoped = scoped
         scoped = false
+        lock.unlock()
+        // 不能持锁调用：系统可能等回调队列，而回调 `notify()` 也要拿这把锁。
+        NSFileCoordinator.removeFilePresenter(self)
+        if wasScoped { presentedItemURL?.stopAccessingSecurityScopedResource() }
     }
 
     deinit { stop() }

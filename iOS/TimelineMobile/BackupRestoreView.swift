@@ -15,15 +15,13 @@ struct BackupRestoreView: View {
     @State private var exporting = false
     @State private var result: String?
     @State private var visible = true
+    @State private var missingImages: [String] = []
 
     var body: some View {
         Form {
             Section {
                 Button("导出完整备份") {
-                    run {
-                        exportURL = try await store.createBackupPackage()
-                        exporting = true
-                    }
+                    run { try await export(allowingMissingImages: false) }
                 }.disabled(working || store.isReadOnly)
                 Button("选择备份并预览") { importing = true }.disabled(working)
                 if working { ProgressView("正在处理备份…") }
@@ -38,6 +36,7 @@ struct BackupRestoreView: View {
                     LabeledContent("日志", value: "\(preview.logs)")
                     LabeledContent("工作板", value: "\(preview.boards)")
                     LabeledContent("原图", value: "\(preview.images)")
+                    if preview.missingImages > 0 { LabeledContent("缺失的原图", value: "\(preview.missingImages)") }
                     LabeledContent("大小", value: ByteCountFormatter.string(fromByteCount: Int64(preview.bytes), countStyle: .file))
                     Text("内容及原图校验通过。恢复会替换当前内容，并向其他设备同步；恢复前自动保留本机快照。")
                         .font(.caption).foregroundStyle(.secondary)
@@ -71,9 +70,24 @@ struct BackupRestoreView: View {
             }
             Button("取消", role: .cancel) {}
         }
+        .confirmationDialog(LF("有 %lld 张原图找不到", missingImages.count), isPresented: Binding(get: { !missingImages.isEmpty }, set: { if !$0 { missingImages = [] } }), titleVisibility: .visible) {
+            Button("仍然导出") { run { try await export(allowingMissingImages: true) } }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("联网后图片可能还能下载，可以稍后重试。仍然导出时，备份不含这些原图，其余内容不受影响。")
+        }
         .onAppear { visible = true }
         .onDisappear { visible = false; if !working { releaseSource() } }
         .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+            if note.object as? String == "backupRestoreRoundTrip" {
+                run {
+                    let package = try await store.createBackupPackage(allowingMissingImages: true)
+                    defer { Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: package) } }
+                    try await store.restoreBackupPackage(package)
+                    PerfProbe.lap("BACKUP_RESTORED logs=\(store.allLogs(includeFocus: true).count) error=\(store.errorMessage ?? "none")")
+                }
+                return
+            }
             guard note.object as? String == "backupValidation" else { return }
             run {
                 let package = try await store.createBackupPackage()
@@ -82,6 +96,15 @@ struct BackupRestoreView: View {
                 result = LF("备份校验通过：%lld 条日志", checked.logs)
                 PerfProbe.lap("BACKUP_VALIDATED logs=\(checked.logs) images=\(checked.images)")
             }
+        }
+    }
+
+    private func export(allowingMissingImages: Bool) async throws {
+        do {
+            exportURL = try await store.createBackupPackage(allowingMissingImages: allowingMissingImages)
+            exporting = true
+        } catch BackupPackageError.missingImages(let names) {
+            missingImages = names
         }
     }
 

@@ -58,6 +58,7 @@ struct IncrementalState: Codable, Equatable, Sendable {
     var pendingRetirements: [String: SyncRetirement]?
     var retiredDevices: Set<String>?
     var waitingFiles: Set<String>?
+    var missingImages: Set<String>?
 }
 
 enum IncrementalSync {
@@ -123,13 +124,15 @@ enum IncrementalSync {
     }
 
     static func read(folder: URL, device: String, state: inout IncrementalState,
-                     merge: inout SyncMerge, records: inout [String: SyncRecord]) throws -> ReadResult {
+                     merge: inout SyncMerge, records: inout [String: SyncRecord], quiet: Set<String> = []) throws -> ReadResult {
         var result = ReadResult()
         state.streamErrors = [:]
         state.waitingFiles = []
         let root = folder.appendingPathComponent(directory)
         if FileManager.default.fileExists(atPath: root.path) {
             for peer in try FolderSync.coordinatedDirectoryContents(root).map(\.lastPathComponent).sorted() where safe(peer) && peer != device {
+                let reported = (result.waiting, state.waitingFiles, state.streamErrors)
+                defer { if quiet.contains(peer) { (result.waiting, state.waitingFiles, state.streamErrors) = reported } }
                 var problemPath = "streams/" + peer
                 do {
                     let path = root.appendingPathComponent(peer)
@@ -182,6 +185,8 @@ enum IncrementalSync {
                 String($0.lastPathComponent.split(separator: "-")[0])
             }
             for (peer, files) in groups where peer != device {
+                let reported = (result.waiting, state.waitingFiles, state.streamErrors)
+                defer { if quiet.contains(peer) { (result.waiting, state.waitingFiles, state.streamErrors) = reported } }
                 var problemPath = "receipts/" + peer
                 do {
                     guard let file = files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }).last,
@@ -200,7 +205,7 @@ enum IncrementalSync {
                 }
             }
         }
-        if state.peers.values.contains(where: { ($0.seen[$0.device] ?? 0) > (state.received[$0.device] ?? 0) }) { result.waiting = true }
+        if state.peers.values.contains(where: { !quiet.contains($0.device) && ($0.seen[$0.device] ?? 0) > (state.received[$0.device] ?? 0) }) { result.waiting = true }
         return result
     }
 

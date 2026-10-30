@@ -45,7 +45,8 @@ struct TimelineMobileApp: App {
                 let saving = BackgroundTask()
                 Task { @MainActor in
                     defer { saving.end() }
-                    await BoardWebSession.commitActiveEditors()
+                    // 网页进程可能已被挂起、不再回话：不能因此连已有的修改都不存。
+                    await waitAtMost(5) { await BoardWebSession.commitActiveEditors() }
                     do { try await store.saveAndWait() } catch { }
                 }
                 sync.setActive(false)
