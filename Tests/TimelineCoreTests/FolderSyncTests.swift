@@ -31,6 +31,68 @@ final class FolderSyncTests: XCTestCase {
         return sync
     }
 
+    func testDirectoryCoordinationCreatesNestedStreamAndRejectsFileAsParent() throws {
+        let file = folder.appendingPathComponent("streams/testdevice/nested/change.json")
+        try FolderSync.coordinatedWrite(Data("first".utf8), to: file)
+        try FolderSync.coordinatedWrite(Data("second".utf8), to: file)
+        XCTAssertEqual(try FolderSync.coordinatedRead(file), Data("second".utf8))
+        XCTAssertEqual(try FolderSync.coordinatedDirectoryContents(file.deletingLastPathComponent()).map(\.lastPathComponent), ["change.json"])
+        XCTAssertThrowsError(try FolderSync.coordinatedWrite(Data(), to: file.appendingPathComponent("child.json")))
+    }
+
+    func testFolderAccessBalancesPresenterRegistration() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let access = SyncFolderAccess(folder: folder, changed: {})
+        access.start()
+        access.start()
+        XCTAssertEqual(NSFileCoordinator.filePresenters.filter { $0 === access }.count, 1)
+        access.stop()
+        access.stop()
+        XCTAssertFalse(NSFileCoordinator.filePresenters.contains { $0 === access })
+    }
+
+    func testTransportCheckRequiresMatchingReplyAndKeepsJournalUntouched() async throws {
+        let phone = makeDevice("Phone")
+        let content = phone.store.syncContent
+        let probe = "probe" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let root = folder.appendingPathComponent("transport-checks/" + probe)
+        let check = Task { try await phone.verifyTransport(probe: probe, timeout: 5) }
+        let request = root.appendingPathComponent("request.txt")
+        while !FileManager.default.fileExists(atPath: request.path) { try await Task.sleep(nanoseconds: 10_000_000) }
+        try FolderSync.coordinatedWrite(Data("wrong reply".utf8), to: root.appendingPathComponent("reply.txt"))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try FolderSync.coordinatedWrite(Data(probe.utf8), to: root.appendingPathComponent("reply.txt"))
+        _ = try await check.value
+        XCTAssertEqual(phone.store.syncContent, content)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+        do {
+            _ = try await phone.verifyTransport(probe: "../escape")
+            XCTFail("Unsafe paths must be rejected")
+        } catch { }
+    }
+
+    func testRemoteChangeIsObservedWithoutWaitingForPollingTimer() async throws {
+        let phone = makeDevice("Phone"), mac = makeDevice("Mac")
+        try await sync(phone, mac, phone)
+        phone.startAutomaticSync(interval: 3600)
+        defer { phone.stopAutomaticSync() }
+        clock += 1
+        _ = try mac.store.quickLog("Observed cloud change", on: clock)
+        try await sync(mac)
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline, !phone.store.allLogs().contains(where: { $0.log.text == "Observed cloud change" }) {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertTrue(phone.store.allLogs().contains { $0.log.text == "Observed cloud change" })
+        // 通知不能引发反复导出或新的云端批次。
+        try await sync(phone)
+        let files = try FolderSync.coordinatedDirectoryContents(folder.appendingPathComponent("streams/" + phone.deviceID))
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        try await sync(phone)
+        XCTAssertEqual(try FolderSync.coordinatedDirectoryContents(folder.appendingPathComponent("streams/" + phone.deviceID)), files)
+        XCTAssertEqual(phone.lastWrittenBytes, 0)
+    }
+
     /// 每次同步前把时钟拨快一秒，后做的修改时间戳一定更晚。
     private func sync(_ devices: FolderSync...) async throws {
         for device in devices {

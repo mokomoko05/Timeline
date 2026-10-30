@@ -1167,3 +1167,10 @@
 
 "图片正在导入，请完成后再保存。" = "Importing images. Wait until it finishes before saving.";
 "图片导入失败：" = "Image import failed: ";
+
+"准备同步…" = "Preparing…";
+"检查更新…" = "Checking updates…";
+"合并更新…" = "Merging updates…";
+"保存更新…" = "Saving updates…";
+"上传更新…" = "Sending updates…";
+"同步完成" = "Sync complete";

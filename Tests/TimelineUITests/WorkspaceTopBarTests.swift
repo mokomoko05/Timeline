@@ -7,6 +7,32 @@ import TimelineCore
 
 @MainActor
 final class WorkspaceTopBarTests: XCTestCase {
+    func testSyncButtonAppearsForLocalEditAndCollapsesAfterAutomaticCompletion() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let folder = directory.appendingPathComponent("cloud")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let defaults = InMemoryDefaults()
+        defaults.set(true, forKey: CloudSyncController.enabledKey)
+        let store = JournalStore(directory: directory.appendingPathComponent("data"))
+        let controller = CloudSyncController(store: store, defaults: defaults, syncFolder: folder)
+        let sync = try XCTUnwrap(controller.sync)
+        sync.stopAutomaticSync()
+        await sync.syncUntilExported()
+        let previous = AppRouter.cloudSync
+        AppRouter.cloudSync = controller
+        defer { AppRouter.cloudSync = previous; controller.setEnabled(false); try? FileManager.default.removeItem(at: directory) }
+        let host = NSHostingView(rootView: WorkspaceSyncButton())
+        let idleWidth = host.fittingSize.width
+        sync.startAutomaticSync(delay: 0.2, interval: 3600)
+        _ = try store.quickLog("Toolbar visibility check", on: Date())
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertGreaterThan(host.fittingSize.width, idleWidth + 10)
+        let deadline = Date().addingTimeInterval(4)
+        while Date() < deadline, sync.hasLocalChanges || sync.isSyncing { try await Task.sleep(for: .milliseconds(20)) }
+        try await Task.sleep(for: .milliseconds(2400))
+        XCTAssertEqual(host.fittingSize.width, idleWidth, accuracy: 0.5, "The entire button must collapse so the adjacent panels can move left")
+    }
+
     func testTooltipsFollowEachConfiguredShortcutAndResetImmediately() {
         let defaults = InMemoryDefaults()
         let labels = WorkspaceShortcutLabels(defaults: defaults)

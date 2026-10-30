@@ -10,6 +10,7 @@ final class SyncModel: ObservableObject {
     static let bookmarkKey = "syncFolderBookmark"
 
     @Published private(set) var sync: FolderSync?
+    @Published private(set) var toolbar: SyncToolbarPresentation?
     @Published private(set) var folderName: String?
     @Published var setupError: String?
     let store: JournalStore
@@ -72,13 +73,25 @@ final class SyncModel: ObservableObject {
         let sync = FolderSync(store: store, folder: folder, deviceName: UIDevice.current.model)
         sync.prepareForSync = { await BoardWebSession.commitActiveEditors() }
         self.sync = sync
+        toolbar = SyncToolbarPresentation(sync: sync)
         folderName = folder.lastPathComponent
         if active { sync.startAutomaticSync(interval: 15) } else { sync.syncSoon() }
+        // 真机通道检查沿用正式界面，但仅交换随机诊断文件，绝不添加样例日志。
+        if let probe = UserDefaults.standard.string(forKey: "syncTransportProbe"), !probe.isEmpty {
+            Task {
+                do {
+                    let elapsed = try await sync.verifyTransport(probe: probe)
+                    print("[sync-probe] roundTripSeconds=\(elapsed)")
+                } catch { print("[sync-probe] failed=\(error.localizedDescription)") }
+                fflush(stdout)
+            }
+        }
     }
 
     private func stop() {
         sync?.stopAutomaticSync()
         sync = nil
+        toolbar = nil
         folderName = nil
     }
 
@@ -96,6 +109,11 @@ final class SyncModel: ObservableObject {
                 background.end()
             }
         }
+    }
+
+    func syncWithFeedback() async {
+        guard let toolbar else { return }
+        await toolbar.feedback.run { await syncNow() }
     }
 
     func syncNow() async {

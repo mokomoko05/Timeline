@@ -270,6 +270,12 @@ enum PerfProbe {
             ("切到笔记", { switchTab(.notes) }),
             ("切到工作板", { switchTab(.boards) }),
             ("同步工作板", { Task { await AppServices.shared.sync.syncNow() } }),
+            ("点击同步按钮", {
+                _ = try? store.quickLog("Sync feedback probe", linkDefault: false, on: Date())
+                Task { await AppServices.shared.sync.syncWithFeedback() }
+            }),
+            ("检查同步完成提示", { if let toolbar = AppServices.shared.sync.toolbar { print("[perf] SYNC_FEEDBACK phase=\(toolbar.feedback.phase.rawValue) visible=\(toolbar.visible) working=\(toolbar.feedback.isWorking)") } }),
+            ("检查同步提示收起", { if let toolbar = AppServices.shared.sync.toolbar { print("[perf] SYNC_FEEDBACK phase=\(toolbar.feedback.phase.rawValue) visible=\(toolbar.visible) working=\(toolbar.feedback.isWorking)") } }),
             ("准备工作板收藏", { store.setBoardFavoriteOrder(Array(store.boards.prefix(3).map(\.id))) }),
             ("搜索工作板", { send("boardSearch") }),
             ("清空工作板搜索", { send("boardSearchClear") }),

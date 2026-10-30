@@ -15,6 +15,7 @@ final class CloudSyncController: ObservableObject {
     static var defaultFolder: URL { iCloudDrive.appendingPathComponent("Timeline", isDirectory: true) }
 
     @Published private(set) var sync: FolderSync?
+    @Published private(set) var toolbar: SyncToolbarPresentation?
     private let store: JournalStore
     private let defaults: UserDefaults
     private let syncFolder: URL
@@ -52,6 +53,7 @@ final class CloudSyncController: ObservableObject {
         // 同步状态变了让设置界面跟着刷新。
         forward = sync.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         self.sync = sync
+        toolbar = SyncToolbarPresentation(sync: sync)
         sync.startAutomaticSync()
     }
 
@@ -59,10 +61,16 @@ final class CloudSyncController: ObservableObject {
         sync?.stopAutomaticSync()
         forward = nil
         sync = nil
+        toolbar = nil
     }
 
     func revealFolder() {
         NSWorkspace.shared.activateFileViewerSelecting([syncFolder])
+    }
+
+    func syncWithFeedback() async {
+        guard let toolbar else { return }
+        await toolbar.feedback.run { await syncNow() }
     }
 
     func syncNow() async {
@@ -76,33 +84,68 @@ final class CloudSyncController: ObservableObject {
 /// 放在共用顶栏左端；同步状态只刷新这个控件。
 struct WorkspaceSyncButton: View {
     var body: some View {
-        if let controller = AppRouter.cloudSync { WorkspaceCloudSyncButton(controller: controller) }
+        if let controller = AppRouter.cloudSync {
+            WorkspaceSyncControllerButton(controller: controller)
+        }
+    }
+}
+
+private struct WorkspaceSyncControllerButton: View {
+    @ObservedObject var controller: CloudSyncController
+    var body: some View {
+        if let state = controller.sync, let presentation = controller.toolbar {
+            WorkspaceSyncVisibility(controller: controller, state: state, presentation: presentation)
+        }
+    }
+}
+
+private struct WorkspaceSyncVisibility: View {
+    let controller: CloudSyncController
+    let state: FolderSync
+    @ObservedObject var presentation: SyncToolbarPresentation
+
+    var body: some View {
+        if presentation.visible {
+            WorkspaceCloudSyncButton(controller: controller, state: state, feedback: presentation.feedback)
+                .transition(.opacity.combined(with: .move(edge: .leading)))
+        }
     }
 }
 
 private struct WorkspaceCloudSyncButton: View {
-    @ObservedObject var controller: CloudSyncController
-    @State private var working = false
+    let controller: CloudSyncController
+    @ObservedObject var state: FolderSync
+    @ObservedObject var feedback: SyncButtonFeedback
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    var body: some View {
+    var body: some View { button }
+
+    private var button: some View {
         Button {
-            working = true
-            Task { @MainActor in await controller.syncNow(); working = false }
+            Task { @MainActor in await controller.syncWithFeedback() }
         } label: {
-            Label(title, systemImage: controller.sync?.lastError != nil ? "exclamationmark.icloud" : "arrow.triangle.2.circlepath.icloud")
-                .font(.system(size: 11, weight: .medium)).frame(minHeight: 24)
+            HStack(spacing: 5) {
+                Image(systemName: feedback.phase.symbol)
+                    .id(feedback.phase.symbol)
+                    .transition(.scale(scale: reduceMotion ? 1 : 0.6).combined(with: .opacity))
+                    .frame(width: 14)
+                Text(AppLocalized(feedback.phase.title)).contentTransition(.opacity).lineLimit(1)
+                if feedback.isWorking || feedback.phase.isRunning {
+                    ProgressView().progressViewStyle(.circular).controlSize(.mini)
+                        .frame(width: 12, height: 12).transition(.opacity)
+                }
+            }
+            .font(.system(size: 11, weight: .medium)).frame(minHeight: 24)
+            .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.85), value: feedback.phase)
         }
         .buttonStyle(HitAreaButtonStyle(compact: true))
-        .foregroundStyle(controller.sync?.lastError != nil ? Palette.deadline : Palette.accent)
-        .disabled(working)
-        .help(controller.sync?.lastError.map(AppLocalizedLines) ?? AppLocalized(controller.sync?.waitingForUpload == true ? "等待 iCloud 上传" : (controller.sync?.waitingForDownload == true ? "等待 iCloud 下载" : "立即同步")))
+        .foregroundStyle(feedback.phase == .completed ? Color.green : (feedback.phase == .failed ? Palette.deadline : (state.waitingForUpload || state.waitingForDownload ? Color.orange : Palette.accent)))
+        .disabled(feedback.isWorking)
+        .help(state.lastError.map(AppLocalizedLines) ?? AppLocalized(feedback.phase == .idle ? "立即同步" : feedback.phase.title))
         .accessibilityLabel("立即同步")
+        .accessibilityValue(AppLocalized(feedback.phase == .idle ? state.statusTitle : feedback.phase.title))
         .accessibilityIdentifier("workspace.sync")
         .contextMenu { Button("同步详情") { AppRouter.showSettings() } }
-    }
-
-    private var title: String {
-        AppLocalized(working ? "正在同步…" : (controller.sync?.waitingForUpload == true ? "等待上传" : (controller.sync?.waitingForDownload == true ? "等待下载" : "同步")))
     }
 }
 

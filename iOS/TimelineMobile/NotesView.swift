@@ -69,7 +69,7 @@ struct NotesView: View {
             .overlay { if store.noteTopics().isEmpty && store.allTags().isEmpty { ContentUnavailableView("还没有笔记", systemImage: "text.bubble") } }
             .searchable(text: $query, prompt: "搜索任务或 #标签")
             .navigationTitle("笔记")
-            .toolbar { ToolbarItem(placement: .topBarLeading) { SyncToolbarButton(sync: sync) } }
+            .toolbar { SyncToolbarItems(sync: sync) }
             .notesDestinations(store)
             .syncOnRefresh(sync)
         }

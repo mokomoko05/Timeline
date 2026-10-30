@@ -70,6 +70,8 @@ public final class FolderSync: ObservableObject {
     /// 网页编辑器先取回尚未通过防抖写入的正文，再捕获同步快照；同步和进后台都必须等待。
     public var prepareForSync: (() async -> Void)?
     @Published public private(set) var isSyncing = false
+    @Published public private(set) var phase: SyncPhase = .idle
+    @Published public private(set) var hasLocalChanges = false
     @Published public private(set) var lastSync: Date?
     @Published public private(set) var lastCheck: Date?
     @Published public private(set) var lastExport: Date?
@@ -112,6 +114,11 @@ public final class FolderSync: ObservableObject {
     /// 连续等下载的轮数：iCloud 一直没下载下来时别无限地每几秒查一次。
     private var downloadWaits = 0
     private var automatic: AnyCancellable?
+    private var contentObservation: AnyCancellable?
+    private var observedContent: SyncContent?
+    private var contentCheckScheduled = false
+    private var applyingRemoteContent = false
+    private var folderAccess: SyncFolderAccess?
     private var timer: Timer?
     private var retryTask: Task<Void, Never>?
     private var imageRequests: Set<String> = []
@@ -129,6 +136,7 @@ public final class FolderSync: ObservableObject {
         self.store = store
         self.folder = folder
         self.deviceName = deviceName
+        observedContent = store.syncContent
         let url = Self.stateURL(in: store.directory)
         state = (try? store.persistedSyncState()) ?? SyncState(device: Self.makeDeviceID())
         let folderPath = folder.standardizedFileURL.resolvingSymlinksInPath().path
@@ -136,6 +144,7 @@ public final class FolderSync: ObservableObject {
             state = SyncState(device: Self.makeDeviceID(), records: state.records)
         }
         state.folderPath = folderPath
+        hasLocalChanges = state.ledger?.pending.isEmpty == false || state.ledger?.pendingCloud.contains(where: { $0.hasPrefix("streams/" + state.device + "/") }) == true
         let statusURL = url.deletingLastPathComponent().appendingPathComponent("status.json")
         if let data = try? Data(contentsOf: statusURL), let report = try? JSONDecoder().decode([String: String].self, from: data) {
             let formatter = ISO8601DateFormatter()
@@ -152,7 +161,7 @@ public final class FolderSync: ObservableObject {
         }
     }
 
-    deinit { timer?.invalidate(); retryTask?.cancel() }
+    deinit { timer?.invalidate(); retryTask?.cancel(); folderAccess?.stop() }
 
     private func enqueueImage(_ name: String) {
         guard !imageRequests.contains(name) else { return }
@@ -211,10 +220,30 @@ public final class FolderSync: ObservableObject {
     }
 
     /// 本机数据一改（停 `delay` 秒没有新修改）就同步，另外每隔 `interval` 秒看一次其他设备有没有新内容。
-    public func startAutomaticSync(delay: TimeInterval = 2, interval: TimeInterval = 30) {
+    public func startAutomaticSync(delay: TimeInterval = 0.5, interval: TimeInterval = 30) {
+        if folderAccess == nil {
+            let access = SyncFolderAccess(folder: folder) { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self, self.automatic != nil else { return }
+                    self.retry(after: 0.5)
+                }
+            }
+            access.start()
+            folderAccess = access
+        }
         automatic = store.objectWillChange
             .debounce(for: .seconds(delay), scheduler: RunLoop.main)
             .sink { [weak self] in self?.syncSoon() }
+        contentObservation = store.objectWillChange.sink { [weak self] in
+            guard let self, !self.applyingRemoteContent, !self.contentCheckScheduled else { return }
+            self.contentCheckScheduled = true
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.contentCheckScheduled = false
+                self.checkLocalChanges()
+            }
+        }
+        checkLocalChanges()
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.syncSoon() }
@@ -224,10 +253,20 @@ public final class FolderSync: ObservableObject {
 
     public func stopAutomaticSync() {
         automatic = nil
+        contentObservation = nil
+        folderAccess?.stop()
+        folderAccess = nil
         retryTask?.cancel()
         retryTask = nil
         timer?.invalidate()
         timer = nil
+    }
+
+    private func checkLocalChanges() {
+        let content = store.syncContent
+        guard content != observedContent else { return }
+        observedContent = content
+        if !hasLocalChanges { hasLocalChanges = true }
     }
 
     /// 发起一次同步，不等结果；正在同步时，结束后再补一轮。
@@ -262,6 +301,7 @@ public final class FolderSync: ObservableObject {
         do {
             await recordProgress("preparing")
             await prepareForSync?()
+            checkLocalChanges()
             let changed = try await runOnce()
             for name in deferredImageRequests { enqueueImage(name) }
             lastCheck = now()
@@ -318,9 +358,26 @@ public final class FolderSync: ObservableObject {
 
     /// 保存阶段和错误，应用重启后也能诊断是哪一步没有完成；不记录正文或授权书签。
     private func recordProgress(_ stage: String, error: String? = nil) async {
+        let next: SyncPhase
+        switch stage {
+        case "preparing": next = .preparing
+        case "readingRemote": next = .reading
+        case "exporting": next = .saving
+        case "waitingForUpload": next = .waitingForUpload
+        case "waitingForDownload": next = .waitingForDownload
+        case "finished": next = .completed
+        case "failed", "timedOut": next = .failed
+        default: next = phase
+        }
+        if phase != next { phase = next }
         let url = stateURL.deletingLastPathComponent().appendingPathComponent("status.json")
         let formatter = ISO8601DateFormatter()
         var report = ["stage": stage, "time": formatter.string(from: Date()), "error": error ?? lastError ?? "", "device": state.device]
+        report["waitingForUpload"] = String(waitingForUpload)
+        report["waitingForDownload"] = String(waitingForDownload)
+        report["pendingUploadFiles"] = String(pendingUploadFiles)
+        report["pendingUploadBytes"] = String(pendingUploadBytes)
+        report["uploadWaitingSince"] = uploadWaitingSince.map(formatter.string)
         report["lastCheck"] = lastCheck.map(formatter.string)
         report["lastExport"] = lastExport.map(formatter.string)
         report["lastUpload"] = lastUpload.map(formatter.string)
@@ -353,6 +410,7 @@ public final class FolderSync: ObservableObject {
         let outcome = try await Task.detached(priority: .utility) {
             try Self.merge(content: content, state: previous, localChanged: localChanged, baseline: baseline, folder: folder, deviceName: deviceName, now: time)
         }.value
+        phase = .merging
         // 合并期间本机又改了：作废这次结果，稍后重来。
         guard store.syncContent == content else { rerun = true; return false }
         if outcome.firstMerge {
@@ -360,7 +418,12 @@ public final class FolderSync: ObservableObject {
             try? store.export(to: store.backupsDirectory.appendingPathComponent("before-first-sync-\(JournalDates.key(time)).json"))
         }
         let applied = outcome.content != content
-        if applied { store.applySyncContent(outcome.content, persistImmediately: false) }
+        if applied {
+            applyingRemoteContent = true
+            store.applySyncContent(outcome.content, persistImmediately: false)
+            applyingRemoteContent = false
+            observedContent = store.syncContent
+        }
         if waitingForDownload != outcome.pendingDownload { waitingForDownload = outcome.pendingDownload }
         if !outcome.pendingDownload && !waitingForUpload { downloadWaits = 0 }
         if outcome.stateChanged { needsExport = true }
@@ -388,6 +451,7 @@ public final class FolderSync: ObservableObject {
         snapshotState.ledger?.commitID = snapshotState.commitID
         await recordProgress("exporting")
         let durableState = snapshotState
+        if !previous.records.isEmpty, (durableState.ledger?.sequence ?? 0) > (previous.ledger?.sequence ?? 0), !hasLocalChanges { hasLocalChanges = true }
         if recordsChanged || applied || store.hasPendingSave || durableState.ledger != previous.ledger {
             try await store.saveForSync(state: durableState)
         }
@@ -400,6 +464,7 @@ public final class FolderSync: ObservableObject {
             }
             return device
         }
+        phase = .publishing
         let transfer = try await Task.detached(priority: .utility) {
             let persisted = snapshotState
             return try Self.accessing(folder) { () throws -> (Int, Int, URL, IncrementalState, Int, Int) in
@@ -442,6 +507,7 @@ public final class FolderSync: ObservableObject {
             if revisionChanged || waitingForUpload || lastUpload == nil { lastUpload = now() }
         }
         if waitingForUpload != (transfer.0 > 0) { waitingForUpload = transfer.0 > 0 }
+        if transfer.0 == 0, !needsExport, store.syncContent == syncedContent, hasLocalChanges { hasLocalChanges = false }
         if store.syncContent != syncedContent { rerun = true }
         return applied
     }
@@ -469,7 +535,7 @@ public final class FolderSync: ObservableObject {
             readBytes = incoming.bytes
             mergedRemote = incoming.changed
             pendingDownload = incoming.waiting
-            try FileManager.default.createDirectory(at: folder.appendingPathComponent(devicesFolder), withIntermediateDirectories: true)
+            try coordinatedCreateDirectory(folder.appendingPathComponent(devicesFolder))
             let (files, placeholders) = try remoteFiles(in: folder, excluding: state.device, ignoring: ledger.migrated)
             pendingDownload = pendingDownload || placeholders
             let present = Set(files.map { $0.deletingPathExtension().lastPathComponent })
@@ -574,7 +640,7 @@ public final class FolderSync: ObservableObject {
         for subfolder in [devicesFolder, updatesFolder] {
             let directory = folder.appendingPathComponent(subfolder)
             guard FileManager.default.fileExists(atPath: directory.path) else { continue }
-            for name in try FileManager.default.contentsOfDirectory(atPath: directory.path) {
+            for name in try coordinatedDirectoryContents(directory).map(\.lastPathComponent) {
                 let real = placeholderTarget(name) ?? name
                 let owner = subfolder == updatesFolder ? String(real.split(separator: "-", maxSplits: 1).first ?? "") : String(real.dropLast(5))
                 if migrated.contains(owner) { continue }
@@ -600,7 +666,7 @@ public final class FolderSync: ObservableObject {
         let manager = FileManager.default
         var written = 0
         let remote = folder.appendingPathComponent(imagesFolder)
-        try manager.createDirectory(at: remote, withIntermediateDirectories: true)
+        try coordinatedCreateDirectory(remote)
         for name in names.sorted() where !name.contains("/") && !name.hasPrefix(".") {
             let mine = local.appendingPathComponent(name), theirs = remote.appendingPathComponent(name)
             if manager.fileExists(atPath: mine.path) {
@@ -630,7 +696,7 @@ public final class FolderSync: ObservableObject {
         let scoped = folder.startAccessingSecurityScopedResource()
         defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory) || (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil
+        guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory) || (try? coordinatedCreateDirectory(folder)) != nil
         else { throw SyncError.folderUnavailable(folder.path) }
         return try body()
     }
@@ -647,12 +713,45 @@ public final class FolderSync: ObservableObject {
     }
 
     nonisolated static func coordinatedWrite(_ data: Data, to url: URL) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try coordinatedCreateDirectory(url.deletingLastPathComponent())
         var coordinationError: NSError?
-        var writeError: Error?
-        NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { actual in
-            do { try data.write(to: actual, options: .atomic) } catch { writeError = error }
+        var result: Result<Void, Error>?
+        // 更新内容（包括 atomic rename）用普通写意图；forReplacing 表示替换文档身份。
+        NSFileCoordinator().coordinate(writingItemAt: url, options: [], error: &coordinationError) { actual in
+            result = Result { try data.write(to: actual, options: .atomic) }
         }
-        if let error = coordinationError ?? writeError { throw error }
+        if let coordinationError { throw coordinationError }
+        guard let result else { throw CocoaError(.fileWriteUnknown) }
+        try result.get()
+    }
+
+    nonisolated static func coordinatedCreateDirectory(_ url: URL) throws {
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue else { throw CocoaError(.fileWriteFileExists) }
+            return
+        }
+        let parent = url.deletingLastPathComponent()
+        guard parent.path != url.path else { throw SyncError.folderUnavailable(url.path) }
+        try coordinatedCreateDirectory(parent)
+        var coordinationError: NSError?
+        var result: Result<Void, Error>?
+        NSFileCoordinator().coordinate(writingItemAt: url, options: [], error: &coordinationError) { actual in
+            result = Result { try FileManager.default.createDirectory(at: actual, withIntermediateDirectories: false) }
+        }
+        if let coordinationError { throw coordinationError }
+        guard let result else { throw CocoaError(.fileWriteUnknown) }
+        try result.get()
+    }
+
+    nonisolated static func coordinatedDirectoryContents(_ url: URL) throws -> [URL] {
+        var coordinationError: NSError?
+        var result: Result<[URL], Error>?
+        NSFileCoordinator().coordinate(readingItemAt: url, options: .withoutChanges, error: &coordinationError) { actual in
+            result = Result { try FileManager.default.contentsOfDirectory(at: actual, includingPropertiesForKeys: nil) }
+        }
+        if let coordinationError { throw coordinationError }
+        guard let result else { throw CocoaError(.fileReadUnknown) }
+        return try result.get()
     }
 }

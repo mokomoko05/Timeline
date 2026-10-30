@@ -65,7 +65,7 @@ enum SyncImageMaintenance {
         var candidates = (state.imageCandidates ?? [:]).filter { !protected.contains($0.key) }
         let images = folder.appendingPathComponent(FolderSync.imagesFolder)
         let trash = folder.appendingPathComponent(quarantine)
-        try manager.createDirectory(at: trash, withIntermediateDirectories: true)
+        try FolderSync.coordinatedCreateDirectory(trash)
         let names = try contents(images)
         for name in names where !name.hasPrefix(".") && !name.contains("/") {
             if protected.contains(name) { candidates.removeValue(forKey: name); continue }
@@ -106,7 +106,7 @@ enum SyncImageMaintenance {
         state.imageCandidates = candidates
         // 回执引用的清单保留；旧清单确认上传后才清理。
         if let own = state.imageLease, !(try uploadPending(folder.appendingPathComponent(leases).appendingPathComponent(own))) {
-            for file in (try? manager.contentsOfDirectory(at: folder.appendingPathComponent(leases), includingPropertiesForKeys: nil)) ?? []
+            for file in (try? FolderSync.coordinatedDirectoryContents(folder.appendingPathComponent(leases))) ?? []
                 where file.lastPathComponent.hasPrefix(device + "-") && !activeLeases.contains(file.lastPathComponent) {
                 try? IncrementalSync.remove(file)
             }
@@ -116,6 +116,6 @@ enum SyncImageMaintenance {
     private static func contents(_ directory: URL) throws -> [String] {
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
         // 无法读取目录时推迟整轮清理，不能把读取失败当成“没有其他设备或引用”。
-        return try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        return try FolderSync.coordinatedDirectoryContents(directory).map(\.lastPathComponent)
     }
 }

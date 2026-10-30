@@ -46,7 +46,7 @@ struct BoardsView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .navigationDestination(for: UUID.self) { BoardPage(store: store, id: $0, sync: sync) }
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) { SyncToolbarButton(sync: sync) }
+                    SyncToolbarItems(sync: sync)
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { managingFavorites = true } label: { Image(systemName: "star.circle") }
                             .accessibilityLabel("收藏与排序")
@@ -241,7 +241,7 @@ struct BoardPage: View {
             .navigationTitle(board.map(store.boardTitle) ?? "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { SyncToolbarButton(sync: sync) }
+                SyncToolbarItems(sync: sync)
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if session.editing {
                         Button("完成") { session.endEditing() }

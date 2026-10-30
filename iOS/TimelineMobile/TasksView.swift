@@ -37,7 +37,7 @@ struct TasksView: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: UUID.self) { TaskPage(store: store, id: $0) }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { SyncToolbarButton(sync: sync) }
+                SyncToolbarItems(sync: sync)
                 if let openSettings {
                     ToolbarItem(placement: .topBarLeading) {
                         Button { openSettings() } label: {

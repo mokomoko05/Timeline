@@ -121,7 +121,7 @@ enum IncrementalSync {
         var result = ReadResult()
         let root = folder.appendingPathComponent(directory)
         if FileManager.default.fileExists(atPath: root.path) {
-            for peer in try FileManager.default.contentsOfDirectory(atPath: root.path).sorted() where safe(peer) && peer != device {
+            for peer in try FolderSync.coordinatedDirectoryContents(root).map(\.lastPathComponent).sorted() where safe(peer) && peer != device {
                 let path = root.appendingPathComponent(peer)
                 guard (try? path.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
                 let (files, waiting) = try list(path)
@@ -273,7 +273,8 @@ enum IncrementalSync {
             try? FileManager.default.startDownloadingUbiquitousItem(at: url)
             return false
         }
-        let values = try url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
+        let fresh = URL(fileURLWithPath: url.path)
+        let values = try fresh.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
         if values.isUbiquitousItem == true, values.ubiquitousItemDownloadingStatus != .current {
             try FileManager.default.startDownloadingUbiquitousItem(at: url)
             return false
@@ -282,7 +283,8 @@ enum IncrementalSync {
     }
 
     static func list(_ directory: URL) throws -> ([URL], Bool) {
-        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path).compactMap { name -> URL? in
+        let files = try FolderSync.coordinatedDirectoryContents(directory).compactMap { file -> URL? in
+            let name = file.lastPathComponent
             if name.hasPrefix("."), name.hasSuffix(".icloud") {
                 let real = String(name.dropFirst().dropLast(7))
                 return directory.appendingPathComponent(real)
