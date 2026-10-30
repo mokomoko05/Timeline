@@ -92,7 +92,7 @@ BUNDLE_ID="${TIMELINE_BUNDLE_ID:-local.timeline.mobile.$(echo "$TEAM" | tr '[:up
 # 设备：第一台已配对、可连接的 iPhone。
 DEVICE_JSON="$(mktemp)"
 trap 'rm -f "$DEVICE_JSON"' EXIT
-xcrun devicectl list devices --json-output "$DEVICE_JSON" >/dev/null 2>&1 || true
+xcrun devicectl list devices --timeout 15 --json-output "$DEVICE_JSON" >/dev/null 2>&1 || true
 read -r DEVICE UDID NAME < <(python3 - "$DEVICE_JSON" "${TIMELINE_DEVICE:-}" <<'PY'
 import json, sys
 try:
@@ -132,11 +132,19 @@ xcodebuild -project iOS/TimelineMobile.xcodeproj -scheme TimelineMobile -configu
 
 APP="$BUILD/Build/Products/Release-iphoneos/Timeline.app"
 echo "→ 安装到手机…"
-xcrun devicectl device install app --device "$DEVICE" "$APP" >/dev/null || fail "安装失败。请确认手机已解锁，并已在 设置 › 隐私与安全性 › 开发者模式 中打开开发者模式。"
+mkdir -p "$LOG_DIR"
+INSTALL_LOG="$LOG_DIR/ios-install-$(date +%Y%m%d-%H%M%S)-$$"
+if ! xcrun devicectl device install app --device "$DEVICE" "$APP" --timeout 120 \
+    --json-output "$INSTALL_LOG.json" --log-output "$INSTALL_LOG.log"; then
+    echo "  安装日志：$INSTALL_LOG.log" >&2
+    echo "  结构化结果：$INSTALL_LOG.json" >&2
+    echo "  若底层错误为 Connection interrupted、IXRemoteErrorDomain error 6 或 Broken pipe，表示开发连接/安装服务中断：请解锁后重新插拔数据线，优先直连 Mac；仍失败时重启手机再试。" >&2
+    fail "安装失败。请以上方底层错误为准；CoreDeviceError 3002 本身不能证明手机未解锁或开发者模式未开启。"
+fi
 mkdir -p "$STATE_DIR"
 date +%s >"$STAMP"
 echo "→ 打开应用…"
-if ! xcrun devicectl device process launch --device "$DEVICE" "$BUNDLE_ID" >/dev/null 2>&1; then
+if ! xcrun devicectl device process launch --device "$DEVICE" "$BUNDLE_ID" --timeout 20 >/dev/null 2>&1; then
     echo "  无法自动打开。首次安装需在手机 设置 › 通用 › VPN与设备管理 里信任你的开发者证书，然后手动打开 Timeline。"
 fi
 echo "✓ 已安装 iPhone 版 Timeline。免费签名 7 天后过期，过期前重新运行本脚本（或用 --schedule 自动重装），数据会保留。"

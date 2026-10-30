@@ -55,3 +55,11 @@ iPhone 14 Pro Max / iOS 26.6.2 可以识别、读取设备状态和应用文件�
 - 实际输入后保存时尝试继续输入：`inputBlocked=true`；重新打开后 `cleared=true pending=false`，日记投影包含刚保存的 ID。
 - 4000×3000、约 1.55 MB 原图导入期间立即保存被阻止；关闭后导入结果仍写回草稿，重开保存成功。重新读取 SQLite 确认仅新增一条日志，原图存在，`PRAGMA integrity_check` 通过。
 - macOS 正常退出后执行 `bash scripts/install.sh`，完成备份、安装与重新打开。安装前后 SQLite 实体数量保持 52 个任务、758 条日志、25 天和 12 个工作板，完整性检查通过。真机安装及真机性能验证仍未完成。
+
+## 后续安装故障排查
+
+同日再次复现用户正常安装时的 CoreDeviceError 3002 / IXRemoteErrorDomain 6。沿用现有 Bundle ID 的构建包通过 `codesign --verify --deep --strict`，应用及扩展的 profile 均包含该设备且未过期。设备报告开发者模式开启、已配对、USB 直连；重新连接后 `lockState` 查询也确认已解锁。
+
+宿主日志记录到 `remoted` 首次心跳成功、第二次心跳超时，随后 CoreDevice 的 HTTP/2/TCP 连接超时，安装包流式传输出现 `Broken pipe`。更早的 `usbmuxd` 日志还有 `kIOReturnNotAttached` 和 `kIOUSBUnknownPipeErr: Pipe ref not recognized`。USB 错误可以解释上层连接中断，但不能仅凭这些日志确定线缆损坏；用户确认未使用扩展坞、手机未开启 VPN。重新插拔及重启用户级 CoreDeviceService 后仍复现，手机端服务、系统 USB 状态或线缆/接口仍待区分。
+
+3002 是安装失败的外层错误，不能单独判定为未解锁或未开启开发者模式。安装脚本已移除该误导结论，保留安装进度、底层错误、带时间戳的日志和 JSON 结果，并为设备发现、安装和启动设置超时。未卸载应用、未解除配对、未清理手机数据。
