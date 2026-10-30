@@ -26,7 +26,7 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
     var defaultBinding: HotKeyBinding {
         switch self {
         case .main: return HotKeyBinding(keyCode: kVK_ANSI_D, modifiers: HotKeyBinding.controlOption)
-        case .shell: return HotKeyBinding(keyCode: kVK_Tab, modifiers: controlKey)
+        case .shell: return HotKeyBinding(keyCode: kVK_Tab, modifiers: HotKeyBinding.controlOption)
         case .log: return HotKeyBinding(keyCode: kVK_ANSI_L, modifiers: HotKeyBinding.controlOption)
         case .notes: return HotKeyBinding(keyCode: kVK_ANSI_N, modifiers: HotKeyBinding.controlOption)
         case .focusPanel: return HotKeyBinding(keyCode: kVK_ANSI_F, modifiers: HotKeyBinding.controlOption)

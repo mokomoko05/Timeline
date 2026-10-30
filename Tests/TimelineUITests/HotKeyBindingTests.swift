@@ -10,7 +10,7 @@ final class HotKeyBindingTests: XCTestCase {
 
     func testDefaultsAndLabels() {
         XCTAssertEqual(HotKeyAction.main.defaultBinding.label, "⌃⌥D")
-        XCTAssertEqual(HotKeyAction.shell.defaultBinding.label, "⌃⇥")
+        XCTAssertEqual(HotKeyAction.shell.defaultBinding.label, "⌃⌥⇥")
         XCTAssertEqual(HotKeyAction.log.defaultBinding.label, "⌃⌥L")
         XCTAssertEqual(HotKeyAction.focusPanel.defaultBinding.label, "⌃⌥F")
         XCTAssertEqual(HotKeyBinding(keyCode: kVK_Space, modifiers: cmdKey | shiftKey).label, "⇧⌘空格")

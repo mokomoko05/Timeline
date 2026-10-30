@@ -56,7 +56,7 @@ A native macOS + iPhone app for tasks, focus sessions, notes and a daily journal
 | **Focus** (`⌃⌥F`) | Pick a task, set a goal and length. While running, the panel shrinks to a translucent companion docked to the screen edge, styled as a card, capsule, digits or a dot, or moves to the menu bar; the session ends with a reflection written to the journal. |
 | **Notes & journal** (`⌃⌥N`) | One notebook per task and per tag (grouped by task or by date), plus a day-by-day journal with a rhythm bar and a summary card at the end of each day. Entries are Markdown with LaTeX math, highlighted code blocks with a copy button, tables, and foldable headings and `<details>` blocks. Click an entry to select it and click again to edit it in place, WYSIWYG; edits save as you type. |
 | **Boards** (`⌃⌥M`) | A Markdown page per task or tag, with live-rendered checklists, folds, code and tables, a favorites bar, and version history. |
-| **Terminal** (`⌃Tab`) | Built-in terminal with tabs and splits. |
+| **Terminal** (`⌃⌥Tab`) | Built-in terminal with tabs and splits. |
 | **Search** (`⌃⌥S`) | One panel across tasks, boards, logs and text in images. |
 | **Safety net** | Deleted logs, tasks and boards stay in Recently Deleted for 30 days; backup and restore cover the journal and its images. |
 
