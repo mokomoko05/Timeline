@@ -326,6 +326,12 @@ enum PerfProbe {
             ("点每日总结", { switchTab(.journal); SummaryEditing.shared.date = Date() }),
             ("收起每日总结", { SummaryEditing.shared.date = nil }),
             ("检查编辑冲突", { checkEditorConflict(store) }),
+            ("点折叠块", { send("toggleDisclosure") }),
+            ("检查折叠块", { checkDisclosures(store) }),
+            ("检查日志图片", { checkLogImages(store) }),
+            ("粘贴图片到编辑器", { pasteIntoLogEditor(store) }),
+            ("查看日志图片", { if let name = store.allLogs().first(where: { !$0.log.images.isEmpty })?.log.images.first { send("viewLogImage:" + name) } }),
+            ("添加图片面板", { send("pickLogImages") }),
             ("滚动全文", { scrollThrough() }),
             ("长按长文", { pressLongText() }),
             ("拖动排序", { switchTab(.tasks); send("dragTask") }),
@@ -349,6 +355,79 @@ enum PerfProbe {
                     step()
                 }
             }
+        }
+    }
+
+    /// 折叠块：解析、键、默认状态，收起后记住（含 `<details open>`），编辑器和正文的记忆互通。
+    static func checkDisclosures(_ store: JournalStore) {
+        let source = "前文\n\n<details open>\n<summary>甲</summary>\n\n## 里面\n\n内容\n\n<details><summary>乙</summary>\n\n更里面\n\n</details>\n\n</details>\n\n```\n<details>\n```\n\n<details>\n<summary>丙</summary>\n紧贴的内容\n</details>\n\n后文 `x`"
+        let blocks = MarkdownBlock.parse(source).blocks
+        let disclosures = blocks.compactMap { block -> MarkdownBlock.Disclosure? in if case .disclosure(let value) = block { return value }; return nil }
+        let keys = disclosures.map(\.key) == ["d:甲#0", "d:丙#0"] && disclosures.map(\.initiallyOpen) == [true, false]
+        let nested = disclosures.first?.document.blocks.contains { if case .disclosure(let value) = $0 { return value.key == "d:乙#0" }; return false } == true
+        let tight = disclosures.last?.document.blocks.contains { if case .paragraph(let text) = $0 { return String(text.characters) == "紧贴的内容" }; return false } == true
+        let code = blocks.contains { if case .code(_, let text) = $0 { return text == "<details>" }; return false }
+        guard let day = JournalDates.calendar.date(byAdding: .year, value: -5, to: Date()) else { return }
+        let session = BoardWebSession(store: store, document: .summary(date: day))
+        let key = "markdownFolds.summary." + JournalDates.key(day)
+        let closed = session.probeReceive(["kind": "fold", "key": "d:甲#0", "value": false])["folds"] as? [String: Bool]
+        let stored = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+        let remembered = closed?["d:甲#0"] == false && !FoldRecords.isOpen("d:甲#0", initially: true, in: stored)
+        _ = session.probeReceive(["kind": "fold", "key": "h2:里面#0", "value": true])
+        let heading = Set(UserDefaults.standard.stringArray(forKey: key) ?? []).contains("h2:里面#0")
+        session.configure(dark: false, sourceMode: false)
+        let images = session.probeReceive(["kind": "none"])["acceptsImages"] as? Bool
+        UserDefaults.standard.removeObject(forKey: key)
+        print("[perf] 折叠块：键和默认 \(keys ? "OK" : "FAIL") · 嵌套 \(nested ? "OK" : "FAIL") · 紧贴内容 \(tight ? "OK" : "FAIL") · 代码块不算 \(code ? "OK" : "FAIL") · 收起记住 \(remembered ? "OK" : "FAIL") · 标题记忆 \(heading ? "OK" : "FAIL") · 总结不收图 \(images == false ? "OK" : "FAIL")")
+    }
+
+    /// 真的在编辑器网页里发一次粘贴（带图片文件）：网页收下、发消息回来、图片加到正在编辑的这一条上。
+    static func pasteIntoLogEditor(_ store: JournalStore) {
+        guard let logged = LogEditing.shared.item,
+              let png = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).image(actions: { $0.fill(CGRect(x: 0, y: 0, width: 4, height: 4)) }).pngData() else {
+            print("[perf] 粘贴图片：FAIL（没有打开的日志编辑器）")
+            return
+        }
+        let count = { store.entry(for: logged.date).logs.first { $0.id == logged.id }?.images.count ?? -1 }
+        let before = count()
+        BoardWebSession.probePaste(png)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            print("[perf] 粘贴图片：\(before) → \(count()) 张 \(count() == before + 1 ? "OK" : "FAIL")")
+        }
+    }
+
+    /// 已提交日志增删单张图：加图、编辑器粘贴、删一张、撤销、删最后一张连带整条。用很早的一天，不碰演示数据。
+    static func checkLogImages(_ store: JournalStore) {
+        guard let day = JournalDates.calendar.date(byAdding: .year, value: -5, to: Date()),
+              let png = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).image(actions: { $0.fill(CGRect(x: 0, y: 0, width: 4, height: 4)) }).pngData() else { return }
+        _ = try? store.quickLog("有字的", on: day)
+        guard let log = store.entry(for: day).logs.last else { return }
+        let id = log.id
+        func images() -> [String] { store.entry(for: day).logs.first { $0.id == id }?.images ?? [] }
+        Task {
+            LogImages.add([{ png }], to: id, store: store)
+            let session = BoardWebSession(store: store, document: .log(id: id, date: day))
+            session.configure(dark: false, sourceMode: false)
+            let accepts = session.probeReceive(["kind": "images", "images": [png.base64EncodedString()]])["acceptsImages"] as? Bool
+            let queue = store.imageImports(for: "inline:" + id.uuidString)
+            while queue.pending > 0 { try? await Task.sleep(nanoseconds: 50_000_000) }
+            let added = images().count == 2
+            guard let first = images().first else { print("[perf] 日志图片：加图 FAIL"); return }
+            LogImages.remove(first, from: id, deletesLog: false, store: store)
+            let removed = images().count == 1
+            UndoToast.shared.performUndo()
+            let restored = images().count == 2
+            store.entry(for: day).logs.forEach { store.deleteLog($0.id, on: day) }
+            let name = try? await store.storeOriginalImage(png)
+            var whole = false, wholeUndo = false
+            if let name, (try? store.quickLog("", images: [name], on: day)) != nil, let bare = store.entry(for: day).logs.last {
+                LogImages.remove(name, from: bare.id, deletesLog: true, store: store)
+                whole = store.entry(for: day).logs.isEmpty
+                UndoToast.shared.performUndo()
+                wholeUndo = store.entry(for: day).logs.first?.images == [name]
+                store.entry(for: day).logs.forEach { store.deleteLog($0.id, on: day) }
+            }
+            print("[perf] 日志图片：相册+粘贴加图 \(added ? "OK" : "FAIL") · 编辑器收图 \(accepts == true ? "OK" : "FAIL") · 删一张 \(removed ? "OK" : "FAIL") · 撤销 \(restored ? "OK" : "FAIL") · 删最后一张连带整条 \(whole ? "OK" : "FAIL") · 撤销 \(wholeUndo ? "OK" : "FAIL")")
         }
     }
 

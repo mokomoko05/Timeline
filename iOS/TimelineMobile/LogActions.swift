@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import TimelineCore
 import UIKit
@@ -28,6 +29,9 @@ final class LogActions: ObservableObject {
         set { LogEditing.shared.item = newValue }
     }
     @Published var deleting: JournalStore.LoggedLog?
+    /// 「添加图片」：相册面板开着。选完面板已经关了才给结果，所以要加到哪一条单独记着。
+    @Published var pickingImages = false
+    var imageTarget: UUID?
     /// 「打开待办的笔记」：推进任务页。
     @Published var openTask: NotesView.Destination?
     let toast = Toast()
@@ -61,6 +65,7 @@ private struct LogActionsHost: ViewModifier {
     // 操作闭包读取的是实时 store；宿主本身不因每次内容修改重建整页环境。
     let store: JournalStore
     @StateObject private var actions = LogActions()
+    @State private var pickedImages: [PhotosPickerItem] = []
 
     func body(content: Content) -> some View {
         content
@@ -73,7 +78,20 @@ private struct LogActionsHost: ViewModifier {
                 case .select(let logged): LogSelectSheet(logged: logged)
                 }
             }
+            .photosPicker(isPresented: $actions.pickingImages, selection: $pickedImages, maxSelectionCount: 6, matching: .images, preferredItemEncoding: .current)
+            .onChange(of: pickedImages) { _, items in
+                guard !items.isEmpty, let id = actions.imageTarget else { return }
+                pickedImages = []
+                LogImages.add(items.map { item in {
+                    guard let data = try await item.loadTransferable(type: Data.self) else { throw CocoaError(.fileReadCorruptFile) }
+                    return data
+                } }, to: id, store: store)
+            }
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+                if note.object as? String == "pickLogImages", let logged = store.allLogs().first {
+                    actions.imageTarget = logged.id
+                    actions.pickingImages = true
+                }
                 // 性能 / 截图检查：打开最长那条日志的「选择文字」。
                 if note.object as? String == "selectText", actions.sheet == nil,
                    let logged = store.allLogs().max(by: { $0.log.text.count < $1.log.text.count }) { actions.sheet = .select(logged) }
@@ -94,6 +112,34 @@ private struct LogActionsHost: ViewModifier {
             .navigationDestination(item: $actions.openTask) { destination in
                 if case .task(let id, let reveal) = destination { TaskPage(store: store, id: id, reveal: reveal) }
             }
+    }
+}
+
+/// 给已经提交的日志增删单张图（和 Mac 一样：可撤销；只剩这张图、又没有文字时整条删掉）。
+@MainActor
+enum LogImages {
+    /// 按选择顺序一张张导入；读原图、写盘都在后台。
+    static func add(_ loads: [() async throws -> Data], to id: UUID, store: JournalStore) {
+        let queue = store.imageImports(for: "inline:" + id.uuidString)
+        for load in loads {
+            queue.start({ [store] in
+                do {
+                    return [try await store.storeOriginalImage(try await load())]
+                } catch {
+                    UndoToast.shared.show(L("图片没能添加，请重试"))
+                    throw error
+                }
+            }, append: { [store] names in
+                store.addImages(names, toLog: id)
+                store.save()
+            })
+        }
+    }
+
+    static func remove(_ name: String, from id: UUID, deletesLog: Bool, store: JournalStore) {
+        store.removeImage(name, fromLog: id)
+        store.save()
+        UndoToast.shared.show(L(deletesLog ? "已删除日志" : "已删除图片")) { store.undo() }
     }
 }
 
@@ -133,6 +179,7 @@ extension LogActions {
         if !store.isReadOnly {
             items += [
                 MenuItem(title: L("编辑"), symbol: "pencil", disabled: !log.hasEditableText) { [self] in editing = logged },
+                MenuItem(title: L("添加图片"), symbol: "photo.badge.plus") { [self] in imageTarget = log.id; pickingImages = true },
                 MenuItem(title: L(log.tags.isEmpty ? "加标签…" : "标签…"), symbol: "tag") { [self] in sheet = .tags(logged) },
                 MenuItem(title: L(log.taskID == nil ? "关联待办…" : "更改关联待办…"), symbol: "link") { [self] in sheet = .link(logged) },
             ]

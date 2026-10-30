@@ -478,3 +478,11 @@
 "每日总结" = "Daily summary";
 "写点今天的总结…" = "Write a summary for this day…";
 "还没有总结" = "No summary yet";
+
+"删除这张图片" = "Delete This Image";
+"添加图片" = "Add Images";
+"已删除图片" = "Image deleted";
+"图片没能添加，请重试" = "Couldn't add the image. Please try again.";
+"折叠内容" = "Collapsible content";
+"已展开" = "Expanded";
+"已收起" = "Collapsed";

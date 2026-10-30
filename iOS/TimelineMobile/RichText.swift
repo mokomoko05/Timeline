@@ -128,10 +128,17 @@ final class RichText: @unchecked Sendable {
 
     /// 后台把正文拼好、按上次的宽度排好版。
     static func prewarm(_ document: MarkdownDocument, source: String, size: CGFloat) {
-        let width = width(for: size)
+        prewarm(document, source: source, size: size, width: width(for: size))
+    }
+
+    private static func prewarm(_ document: MarkdownDocument, source: String, size: CGFloat, width: CGFloat?) {
         for run in document.runs.values {
             let text = make(document, run: run, source: source, size: size)
             if let width { _ = text.layout(width: width) }
+        }
+        // 折叠块里的内容也排好：点开时不用现排。
+        for case .disclosure(let disclosure) in document.blocks {
+            prewarm(disclosure.document, source: disclosure.cacheSource(source), size: size, width: width.map { $0 - MarkdownDocument.disclosureIndent })
         }
     }
 
@@ -243,6 +250,10 @@ final class RichText: @unchecked Sendable {
                         }
                         paragraph(line, indent: indent, head: indent, spacing: index == 0 ? spacing : size * 0.3, marker: nil)
                     }
+                case .disclosure(let disclosure) where complete:
+                    paragraph(NSAttributedString(string: disclosure.title, attributes: [.font: UIFont.systemFont(ofSize: size, weight: .medium), .foregroundColor: ink]),
+                              indent: indent, head: indent, spacing: spacing, marker: nil)
+                    add(disclosure.document.blocks[...], indent: indent + 14, color: color)
                 case .rule where complete:
                     paragraph(NSAttributedString(string: "———", attributes: [.font: body, .foregroundColor: muted]),
                               indent: indent, head: indent, spacing: spacing, marker: nil)
@@ -327,6 +338,7 @@ extension MarkdownBlock {
 struct RichTextView: UIViewRepresentable {
     let text: RichText
     let size: CGFloat
+    var remembersWidth = true
     private static let probeWidth: CGFloat = 80
     private static let fallbackWidth: CGFloat = 320
 
@@ -346,7 +358,7 @@ struct RichTextView: UIViewRepresentable {
         if width < Self.probeWidth {
             return CGSize(width: width, height: text.layout(width: RichText.width(for: size) ?? Self.fallbackWidth).height)
         }
-        RichText.remember(width: width, size: size)
+        if remembersWidth { RichText.remember(width: width, size: size) }
         return CGSize(width: width, height: text.layout(width: width).height)
     }
 }

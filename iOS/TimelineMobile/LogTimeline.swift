@@ -208,7 +208,7 @@ struct LogEntryRow: View, Equatable {
                     .logContextMenu(store: store, logged: logged, actions: actions)
                 }
                 if !log.images.isEmpty {
-                    ImageStrip(store: store, names: log.images, texts: log.imageText, logged: hasText ? nil : logged)
+                    ImageStrip(store: store, names: log.images, texts: log.imageText, logged: hasText ? nil : logged, owner: log.id)
                 }
             }
             .padding(.bottom, 18)
@@ -339,6 +339,8 @@ struct ImageStrip: View {
     var texts: [String: String] = [:]
     /// 只有图片、没有文字的日志：日志自己的操作（编辑、标签、删除…）也放进图片的长按菜单。
     var logged: JournalStore.LoggedLog?
+    /// 图片所属的日志：有的话可以删单张图（输入卡里的草稿图不走这里）。
+    var owner: UUID?
     @State private var shown: String?
     @StateObject private var toast = Toast()
     @Environment(\.logActions) private var actions
@@ -351,6 +353,9 @@ struct ImageStrip: View {
                         .buttonStyle(PressableStyle())
                         .contextMenu {
                             ImageActionButtons(url: store.imageURL(name), text: texts[name], toast: toast)
+                            if remove != nil {
+                                Button(role: .destructive) { remove?(name) } label: { Label("删除这张图片", systemImage: "trash") }
+                            }
                             if let logged, let actions {
                                 Section { LogMenuItems(store: store, logged: logged, actions: actions) }
                             }
@@ -363,7 +368,17 @@ struct ImageStrip: View {
         .sensoryFeedback(.impact(weight: .light), trigger: shown) { _, new in new != nil }
         .overlay(alignment: .bottom) { ToastView(toast: toast) }
         .fullScreenCover(item: Binding(get: { shown.map(ShownImage.init) }, set: { shown = $0?.id })) { item in
-            ImageViewer(store: store, names: names, texts: texts, selection: item.id)
+            ImageViewer(store: store, names: names, texts: texts, remove: remove, selection: item.id)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+            if let first = names.first, note.object as? String == "viewLogImage:" + first { shown = first }
+        }
+    }
+
+    private var remove: ((String) -> Void)? {
+        guard let owner, !store.isReadOnly else { return nil }
+        return { [store, names, logged] name in
+            LogImages.remove(name, from: owner, deletesLog: names == [name] && logged != nil, store: store)
         }
     }
 
@@ -515,6 +530,7 @@ private struct ImageViewer: View {
     @ObservedObject var store: JournalStore
     let names: [String]
     let texts: [String: String]
+    var remove: ((String) -> Void)?
     @State var selection: String
     @StateObject private var toast = Toast()
     @Environment(\.dismiss) private var dismiss
@@ -541,6 +557,12 @@ private struct ImageViewer: View {
                     ImageActionButtons(url: store.imageURL(selection), text: texts[selection], toast: toast)
                         .labelStyle(ViewerActionLabel())
                         .frame(maxWidth: .infinity)
+                    if let remove {
+                        // 删完回到时间轴：撤销提示在那里。
+                        Button { dismiss(); remove(selection) } label: { Label("删除", systemImage: "trash") }
+                            .labelStyle(ViewerActionLabel())
+                            .frame(maxWidth: .infinity)
+                    }
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)

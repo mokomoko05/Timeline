@@ -66,28 +66,74 @@ private struct MarkdownContent: View {
     @Environment(\.scrollToMarkdownAnchor) private var scrollTo
 
     var body: some View {
-        let document = MarkdownBlock.parse(source)
+        MarkdownColumn(document: MarkdownBlock.parse(source), cacheSource: source, size: size, toggleTask: toggleTask,
+                       folds: MarkdownFolds(folded: folded, opened: opened, toggle: toggleFold, setDisclosure: setDisclosure),
+                       scope: foldScope ?? String(source.hashValue), scrollTo: scrollTo)
+        .onAppear(perform: loadFolds)
+        // 编辑器里收起 / 展开的，正文也跟着变。
+        .onReceive(NotificationCenter.default.publisher(for: BoardWebSession.markdownFoldsChanged)) { note in
+            if let defaultsKey, note.object as? String == defaultsKey { folded = Set(UserDefaults.standard.stringArray(forKey: defaultsKey) ?? []) }
+        }
+    }
+
+    private var defaultsKey: String? { foldScope.map { "markdownFolds." + $0 } }
+
+    private func loadFolds() {
+        guard !loaded else { return }
+        loaded = true
+        if let defaultsKey { folded = Set(UserDefaults.standard.stringArray(forKey: defaultsKey) ?? []) }
+    }
+
+    private func toggleFold(_ key: String) {
+        opened.insert(key)
+        if folded.contains(key) { folded.remove(key) } else { folded.insert(key) }
+        if let defaultsKey { UserDefaults.standard.set(Array(folded), forKey: defaultsKey) }
+    }
+
+    private func setDisclosure(_ key: String, open: Bool) {
+        opened.insert(key)
+        FoldRecords.set(key, value: open, in: &folded)
+        if let defaultsKey { UserDefaults.standard.set(Array(folded), forKey: defaultsKey) }
+    }
+}
+
+/// 一层块：整篇正文，或折叠块里的内容（折叠块里也能再有标题和折叠块）。
+private struct MarkdownColumn: View {
+    let document: MarkdownDocument
+    /// 排版缓存用的原文：折叠块里的内容在原文后面带上折叠键，序号不会和外层撞。
+    let cacheSource: String
+    let size: CGFloat
+    let toggleTask: ((Int) -> Void)?
+    let folds: MarkdownFolds
+    let scope: String
+    let scrollTo: ((String) -> Void)?
+    /// 在折叠块里：比正文窄，不当成这种字号的常用宽度记下。
+    var nested = false
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(visible(document), id: \.id) { item in
+            ForEach(visible, id: \.id) { item in
                 Group {
                 switch item.kind {
                 case .block(let block):
-                    if case .heading(let level, let text, let key, _) = block, document.sections[item.index] != nil {
+                    if case .disclosure(let disclosure) = block {
+                        DisclosureView(disclosure: disclosure, cacheSource: cacheSource, size: size, toggleTask: toggleTask, folds: folds, scope: scope, scrollTo: scrollTo)
+                    } else if case .heading(let level, let text, let key, _) = block, document.sections[item.index] != nil {
                         // 标题文字是正文的一部分；收起 / 展开用标题右边的按钮。
                         HStack(alignment: .center, spacing: 8) {
                             headingText(level, text)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                            HeadingFoldButton(folded: folded.contains(key), size: size) { toggleFold(key) }
+                            HeadingFoldButton(folded: folds.folded.contains(key), size: size) { folds.toggle(key) }
                         }
                         .id(anchor(key))
                     } else {
-                        BlockView(block: block, size: size, toggleTask: toggleTask, folds: MarkdownFolds(folded: folded, toggle: toggleFold))
+                        BlockView(block: block, size: size, toggleTask: toggleTask, folds: folds)
                     }
                 case .flow(let run):
-                    RichTextView(text: RichText.make(document, run: run, source: source, size: size), size: size)
+                    RichTextView(text: RichText.make(document, run: run, source: cacheSource, size: size), size: size, remembersWidth: !nested)
                 case .collapse(let key, let title):
                     Button {
-                        toggleFold(key)
+                        folds.toggle(key)
                         let id = anchor(key)
                         DispatchQueue.main.async { scrollTo?(id) }
                     } label: {
@@ -109,7 +155,6 @@ private struct MarkdownContent: View {
                 .accessibilityHidden(item.hidden)
             }
         }
-        .onAppear(perform: loadFolds)
     }
 
     private func headingText(_ level: Int, _ text: AttributedString) -> some View {
@@ -119,7 +164,7 @@ private struct MarkdownContent: View {
             .padding(.top, level <= 2 ? size * 0.3 : 0)
     }
 
-    private func anchor(_ key: String) -> String { (foldScope ?? String(source.hashValue)) + "|" + key }
+    private func anchor(_ key: String) -> String { scope + "|" + key }
 
     private struct Visible: Identifiable {
         enum Kind { case block(MarkdownBlock), flow(Range<Int>), collapse(key: String, title: String) }
@@ -131,7 +176,7 @@ private struct MarkdownContent: View {
     }
 
     /// 要放进视图的块：收起的标题下面没展开过的内容不放；展开过的标成隐藏；展开的长段落末尾补一个「收起」。
-    private func visible(_ document: MarkdownDocument) -> [Visible] {
+    private var visible: [Visible] {
         var result: [Visible] = []
         var open: [(end: Int, key: String, title: String, folded: Bool, long: Bool, hidden: Bool)] = []
         for (index, block) in document.blocks.enumerated() {
@@ -142,13 +187,13 @@ private struct MarkdownContent: View {
                 open.removeLast()
             }
             let hidden = open.contains { $0.folded }
-            let kept = open.allSatisfy { !$0.folded || opened.contains($0.key) }
+            let kept = open.allSatisfy { !$0.folded || folds.opened.contains($0.key) }
             if kept, !document.inRun.contains(index) {
                 let kind: Visible.Kind = document.runs[index].map { .flow($0) } ?? .block(block)
                 result.append(Visible(id: "\(index)", index: index, kind: kind, hidden: hidden))
             }
             if case .heading(_, let text, let key, _) = block, let section = document.sections[index] {
-                open.append((section.end, key, String(text.characters), folded.contains(key), section.long, hidden))
+                open.append((section.end, key, String(text.characters), folds.folded.contains(key), section.long, hidden))
             }
         }
         for last in open.reversed() where !last.folded && last.long && !last.hidden {
@@ -156,19 +201,62 @@ private struct MarkdownContent: View {
         }
         return result
     }
+}
 
-    private var defaultsKey: String? { foldScope.map { "markdownFolds." + $0 } }
+/// `<details>` 折叠块：点标题行展开 / 收起，内容缩进、左边一道竖线（和 Mac 一样）。
+/// 和标题一样，展开过的内容收起时留在视图里、只把高度压成 0，再展开不用重新排版。
+private struct DisclosureView: View {
+    let disclosure: MarkdownBlock.Disclosure
+    let cacheSource: String
+    let size: CGFloat
+    let toggleTask: ((Int) -> Void)?
+    let folds: MarkdownFolds
+    let scope: String
+    let scrollTo: ((String) -> Void)?
 
-    private func loadFolds() {
-        guard !loaded else { return }
-        loaded = true
-        if let defaultsKey { folded = Set(UserDefaults.standard.stringArray(forKey: defaultsKey) ?? []) }
-    }
-
-    private func toggleFold(_ key: String) {
-        opened.insert(key)
-        if folded.contains(key) { folded.remove(key) } else { folded.insert(key) }
-        if let defaultsKey { UserDefaults.standard.set(Array(folded), forKey: defaultsKey) }
+    var body: some View {
+        let open = folds.isOpen(disclosure)
+        VStack(alignment: .leading, spacing: 0) {
+            Button { folds.setDisclosure(disclosure.key, !open) } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 0) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: size * 0.7, weight: .semibold))
+                        .foregroundStyle(Palette.muted)
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                        .animation(Motion.adapt(.easeOut(duration: 0.15)), value: open)
+                        .frame(width: MarkdownDocument.disclosureIndent, alignment: .leading)
+                    Text(disclosure.title)
+                        .font(.system(size: size, weight: .medium))
+                        .foregroundStyle(Palette.ink)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.vertical, -10)
+            .accessibilityValue(open ? "已展开" : "已收起")
+            .accessibilityHint(open ? "收起" : "展开")
+            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+                if note.object as? String == "toggleDisclosure" { folds.setDisclosure(disclosure.key, !folds.isOpen(disclosure)) }
+            }
+            if open || folds.opened.contains(disclosure.key) {
+                MarkdownColumn(document: disclosure.document, cacheSource: disclosure.cacheSource(cacheSource), size: size, toggleTask: toggleTask,
+                               folds: folds, scope: scope, scrollTo: scrollTo, nested: true)
+                    .padding(.top, size * 0.45)
+                    .padding(.leading, MarkdownDocument.disclosureIndent)
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(Palette.line).frame(width: 1.5).padding(.top, size * 0.45).padding(.leading, 4)
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(height: open ? nil : 0, alignment: .top)
+                    .clipped()
+                    .opacity(open ? 1 : 0)
+                    .allowsHitTesting(open)
+                    .accessibilityHidden(!open)
+            }
+        }
     }
 }
 
@@ -198,12 +286,23 @@ private struct HeadingFoldButton: View {
 
 /// 收起了哪些标题、怎么切换：引用里的标题和顶层的共用一份（折叠键在整篇里唯一，也和编辑器一样）。
 private struct MarkdownFolds {
+    /// 折叠记忆的记录，格式见 `FoldRecords`。
     let folded: Set<String>
+    /// 这次显示期间切换过的：内容已经排过版，收起后留在视图里。
+    let opened: Set<String>
     let toggle: (String) -> Void
+    let setDisclosure: (String, Bool) -> Void
+
+    func isOpen(_ disclosure: MarkdownBlock.Disclosure) -> Bool {
+        FoldRecords.isOpen(disclosure.key, initially: disclosure.initiallyOpen, in: folded)
+    }
 }
 
 /// 解析结果：顶层块，以及每个可以收起的标题管到哪里、内容长不长。
 struct MarkdownDocument {
+    /// 折叠块内容的缩进：和标题文字对齐（箭头占这么宽）。
+    static let disclosureIndent: CGFloat = 19
+
     let blocks: [MarkdownBlock]
     /// 标题序号 → 它的段落结束位置（不含），和段落是否够长（需要末尾的「收起」）。
     let sections: [Int: (end: Int, long: Bool)]
@@ -256,6 +355,17 @@ indirect enum MarkdownBlock {
     case table(header: [AttributedString], rows: [[AttributedString]])
     case rule
     case html(String)
+    case disclosure(Disclosure)
+
+    /// `<details>`：内容自成一层（里面的标题收起时不会跨出这个折叠块）。
+    struct Disclosure {
+        let title: String
+        let key: String
+        let initiallyOpen: Bool
+        let document: MarkdownDocument
+
+        func cacheSource(_ outer: String) -> String { outer + "\u{0}" + key }
+    }
 
     struct Item {
         let checkbox: Bool?
@@ -278,6 +388,7 @@ indirect enum MarkdownBlock {
         case .table(_, let rows): return rows.count * 80
         case .rule: return 20
         case .html(let text): return text.count
+        case .disclosure(let disclosure): return disclosure.document.blocks.reduce(disclosure.title.count + 40) { $0 + $1.weight }
         }
     }
 
@@ -295,7 +406,7 @@ indirect enum MarkdownBlock {
         // 公式先换成占位符再解析（见 `MarkdownMath`），行内拼字时再换回来。
         let math = MarkdownMath.extract(source)
         var context = Context(seen: [:], formulas: math.formulas)
-        let blocks = blocks(Document(parsing: math.source), context: &context)
+        let blocks = topLevel(Document(parsing: math.source), source: math.source, context: &context)
         let document = MarkdownDocument(blocks: blocks, sections: sections(of: blocks))
         lock.lock()
         if cache.count > 600 { cache.removeAll() }
@@ -337,7 +448,66 @@ indirect enum MarkdownBlock {
         node.children.compactMap { block($0, context: &context) }
     }
 
-    /// `<details>` 在这里不折叠：标签不显示，标题留下来，内容是后面的块，照常显示。
+    /// 顶层的块：配好对的 `<details>` 收成折叠块（一个 HTML 块里可能连着开头、标题、内容和结尾，所以按行看）。
+    private static func topLevel(_ document: Document, source: String, context: inout Context) -> [MarkdownBlock] {
+        guard source.range(of: "<details", options: .caseInsensitive) != nil else { return blocks(document, context: &context) }
+        let spans = MarkdownDisclosures.spans(source.components(separatedBy: "\n"), untitled: L("折叠内容"))
+        guard !spans.isEmpty else { return blocks(document, context: &context) }
+        let openings = Dictionary(spans.map { ($0.line, $0) }, uniquingKeysWith: { first, _ in first })
+        let closings = Dictionary(spans.map { ($0.closing, $0) }, uniquingKeysWith: { first, _ in first })
+        var root: [MarkdownBlock] = []
+        var stack: [(span: MarkdownDisclosures.Span, blocks: [MarkdownBlock])] = []
+        func add(_ block: MarkdownBlock) {
+            if stack.isEmpty { root.append(block) } else { stack[stack.count - 1].blocks.append(block) }
+        }
+        func close() {
+            let (span, children) = stack.removeLast()
+            add(.disclosure(Disclosure(title: MarkdownMath.restore(span.title, formulas: context.formulas), key: span.key, initiallyOpen: span.initiallyOpen,
+                                       document: MarkdownDocument(blocks: children, sections: sections(of: children)))))
+        }
+        var bodyStart = 0
+        for child in document.children {
+            let raw = (child as? HTMLBlock)?.rawHTML.components(separatedBy: "\n") ?? []
+            // 没有折叠块标签的 HTML 照旧原样显示。
+            guard let first = child.range?.lowerBound.line,
+                  raw.indices.contains(where: { openings[first + $0] != nil || closings[first + $0] != nil || first + $0 < bodyStart }) else {
+                if let block = block(child, context: &context) { add(block) }
+                continue
+            }
+            var pending: [String] = []
+            func flush() {
+                let text = pending.joined(separator: "\n")
+                pending = []
+                // 和标签连着写的内容按正文显示（和 Mac 一样）。
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let text = disclosureFree(text) {
+                    add(.paragraph(AttributedString(MarkdownMath.restore(text, formulas: context.formulas))))
+                }
+            }
+            for (offset, line) in raw.enumerated() {
+                let number = first + offset
+                if let span = openings[number] {
+                    flush()
+                    stack.append((span, []))
+                    bodyStart = span.bodyStart
+                } else if number < bodyStart {
+                    continue
+                } else if let span = closings[number] {
+                    flush()
+                    if stack.contains(where: { $0.span.line == span.line }) {
+                        while let last = stack.last, last.span.line != span.line { close() }
+                        close()
+                    }
+                } else {
+                    pending.append(line)
+                }
+            }
+            flush()
+        }
+        while !stack.isEmpty { close() }
+        return root
+    }
+
+    /// 没配好对的 `<details>` 和引用、列表里的不折叠：标签不显示，标题留下来，内容是后面的块，照常显示。
     private static func disclosureFree(_ raw: String) -> String? {
         guard raw.range(of: "<details", options: .caseInsensitive) != nil || raw.range(of: "</details", options: .caseInsensitive) != nil
                 || raw.range(of: "<summary", options: .caseInsensitive) != nil else { return raw }
@@ -553,6 +723,9 @@ private struct BlockView: View {
             }
         case .rule:
             Rectangle().fill(Palette.line).frame(height: 1).padding(.vertical, 4)
+        case .disclosure:
+            // 由 `MarkdownColumn` 画（只出现在顶层和折叠块里）。
+            EmptyView()
         case .html(let text):
             Text(text).font(.system(size: size * 0.9, design: .monospaced)).foregroundStyle(Palette.muted)
         }

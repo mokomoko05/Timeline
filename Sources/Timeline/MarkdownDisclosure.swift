@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import Markdown
+import TimelineCore
 
 struct MarkdownFragment: Identifiable {
     let source: String
@@ -134,80 +135,10 @@ enum BoardFolds {
     }
 }
 
-enum MarkdownDisclosures {
-    fileprivate struct Opening {
-        let title: String
-        /// 折叠记忆里用的名字：和编辑器一致，不随界面语言变。
-        let foldName: String
-        let initiallyOpen: Bool
-        let bodyStart: Int
-    }
-
-    private static let opening = try! NSRegularExpression(pattern: #"^<details(?:\s+(open)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?\s*>\s*(?:<summary\s*>(.*?)</summary\s*>)?\s*$"#, options: [.caseInsensitive])
-    private static let summary = try! NSRegularExpression(pattern: #"^<summary\s*>(.*?)</summary\s*>\s*$"#, options: [.caseInsensitive])
-
-    /// 逐行找出折叠块的开头、结尾（代码块里的不算），和代码块占的行。
-    fileprivate static func scan(_ lines: [String]) -> (openings: [Int: Opening], closingLines: [Int: Int], codeLines: Set<Int>) {
-        var openings: [Int: Opening] = [:]
-        var closingLines: [Int: Int] = [:]
-        var codeLines: Set<Int> = []
-        var stack: [Int] = []
-        var fence: (marker: Character, length: Int)?
-        for index in lines.indices {
-            let raw = lines[index]
-            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            let indentation = raw.prefix { $0 == " " || $0 == "\t" }
-            let indented = indentation.contains("\t") || indentation.count > 3
-            if let active = fence {
-                codeLines.insert(index)
-                let run = line.prefix { $0 == active.marker }
-                if run.count >= active.length && line.dropFirst(run.count).trimmingCharacters(in: .whitespaces).isEmpty {
-                    fence = nil
-                }
-                continue
-            }
-            if !indented, let marker = line.first, marker == "\u{60}" || marker == "~" {
-                let run = line.prefix { $0 == marker }
-                if run.count >= 3 {
-                    fence = (marker, run.count)
-                    codeLines.insert(index)
-                    continue
-                }
-            }
-            guard !indented else { continue }
-            let text = line as NSString
-            if let match = opening.firstMatch(in: line, range: NSRange(location: 0, length: text.length)) {
-                var title: String?
-                var bodyStart = index + 1
-                if match.range(at: 2).location != NSNotFound {
-                    title = text.substring(with: match.range(at: 2))
-                } else {
-                    var next = index + 1
-                    while next < lines.count && lines[next].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { next += 1 }
-                    if next < lines.count {
-                        let candidate = lines[next].trimmingCharacters(in: .whitespacesAndNewlines) as NSString
-                        if let match = summary.firstMatch(in: candidate as String, range: NSRange(location: 0, length: candidate.length)) {
-                            title = candidate.substring(with: match.range(at: 1))
-                            bodyStart = next + 1
-                        }
-                    }
-                }
-                let decoded = decodeTitle(title ?? "")
-                openings[index] = Opening(title: decoded.isEmpty ? AppLocalized("折叠内容") : decoded,
-                                          foldName: decoded.isEmpty ? "折叠内容" : decoded,
-                                          initiallyOpen: match.range(at: 1).location != NSNotFound,
-                                          bodyStart: bodyStart)
-                stack.append(index)
-            } else if line.lowercased() == "</details>", let start = stack.popLast() {
-                closingLines[start] = index
-            }
-        }
-        return (openings, closingLines, codeLines)
-    }
-
+extension MarkdownDisclosures {
     static func parse(_ source: String) -> [MarkdownDisclosureNode] {
         let lines = source.components(separatedBy: "\n")
-        let (openings, closingLines, _) = scan(lines)
+        let (openings, closingLines, _) = scan(lines, untitled: AppLocalized("折叠内容"))
 
         func nodes(in range: Range<Int>) -> [MarkdownDisclosureNode] {
             var result: [MarkdownDisclosureNode] = []
@@ -258,38 +189,6 @@ enum MarkdownDisclosures {
             return result
         }
         return nodes(in: lines.indices)
-    }
-
-    /// 正文里配好对的折叠块（行号从 1 开始，和解析结果的行号一致；键和工作板、编辑器的折叠记忆一样）。
-    struct Span {
-        let line: Int
-        let bodyStart: Int
-        let closing: Int
-        let key: String
-        let title: String
-        let initiallyOpen: Bool
-    }
-
-    static func spans(_ lines: [String]) -> [Span] {
-        let (openings, closingLines, _) = scan(lines)
-        var seen: [String: Int] = [:]
-        return openings.keys.sorted().compactMap { start in
-            guard let opening = openings[start] else { return nil }
-            let occurrence = seen[opening.foldName, default: 0]
-            seen[opening.foldName] = occurrence + 1
-            guard let closing = closingLines[start] else { return nil }
-            return Span(line: start + 1, bodyStart: opening.bodyStart + 1, closing: closing + 1, key: "d:\(opening.foldName)#\(occurrence)",
-                        title: opening.title, initiallyOpen: opening.initiallyOpen)
-        }
-    }
-
-    fileprivate static func decodeTitle(_ title: String) -> String {
-        title.replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&#39;", with: "'")
-            .replacingOccurrences(of: "&amp;", with: "&")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

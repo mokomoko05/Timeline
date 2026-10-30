@@ -903,43 +903,23 @@ enum HeadingFolds {
 
     static func folded(in id: String) -> Set<String> { Set(defaults.stringArray(forKey: key(id)) ?? []) }
 
-    /// 给编辑器的折叠记忆：标题和展开的折叠块是 true，明确收起的折叠块是 false（`<details open>` 收起后要记得住）。
-    static func editorFolds(in id: String) -> [String: Bool] {
-        var result: [String: Bool] = [:]
-        for item in folded(in: id) {
-            if let state = disclosureState(item) { result[state.name] = state.open } else { result[item] = true }
-        }
-        return result
-    }
+    /// 给编辑器的折叠记忆，见 `FoldRecords`。
+    static func editorFolds(in id: String) -> [String: Bool] { FoldRecords.editorFolds(folded(in: id)) }
 
-    /// 折叠块的记录是 "d:名字#序号=open"（或 "=closed"）；编辑器旧版存的没有后缀，表示展开。
-    private static func disclosureState(_ item: String) -> (name: String, open: Bool)? {
-        guard item.hasPrefix("d:") else { return nil }
-        if item.hasSuffix("=open") { return (String(item.dropLast(5)), true) }
-        if item.hasSuffix("=closed") { return (String(item.dropLast(7)), false) }
-        return (item, true)
-    }
-
-    private static func setDisclosure(_ name: String, open: Bool, in id: String) {
-        var current = folded(in: id)
-        current.subtract([name, name + "=open", name + "=closed"])
-        current.insert(name + (open ? "=open" : "=closed"))
-        defaults.set(current.sorted(), forKey: key(id))
+    private static func store(_ records: Set<String>, in id: String) {
+        if records.isEmpty { defaults.removeObject(forKey: key(id)) } else { defaults.set(records.sorted(), forKey: key(id)) }
     }
 
     static func set(_ heading: String, folded: Bool, in id: String) {
-        if heading.hasPrefix("d:") { setDisclosure(heading, open: folded, in: id); return }
         var current = self.folded(in: id)
-        if folded { current.insert(heading) } else { current.remove(heading) }
-        if current.isEmpty { defaults.removeObject(forKey: key(id)) } else { defaults.set(current.sorted(), forKey: key(id)) }
+        FoldRecords.set(heading, value: folded, in: &current)
+        store(current, in: id)
     }
 
     /// 折叠块的 `heading` 带着点下去要变成的状态（"…=open" / "…=closed"，由 `MarkdownText` 写好）。
     static func toggle(_ heading: String, in id: String) {
-        if let state = disclosureState(heading) { setDisclosure(state.name, open: state.open, in: id); return }
-        var folded = folded(in: id)
-        if folded.remove(heading) == nil { folded.insert(heading) }
-        if folded.isEmpty { defaults.removeObject(forKey: key(id)) } else { defaults.set(folded.sorted(), forKey: key(id)) }
+        if let target = FoldRecords.disclosureTarget(heading) { set(target.name, folded: target.open, in: id); return }
+        set(heading, folded: !folded(in: id).contains(heading), in: id)
     }
 }
 

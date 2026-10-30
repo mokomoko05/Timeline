@@ -221,7 +221,7 @@ final class BoardWebSession: NSObject, ObservableObject {
                       "selection-ink": css(Palette.ink)]
         for level in 1...6 { colors["heading-\(level)"] = css(Palette.heading(level)) }
         settings = ["fontSize": UIFontMetrics(forTextStyle: .body).scaledValue(for: 16), "readOnly": store.isReadOnly, "colors": colors, "touch": true,
-                    "sourceMode": sourceMode, "folds": folds, "key": key, "measure": pool == .log,
+                    "sourceMode": sourceMode, "folds": folds, "key": key, "measure": pool == .log, "acceptsImages": imageLogID != nil,
                     "labels": ["openLink": L("在 Safari 中打开"), "copyCode": L("复制代码"), "copied": L("已复制"),
                                "copyFailed": L("复制失败，请重试"), "expand": L("展开标题下的内容"), "collapse": L("收起标题下的内容")]]
         // 别处（另一台设备同步过来）改了正文，而这边没有没写回的修改：换成新的。
@@ -268,17 +268,25 @@ final class BoardWebSession: NSObject, ObservableObject {
         }
     }
 
+    /// 正文的折叠记忆被编辑器改了（`object` 是记忆的键）。
+    static let markdownFoldsChanged = Notification.Name("MarkdownFoldsChanged")
+
+    private var imageLogID: UUID? {
+        if case .log(let id, _) = document { return id }
+        return nil
+    }
+
     private var foldsKey: String {
         switch document {
         case .board(let id): return "board.folds.\(id.uuidString)"
-        // 和渲染好的正文（`MarkdownView`）共用折叠记忆：存的是收起的标题。
+        // 和渲染好的正文（`MarkdownView`）共用折叠记忆，格式见 `FoldRecords`。
         case .log(let id, _): return "markdownFolds.log.\(id.uuidString)"
         case .summary(let date): return "markdownFolds.summary.\(JournalDates.key(date))"
         }
     }
     private var folds: [String: Bool] {
         if pool == .log {
-            return Dictionary(uniqueKeysWithValues: (UserDefaults.standard.stringArray(forKey: foldsKey) ?? []).map { ($0, true) })
+            return FoldRecords.editorFolds(UserDefaults.standard.stringArray(forKey: foldsKey) ?? [])
         }
         return UserDefaults.standard.dictionary(forKey: foldsKey) as? [String: Bool] ?? [:]
     }
@@ -304,15 +312,22 @@ final class BoardWebSession: NSObject, ObservableObject {
             toolbar.refreshUndo()
         case "fold":
             guard let key = body["key"] as? String, let value = body["value"] as? Bool else { return }
-            var folds = folds
-            folds[key] = value
-            if key.hasPrefix("h"), !value { folds.removeValue(forKey: key) }
             if pool == .log {
-                UserDefaults.standard.set(folds.filter(\.value).map(\.key).sorted(), forKey: foldsKey)
+                var records = Set(UserDefaults.standard.stringArray(forKey: foldsKey) ?? [])
+                FoldRecords.set(key, value: value, in: &records)
+                UserDefaults.standard.set(records.sorted(), forKey: foldsKey)
+                NotificationCenter.default.post(name: Self.markdownFoldsChanged, object: foldsKey)
             } else {
+                var folds = folds
+                folds[key] = value
+                if key.hasPrefix("h"), !value { folds.removeValue(forKey: key) }
                 UserDefaults.standard.set(folds, forKey: foldsKey)
             }
             settings["folds"] = folds
+        case "images":
+            // 编辑时粘贴、拖入的图片：加到这一条上（每日总结没有图片）。
+            guard let id = imageLogID, let images = body["images"] as? [String] else { return }
+            LogImages.add(images.compactMap { Data(base64Encoded: $0) }.map { data in { data } }, to: id, store: store)
         case "height":
             if let value = body["value"] as? Double, value > 0 { contentHeight = CGFloat(value) }
         case "open":
@@ -458,6 +473,21 @@ final class BoardWebSession: NSObject, ObservableObject {
 }
 
 extension BoardWebSession: MarkdownToolbarTarget {
+    /// 性能 / 检查：走网页发来的消息那条路。
+    func probeReceive(_ body: [String: Any]) -> [String: Any] {
+        receive(body)
+        return settings
+    }
+
+    static func probePaste(_ png: Data, pool: Pool = .log) {
+        let script = """
+        (() => { const bytes = Uint8Array.from(atob("\(png.base64EncodedString())"), c => c.charCodeAt(0));
+          const data = new DataTransfer(); data.items.add(new File([bytes], "a.png", {type: "image/png"}));
+          document.querySelector(".cm-content").dispatchEvent(new ClipboardEvent("paste", {clipboardData: data, bubbles: true, cancelable: true})); return 0; })()
+        """
+        owner(pool)?.webView?.evaluateJavaScript(script) { _, error in if let error { print("[perf] 粘贴图片：脚本出错 \(error)") } }
+    }
+
     func undo() { webView?.evaluateJavaScript("window.boardEditor.undo(); 0") }
     func redo() { webView?.evaluateJavaScript("window.boardEditor.redo(); 0") }
     func dismissKeyboard() { endEditing() }

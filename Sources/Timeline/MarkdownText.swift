@@ -83,7 +83,7 @@ enum MarkdownText {
         renderer.boardFolds = boardFolds
         renderer.formulas = math.formulas
         renderer.sourceLines = math.source.components(separatedBy: "\n")
-        if math.source.range(of: "<details", options: .caseInsensitive) != nil { renderer.spans = MarkdownDisclosures.spans(renderer.sourceLines) }
+        if math.source.range(of: "<details", options: .caseInsensitive) != nil { renderer.spans = MarkdownDisclosures.spans(renderer.sourceLines, untitled: AppLocalized("折叠内容")) }
         let document = document ?? Document(parsing: math.source)
         if folds != nil { renderer.assignHeadingKeys(document) }
         renderer.blocks(document)

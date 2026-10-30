@@ -6,12 +6,12 @@ import TimelineCore
     static let shared = UndoToast()
 
     @Published private(set) var message: String?
-    private var undo: (() -> Void)?
+    @Published private(set) var undo: (() -> Void)?
     private var hide: Task<Void, Never>?
     /// 停留时间：给手指移过去点「撤销」留够时间。
     static let duration: TimeInterval = 4
 
-    func show(_ text: String, undo: @escaping () -> Void) {
+    func show(_ text: String, undo: (() -> Void)? = nil) {
         self.undo = undo
         withAnimation(Motion.fading(.snappy)) { message = text }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -48,9 +48,11 @@ struct UndoToastView: View {
         if let message = toast.message {
             HStack(spacing: 14) {
                 Text(message).font(.subheadline.weight(.medium))
-                Button("撤销", action: toast.performUndo)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Palette.accent)
+                if toast.undo != nil {
+                    Button("撤销", action: toast.performUndo)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Palette.accent)
+                }
             }
             .foregroundStyle(.white)
             .padding(.leading, 16).padding(.trailing, 12).padding(.vertical, 10)
