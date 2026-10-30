@@ -18,7 +18,7 @@ final class LogKeyboardSelection: ObservableObject {
     @Published private(set) var selectedID: UUID?
     let scrollRequests = PassthroughSubject<UUID, Never>()
     fileprivate let rowViews = NSHashTable<LogRowSelectionView>.weakObjects()
-    private var pages: [UnifiedNotesMode: Page] = [:]
+    private(set) var pages: [UnifiedNotesMode: Page] = [:]
     private var keyMonitor: Any?
     private var mouseMonitor: Any?
     /// 页面现在是笔记还是日记；测试里可以替换。

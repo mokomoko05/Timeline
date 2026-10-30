@@ -106,7 +106,11 @@ struct NotesView: View {
         return all.first { $0.id == selection } ?? (selection == nil ? nil : nil)
     }
 
+    /// 键盘进入编辑的闭包只注册一次，里面的环境值是注册时的：字号、深浅色从这里读。
+    @State private var editorStyle = EditorStyle()
+
     var body: some View {
+        let _ = editorStyle.update(typography, colorScheme)
         HStack(spacing: 0) {
             sidebar.frame(width: 250)
             Divider()
@@ -614,7 +618,7 @@ struct NotesView: View {
         let log = item.log
         let showsMetadata = showDate || NoteThread.kindLabel(log) != nil || (showTask && Self.sourceLabel(log) != nil) || !log.tags.isEmpty
         return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext, highlighted: flashNoteID == log.id,
-                             actionWidth: store.isReadOnly ? 24 : 96, showsMetadata: showsMetadata,
+                             actionWidth: store.isReadOnly ? 24 : 120, showsMetadata: showsMetadata,
                              prepareEdit: !store.isReadOnly && log.hasEditableText ? { beginNoteEdit(item, at: nil, prepare: true) } : nil) {
             if showDate { Text(item.date.relativeLabel).help(item.key) }
             if let kind = NoteThread.kindLabel(log) {
@@ -682,7 +686,7 @@ struct NotesView: View {
     private func beginNoteEdit(_ item: JournalStore.LoggedLog, at point: CGPoint?, prepare: Bool = false) {
         guard !store.isReadOnly, item.log.hasEditableText else { return }
         InlineMarkdownEditor.shared.begin(item.log, on: item.date, store: store, at: point,
-                                          fontSize: typography.pt(13), lineSpacing: typography.lineSpacing, dark: colorScheme == .dark, prepare: prepare)
+                                          fontSize: editorStyle.typography.pt(13), lineSpacing: editorStyle.typography.lineSpacing, dark: editorStyle.dark, prepare: prepare)
     }
 
     private func deleteNote(_ item: JournalStore.LoggedLog) {
@@ -978,6 +982,10 @@ struct NotesView: View {
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 12)
+        .imageFileDrop(enabled: !store.isReadOnly) { datas in
+            ImageTools.importImages(datas, in: store, queue: store.imageImports(for: "notes:" + key)) { [nav] names in nav.updateDraft(key) { $0.images += names } }
+            tagFocused = true
+        }
     }
 
     private func submitTag(_ tag: String) {
@@ -1058,6 +1066,10 @@ struct NotesView: View {
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 12)
+        .imageFileDrop(enabled: !store.isReadOnly && !topic.deleted) { datas in
+            ImageTools.importImages(datas, in: store, queue: store.imageImports(for: "notes:" + key)) { [nav] names in nav.updateDraft(key) { $0.images += names } }
+            focused = true
+        }
     }
 
     private func submit(_ topic: JournalStore.NoteTopic) {

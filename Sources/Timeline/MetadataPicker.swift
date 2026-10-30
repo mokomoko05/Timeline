@@ -189,6 +189,24 @@ struct EntryMetadataButtons: View {
                 store.setLogTask($0, forLog: log.id, on: date)
             }) { MetadataSymbol(symbol: "@", active: live.taskID != nil) }
                 .raisedOnHover(radius: 5).help("选择关联的待办").accessibilityLabel("选择关联的待办")
+            Button(action: chooseImages) {
+                Image(systemName: "photo.badge.plus").font(.system(size: 11)).frame(width: 24, height: 22).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).foregroundStyle(Palette.muted)
+            .raisedOnHover(radius: 5).help("添加图片").accessibilityLabel("添加图片")
         }.fixedSize().disabled(store.isReadOnly)
+    }
+
+    private func chooseImages() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = true
+        panel.begin { [store, id = log.id] response in
+            guard response == .OK else { return }
+            let datas = panel.urls.compactMap { try? Data(contentsOf: $0) }
+            ImageTools.importImages(datas, in: store, queue: store.imageImports(for: "inline:" + id.uuidString)) { names in
+                store.addImages(names, toLog: id)
+            }
+        }
     }
 }

@@ -78,6 +78,7 @@ html.touch:not(.inline) .board-check svg { width: 18px; height: 18px; }
 .board-details .arrow[data-open="true"] svg { transform: rotate(90deg); }
 .board-details .title { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .board-details:hover { color: var(--accent); }
+.cm-table-block .cm-math .katex { font-size: 1em; line-height: 1; }
 html.inline .board-details { min-height: var(--m-line); }
 html.inline .board-details .arrow { height: var(--m-line); }
 .cm-details-body { border-left: 1px solid var(--line); margin-left: 18px; padding-left: 12px; }

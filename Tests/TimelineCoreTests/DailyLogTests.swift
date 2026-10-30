@@ -209,4 +209,32 @@ final class DailyLogTests: XCTestCase {
         store.undo()
         XCTAssertEqual(store.entry(for: day).summary, "")
     }
+
+    @MainActor func testAddingAndRemovingImagesOnACommittedLog() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let day = Date()
+        store.setLogDraft("正文", on: day)
+        _ = try store.commitLog(on: day, linkDefault: false)
+        let id = try XCTUnwrap(store.entry(for: day).logs.first?.id)
+        store.addImages(["a.png", "b.png"], toLog: id)
+        XCTAssertEqual(store.entry(for: day).logs.first?.images, ["a.png", "b.png"])
+        store.setImageText("识别的字", image: "a.png")
+        store.removeImage("a.png", fromLog: id)
+        XCTAssertEqual(store.entry(for: day).logs.first?.images, ["b.png"])
+        XCTAssertNil(store.entry(for: day).logs.first?.imageText["a.png"])
+        store.undo()
+        XCTAssertEqual(store.entry(for: day).logs.first?.images, ["a.png", "b.png"])
+        XCTAssertEqual(store.entry(for: day).logs.first?.imageText["a.png"], "识别的字")
+        // 有文字的日志去掉所有图片还在；只有图片的去掉最后一张就整条删。
+        store.removeImage("a.png", fromLog: id)
+        store.removeImage("b.png", fromLog: id)
+        XCTAssertEqual(store.entry(for: day).logs.first?.text, "正文")
+        store.addImages(["c.png"], toLog: id)
+        store.updateLog(id, text: "", on: day)
+        XCTAssertEqual(store.entry(for: day).logs.first?.images, ["c.png"])
+        store.removeImage("c.png", fromLog: id)
+        XCTAssertTrue(store.entry(for: day).logs.isEmpty)
+    }
 }

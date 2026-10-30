@@ -209,7 +209,12 @@ private struct SummaryEditSheet: View {
                 .frame(height: min(max(session.contentHeight ?? 120, 96), UIScreen.main.bounds.height * 0.32))
                 .animation(Motion.adapt(.snappy(duration: 0.15)), value: session.contentHeight)
         }
-        .onAppear { session.beginEditing() }
+        .onAppear {
+            session.beginEditing()
+            if PerfProbe.typing == "summary" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { session.runTypingTest("总结") }
+            }
+        }
         .onDisappear { session.commit() }
     }
 }

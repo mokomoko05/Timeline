@@ -51,7 +51,11 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     private var configured = false
     /// 编辑器的内容已经画到屏幕上了：这之后才把渲染好的正文换成编辑器（之前的高度消息不算）。
     private var painted = false
-    private var settings: [String: Any] = [:]
+    private(set) var settings: [String: Any] = [:]
+    /// 排版用的字号、行距、深浅色：提前排好的版只有这些都没变才能用。
+    private var layoutSignature = ""
+    private var preparedPreferences = ""
+    private var preparedAppearance: NSAppearance.Name?
     private var caret: CGPoint?
     private var selectsWord = false
     private var clickMonitor: Any?
@@ -124,8 +128,13 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     /// 排好版之后这一条的正文又变了（撤销、同步……）：排好的版不能用，否则一打字就把新内容盖掉。
     private var preparedIsStale: Bool {
         guard preparing, let target, let store else { return false }
+        if preparedPreferences != Self.preferences { return true }
+        if let preparedAppearance, let webView, webView.effectiveAppearance.name != preparedAppearance { return true }
         return Self.storedText(target, in: store) != original
     }
+
+    /// 界面缩放和行距（在设置里改的）。
+    private static var preferences: String { "\(UIScale.factor)|\(UserDefaults.standard.double(forKey: Prefs.lineSpacing))" }
 
     /// 数据里现在的正文；日志已经不在了是 nil。
     private static func storedText(_ target: Target, in store: JournalStore) -> String? {
@@ -161,8 +170,9 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
                       dark: Bool, muted: Bool, prepare: Bool) {
         guard !store.isReadOnly else { return }
         if prepare, target != nil, !preparing { return }
+        let signature = "\(fontSize)|\(lineSpacing)|\(dark)|\(muted)"
         if target?.logID == next.logID {
-            if !preparing || text == original {
+            if !preparing || (text == original && signature == layoutSignature) {
                 if preparing, !prepare {
                     caret = point.map(caretPoint)
                     activate(place: placement(caret))
@@ -179,6 +189,9 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         slot = slot(for: next.logID)
         slot?.height = nil
         slot?.phase = prepare ? .prepared : .editing
+        layoutSignature = signature
+        preparedPreferences = Self.preferences
+        preparedAppearance = nil
         original = text
         sessionStart = text
         source = text
@@ -189,10 +202,10 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         caret = point.map(caretPoint)
         var colors = BoardLiveEditorSession.colors(dark: dark)
         if muted { colors["ink"] = colors["muted"] }
-        settings = ["key": "log." + next.logID.uuidString, "source": text, "inline": true, "readOnly": false, "sourceMode": false,
+        settings = ["key": "log." + next.logID.uuidString, "source": text, "inline": true, "readOnly": false, "sourceMode": false, "acceptsImages": !next.isSummary,
                     "fontSize": fontSize, "colors": colors, "dark": dark,
                     "metrics": metrics.merging(["tail": InlineEditorMetrics.tail(text, fontSize: fontSize, lineSpacing: lineSpacing)]) { $1 },
-                    "labels": BoardLiveEditorSession.labels.merging(["copyCode": AppLocalized("复制"), "code": AppLocalized("代码")]) { $1 },
+                    "labels": BoardLiveEditorSession.labels.merging(["copyCode": AppLocalized("复制"), "code": AppLocalized("代码"), "content": AppLocalized("编辑 Markdown 内容")]) { $1 },
                     "folds": HeadingFolds.editorFolds(in: Self.foldID(next.logID))]
         _ = makeWebView()
         configure()
@@ -500,6 +513,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
 
     private func reveal(_ value: CGFloat) {
         painted = true
+        preparedAppearance = webView?.effectiveAppearance.name
         slot?.height = value
     }
 
@@ -524,6 +538,13 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
             slot?.height = CGFloat(value)
         case "done":
             finish()
+        case "images":
+            // 就地编辑时粘贴、拖入的图片：加到这一条上。
+            guard let target, !target.isSummary, let store, let images = body["images"] as? [String] else { return }
+            let datas = images.compactMap { Data(base64Encoded: $0) }
+            ImageTools.importImages(datas, in: store, queue: store.imageImports(for: "inline:" + target.logID.uuidString)) { [store, id = target.logID] names in
+                store.addImages(names, toLog: id)
+            }
         case "fold":
             guard let target, let key = body["key"] as? String, let value = body["value"] as? Bool else { return }
             HeadingFolds.set(key, folded: value, in: Self.foldID(target.logID))
@@ -559,6 +580,17 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         configured = false
         painted = false
         webView.reload()
+    }
+}
+
+/// 开始就地编辑用的字号、深浅色。视图每次更新时写进来，只注册一次的闭包（键盘选中后回车进入编辑）也能读到最新的。
+final class EditorStyle {
+    private(set) var typography = AppTypography()
+    private(set) var dark = false
+
+    func update(_ typography: AppTypography, _ scheme: ColorScheme) {
+        self.typography = typography
+        dark = scheme == .dark
     }
 }
 

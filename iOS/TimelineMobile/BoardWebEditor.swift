@@ -367,6 +367,12 @@ final class BoardWebSession: NSObject, ObservableObject {
         }
     }
 
+    /// 测试用（`检查编辑冲突` 这一步）：当作网页交来了这段文字，再写回。
+    func probeCommit(_ text: String) {
+        accept(["source": text])
+        flush()
+    }
+
     /// 把编辑器里的文字写进数据并存盘（没变就什么也不做）。
     func flush(persist: Bool = true) {
         pendingWrite?.cancel()

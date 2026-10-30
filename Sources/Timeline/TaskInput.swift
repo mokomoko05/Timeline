@@ -36,6 +36,8 @@ struct TaskInput: View {
     var returnSubmits = false
     /// 编辑已有条目时仅接受 ⌘Enter；新建输入框仍可用普通 Enter。
     var commandReturnOnly = false
+    /// `commandReturnOnly` 时按了普通 Enter（不保存）：界面提示一句该按什么。
+    var plainReturn: (() -> Void)?
 
     private var growing: Bool { minHeight != nil && allowsNewlines }
 
@@ -55,7 +57,7 @@ struct TaskInput: View {
                                  cancel: cancel, previous: previous, monospaced: monospaced, onPasteImages: onPasteImages,
                                  minHeight: minHeight, maxLines: maxLines, allowsNewlines: allowsNewlines,
                                  collapsesPastedNewlines: collapsesPastedNewlines ?? !allowsNewlines, complete: complete,
-                                 commandReturnOnly: commandReturnOnly)
+                                 commandReturnOnly: commandReturnOnly, plainReturn: plainReturn)
         }
     }
 }
@@ -104,6 +106,7 @@ struct SingleLineTaskInput: NSViewRepresentable {
     var collapsesPastedNewlines: Bool?
     var complete: (() -> Void)?
     var commandReturnOnly = false
+    var plainReturn: (() -> Void)?
     private var collapsesNewlines: Bool { collapsesPastedNewlines ?? !allowsNewlines }
 
     private var growing: Bool { minHeight != nil }
@@ -206,7 +209,7 @@ struct SingleLineTaskInput: NSViewRepresentable {
             // 这里走到的都是 allowsNewlines == false 的单行场景（`allowsNewlines == true` 时 `TaskInput.body`
             // 选的是 `GrowingTaskInput`）；编辑已有标题时只允许 ⌘Enter 保存。
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                guard !parent.commandReturnOnly else { return true }
+                guard !parent.commandReturnOnly else { parent.plainReturn?(); return true }
                 parent.text = textView.string
                 parent.submit()
                 return true

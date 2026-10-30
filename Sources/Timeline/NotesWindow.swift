@@ -340,6 +340,9 @@ struct UnifiedJournalView: View {
     @State private var query = ""
     @FocusState private var searchFocused: Bool
 
+    /// 键盘进入编辑的闭包只注册一次，里面的环境值是注册时的：字号、深浅色从这里读。
+    @State private var editorStyle = EditorStyle()
+
     private var entry: DayEntry { store.entry(for: date) }
     private var allDates: [Date] {
         var result = store.days.keys.compactMap(JournalDates.date(for:))
@@ -363,6 +366,7 @@ struct UnifiedJournalView: View {
     }
 
     var body: some View {
+        let _ = editorStyle.update(typography, colorScheme)
         HStack(spacing: 0) {
             sidebar.frame(width: 250)
             Divider()
@@ -643,7 +647,7 @@ struct UnifiedJournalView: View {
         let showsMetadata = NoteThread.kindLabel(log) != nil || taskLabel != nil || (log.showsTimelineTags && !log.tags.isEmpty)
         return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext,
                              focusBefore: segment?.focusBefore == true, focusAfter: segment?.focusAfter == true,
-                             highlighted: highlightedID == log.id, actionWidth: store.isReadOnly ? 0 : 72, showsMetadata: showsMetadata,
+                             highlighted: highlightedID == log.id, actionWidth: store.isReadOnly ? 0 : 96, showsMetadata: showsMetadata,
                              prepareEdit: !store.isReadOnly && log.hasEditableText ? { beginEdit(log, on: day, at: nil, prepare: true) } : nil) {
             if let kind = NoteThread.kindLabel(log) {
                 Text(kind).foregroundStyle(LogEventStyle.color(log)).fontWeight(.medium)
@@ -786,8 +790,8 @@ struct UnifiedJournalView: View {
 
     private func beginEdit(_ log: DailyLogEntry, on day: Date, at point: CGPoint?, prepare: Bool = false) {
         guard log.hasEditableText else { return }
-        InlineMarkdownEditor.shared.begin(log, on: day, store: store, at: point, fontSize: typography.pt(LogEventStyle.quiet(log) ? 12 : 13),
-                                          lineSpacing: typography.lineSpacing, dark: colorScheme == .dark, muted: LogEventStyle.quiet(log), prepare: prepare)
+        InlineMarkdownEditor.shared.begin(log, on: day, store: store, at: point, fontSize: editorStyle.typography.pt(LogEventStyle.quiet(log) ? 12 : 13),
+                                          lineSpacing: editorStyle.typography.lineSpacing, dark: editorStyle.dark, muted: LogEventStyle.quiet(log), prepare: prepare)
     }
 
 }

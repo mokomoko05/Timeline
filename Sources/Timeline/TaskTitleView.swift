@@ -76,16 +76,29 @@ struct TaskTitleView: View {
     @State private var focused = false
     @State private var editToken: UUID?
     @State private var originalText = ""
+    @State private var returnHint = 0
 
     var body: some View {
         HStack(spacing: 0) {
             if editing {
                 TaskInput(text: $editText, focused: $focused, fontSize: fontSize,
-                          submit: { finishEditing(); next() }, cancel: cancelEditing, commandReturnOnly: true)
+                          submit: { finishEditing(); next() }, cancel: cancelEditing, commandReturnOnly: true, plainReturn: { returnHint += 1 })
                     .frame(height: typography.pt(fontSize) + 7)
                     .padding(.horizontal, 4).padding(.vertical, 2)
                     .background(Palette.soft, in: RoundedRectangle(cornerRadius: 4))
                     .onAppear { focused = true }
+                    .overlay(alignment: .trailing) {
+                        // 标题里不能换行，普通回车也不保存：告诉用户该按什么。
+                        if returnHint > 0 {
+                            Text("⌘↩ 保存 · Esc 取消").font(.system(size: typography.pt(10))).foregroundStyle(Palette.muted)
+                                .padding(.horizontal, 5).background(Palette.soft).padding(.trailing, 3).allowsHitTesting(false)
+                        }
+                    }
+                    .task(id: returnHint) {
+                        guard returnHint > 0 else { return }
+                        try? await Task.sleep(for: .seconds(2.5))
+                        if !Task.isCancelled { returnHint = 0 }
+                    }
                     .accessibilityLabel("编辑事项，支持 Markdown 链接")
             } else {
                 TaskLinkText(source: title, completed: completed, color: color, fontSize: fontSize,

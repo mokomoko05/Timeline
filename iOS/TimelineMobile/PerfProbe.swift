@@ -325,6 +325,7 @@ enum PerfProbe {
             ("收起日志编辑", { send("closeLogEditor") }),
             ("点每日总结", { switchTab(.journal); SummaryEditing.shared.date = Date() }),
             ("收起每日总结", { SummaryEditing.shared.date = nil }),
+            ("检查编辑冲突", { checkEditorConflict(store) }),
             ("滚动全文", { scrollThrough() }),
             ("长按长文", { pressLongText() }),
             ("拖动排序", { switchTab(.tasks); send("dragTask") }),
@@ -349,6 +350,36 @@ enum PerfProbe {
                 }
             }
         }
+    }
+
+    /// 编辑时别处也改了同一段：两份都留；只有这边改了就直接写。用很早的一天，不碰演示数据。
+    static func checkEditorConflict(_ store: JournalStore) {
+        guard let day = JournalDates.calendar.date(byAdding: .year, value: -5, to: Date()) else { return }
+        store.setSummary("基线", on: day)
+        let plain = BoardWebSession(store: store, document: .summary(date: day))
+        plain.probeCommit("基线+本机")
+        let clean = store.entry(for: day).summary == "基线+本机"
+        store.setSummary("基线", on: day)
+        let summary = BoardWebSession(store: store, document: .summary(date: day))
+        store.setSummary("基线+远端", on: day)
+        summary.probeCommit("基线+本机")
+        let merged = store.entry(for: day).summary
+        store.setSummary("", on: day)
+        _ = try? store.quickLog("基线", on: day)
+        var both = false, restored = false
+        if let log = store.entry(for: day).logs.first {
+            let session = BoardWebSession(store: store, document: .log(id: log.id, date: day))
+            store.updateLog(log.id, text: "基线+远端", on: day)
+            session.probeCommit("基线+本机")
+            let text = store.entry(for: day).logs.first?.text ?? ""
+            both = text.contains("基线+本机") && text.contains("基线+远端")
+            let deleted = BoardWebSession(store: store, document: .log(id: log.id, date: day))
+            store.deleteLog(log.id, on: day)
+            deleted.probeCommit("删除后还在")
+            restored = store.entry(for: day).logs.first?.text == "删除后还在"
+            store.entry(for: day).logs.forEach { store.deleteLog($0.id, on: day) }
+        }
+        print("[perf] 编辑冲突：只改一边 \(clean ? "OK" : "FAIL") · 总结两份都留 \(merged.contains("基线+本机") && merged.contains("基线+远端") ? "OK" : "FAIL") · 日志两份都留 \(both ? "OK" : "FAIL") · 被删后保留 \(restored ? "OK" : "FAIL")")
     }
 
     /// 在宽公式的滑动条上横着滑不换天，在普通文字上滑照常换天：检查两处的判断。

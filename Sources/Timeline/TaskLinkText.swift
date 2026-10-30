@@ -331,6 +331,7 @@ final class InteractiveTaskText: NSTextView {
     private var cachedLinks: (key: RegionLayoutKey, regions: [(url: URL, rect: NSRect)])?
     private var cachedTasks: (key: RegionLayoutKey, regions: [(line: Int, rect: NSRect)])?
     private var cachedCode: (key: RegionLayoutKey, regions: [(info: MarkdownText.CodeBlockInfo, block: NSRect, copy: NSRect)])?
+    private var cachedRules: (key: RegionLayoutKey, lines: [(from: NSPoint, to: NSPoint)])?
     private var cachedHeadings: (key: RegionLayoutKey, regions: [(key: String, rect: NSRect, folded: Bool, hit: NSRect)])?
     private weak var observedRegionStorage: NSTextStorage?
     private var regionObservation: NSObjectProtocol?
@@ -344,6 +345,7 @@ final class InteractiveTaskText: NSTextView {
         cachedTasks = nil
         cachedCode = nil
         cachedHeadings = nil
+        cachedRules = nil
     }
 
     private func regionLayoutKey(storage: NSTextStorage, manager: NSLayoutManager, container: NSTextContainer) -> RegionLayoutKey {
@@ -683,6 +685,30 @@ final class InteractiveTaskText: NSTextView {
         return regions
     }
 
+    /// 按实际宽度画的线：分隔线和展开的折叠块左边的竖线。
+    private func ruleLines() -> [(from: NSPoint, to: NSPoint)] {
+        guard markdown, let storage = textStorage, let manager = layoutManager, let container = textContainer, storage.length > 0 else { return [] }
+        let key = regionLayoutKey(storage: storage, manager: manager, container: container)
+        if let cachedRules, cachedRules.key == key { return cachedRules.lines }
+        var lines: [(from: NSPoint, to: NSPoint)] = []
+        let origin = textContainerOrigin
+        let whole = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(MarkdownText.ruleKey, in: whole) { value, range, _ in
+            guard let indent = value as? CGFloat else { return }
+            let rect = manager.lineFragmentRect(forGlyphAt: manager.glyphIndexForCharacter(at: range.location), effectiveRange: nil)
+            let y = (origin.y + rect.minY + manager.lineFragmentUsedRect(forGlyphAt: manager.glyphIndexForCharacter(at: range.location), effectiveRange: nil).height / 2).rounded() + 0.5
+            lines.append((NSPoint(x: origin.x + indent, y: y), NSPoint(x: origin.x + container.size.width - container.lineFragmentPadding, y: y)))
+        }
+        storage.enumerateAttribute(MarkdownText.disclosureBodyKey, in: whole) { value, range, _ in
+            guard let x = value as? CGFloat else { return }
+            let rect = manager.boundingRect(forGlyphRange: manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil), in: container)
+            let lineX = (origin.x + x).rounded() + 0.5
+            lines.append((NSPoint(x: lineX, y: origin.y + rect.minY), NSPoint(x: lineX, y: origin.y + rect.maxY)))
+        }
+        cachedRules = (key, lines)
+        return lines
+    }
+
     func headingKey(at point: NSPoint) -> String? {
         headingRegions().first { $0.hit.insetBy(dx: -4, dy: -4).contains(point) }?.key
     }
@@ -707,6 +733,17 @@ final class InteractiveTaskText: NSTextView {
         }
         super.draw(dirtyRect)
         drawCopyButtons(in: dirtyRect)
+        let rules = ruleLines()
+        if !rules.isEmpty {
+            (foreground ?? .labelColor).withAlphaComponent(0.22).setStroke()
+            for rule in rules {
+                let path = NSBezierPath()
+                path.move(to: rule.from)
+                path.line(to: rule.to)
+                path.lineWidth = 1
+                path.stroke()
+            }
+        }
         // 标题右边的收起 / 展开按钮画在文字上面（文字已经给它让出了位置）。
         for region in headingRegions() where region.rect.intersects(dirtyRect) {
             let color = foreground ?? .labelColor

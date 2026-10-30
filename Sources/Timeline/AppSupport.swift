@@ -294,7 +294,8 @@ struct ToastView: View {
         Group {
             if let toast = center.current {
                 HStack(spacing: 12) {
-                    Text(LocalizedStringKey(toast.message)).font(.system(size: typography.pt(12), weight: .medium)).lineLimit(1)
+                    // 提示里可能有标签名、文件名：不当 Markdown 解析（`*`、`_` 要原样显示）。
+                    Text(verbatim: AppLocalized(toast.message)).font(.system(size: typography.pt(12), weight: .medium)).lineLimit(1)
                     if let title = toast.actionTitle, let action = toast.action {
                         Button(LocalizedStringKey(title)) { action(); center.dismiss() }
                             .buttonStyle(HitAreaButtonStyle(compact: true))

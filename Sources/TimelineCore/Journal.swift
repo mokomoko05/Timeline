@@ -836,6 +836,30 @@ public final class JournalStore: ObservableObject {
         change(date, action: "删除日志") { $0.logs.removeAll { $0.id == id } }
     }
 
+    /// 给已经提交的日志加图片，可撤销。
+    public func addImages(_ names: [String], toLog id: UUID) {
+        guard !names.isEmpty, let date = dayOfLog(id) else { return }
+        change(date) { entry in
+            guard let index = entry.logs.firstIndex(where: { $0.id == id }) else { return }
+            entry.logs[index].images += names
+        }
+    }
+
+    /// 从已经提交的日志里去掉一张图，可撤销；只剩这张图、又没有文字时整条删掉。
+    public func removeImage(_ name: String, fromLog id: UUID) {
+        guard let date = dayOfLog(id), let log = entry(for: date).logs.first(where: { $0.id == id }) else { return }
+        if log.images == [name], log.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { deleteLog(id, on: date); return }
+        change(date) { entry in
+            guard let index = entry.logs.firstIndex(where: { $0.id == id }), let position = entry.logs[index].images.firstIndex(of: name) else { return }
+            entry.logs[index].images.remove(at: position)
+            if !entry.logs[index].images.contains(name) { entry.logs[index].imageText[name] = nil }
+        }
+    }
+
+    private func dayOfLog(_ id: UUID) -> Date? {
+        days.first { $0.value.logs.contains { $0.id == id } }.flatMap { JournalDates.date(for: $0.key) }
+    }
+
     public func setDeadlineDraft(_ text: String, on date: Date) {
         change(date, debounce: true) { $0.deadlineDraft = text }
     }

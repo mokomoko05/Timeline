@@ -116,6 +116,26 @@ class MathWidget extends WidgetType {
 const tableInline = /`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_|~~([^~]+)~~|\[([^\]]+)\]\(([^)\s]+)\)/g;
 
 function appendTableCell(cell, text) {
+  // 公式先挑出来（里面的 _、* 不是格式），和原生正文一样画成公式；KaTeX 没加载好时先显示原文。
+  const maths = text.includes("$") ? inlineMath(text) : [];
+  if (!maths.length) { appendTableText(cell, text); return; }
+  ensureKatex();
+  let last = 0;
+  for (const math of maths) {
+    appendTableText(cell, text.slice(last, math.from));
+    last = math.to;
+    const html = katexState === "ready" ? renderMath(math.tex, false) : null;
+    if (html) {
+      const element = document.createElement("span");
+      element.className = "cm-math";
+      element.innerHTML = html;
+      cell.append(element);
+    } else cell.append(text.slice(math.from, math.to));
+  }
+  appendTableText(cell, text.slice(last));
+}
+
+function appendTableText(cell, text) {
   let last = 0;
   for (const match of text.matchAll(tableInline)) {
     cell.append(text.slice(last, match.index));
@@ -146,8 +166,8 @@ function splitTableRow(text) {
 }
 
 class TableWidget extends WidgetType {
-  constructor(source) { super(); this.source = source; }
-  eq(other) { return other.source === this.source; }
+  constructor(source, math) { super(); this.source = source; this.math = math; }
+  eq(other) { return other.source === this.source && other.math === this.math; }
   toDOM(view) {
     const lines = this.source.split("\n");
     const alignments = splitTableRow(lines[1]).map(cell => cell.startsWith(":") && cell.endsWith(":") ? "center" : cell.endsWith(":") ? "right" : "left");
@@ -216,7 +236,8 @@ function tableDecorations(state, tables) {
   const ranges = [];
   for (const table of tables) {
     if (selection && selection.from <= table.to && selection.to >= table.from) continue;
-    ranges.push(Decoration.replace({widget: new TableWidget(state.doc.sliceString(table.from, table.to)), block: true}).range(table.from, table.to));
+    const source = state.doc.sliceString(table.from, table.to);
+    ranges.push(Decoration.replace({widget: new TableWidget(source, source.includes("$") && katexState === "ready"), block: true}).range(table.from, table.to));
   }
   return Decoration.set(ranges);
 }
@@ -233,10 +254,11 @@ const tableBlocks = StateField.define({
       return {...value, tables, decorations: value.decorations.map(transaction.changes)};
     }
     const finished = transaction.effects.some(effect => effect.is(setComposing) && !effect.value);
+    const loaded = transaction.effects.some(effect => effect.is(mathLoaded));
     const tables = transaction.docChanged || finished ? findTables(transaction.state.doc) : value.tables;
     if (!tables.length && !value.tables.length) return value;
     const key = revealedBlocks(transaction.state, tables);
-    if (!transaction.docChanged && !finished && key === value.key && transaction.startState.readOnly === transaction.state.readOnly) return value;
+    if (!transaction.docChanged && !finished && !loaded && key === value.key && transaction.startState.readOnly === transaction.state.readOnly) return value;
     return {tables, key, decorations: tableDecorations(transaction.state, tables)};
   },
   provide: field => EditorView.decorations.from(field, value => value.decorations)
@@ -591,6 +613,23 @@ function parseHeadings(doc, found, details) {
   return headings.filter(heading => heading.end > heading.lineTo);
 }
 
+// 行内的 <br>：和原生正文一样换一行。
+class LineBreakWidget extends WidgetType {
+  eq() { return true; }
+  toDOM() { return document.createElement("br"); }
+  ignoreEvent() { return false; }
+}
+
+let measuring = null;
+function orderedIndent(marker) {
+  if (marker.length < 3) return 0;
+  measuring ??= document.createElement("canvas").getContext("2d");
+  // 第一次排版时编辑器视图还没建好（这段代码在建状态时就会跑）：量外层容器，字体一样。
+  measuring.font = getComputedStyle(document.getElementById("editor") ?? document.body).font;
+  const indent = Math.ceil(measuring.measureText(marker).width + 5);
+  return indent > 22 ? indent : 0;
+}
+
 class HeadingFoldWidget extends WidgetType {
   constructor(key, folded) { super(); this.key = key; this.folded = folded; }
   eq(other) { return this.key === other.key && this.folded === other.folded; }
@@ -640,7 +679,12 @@ class FoldedMoreWidget extends WidgetType {
 function setFold(key, folded, lineFrom) {
   folds.set(key, folded);
   post({kind: "fold", key, value: folded});
-  keepInPlace(lineFrom, {effects: [refold.of(null)]});
+  const spec = {effects: [refold.of(null)]};
+  // 光标在要收起的内容里：挪到标题行末尾，不然接着打字会改到看不见的地方。
+  const heading = folded ? view.state.field(live, false)?.headings.find(item => item.key === key) : null;
+  const selection = view.state.selection.main;
+  if (heading && selection.to > heading.lineTo && selection.from <= heading.end) spec.selection = {anchor: heading.lineTo};
+  keepInPlace(lineFrom, spec);
 }
 
 // 收起 / 展开时被点的那一行（标题、折叠块）留在屏幕上原来的位置，内容在它下面展开、收起。
@@ -1090,10 +1134,15 @@ function inlineDecorations(view) {
           }
           const start = /^\s*$/.test(state.doc.sliceString(line.from, node.from)) ? line.from : node.from;
           const end = state.doc.sliceString(node.to, node.to + 1) === " " ? node.to + 1 : node.to;
-          ranges.push(Decoration.line({class: "cm-list-line", attributes: {style: "--list-depth: " + Math.max(1, depth)}}).range(line.from));
+          // 序号放不下默认缩进（「100.」、放大界面后的「10.」）：这一列表整体缩进多一点，和原生一致。
+          const lastMark = ordered ? node.node.parent?.parent?.lastChild?.firstChild : null;
+          const indent = lastMark ? orderedIndent(state.doc.sliceString(lastMark.from, lastMark.to)) : 0;
+          ranges.push(Decoration.line({class: "cm-list-line", attributes: {style: "--list-depth: " + Math.max(1, depth) + (indent ? "; --list-indent: " + indent + "px" : "")}}).range(line.from));
           if (!task) ranges.push(Decoration.replace({widget: new BulletWidget(ordered ? state.doc.sliceString(node.from, node.to) : "•"), atomic: true}).range(start, end));
           else if (start < node.from) hide(start, node.from);
         }
+      } else if (name === "HTMLTag" && !inside(node.from, node.to) && /^<br\s*\/?>$/i.test(state.doc.sliceString(node.from, node.to))) {
+        ranges.push(Decoration.replace({widget: new LineBreakWidget(), atomic: true}).range(node.from, node.to));
       } else if (name === "Link") {
         const destination = node.node.getChild("URL");
         const closing = node.node.getChildren("LinkMark").find(mark => state.doc.sliceString(mark.from, mark.to) === "]");
@@ -1158,6 +1207,21 @@ function reportHistory(state) {
   post({kind: "history", ...depth});
 }
 
+let acceptsImages = false;
+function takeImages(event, data) {
+  if (!acceptsImages) return false;
+  const files = [...(data?.files ?? [])].filter(file => file.type.startsWith("image/"));
+  if (!files.length) return false;
+  event.preventDefault();
+  Promise.all(files.map(file => new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+    reader.onerror = () => resolve("");
+    reader.readAsDataURL(file);
+  }))).then(images => post({kind: "images", images: images.filter(Boolean)}));
+  return true;
+}
+
 function snapshot() {
   return {key: currentKey, source: view.state.doc.toString(), anchor: view.state.selection.main.anchor,
           head: view.state.selection.main.head, composing: composing || view.composing};
@@ -1214,7 +1278,7 @@ function editorExtensions(config) {
             return true;
           }})),
           EditorView.contentAttributes.of(view => ({
-            "aria-label": "工作板 Markdown 内容",
+            "aria-label": labels.content || "工作板 Markdown 内容",
             spellcheck: "false", tabindex: "0"
           })),
           EditorView.updateListener.of(update => {
@@ -1223,6 +1287,14 @@ function editorExtensions(config) {
             if (update.docChanged && !update.transactions.some(transaction => transaction.annotation(external))) scheduleChange();
           }),
           EditorView.domEventHandlers({
+            // 就地编辑日志时图片加到这一条上；文件拖到编辑器上也不会让网页跳走。
+            paste(event) { return takeImages(event, event.clipboardData); },
+            dragover(event) {
+              if (!acceptsImages || !event.dataTransfer?.types.includes("Files")) return false;
+              event.preventDefault();
+              return true;
+            },
+            drop(event) { return takeImages(event, event.dataTransfer); },
             // 只读的工作板：复制系统原生选区里看到的文字（CodeMirror 自己的选区在只读时不跟随拖选）。
             copy(event, view) {
               if (!view.state.readOnly) return false;
@@ -1326,6 +1398,7 @@ function switchBoard(config) {
 window.boardEditor = {
   configure(config) {
     if (config.labels) labels = config.labels;
+    acceptsImages = !!config.acceptsImages;
     // 就地编辑的网页只用来就地编辑：在建编辑器之前定下来，第一次排版就是就地编辑的样子。
     if (!view && config.inline) inline = true;
     document.documentElement.classList.toggle("dark", !!config.dark);

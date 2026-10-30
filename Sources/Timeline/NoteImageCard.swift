@@ -52,6 +52,10 @@ struct NoteImageCard: View {
                     Label("在访达中显示", systemImage: "folder")
                 }.help("在访达中显示")
                 ImageCopyButton(url: url)
+                if !store.isReadOnly {
+                    Button { store.removeImage(log.images[index], fromLog: log.id) } label: { Label("删除这张图片", systemImage: "trash") }
+                        .help("删除这张图片 · ⌘Z 撤销")
+                }
             }
             .buttonStyle(HitAreaButtonStyle(compact: true)).labelStyle(.iconOnly)
             .font(.system(size: 12)).foregroundStyle(Palette.muted)

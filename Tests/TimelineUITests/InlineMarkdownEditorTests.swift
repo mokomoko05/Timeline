@@ -402,6 +402,111 @@ final class InlineMarkdownEditorTests: XCTestCase {
         XCTAssertEqual(store.entry(for: date).summary, "今天不错")
     }
 
+    private func beginEditing(_ text: String, directory: URL) async throws -> (JournalStore, Date, DailyLogEntry, QuietWindow, WKWebView) {
+        let (store, date, log) = try makeLog(text, directory: directory)
+        let (host, window) = host(log)
+        InlineMarkdownEditor.shared.begin(log, on: date, store: store, at: nil, fontSize: 13, lineSpacing: 2, dark: false)
+        try await wait { host.layoutSubtreeIfNeeded(); return InlineMarkdownEditor.shared.height != nil }
+        return (store, date, log, window, try XCTUnwrap(InlineMarkdownEditor.shared.webView))
+    }
+
+    /// 收起标题时光标在里面：挪到标题行末尾，接着打字不会改到看不见的内容。
+    func testFoldingMovesCaretOutOfHiddenContent() async throws {
+        let defaults = InMemoryDefaults(), previous = HeadingFolds.defaults
+        HeadingFolds.defaults = defaults
+        defer { HeadingFolds.defaults = previous }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (_, _, _, window, webView) = try await beginEditing("# 甲\n\n正文\n\n# 乙\n\n别的", directory: directory)
+        defer { InlineMarkdownEditor.shared.finish(); window.contentView = nil; window.close() }
+        _ = try await webView.evaluateJavaScript("(()=>{const e=window.boardEditor;e.focus();e.select(6);})()")
+        try await Task.sleep(for: .milliseconds(100))
+        _ = try await webView.evaluateJavaScript("document.querySelector('.board-heading-fold').click();0")
+        try await Task.sleep(for: .milliseconds(100))
+        let head = try await webView.evaluateJavaScript("window.boardEditor.view().state.selection.main.head") as? Int
+        XCTAssertEqual(head, 3, "标题行末尾")
+        _ = try await webView.evaluateJavaScript("window.boardEditor.view().dispatch(window.boardEditor.view().state.replaceSelection('字'));0")
+        let shown = await source(of: webView)
+        XCTAssertEqual(shown, "# 甲字\n\n正文\n\n# 乙\n\n别的")
+    }
+
+    /// 就地编辑的无障碍标签说的是正在编辑的内容，不是「工作板」。
+    func testInlineEditorAccessibilityLabel() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (_, _, _, window, webView) = try await beginEditing("原文", directory: directory)
+        defer { InlineMarkdownEditor.shared.finish(); window.contentView = nil; window.close() }
+        let label = try await webView.evaluateJavaScript("document.querySelector('.cm-content').getAttribute('aria-label')") as? String
+        XCTAssertEqual(label, AppLocalized("编辑 Markdown 内容"))
+    }
+
+    /// 提前排好版后字号、深浅色变了：不能拿旧排版开始编辑。
+    func testPreparedEditorFollowsLayoutChanges() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (store, date, log) = try makeLog("原文", directory: directory)
+        let (host, window) = host(log)
+        let editor = InlineMarkdownEditor.shared
+        defer { editor.finish(); window.contentView = nil; window.close() }
+        editor.begin(log, on: date, store: store, at: nil, fontSize: 13, lineSpacing: 2, dark: false, prepare: true)
+        try await wait { host.layoutSubtreeIfNeeded(); return editor.height != nil }
+        editor.begin(log, on: date, store: store, at: nil, fontSize: 16, lineSpacing: 2, dark: false, prepare: true)
+        XCTAssertEqual(editor.settings["fontSize"] as? CGFloat, 16)
+        try await wait { host.layoutSubtreeIfNeeded(); return editor.height != nil }
+        editor.begin(log, on: date, store: store, at: nil, fontSize: 16, lineSpacing: 2, dark: true)
+        XCTAssertEqual(editor.settings["dark"] as? Bool, true)
+        XCTAssertTrue(editor.isEditing(log.id))
+        editor.finish()
+
+        // 窗口换了深浅色：鼠标按下时不接管旧排版。
+        window.appearance = NSAppearance(named: .aqua)
+        editor.begin(log, on: date, store: store, at: nil, fontSize: 13, lineSpacing: 2, dark: false, prepare: true)
+        try await wait { host.layoutSubtreeIfNeeded(); return editor.height != nil }
+        window.appearance = NSAppearance(named: .darkAqua)
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 10, y: 190), modifierFlags: [], timestamp: 0,
+                                                     windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        XCTAssertNil(editor.takeOver(event))
+    }
+
+    private static let pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    private func imageEvent(_ script: String) -> String {
+        """
+        (()=>{const bytes=Uint8Array.from(atob('\(Self.pixel)'),c=>c.charCodeAt(0));const dt=new DataTransfer();
+        dt.items.add(new File([bytes],'a.png',{type:'image/png'}));
+        const target=window.boardEditor.view().contentDOM;\(script);return 0})()
+        """
+    }
+
+    /// 就地编辑时粘贴、拖入图片：加到这一条上，正文不变；文件拖上去网页不会跳走。
+    func testPastingAndDroppingImagesAddsThemToTheLog() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (store, date, _, window, webView) = try await beginEditing("原文", directory: directory)
+        defer { InlineMarkdownEditor.shared.finish(); window.contentView = nil; window.close() }
+        _ = try await webView.evaluateJavaScript(imageEvent("target.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}))"))
+        try await wait { store.entry(for: date).logs.first?.images.count == 1 }
+        _ = try await webView.evaluateJavaScript(imageEvent("target.dispatchEvent(new DragEvent('drop',{dataTransfer:dt,bubbles:true,cancelable:true}))"))
+        try await wait { store.entry(for: date).logs.first?.images.count == 2 }
+        let shown = await source(of: webView)
+        XCTAssertEqual(shown, "原文")
+        XCTAssertTrue(InlineMarkdownEditor.shared.isEditing(try XCTUnwrap(store.entry(for: date).logs.first?.id)))
+    }
+
+    /// 每日总结没有图片：不接管粘贴。
+    func testSummaryDoesNotTakeImages() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let date = Date()
+        let id = InlineMarkdownEditor.summaryID(for: date)
+        let (host, window) = host(DailyLogEntry(id: id, createdAt: date, kind: .note, text: ""))
+        let editor = InlineMarkdownEditor.shared
+        defer { editor.finish(); window.contentView = nil; window.close() }
+        editor.beginSummary(on: date, store: store, at: nil, fontSize: 13, lineSpacing: 2, dark: false)
+        try await wait { host.layoutSubtreeIfNeeded(); return editor.height != nil }
+        XCTAssertEqual(editor.settings["acceptsImages"] as? Bool, false)
+    }
+
     /// 只排最后一块量出来的尾部空白，和把全文排一遍一样。
     func testTailFromLastBlockMatchesFullRender() {
         func full(_ source: String) -> Double {

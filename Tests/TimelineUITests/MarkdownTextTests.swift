@@ -209,4 +209,26 @@ final class MarkdownTextTests: XCTestCase {
         HeadingFolds.set("h1:标题#0", folded: true, in: "x")
         XCTAssertEqual(HeadingFolds.editorFolds(in: "x"), ["d:甲#0": false, "h1:标题#0": true])
     }
+
+    func testLineBreakTagAndFullWidthRule() {
+        let broken = MarkdownText.render("甲<br>乙<br/>丙", color: .labelColor, fontSize: 13, lineSpacing: 2, scale: 1).string
+        XCTAssertEqual(broken.trimmingCharacters(in: .newlines), "甲\u{2028}乙\u{2028}丙")
+        let rule = MarkdownText.render("上\n\n---\n\n下", color: .labelColor, fontSize: 13, lineSpacing: 2, scale: 1)
+        XCTAssertFalse(rule.string.contains("─"), "线按实际宽度画，不是固定个数的字符")
+        var found = false
+        rule.enumerateAttribute(MarkdownText.ruleKey, in: NSRange(location: 0, length: rule.length)) { value, _, _ in if value != nil { found = true } }
+        XCTAssertTrue(found)
+    }
+
+    /// 序号放不下默认缩进时列表整体多缩进；放得下的不变。
+    func testOrderedListIndentFitsTheMarker() {
+        func tab(_ source: String, scale: CGFloat = 1) -> CGFloat {
+            let text = MarkdownText.render(source, color: .labelColor, fontSize: 13, lineSpacing: 2, scale: scale)
+            return (text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.tabStops.first?.location ?? 0
+        }
+        XCTAssertEqual(tab("1. 甲\n2. 乙"), 22)
+        XCTAssertEqual(tab("- 甲"), 22)
+        XCTAssertGreaterThan(tab("100. 甲"), 25.5, "放得下「100.」")
+        XCTAssertGreaterThan(tab("10. 甲", scale: 1.5), 24.7, "放大界面后放得下「10.」")
+    }
 }

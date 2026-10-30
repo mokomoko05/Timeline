@@ -1212,3 +1212,7 @@
 "别处也改了这段内容，两份都保留在正文里" = "This text also changed elsewhere. Both versions were kept in the note.";
 "写点今天的总结…" = "Write a summary for this day…";
 "还没有总结" = "No summary yet";
+"⌘↩ 保存 · Esc 取消" = "⌘↩ to save · Esc to cancel";
+"删除这张图片" = "Delete This Image";
+"删除这张图片 · ⌘Z 撤销" = "Delete this image · ⌘Z to undo";
+"添加图片" = "Add Images";

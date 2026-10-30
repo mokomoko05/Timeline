@@ -217,6 +217,10 @@ final class InlineEditorAlignmentTests: XCTestCase {
     func testEditorHeightMatchesForTablesRulesAndMath() async throws {
         let samples = ["折叠块": "上面\n\n<details>\n<summary>更多</summary>\n\n内容\n\n</details>\n\n下面",
                        "展开的折叠块": "上面\n\n<details open>\n<summary>更多</summary>\n\n第一段\n\n第二段\n\n</details>\n\n下面",
+                       "换行标签": "第一行<br>第二行\n\n下面",
+                       "三位数序号": "99. 甲\n100. 乙\n101. 丙\n\n下面",
+                       "普通序号": "1. 甲\n2. 乙\n3. 丙\n\n下面",
+                       "含公式的表格": "| 甲 | 乙 |\n| --- | --- |\n| $x^2$ | 2 |\n\n下面",
                        "分隔线": "上面\n\n---\n\n下面",
                        "表格": "上面\n\n| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n\n下面",
                        "行内公式": "公式 $x^2 + y^2$ 在这里\n\n下面",
@@ -253,6 +257,18 @@ final class InlineEditorAlignmentTests: XCTestCase {
             if name.contains("表格") {
                 let cells = try await editor.webView?.evaluateJavaScript("document.querySelectorAll('.cm-table-block td, .cm-table-block th').length") as? Int
                 XCTAssertGreaterThan(cells ?? 0, 0, "光标不在里面时画成表格，不露源码")
+            }
+            if name == "含公式的表格" {
+                try await wait {
+                    let count = (try? await editor.webView?.evaluateJavaScript("document.querySelectorAll('.cm-table-block .katex').length")) as? Int
+                    return count == 1
+                }
+            }
+            if name == "三位数序号" {
+                let indent = try await editor.webView?.evaluateJavaScript("getComputedStyle(document.querySelector('.cm-list-line')).getPropertyValue('--list-indent').trim()") as? String
+                let rendered = MarkdownText.render(text, color: .labelColor, fontSize: 13, lineSpacing: 2, scale: 1)
+                let style = rendered.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+                XCTAssertEqual(indent, "\(Int(style?.tabStops.first?.location ?? 0))px", "序号放得下，文字和原生对齐")
             }
             editor.finish()
         }

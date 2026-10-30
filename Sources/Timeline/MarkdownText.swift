@@ -47,6 +47,10 @@ enum MarkdownText {
         }
     }
 
+    /// 分隔线：这一行是空的，线由 `InteractiveTaskText` 按实际宽度画满（值是起点的缩进）。
+    static let ruleKey = NSAttributedString.Key("TimelineMarkdownRule")
+    /// 展开的折叠块的内容：左边那条竖线的位置（和编辑器一样）。
+    static let disclosureBodyKey = NSAttributedString.Key("TimelineMarkdownDisclosureBody")
     /// 这一行是折叠块（`<details>`）的标题：箭头画在左边。
     static let disclosureHeaderKey = NSAttributedString.Key("TimelineMarkdownDisclosureHeader")
     /// 折叠块标题文字左边给箭头留的宽度；折叠块里的内容再缩进 `disclosureBodyIndent`（和编辑器的 CSS 一致）。
@@ -107,6 +111,7 @@ enum MarkdownText {
         /// 正文里的折叠块；收起时藏到 `hiddenThrough` 这一行。
         var spans: [MarkdownDisclosures.Span] = []
         private var hiddenThrough = 0
+        private var openBodies: [Int: Int] = [:]
         /// 上一个块是折叠块的标题 / 这个块是折叠块的结尾：挨着它们的那一个空行编辑器不显示。
         private var followsDisclosureHeader = false
         /// 标题所在的行 → 折叠键。先走一遍整篇再画：同名标题的次序不随上面的内容收起而变，也和编辑器一样把引用里的标题算进去。
@@ -151,7 +156,11 @@ enum MarkdownText {
                 result.addAttribute(.backgroundColor, value: color.withAlphaComponent(0.08), range: result.fullRange)
                 return result
             }
-            if let node = node as? InlineHTML { return text(node.rawHTML, font: font) }
+            if let node = node as? InlineHTML {
+                let tag = node.rawHTML.lowercased().replacingOccurrences(of: " ", with: "")
+                // 同一段里换行（U+2028）：下一行和这一行之间没有段距，和编辑器一样。
+                return text(tag == "<br>" || tag == "<br/>" ? "\u{2028}" : node.rawHTML, font: font)
+            }
             var childFont = font
             if node is Strong { childFont = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) }
             if node is Emphasis { childFont = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
@@ -333,6 +342,7 @@ enum MarkdownText {
                     let open = isOpen(span)
                     renderDisclosureHeader(span, open: open)
                     if open {
+                        openBodies[span.line] = output.length
                         line = span.bodyStart
                         followsDisclosureHeader = true
                     } else {
@@ -340,8 +350,12 @@ enum MarkdownText {
                         line = span.closing + 1
                         followsDisclosureHeader = false
                     }
-                } else if spans.contains(where: { $0.closing == line }) {
+                } else if let span = spans.first(where: { $0.closing == line }) {
                     flush(line)
+                    if let start = openBodies.removeValue(forKey: span.line), output.length > start {
+                        output.addAttribute(MarkdownText.disclosureBodyKey, value: disclosureIndent(span.line) + 18,
+                                            range: NSRange(location: start, length: output.length - start))
+                    }
                     line += 1
                 } else {
                     if line <= sourceLines.count { raw.append(sourceLines[line - 1]) }
@@ -452,7 +466,9 @@ enum MarkdownText {
                     output.addAttribute(.paragraphStyle, value: style, range: part)
                 }
             case is ThematicBreak:
-                paragraph(text("────────────────"), style: style(indent: indent))
+                let rule = text(" ")
+                rule.addAttribute(MarkdownText.ruleKey, value: indent, range: rule.fullRange)
+                paragraph(rule, style: style(indent: indent))
             case let html as HTMLBlock:
                 paragraph(text(html.rawHTML), style: style(indent: indent))
             default:
@@ -478,6 +494,9 @@ enum MarkdownText {
         }
 
         func renderList(_ list: Markup, start: Int?, indent: CGFloat) {
+            // 序号放不下默认缩进（「100.」、放大界面后的「10.」）：整个列表多缩进一点，文字仍对齐。
+            let width = start.map { ceil((("\($0 + list.childCount - 1)." as NSString).size(withAttributes: [.font: font]).width) + 5) } ?? 0
+            let step = max(22, width)
             for (index, child) in list.children.enumerated() {
                 guard let item = child as? ListItem else { continue }
                 let marker: String
@@ -499,12 +518,12 @@ enum MarkdownText {
                                                 .foregroundColor: NSColor(Palette.muted)], range: body.fullRange)
                         }
                         content.append(body)
-                        let paragraphStyle = style(indent: indent + 22)
+                        let paragraphStyle = style(indent: indent + step)
                         paragraphStyle.firstLineHeadIndent = indent
-                        paragraphStyle.tabStops = [NSTextTab(textAlignment: .left, location: indent + 22)]
+                        paragraphStyle.tabStops = [NSTextTab(textAlignment: .left, location: indent + step)]
                         paragraphStyle.paragraphSpacing = 3
                         paragraph(content, style: paragraphStyle)
-                    } else { block(child, indent: indent + 22) }
+                    } else { block(child, indent: indent + step) }
                 }
             }
         }

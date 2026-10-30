@@ -295,10 +295,19 @@ final class RichText: @unchecked Sendable {
                 attributes[linkKey] = url
                 attributes[.foregroundColor] = UIColor(Palette.accent)
             }
-            result.append(NSAttributedString(string: value, attributes: attributes))
+            let piece = NSMutableAttributedString(string: value, attributes: attributes)
+            // 中文字体没有斜体，traitItalic 对它不起作用：这几段按倾斜画（和 Mac 的正文一样）。
+            if intent.contains(.emphasized), let pattern = Self.cjkPattern {
+                for match in pattern.matches(in: value, range: NSRange(location: 0, length: piece.length)) {
+                    piece.addAttribute(.obliqueness, value: 0.2, range: match.range)
+                }
+            }
+            result.append(piece)
         }
         return result
     }
+
+    private static let cjkPattern = try? NSRegularExpression(pattern: "[\\p{Han}\\p{Hiragana}\\p{Katakana}\\p{Hangul}\\u3000-\\u303F\\uFF00-\\uFFEF]+")
 }
 
 extension MarkdownBlock {

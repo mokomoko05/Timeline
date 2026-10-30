@@ -351,4 +351,66 @@ final class JournalEditingTests: XCTestCase {
         XCTAssertEqual(model.title, "改过")
         XCTAssertFalse(TaskTitleEdits.shared.hasUnsaved)
     }
+
+    /// 标题里按普通回车不保存：告诉界面提示一句。
+    func testPlainReturnReportsHintWithoutSaving() async throws {
+        var hints = 0, submitted = 0, text = "标题"
+        let host = NSHostingView(rootView: TaskInput(text: Binding(get: { text }, set: { text = $0 }), focused: .constant(true), submit: { submitted += 1 },
+                                                     allowsNewlines: false, commandReturnOnly: true, plainReturn: { hints += 1 }).frame(width: 300, height: 30))
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 30), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        let field = try XCTUnwrap(descendants(host, of: TaskTextField.self).first)
+        XCTAssertTrue(window.makeFirstResponder(field))
+        try XCTUnwrap(field.currentEditor() as? ImagePasteFieldEditorView).doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        XCTAssertEqual(hints, 1)
+        XCTAssertEqual(submitted, 0)
+    }
+
+    /// 提示里的标签名、文件名原样显示：`*`、`_` 不当 Markdown。
+    func testToastDoesNotParseMarkdown() {
+        func width(_ message: String) -> CGFloat {
+            let center = ToastCenter()
+            center.show(message)
+            let host = NSHostingView(rootView: ToastView(center: center))
+            return host.fittingSize.width
+        }
+        XCTAssertGreaterThan(width("*标签*"), width("标签") + 4, "星号还在")
+    }
+
+    /// 字号、深浅色变了：键盘进入编辑用新的，不用注册页面时记下的。
+    func testKeyboardEditUsesCurrentAppearance() async throws {
+        final class Model: ObservableObject { @Published var scheme = ColorScheme.light }
+        struct Root: View {
+            @ObservedObject var model: Model
+            let store: JournalStore
+            let date: Date
+            var body: some View { UnifiedJournalView(store: store, workspace: NotesWorkspaceNavigation(date: date)).environment(\.colorScheme, model.scheme) }
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let date = Date()
+        store.setLogDraft("正文", on: date)
+        _ = try store.commitLog(on: date, linkDefault: false)
+        let id = try XCTUnwrap(store.entry(for: date).logs.first?.id)
+        let model = Model()
+        let host = NSHostingView(rootView: Root(model: model, store: store, date: date))
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 500), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { InlineMarkdownEditor.shared.finish(); window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        model.scheme = .dark
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        try XCTUnwrap(LogKeyboardSelection.shared.pages[.journal]).edit(id)
+        XCTAssertEqual(InlineMarkdownEditor.shared.settings["dark"] as? Bool, true)
+    }
 }
