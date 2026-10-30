@@ -215,6 +215,12 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         return resources.url(forResource: "EditorAssets", withExtension: nil)
     }
 
+    /// 编辑器网页只能在自己的目录里导航：把文件拖到编辑器上不能跳走（跳走后编辑器就没了）。
+    static func allowsNavigation(to url: URL?) -> Bool {
+        guard let url, url.isFileURL, let directory = editorDirectory else { return false }
+        return url.standardizedFileURL.resolvingSymlinksInPath().path.hasPrefix(directory.standardizedFileURL.resolvingSymlinksInPath().path + "/")
+    }
+
     private static func makeEditorView(handler: WeakBoardScriptHandler) -> WKWebView? {
         let installed = Bundle.main.resourceURL?.appendingPathComponent("Timeline_Timeline.bundle")
         let resources = installed.flatMap(Bundle.init(url:)) ?? Bundle.module
@@ -414,7 +420,7 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         if navigationAction.navigationType == .linkActivated {
             if let url = navigationAction.request.url.flatMap({ TaskText.linkURL($0.absoluteString) }) { SafariLinks.open(url) }
             decisionHandler(.cancel)
-        } else { decisionHandler(navigationAction.request.url?.isFileURL == true ? .allow : .cancel) }
+        } else { decisionHandler(Self.allowsNavigation(to: navigationAction.request.url) ? .allow : .cancel) }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -460,6 +466,6 @@ private final class SharedEditorWatcher: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         MainActor.assumeIsolated { BoardLiveEditorSession.navigationStarted(in: webView) }
-        decisionHandler(navigationAction.request.url?.isFileURL == true ? .allow : .cancel)
+        decisionHandler(BoardLiveEditorSession.allowsNavigation(to: navigationAction.request.url) ? .allow : .cancel)
     }
 }

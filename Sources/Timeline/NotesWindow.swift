@@ -264,6 +264,9 @@ struct UnifiedNotesView: View {
             guard note.object as? String == "inline" else { return }
             toast.show(AppLocalized("编辑器意外退出，已保存输入并重新载入"))
         }
+        .onReceive(NotificationCenter.default.publisher(for: .timelineEditorConflict)) { _ in
+            toast.show(AppLocalized("别处也改了这段内容，两份都保留在正文里"))
+        }
         .environmentObject(interaction)
         .environmentObject(toast)
         .environment(\.toastCenter, toast)
@@ -340,7 +343,7 @@ struct UnifiedJournalView: View {
     private var entry: DayEntry { store.entry(for: date) }
     private var allDates: [Date] {
         var result = store.days.keys.compactMap(JournalDates.date(for:))
-            .filter { !store.entry(for: $0).logs.isEmpty }
+            .filter { let entry = store.entry(for: $0); return !entry.logs.isEmpty || !entry.summary.isEmpty }
         if !result.contains(where: { JournalDates.calendar.isDate($0, inSameDayAs: date) }) { result.append(date) }
         return result.sorted(by: >)
     }
@@ -354,6 +357,7 @@ struct UnifiedJournalView: View {
             let weekday = item.formatted(.dateTime.weekday(.wide).locale(locale))
             return dateText.localizedStandardContains(query)
                 || weekday.localizedStandardContains(query)
+                || entry.summary.localizedStandardContains(query)
                 || entry.logs.contains { $0.searchableText.localizedStandardContains(query) || $0.tags.contains { $0.localizedStandardContains(query) } }
         }
     }
@@ -493,11 +497,11 @@ struct UnifiedJournalView: View {
                             if index > 0, let gap = NoteThread.gapLabel(from: logs[index - 1].createdAt, to: log.createdAt) {
                                 NoteThreadGap(label: gap)
                             }
-                            journalRow(log, on: date, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id])
+                            journalRow(log, on: date, hasPrevious: index > 0, hasNext: true, segment: segments[log.id])
                                 .id(log.id)
                                 .recordsScrollPosition(log.id, in: tracker)
                             if let run = summaries[log.id] {
-                                FocusRunSummary(run: run, folded: foldedRuns.contains(run.id), continues: index < logs.count - 1) {
+                                FocusRunSummary(run: run, folded: foldedRuns.contains(run.id), continues: true) {
                                     withAnimation(Motion.quick) {
                                         if foldedRuns.contains(run.id) { foldedRuns.remove(run.id) } else { foldedRuns.insert(run.id) }
                                     }
@@ -506,6 +510,9 @@ struct UnifiedJournalView: View {
                         }
                     }
                 }
+                // 这一天的时间轴走到头是每日总结；还没写时是一张空卡片，点一下就能写。
+                DaySummaryCard(store: store, date: date, hasPrevious: !logs.isEmpty, highlighted: highlightedID == InlineMarkdownEditor.summaryID(for: date))
+                    .id(InlineMarkdownEditor.summaryID(for: date))
                 Color.clear.frame(height: 1).id("journal-bottom")
             }
             .padding(20)

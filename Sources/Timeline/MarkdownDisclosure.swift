@@ -260,6 +260,29 @@ enum MarkdownDisclosures {
         return nodes(in: lines.indices)
     }
 
+    /// 正文里配好对的折叠块（行号从 1 开始，和解析结果的行号一致；键和工作板、编辑器的折叠记忆一样）。
+    struct Span {
+        let line: Int
+        let bodyStart: Int
+        let closing: Int
+        let key: String
+        let title: String
+        let initiallyOpen: Bool
+    }
+
+    static func spans(_ lines: [String]) -> [Span] {
+        let (openings, closingLines, _) = scan(lines)
+        var seen: [String: Int] = [:]
+        return openings.keys.sorted().compactMap { start in
+            guard let opening = openings[start] else { return nil }
+            let occurrence = seen[opening.foldName, default: 0]
+            seen[opening.foldName] = occurrence + 1
+            guard let closing = closingLines[start] else { return nil }
+            return Span(line: start + 1, bodyStart: opening.bodyStart + 1, closing: closing + 1, key: "d:\(opening.foldName)#\(occurrence)",
+                        title: opening.title, initiallyOpen: opening.initiallyOpen)
+        }
+    }
+
     fileprivate static func decodeTitle(_ title: String) -> String {
         title.replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")

@@ -331,7 +331,7 @@ final class InteractiveTaskText: NSTextView {
     private var cachedLinks: (key: RegionLayoutKey, regions: [(url: URL, rect: NSRect)])?
     private var cachedTasks: (key: RegionLayoutKey, regions: [(line: Int, rect: NSRect)])?
     private var cachedCode: (key: RegionLayoutKey, regions: [(info: MarkdownText.CodeBlockInfo, block: NSRect, copy: NSRect)])?
-    private var cachedHeadings: (key: RegionLayoutKey, regions: [(key: String, rect: NSRect, folded: Bool)])?
+    private var cachedHeadings: (key: RegionLayoutKey, regions: [(key: String, rect: NSRect, folded: Bool, hit: NSRect)])?
     private weak var observedRegionStorage: NSTextStorage?
     private var regionObservation: NSObjectProtocol?
 
@@ -648,12 +648,12 @@ final class InteractiveTaskText: NSTextView {
     private var hoveredCopy: NSRect?
 
     /// 可折叠标题右边的收起 / 展开按钮（标题第一行的最右边；标题文字本身留给选择和编辑）。
-    func headingRegions() -> [(key: String, rect: NSRect, folded: Bool)] {
+    func headingRegions() -> [(key: String, rect: NSRect, folded: Bool, hit: NSRect)] {
         guard onToggleHeading != nil, let storage = textStorage, let manager = layoutManager, let container = textContainer else { return [] }
         let key = regionLayoutKey(storage: storage, manager: manager, container: container)
         if let cachedHeadings, cachedHeadings.key == key { return cachedHeadings.regions }
         manager.ensureLayout(for: container)
-        var regions: [(key: String, rect: NSRect, folded: Bool)] = []
+        var regions: [(key: String, rect: NSRect, folded: Bool, hit: NSRect)] = []
         storage.enumerateAttribute(MarkdownText.headingFoldKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
             guard let key = value as? String else { return }
             let folded = storage.attribute(MarkdownText.headingFoldedKey, at: range.location, effectiveRange: nil) as? Bool ?? false
@@ -667,23 +667,30 @@ final class InteractiveTaskText: NSTextView {
                 stop.pointee = true
             }
             guard let line = first else { return }
+            // 折叠块：箭头在标题左边，点整行都算（和编辑器里一样）。
+            if storage.attribute(MarkdownText.disclosureHeaderKey, at: range.location, effectiveRange: nil) != nil {
+                let rect = NSRect(x: self.textContainerOrigin.x + line.minX - MarkdownText.disclosureHeaderIndent, y: self.textContainerOrigin.y + line.midY - 7, width: 14, height: 14)
+                let hit = rect.union(line.offsetBy(dx: self.textContainerOrigin.x, dy: self.textContainerOrigin.y))
+                if rect.intersects(self.bounds) { regions.append((key, rect, folded, hit)) }
+                return
+            }
             // 引用框里的标题：按钮留在框内，不贴着框的右边。
             let right = self.textContainerOrigin.x + container.size.width - container.lineFragmentPadding - (style?.textBlocks.isEmpty == false ? 6 : 0)
             let rect = NSRect(x: right - side, y: self.textContainerOrigin.y + line.midY - side / 2, width: side, height: side)
-            if rect.intersects(self.bounds) { regions.append((key, rect, folded)) }
+            if rect.intersects(self.bounds) { regions.append((key, rect, folded, rect)) }
         }
         cachedHeadings = (regionLayoutKey(storage: storage, manager: manager, container: container), regions)
         return regions
     }
 
     func headingKey(at point: NSPoint) -> String? {
-        headingRegions().first { $0.rect.insetBy(dx: -4, dy: -4).contains(point) }?.key
+        headingRegions().first { $0.hit.insetBy(dx: -4, dy: -4).contains(point) }?.key
     }
 
     /// 收起 / 展开标题：标题留在滚动区域里原来的位置，内容在它下面展开、收起（滚到底时收起也不往下跳）。
     func toggleHeading(_ key: String) {
         if let scroll = enclosingScrollView {
-            let folding = foldedHeadings?.contains(key) != true && boardFolds?.headings.values.first { $0.key == key }?.folded != true
+            let folding = headingRegions().first { $0.key == key }?.folded != true
             if folding { BottomSlack.reserve(in: scroll) } else { BottomSlack.trimAfterLayout(scroll) }
         }
         onToggleHeading?(key)
@@ -718,7 +725,7 @@ final class InteractiveTaskText: NSTextView {
         if onToggleMarkdownTask != nil {
             for region in taskRegions() { addCursorRect(region.rect, cursor: .pointingHand) }
         }
-        for region in headingRegions() { addCursorRect(region.rect, cursor: .pointingHand) }
+        for region in headingRegions() { addCursorRect(region.hit, cursor: .pointingHand) }
         for region in codeRegions() { addCursorRect(region.copy, cursor: .pointingHand) }
     }
 
@@ -859,13 +866,40 @@ enum HeadingFolds {
 
     static func folded(in id: String) -> Set<String> { Set(defaults.stringArray(forKey: key(id)) ?? []) }
 
+    /// 给编辑器的折叠记忆：标题和展开的折叠块是 true，明确收起的折叠块是 false（`<details open>` 收起后要记得住）。
+    static func editorFolds(in id: String) -> [String: Bool] {
+        var result: [String: Bool] = [:]
+        for item in folded(in: id) {
+            if let state = disclosureState(item) { result[state.name] = state.open } else { result[item] = true }
+        }
+        return result
+    }
+
+    /// 折叠块的记录是 "d:名字#序号=open"（或 "=closed"）；编辑器旧版存的没有后缀，表示展开。
+    private static func disclosureState(_ item: String) -> (name: String, open: Bool)? {
+        guard item.hasPrefix("d:") else { return nil }
+        if item.hasSuffix("=open") { return (String(item.dropLast(5)), true) }
+        if item.hasSuffix("=closed") { return (String(item.dropLast(7)), false) }
+        return (item, true)
+    }
+
+    private static func setDisclosure(_ name: String, open: Bool, in id: String) {
+        var current = folded(in: id)
+        current.subtract([name, name + "=open", name + "=closed"])
+        current.insert(name + (open ? "=open" : "=closed"))
+        defaults.set(current.sorted(), forKey: key(id))
+    }
+
     static func set(_ heading: String, folded: Bool, in id: String) {
+        if heading.hasPrefix("d:") { setDisclosure(heading, open: folded, in: id); return }
         var current = self.folded(in: id)
         if folded { current.insert(heading) } else { current.remove(heading) }
         if current.isEmpty { defaults.removeObject(forKey: key(id)) } else { defaults.set(current.sorted(), forKey: key(id)) }
     }
 
+    /// 折叠块的 `heading` 带着点下去要变成的状态（"…=open" / "…=closed"，由 `MarkdownText` 写好）。
     static func toggle(_ heading: String, in id: String) {
+        if let state = disclosureState(heading) { setDisclosure(state.name, open: state.open, in: id); return }
         var folded = folded(in: id)
         if folded.remove(heading) == nil { folded.insert(heading) }
         if folded.isEmpty { defaults.removeObject(forKey: key(id)) } else { defaults.set(folded.sorted(), forKey: key(id)) }

@@ -72,6 +72,7 @@ final class BoardWebSession: NSObject, ObservableObject {
     enum Document {
         case board(UUID)
         case log(id: UUID, date: Date)
+        case summary(date: Date)
     }
 
     /// 工作板和日志各用一个网页编辑器：编辑日志时不用把工作板那一页的编辑器抢走。
@@ -93,12 +94,15 @@ final class BoardWebSession: NSObject, ObservableObject {
         switch document {
         case .board(let id): return id.uuidString
         case .log(let id, _): return "log." + id.uuidString
+        case .summary(let date): return "summary." + JournalDates.key(date)
         }
     }
     /// 「取消」：这次的修改不写回。
     private var discarded = false
     private var storedSource: String
     private var source: String
+    /// 编辑的那条日志：被别处删了时，改过的内容存成新的一条。
+    private var editedLog: DailyLogEntry?
     private var composing = false
     private var settings: [String: Any] = [:]
     private var lastConfiguration: Data?
@@ -121,6 +125,7 @@ final class BoardWebSession: NSObject, ObservableObject {
         source = ""
         super.init()
         let markdown = currentSource() ?? ""
+        if case .log(let id, let date) = document { editedLog = store.entry(for: date).logs.first { $0.id == id } }
         storedSource = markdown
         source = markdown
         Self.sessions.setObject(self, forKey: key as NSString)
@@ -131,7 +136,18 @@ final class BoardWebSession: NSObject, ObservableObject {
         switch document {
         case .board(let id): return store.board(id: id)?.markdown
         case .log(let id, let date): return store.entry(for: date).logs.first { $0.id == id }?.text
+        case .summary(let date): return store.entry(for: date).summary
         }
+    }
+
+    /// 这边改了，别处（同步）也改了：和同步冲突一样两份都留，不能拿这边的盖掉。
+    private func mergedWithExternalChange() -> String {
+        let stored = storedSource.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mine = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let current = currentSource()?.trimmingCharacters(in: .whitespacesAndNewlines), current != stored, current != mine else { return source }
+        source = SyncMerge.keepingBoth(mine: mine, theirs: current)
+        sourceNeedsSynchronization = true
+        return source
     }
 
     // MARK: 共用编辑器
@@ -257,10 +273,11 @@ final class BoardWebSession: NSObject, ObservableObject {
         case .board(let id): return "board.folds.\(id.uuidString)"
         // 和渲染好的正文（`MarkdownView`）共用折叠记忆：存的是收起的标题。
         case .log(let id, _): return "markdownFolds.log.\(id.uuidString)"
+        case .summary(let date): return "markdownFolds.summary.\(JournalDates.key(date))"
         }
     }
     private var folds: [String: Bool] {
-        if case .log = document {
+        if pool == .log {
             return Dictionary(uniqueKeysWithValues: (UserDefaults.standard.stringArray(forKey: foldsKey) ?? []).map { ($0, true) })
         }
         return UserDefaults.standard.dictionary(forKey: foldsKey) as? [String: Bool] ?? [:]
@@ -290,7 +307,7 @@ final class BoardWebSession: NSObject, ObservableObject {
             var folds = folds
             folds[key] = value
             if key.hasPrefix("h"), !value { folds.removeValue(forKey: key) }
-            if case .log = document {
+            if pool == .log {
                 UserDefaults.standard.set(folds.filter(\.value).map(\.key).sorted(), forKey: foldsKey)
             } else {
                 UserDefaults.standard.set(folds, forKey: foldsKey)
@@ -363,8 +380,18 @@ final class BoardWebSession: NSObject, ObservableObject {
             // 正文删空、又没有图片：不写（不能因为编辑到一半把日志删了）。
             let images = store.entry(for: date).logs.first { $0.id == id }?.images ?? []
             guard source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false || !images.isEmpty else { return }
-            storedSource = source
-            store.updateLog(id, text: source, on: date)
+            guard currentSource() != nil else {
+                if let editedLog { store.restoreEditedLog(editedLog, text: source, on: date) }
+                storedSource = source
+                break
+            }
+            let text = mergedWithExternalChange()
+            storedSource = text
+            store.updateLog(id, text: text, on: date)
+        case .summary(let date):
+            let text = mergedWithExternalChange()
+            storedSource = text
+            store.setSummary(text.trimmingCharacters(in: .whitespacesAndNewlines), on: date)
         }
         if persist { store.saveInBackground() }
     }

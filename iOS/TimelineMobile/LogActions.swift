@@ -157,6 +157,13 @@ final class LogEditing: ObservableObject {
     @Published var item: JournalStore.LoggedLog?
 }
 
+/// 写每日总结：点这一天时间轴末端的卡片打开。
+@MainActor
+final class SummaryEditing: ObservableObject {
+    static let shared = SummaryEditing()
+    @Published var date: Date?
+}
+
 extension View {
     /// 改日志的输入卡：挂在整个应用最上层。
     func logEditorHost(_ store: JournalStore) -> some View {
@@ -167,9 +174,43 @@ extension View {
 private struct LogEditorHost: ViewModifier {
     let store: JournalStore
     @ObservedObject private var editing = LogEditing.shared
+    @ObservedObject private var summary = SummaryEditing.shared
 
     func body(content: Content) -> some View {
-        content.floatingEditor(item: $editing.item) { LogEditSheet(store: store, logged: $0).id($0.id) }
+        content
+            .floatingEditor(item: $editing.item) { LogEditSheet(store: store, logged: $0).id($0.id) }
+            .floatingEditor(item: $summary.date) { SummaryEditSheet(store: store, date: $0).id($0) }
+    }
+}
+
+/// 写每日总结：和改日志同一个编辑器。收起时写回；「取消」放弃这次的修改。
+private struct SummaryEditSheet: View {
+    let store: JournalStore
+    let date: Date
+    @Environment(\.closeEditor) private var closeEditor
+    @StateObject private var session: BoardWebSession
+
+    init(store: JournalStore, date: Date) {
+        self.store = store
+        self.date = date
+        _session = StateObject(wrappedValue: BoardWebSession(store: store, document: .summary(date: date)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            EditorCardHeader(title: "每日总结", confirm: "完成", canConfirm: true, cancel: {
+                session.discard()
+                closeEditor?()
+            }) {
+                session.commit()
+                closeEditor?()
+            }
+            BoardWebEditor(session: session)
+                .frame(height: min(max(session.contentHeight ?? 120, 96), UIScreen.main.bounds.height * 0.32))
+                .animation(Motion.adapt(.snappy(duration: 0.15)), value: session.contentHeight)
+        }
+        .onAppear { session.beginEditing() }
+        .onDisappear { session.commit() }
     }
 }
 

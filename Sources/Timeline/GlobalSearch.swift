@@ -447,7 +447,7 @@ final class GlobalSearchController: NSObject, NSWindowDelegate {
                 AppRouter.openLog(date, id)
             }
         case .summary(let date):
-            AppRouter.openJournal(date)
+            AppRouter.openLog(date, InlineMarkdownEditor.summaryID(for: date))
         }
     }
 }

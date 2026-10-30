@@ -323,6 +323,8 @@ enum PerfProbe {
             ("滑公式不换天", { switchTab(.journal); checkSwipeGuard() }),
             ("点日志编辑", { switchTab(.journal); send("editLog") }),
             ("收起日志编辑", { send("closeLogEditor") }),
+            ("点每日总结", { switchTab(.journal); SummaryEditing.shared.date = Date() }),
+            ("收起每日总结", { SummaryEditing.shared.date = nil }),
             ("滚动全文", { scrollThrough() }),
             ("长按长文", { pressLongText() }),
             ("拖动排序", { switchTab(.tasks); send("dragTask") }),

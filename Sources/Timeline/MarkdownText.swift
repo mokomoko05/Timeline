@@ -47,6 +47,12 @@ enum MarkdownText {
         }
     }
 
+    /// 这一行是折叠块（`<details>`）的标题：箭头画在左边。
+    static let disclosureHeaderKey = NSAttributedString.Key("TimelineMarkdownDisclosureHeader")
+    /// 折叠块标题文字左边给箭头留的宽度；折叠块里的内容再缩进 `disclosureBodyIndent`（和编辑器的 CSS 一致）。
+    static let disclosureHeaderIndent: CGFloat = 19
+    static let disclosureBodyIndent: CGFloat = 31
+
     /// 标题右侧收起 / 展开按钮的边长；标题文字在右边给它让出位置。
     static func foldButtonSide(fontSize: CGFloat) -> CGFloat { (fontSize * 1.7).rounded() }
 
@@ -73,6 +79,7 @@ enum MarkdownText {
         renderer.boardFolds = boardFolds
         renderer.formulas = math.formulas
         renderer.sourceLines = math.source.components(separatedBy: "\n")
+        if math.source.range(of: "<details", options: .caseInsensitive) != nil { renderer.spans = MarkdownDisclosures.spans(renderer.sourceLines) }
         let document = document ?? Document(parsing: math.source)
         if folds != nil { renderer.assignHeadingKeys(document) }
         renderer.blocks(document)
@@ -97,6 +104,11 @@ enum MarkdownText {
         var folds: Set<String>?
         var boardFolds: BoardFoldMarks?
         var formulas: [MarkdownMath.Formula] = []
+        /// 正文里的折叠块；收起时藏到 `hiddenThrough` 这一行。
+        var spans: [MarkdownDisclosures.Span] = []
+        private var hiddenThrough = 0
+        /// 上一个块是折叠块的标题 / 这个块是折叠块的结尾：挨着它们的那一个空行编辑器不显示。
+        private var followsDisclosureHeader = false
         /// 标题所在的行 → 折叠键。先走一遍整篇再画：同名标题的次序不随上面的内容收起而变，也和编辑器一样把引用里的标题算进去。
         private var headingKeys: [Int: String] = [:]
         init(color: NSColor, size: CGFloat, monospaced: Bool, lineSpacing: CGFloat, interactiveTasks: Bool) {
@@ -245,6 +257,13 @@ enum MarkdownText {
             var index = 0
             while index < children.count {
                 let child = children[index]
+                let managed = node is Document && !spans.isEmpty
+                let startLine = child.range?.lowerBound.line ?? 0
+                if managed, startLine <= hiddenThrough {
+                    previousEnd = max(lastLine(child) ?? 0, hiddenThrough)
+                    index += 1
+                    continue
+                }
                 if let marks, let start = child.range?.lowerBound.line, marks.hidden.contains(where: { $0.contains(start) }) {
                     previousEnd = lastLine(child)
                     index += 1
@@ -253,10 +272,17 @@ enum MarkdownText {
                 if let end = previousEnd, let start = child.range?.lowerBound.line, start > end + 1 {
                     let blankCount = sourceLines.dropFirst(end).prefix(start - end - 1)
                         .filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
-                    for _ in 0..<blankCount { paragraph(text(""), style: style(indent: indent)) }
+                    let closes = managed && spans.contains { $0.closing == start }
+                    for _ in 0..<max(0, blankCount - (followsDisclosureHeader ? 1 : 0) - (closes ? 1 : 0)) { paragraph(text(""), style: style(indent: indent)) }
                 }
+                followsDisclosureHeader = false
                 previousEnd = lastLine(child)
                 index += 1
+                if managed, let html = child as? HTMLBlock, renderDisclosureLines(html) {
+                    previousEnd = max(previousEnd ?? 0, hiddenThrough)
+                    continue
+                }
+                let indent = managed ? indent + disclosureIndent(startLine) : indent
                 if let marks, let heading = child as? Heading, let line = heading.range?.lowerBound.line, let mark = marks.headings[line] {
                     renderHeading(heading, indent: indent, fold: (mark.key, mark.folded))
                     continue
@@ -266,7 +292,9 @@ enum MarkdownText {
                     continue
                 }
                 var sectionEnd = index
-                while sectionEnd < children.count, ((children[sectionEnd] as? Heading)?.level ?? 7) > heading.level { sectionEnd += 1 }
+                let containerEnd = managed ? spans.filter { $0.line < startLine && startLine < $0.closing }.map(\.closing).min() : nil
+                while sectionEnd < children.count, ((children[sectionEnd] as? Heading)?.level ?? 7) > heading.level,
+                      (children[sectionEnd].range?.lowerBound.line ?? 0) < (containerEnd ?? .max) { sectionEnd += 1 }
                 let hasBody = sectionEnd > index
                 let folded = hasBody && folds?.contains(key) == true
                 renderHeading(heading, indent: indent, fold: hasBody ? (key, folded) : nil)
@@ -275,6 +303,65 @@ enum MarkdownText {
                     index = sectionEnd
                 }
             }
+        }
+
+        private func disclosureIndent(_ line: Int) -> CGFloat {
+            CGFloat(spans.filter { $0.line < line && line < $0.closing }.count) * MarkdownText.disclosureBodyIndent
+        }
+
+        private func isOpen(_ span: MarkdownDisclosures.Span) -> Bool {
+            // 不能折叠的地方（没有折叠记忆）：内容都显示出来，否则就看不到了。
+            guard let folds else { return true }
+            if folds.contains(span.key + "=closed") { return false }
+            return folds.contains(span.key + "=open") || folds.contains(span.key) || span.initiallyOpen
+        }
+
+        /// HTML 块里有折叠块的开头或结尾：逐行处理，标题画成可以点的一行，标签不显示。别的 HTML 照旧原样显示。
+        private func renderDisclosureLines(_ html: HTMLBlock) -> Bool {
+            guard let first = html.range?.lowerBound.line, let last = lastLine(html),
+                  spans.contains(where: { (first...last).contains($0.line) || (first...last).contains($0.closing) }) else { return false }
+            var raw: [String] = []
+            func flush(_ line: Int) {
+                guard !raw.isEmpty else { return }
+                paragraph(text(raw.joined(separator: "\n")), style: style(indent: disclosureIndent(line)))
+                raw = []
+            }
+            var line = first
+            while line <= last {
+                if let span = spans.first(where: { $0.line == line }) {
+                    flush(line)
+                    let open = isOpen(span)
+                    renderDisclosureHeader(span, open: open)
+                    if open {
+                        line = span.bodyStart
+                        followsDisclosureHeader = true
+                    } else {
+                        hiddenThrough = max(hiddenThrough, span.closing)
+                        line = span.closing + 1
+                        followsDisclosureHeader = false
+                    }
+                } else if spans.contains(where: { $0.closing == line }) {
+                    flush(line)
+                    line += 1
+                } else {
+                    if line <= sourceLines.count { raw.append(sourceLines[line - 1]) }
+                    line += 1
+                }
+            }
+            flush(last)
+            return true
+        }
+
+        private func renderDisclosureHeader(_ span: MarkdownDisclosures.Span, open: Bool) {
+            let header = style(indent: disclosureIndent(span.line) + MarkdownText.disclosureHeaderIndent)
+            let content = text(MarkdownMath.restore(span.title, formulas: formulas), font: .systemFont(ofSize: size, weight: .medium))
+            if folds != nil {
+                // 键里带着点下去要变成的状态（见 `HeadingFolds.toggle`）。
+                content.addAttribute(MarkdownText.headingFoldKey, value: span.key + (open ? "=closed" : "=open"), range: content.fullRange)
+                content.addAttribute(MarkdownText.headingFoldedKey, value: !open, range: content.fullRange)
+                content.addAttribute(MarkdownText.disclosureHeaderKey, value: true, range: content.fullRange)
+            }
+            paragraph(content, style: header)
         }
 
         /// 代码块：整块的底色和边框、右上角的「复制」由 `InteractiveTaskText` 画（按 `codeBlockKey` 找到这一块），

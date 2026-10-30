@@ -215,7 +215,9 @@ final class InlineEditorAlignmentTests: XCTestCase {
 
     /// 换成编辑器时高度不变，下面的内容不跳：对齐用例之外的几种内容。
     func testEditorHeightMatchesForTablesRulesAndMath() async throws {
-        let samples = ["分隔线": "上面\n\n---\n\n下面",
+        let samples = ["折叠块": "上面\n\n<details>\n<summary>更多</summary>\n\n内容\n\n</details>\n\n下面",
+                       "展开的折叠块": "上面\n\n<details open>\n<summary>更多</summary>\n\n第一段\n\n第二段\n\n</details>\n\n下面",
+                       "分隔线": "上面\n\n---\n\n下面",
                        "表格": "上面\n\n| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n\n下面",
                        "行内公式": "公式 $x^2 + y^2$ 在这里\n\n下面",
                        "独立公式": "上面\n\n$$\n\\frac{a}{b}\n$$\n\n下面",
@@ -232,7 +234,7 @@ final class InlineEditorAlignmentTests: XCTestCase {
             let root = VStack(alignment: .leading, spacing: 0) {
                 EditableLogText(log: log, editable: true, begin: { _, _ in }) { editAt in
                     TaskLinkText(source: log.text, completed: false, color: Palette.ink, fontSize: 13, edit: {}, open: { _ in },
-                                 maxLines: 0, markdown: true, compactLines: true, editAt: editAt)
+                                 maxLines: 0, markdown: true, compactLines: true, editAt: editAt, foldID: InlineMarkdownEditor.foldID(log.id))
                 }
                 Spacer(minLength: 0)
             }.frame(width: 420, height: 600, alignment: .top)

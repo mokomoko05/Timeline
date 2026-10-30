@@ -312,7 +312,7 @@ struct AgendaView: View {
         switch hits[selection] {
         case .task(let item): navigate(item.task.dueDate, item.id); dismiss()
         case .log(let key, let entry): open(key, log: entry.id)
-        case .summary(let key, _): open(key)
+        case .summary(let key, _): open(key, log: JournalDates.date(for: key).map(InlineMarkdownEditor.summaryID(for:)))
         case .board(let board, _): openBoard(board)
         }
     }

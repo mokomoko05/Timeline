@@ -121,7 +121,7 @@ public struct SyncRecord: Codable, Equatable, Sendable {
 }
 
 /// 合并时的上下文：本机编号、当前时间，以及哪些字段是要保留冲突内容的长文本。
-struct SyncMerge {
+public struct SyncMerge {
     var device: String
     var now: Date
     var describeDevice: (String) -> String = { $0 }
@@ -208,6 +208,14 @@ struct SyncMerge {
         let stamp = stamp(after: base)
         seen[device] = stamp.time
         return SyncField(value: .string(text), stamp: stamp, seen: seen)
+    }
+
+    /// 正在编辑的文字和别处刚同步来的改动撞上了：和同步冲突一样两份都留，本机的放前面。
+    public static func keepingBoth(mine: String, theirs: String, device: String = "其他设备", at time: Date = Date()) -> String {
+        if mine.contains(theirs) { return mine }
+        if theirs.contains(mine) { return theirs }
+        let marker = conflictMarker(for: SyncStamp(time: time.timeIntervalSince1970, device: device), device: device)
+        return mine + "\n\n" + marker + "\n\n" + theirs
     }
 
     static func conflictMarker(for stamp: SyncStamp, device: String) -> String {

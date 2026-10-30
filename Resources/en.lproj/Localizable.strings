@@ -1209,3 +1209,6 @@
 "退出后没保存的修改会丢失。" = "Unsaved changes will be lost when you quit.";
 "保存并退出" = "Save and Quit";
 "放弃修改" = "Discard Changes";
+"别处也改了这段内容，两份都保留在正文里" = "This text also changed elsewhere. Both versions were kept in the note.";
+"写点今天的总结…" = "Write a summary for this day…";
+"还没有总结" = "No summary yet";

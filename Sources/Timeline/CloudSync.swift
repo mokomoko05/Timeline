@@ -49,6 +49,7 @@ final class CloudSyncController: ObservableObject {
             if let editor = BoardLiveEditorSession.active {
                 await withCheckedContinuation { continuation in editor.commit(endingEditing: false) { continuation.resume() } }
             }
+            await withCheckedContinuation { continuation in InlineMarkdownEditor.shared.flushForSync { continuation.resume() } }
         }
         // 同步状态变了让设置界面跟着刷新。
         forward = sync.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }

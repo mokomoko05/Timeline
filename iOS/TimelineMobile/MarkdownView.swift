@@ -337,6 +337,15 @@ indirect enum MarkdownBlock {
         node.children.compactMap { block($0, context: &context) }
     }
 
+    /// `<details>` 在这里不折叠：标签不显示，标题留下来，内容是后面的块，照常显示。
+    private static func disclosureFree(_ raw: String) -> String? {
+        guard raw.range(of: "<details", options: .caseInsensitive) != nil || raw.range(of: "</details", options: .caseInsensitive) != nil
+                || raw.range(of: "<summary", options: .caseInsensitive) != nil else { return raw }
+        let text = raw.replacingOccurrences(of: #"</?(details|summary)\b[^>]*>"#, with: "", options: [.regularExpression, .caseInsensitive])
+            .components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: "\n")
+        return text.isEmpty ? nil : text
+    }
+
     private static func block(_ node: Markup, context: inout Context) -> MarkdownBlock? {
         let formulas = context.formulas
         switch node {
@@ -363,7 +372,7 @@ indirect enum MarkdownBlock {
         case is ThematicBreak:
             return .rule
         case let html as HTMLBlock:
-            return .html(html.rawHTML)
+            return disclosureFree(html.rawHTML).map { .html($0) }
         default:
             let nested = blocks(node, context: &context)
             return nested.isEmpty ? nil : .quote(nested)

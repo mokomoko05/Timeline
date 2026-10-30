@@ -209,7 +209,7 @@ private final class DayIndex {
     private var days: [String: DayEntry] = [:]
     private var cache: [String: [JournalStore.LoggedLog]] = [:]
     func update(_ store: JournalStore, selection: String) -> ([String: [JournalStore.LoggedLog]], [String]) {
-        let keys = Set(store.days.compactMap { $0.value.logs.isEmpty ? nil : $0.key }).union([JournalDates.key(Date())]).sorted()
+        let keys = Set(store.days.compactMap { $0.value.logs.isEmpty && $0.value.summary.isEmpty ? nil : $0.key }).union([JournalDates.key(Date())]).sorted()
         var wanted = Set([selection])
         if let index = keys.firstIndex(of: selection) {
             if index > 0 { wanted.insert(keys[index - 1]) }
@@ -275,15 +275,6 @@ private struct DayContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let summary = summary.nilIfEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("小结", systemImage: "text.quote").font(.caption.weight(.semibold)).foregroundStyle(Palette.muted)
-                    MarkdownView(source: summary, foldScope: "summary." + key, size: 15)
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .card()
-            }
             if logs.isEmpty {
                 ContentUnavailableView("这天没有记录", systemImage: "book.closed", description: Text("点右下角写一条"))
                     .padding(.top, 40)
@@ -292,7 +283,30 @@ private struct DayContent: View {
                 // 跳到底部会落进空白、节奏条和滚动位置对不上。长文的排版有缓存，整列重排不贵。
                 LogTimeline(store: store, logs: logs, lazy: false)
             }
+            summaryCard
         }
+    }
+
+    /// 这一天时间轴的末端：每日总结。还没写时是空卡片，点一下就能写。
+    private var summaryCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("每日总结", systemImage: "sun.max").font(.caption.weight(.semibold)).foregroundStyle(Palette.muted)
+            if let summary = summary.nilIfEmpty {
+                MarkdownView(source: summary, foldScope: "summary." + key, size: 15)
+            } else {
+                Text(store.isReadOnly ? "还没有总结" : "写点今天的总结…").font(.subheadline).foregroundStyle(Palette.muted)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !store.isReadOnly, let date = JournalDates.date(for: key) else { return }
+            SummaryEditing.shared.date = date
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
     }
 }
 

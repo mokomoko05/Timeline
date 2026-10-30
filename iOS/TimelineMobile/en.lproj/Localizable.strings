@@ -475,3 +475,6 @@
 "有 %lld 张原图找不到" = "%lld original images can't be found";
 "仍然导出" = "Export anyway";
 "联网后图片可能还能下载，可以稍后重试。仍然导出时，备份不含这些原图，其余内容不受影响。" = "They may still download once you're online, so you can retry later. If you export anyway, the backup leaves out these originals. Everything else is included.";
+"每日总结" = "Daily summary";
+"写点今天的总结…" = "Write a summary for this day…";
+"还没有总结" = "No summary yet";

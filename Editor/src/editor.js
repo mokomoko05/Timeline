@@ -1518,6 +1518,19 @@ window.boardEditor = {
   },
   // 工作板不再保留（关掉或很久没用）：丢掉存着的编辑器状态。
   forget(key) { savedBoards.delete(key); },
+  // 别处改了正文（同步）：只换变了的那一段，光标跟着文字走，不打断正在写的地方。
+  setSource(text) {
+    if (composing || view.composing) return false;
+    const current = view.state.doc.toString();
+    if (current === text) return true;
+    let start = 0;
+    const shorter = Math.min(current.length, text.length);
+    while (start < shorter && current[start] === text[start]) start++;
+    let end = 0;
+    while (end < shorter - start && current[current.length - 1 - end] === text[text.length - 1 - end]) end++;
+    view.dispatch({changes: {from: start, to: current.length - end, insert: text.slice(start, text.length - end)}, annotations: [externalChange, Transaction.addToHistory.of(false)]});
+    return true;
+  },
   undo() { runHistory(undo); return snapshot(); },
   redo() { runHistory(redo); return snapshot(); },
   history() { return {undo: undoDepth(view.state), redo: redoDepth(view.state)}; },

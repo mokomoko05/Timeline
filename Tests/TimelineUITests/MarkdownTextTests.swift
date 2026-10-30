@@ -163,4 +163,50 @@ final class MarkdownTextTests: XCTestCase {
         XCTAssertNil(mixed.attribute(.obliqueness, at: latin, effectiveRange: nil), "拉丁字母不重复倾斜")
         XCTAssertNil(render("重要内容").attribute(.obliqueness, at: 0, effectiveRange: nil), "没有强调的不倾斜")
     }
+
+    /// 正文里的 `<details>`：不显示 HTML 标签，收起时只有标题，展开有内容；没有折叠记忆的地方内容都显示。
+    func testDetailsRenderAsDisclosure() {
+        let source = "开头\n\n<details>\n<summary>更多</summary>\n\n里面的**内容**\n\n</details>\n\n结尾"
+        func render(_ folds: Set<String>?) -> NSAttributedString {
+            MarkdownText.render(source, color: .labelColor, fontSize: 13, lineSpacing: 2, scale: 1, folds: folds)
+        }
+        let closed = render([]).string
+        XCTAssertFalse(closed.contains("<"), closed)
+        XCTAssertTrue(closed.contains("更多") && closed.contains("结尾"), closed)
+        XCTAssertFalse(closed.contains("里面的"), closed)
+        let opened = render(["d:更多#0=open"])
+        XCTAssertTrue(opened.string.contains("里面的内容"), opened.string)
+        XCTAssertFalse(opened.string.contains("</details>"), opened.string)
+        var key: String?
+        opened.enumerateAttribute(MarkdownText.headingFoldKey, in: NSRange(location: 0, length: opened.length)) { value, _, _ in if let value = value as? String { key = value } }
+        XCTAssertEqual(key, "d:更多#0=closed", "点下去要变成收起")
+        XCTAssertTrue(render(nil).string.contains("里面的内容"), "不能折叠的地方内容都显示")
+
+        let initiallyOpen = "<details open>\n<summary>默认展开</summary>\n\n内容\n\n</details>"
+        XCTAssertTrue(MarkdownText.render(initiallyOpen, color: .labelColor, fontSize: 13, lineSpacing: 2, scale: 1, folds: []).string.contains("内容"))
+        XCTAssertFalse(MarkdownText.render(initiallyOpen, color: .labelColor, fontSize: 13, lineSpacing: 2, scale: 1, folds: ["d:默认展开#0=closed"]).string.contains("内容"))
+
+        // 代码块里的标签、别的 HTML 照旧。
+        let code = "```\n<details>\n</details>\n```"
+        XCTAssertTrue(MarkdownText.render(code, color: .labelColor, fontSize: 13, lineSpacing: 2, scale: 1, folds: []).string.contains("<details>"))
+        XCTAssertTrue(MarkdownText.render("<div>原样</div>", color: .labelColor, fontSize: 13, lineSpacing: 2, scale: 1, folds: []).string.contains("<div>"))
+    }
+
+    /// 折叠记忆：`<details open>` 收起后记得住，点一下切到另一个状态；给编辑器的形式也对。
+    @MainActor
+    func testDisclosureFoldMemory() {
+        let defaults = InMemoryDefaults()
+        let previous = HeadingFolds.defaults
+        HeadingFolds.defaults = defaults
+        defer { HeadingFolds.defaults = previous }
+        HeadingFolds.toggle("d:甲#0=closed", in: "x")
+        XCTAssertEqual(HeadingFolds.folded(in: "x"), ["d:甲#0=closed"])
+        XCTAssertEqual(HeadingFolds.editorFolds(in: "x"), ["d:甲#0": false])
+        HeadingFolds.toggle("d:甲#0=open", in: "x")
+        XCTAssertEqual(HeadingFolds.editorFolds(in: "x"), ["d:甲#0": true])
+        HeadingFolds.set("d:甲#0", folded: false, in: "x")
+        XCTAssertEqual(HeadingFolds.editorFolds(in: "x"), ["d:甲#0": false])
+        HeadingFolds.set("h1:标题#0", folded: true, in: "x")
+        XCTAssertEqual(HeadingFolds.editorFolds(in: "x"), ["d:甲#0": false, "h1:标题#0": true])
+    }
 }

@@ -169,4 +169,44 @@ final class DailyLogTests: XCTestCase {
         try store.restore(from: snapshot)
         XCTAssertEqual(store.entry(for: day).logs, [record])
     }
+
+    @MainActor func testAutosaveAndFinishEditingLogUndoAsOneStep() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let day = Date()
+        store.setLogDraft("原文", on: day)
+        _ = try store.commitLog(on: day, linkDefault: false)
+        let id = try XCTUnwrap(store.entry(for: day).logs.first?.id)
+        store.autosaveLog(id, text: "第一次", on: day)
+        store.autosaveLog(id, text: "  ", on: day)
+        XCTAssertEqual(store.entry(for: day).logs.first?.text, "第一次", "删空时不写")
+        store.finishEditingLog(id, from: "原文", text: "第一次", on: day)
+        store.undo()
+        XCTAssertEqual(store.entry(for: day).logs.first?.text, "原文")
+        store.redo()
+        XCTAssertEqual(store.entry(for: day).logs.first?.text, "第一次")
+        store.finishEditingLog(id, from: "第一次", text: "", on: day)
+        XCTAssertTrue(store.entry(for: day).logs.isEmpty, "结束时是空的才删")
+    }
+
+    func testKeepingBothKeepsEveryVersion() {
+        let merged = SyncMerge.keepingBoth(mine: "本机", theirs: "远端")
+        XCTAssertTrue(merged.hasPrefix("本机\n\n") && merged.hasSuffix("\n\n远端") && merged.contains("同步冲突"), merged)
+        XCTAssertEqual(SyncMerge.keepingBoth(mine: "本机和远端", theirs: "远端"), "本机和远端")
+        XCTAssertEqual(SyncMerge.keepingBoth(mine: "本机", theirs: "本机和远端"), "本机和远端")
+    }
+
+    @MainActor func testFinishEditingSummaryCreatesAndUndoes() {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let day = Date()
+        store.setSummary("写到一半", on: day)
+        store.finishEditingSummary(from: "", text: " 总结 \n", on: day)
+        XCTAssertEqual(store.entry(for: day).summary, "总结")
+        XCTAssertEqual(JournalStore(directory: directory).entry(for: day).summary, "总结")
+        store.undo()
+        XCTAssertEqual(store.entry(for: day).summary, "")
+    }
 }

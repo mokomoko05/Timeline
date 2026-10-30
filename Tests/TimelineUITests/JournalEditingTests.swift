@@ -307,4 +307,48 @@ final class JournalEditingTests: XCTestCase {
         let datas = await ImageFileDrop.load([try file("a.png", "第一张"), try file("b.txt", "不是图片"), try file("c.jpg", "第二张")])
         XCTAssertEqual(datas.map { String(decoding: $0, as: UTF8.self) }, ["第一张", "第二张"])
     }
+
+    /// 编辑中的标题所在的行不见了（折叠、切页）：改过的先存下；没改过的不写。
+    func testTitleEditIsSavedWhenRowDisappears() async throws {
+        final class Model: ObservableObject {
+            @Published var shown = true
+            @Published var title = "原标题"
+            @Published var request: UUID?
+        }
+        struct Root: View {
+            @ObservedObject var model: Model
+            let id: UUID
+            var body: some View {
+                VStack {
+                    if model.shown {
+                        TaskTitleView(title: $model.title, completed: false, color: .primary, fontSize: 13, next: {}, itemID: id, requestedEdit: $model.request)
+                    }
+                }.frame(width: 300, height: 80)
+            }
+        }
+        let model = Model()
+        let id = UUID()
+        let host = NSHostingView(rootView: Root(model: model, id: id))
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 80), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        try XCTUnwrap(descendants(host, of: InteractiveTaskText.self).first).activate(at: .zero, clickCount: 2)
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
+        let input = try XCTUnwrap(descendants(host, of: TaskTextField.self).first)
+        XCTAssertTrue(window.makeFirstResponder(input))
+        let field = try XCTUnwrap(input.currentEditor() as? ImagePasteFieldEditorView)
+        field.insertText("改过", replacementRange: NSRange(location: 0, length: (field.string as NSString).length))
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(TaskTitleEdits.shared.hasUnsaved)
+        model.shown = false
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(model.title, "改过")
+        XCTAssertFalse(TaskTitleEdits.shared.hasUnsaved)
+    }
 }

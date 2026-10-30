@@ -6,6 +6,8 @@ extension Notification.Name {
     static let timelineCommitEditing = Notification.Name("TimelineCommitEditing")
     /// 编辑器的网页进程意外退出、已保存并重新载入：界面提示一句。`object` 是 "inline"（日志就地编辑）或 "board"。
     static let timelineEditorRecovered = Notification.Name("TimelineEditorRecovered")
+    /// 正在就地编辑的内容和别处同步来的改动撞上了，两份都留在正文里：界面提示一句。
+    static let timelineEditorConflict = Notification.Name("TimelineEditorConflict")
 }
 
 /// 正在改、还没保存的任务标题。标题只有 ⌘↩ 才保存（失焦、提交通知都不算），退出应用或释放隐藏的界面时要先问过，不能悄悄丢掉。
@@ -18,6 +20,9 @@ final class TaskTitleEdits {
     var prompt: (Int) -> Choice = TaskTitleEdits.askUser
     private var edits: [UUID: (dirty: () -> Bool, save: () -> Void)] = [:]
 
+    /// 退出时用户选了放弃：之后界面拆掉也不再保存。
+    private(set) var discarding = false
+
     var hasUnsaved: Bool { edits.values.contains { $0.dirty() } }
 
     func register(_ token: UUID, dirty: @escaping () -> Bool, save: @escaping () -> Void) { edits[token] = (dirty, save) }
@@ -29,7 +34,9 @@ final class TaskTitleEdits {
         guard !unsaved.isEmpty else { return true }
         switch prompt(unsaved.count) {
         case .cancel: return false
-        case .discard: return true
+        case .discard:
+            discarding = true
+            return true
         case .save:
             unsaved.forEach { $0.save() }
             return true
@@ -94,7 +101,10 @@ struct TaskTitleView: View {
             if requestedEdit == itemID { requestedEdit = nil; startEditing() }
             if editing { registerEdit() }
         }
-        .onDisappear { unregisterEdit() }
+        .onDisappear {
+            // 这一行不在了（折叠、切页、任务换了位置）：改过的标题先存下，不能悄悄丢。没改过的保持编辑，回来还能接着改。
+            if editing, editText != originalText, !TaskTitleEdits.shared.discarding { finishEditing() } else { unregisterEdit() }
+        }
     }
 
     private func registerEdit() {

@@ -612,6 +612,12 @@ public final class JournalStore: ObservableObject {
         change(date, debounce: true) { $0.summary = summary }
     }
 
+    /// 结束编辑每日总结：写入最后的内容并存盘；撤销一步回到开始编辑时的 `start`。
+    public func finishEditingSummary(from start: String, text: String, on date: Date) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        change(date, undoBase: { $0.summary = start }) { $0.summary = text }
+    }
+
     public func setLogDraft(_ text: String, on date: Date) {
         change(date, debounce: true) { $0.logDraft = text }
     }
@@ -791,6 +797,39 @@ public final class JournalStore: ObservableObject {
             guard let index = entry.logs.firstIndex(where: { $0.id == id }) else { return }
             entry.logs[index].text = text
         }
+    }
+
+    /// 就地编辑途中存盘：不进撤销栈（整段编辑在结束时算一步），正文删空时不写（编辑到一半不能把日志删了）。
+    public func autosaveLog(_ id: UUID, text: String, on date: Date) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        change(date, debounce: true) { entry in
+            guard let index = entry.logs.firstIndex(where: { $0.id == id }) else { return }
+            entry.logs[index].text = text
+        }
+    }
+
+    /// 结束就地编辑：写入最后的正文并存盘；撤销一步回到开始编辑时的 `start`（中途自动存的不算步）。
+    public func finishEditingLog(_ id: UUID, from start: String, text: String, on date: Date) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty, entry(for: date).logs.first(where: { $0.id == id })?.images.isEmpty != false { deleteLog(id, on: date); return }
+        change(date, undoBase: { entry in
+            guard let index = entry.logs.firstIndex(where: { $0.id == id }) else { return }
+            entry.logs[index].text = start
+        }) { entry in
+            guard let index = entry.logs.firstIndex(where: { $0.id == id }) else { return }
+            entry.logs[index].text = text
+        }
+    }
+
+    /// 正在编辑的日志被别处（另一台设备）删了：编辑的内容存成新的一条，不跟着丢。
+    public func restoreEditedLog(_ log: DailyLogEntry, text: String, on date: Date) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        var copy = log
+        copy.id = UUID()
+        copy.text = text
+        change(date) { $0.logs.append(copy) }
     }
 
     public func deleteLog(_ id: UUID, on date: Date) {
@@ -1854,15 +1893,24 @@ public final class JournalStore: ObservableObject {
         if debounce { scheduleSave() } else { persist() }
     }
 
-    func change(_ date: Date, debounce: Bool = false, action: String = "修改事项", mutation: (inout DayEntry) -> Void) {
+    /// `undoBase`：撤销时回到的状态不是当前的数据（内容已经自动存过，这里只是收尾）：在结果上改回去。
+    func change(_ date: Date, debounce: Bool = false, action: String = "修改事项", undoBase: ((inout DayEntry) -> Void)? = nil, mutation: (inout DayEntry) -> Void) {
         guard !isReadOnly else { return }
         let key = JournalDates.key(date)
         var entry = days[key] ?? DayEntry()
         mutation(&entry)
-        guard entry != (days[key] ?? DayEntry()) else { return }
+        var previous = days
+        if let undoBase {
+            var base = entry
+            undoBase(&base)
+            guard entry != base else { return }
+            previous[key] = base.hasContent ? base : nil
+        } else {
+            guard entry != (days[key] ?? DayEntry()) else { return }
+        }
         var updated = days
         updated[key] = entry.hasContent ? entry : nil
-        if !debounce { registerUndo(days, replacing: updated, action: action) }
+        if !debounce { registerUndo(previous, replacing: updated, action: action) }
         let tasksChanged = entry.todos != (days[key]?.todos ?? [])
         let logsChanged = entry.logs != (days[key]?.logs ?? [])
         invalidateNotebookIndex(logsChanged: logsChanged, tasksChanged: tasksChanged)

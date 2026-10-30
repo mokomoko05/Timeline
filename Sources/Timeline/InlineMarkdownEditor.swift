@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import WebKit
 import TimelineCore
@@ -15,7 +16,12 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     struct Target: Equatable {
         let logID: UUID
         let date: Date
+        /// 编辑的是这一天的每日总结（`logID` 是 `summaryID(for:)` 算出来的，不是真的日志）。
+        var isSummary = false
     }
+
+    /// 停顿多久把正在编辑的内容存一次（网页本身停顿 150 ms 才把文字交过来）。测试里调短。
+    var autosaveDelay: TimeInterval = 0.8
 
     /// 编辑器所在的条目：正在编辑，或者提前排好版（`preparing`）。
     private(set) var target: Target?
@@ -32,8 +38,15 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
 
     private(set) var webView: InlineEditorWebView?
     private var store: JournalStore?
+    /// 数据里应该有的正文（最后一次读到或写入的，已去掉首尾空白）。数据和它不一样，就是别处改过了。
     private var original = ""
+    /// 开始编辑时的正文：撤销一步回到这里。
+    private var sessionStart = ""
     private var source = ""
+    private var editedLog: DailyLogEntry?
+    private var pendingAutosave: DispatchWorkItem?
+    private var storeWatch: AnyCancellable?
+    private var reconcilePending = false
     private var ready = false
     private var configured = false
     /// 编辑器的内容已经画到屏幕上了：这之后才把渲染好的正文换成编辑器（之前的高度消息不算）。
@@ -111,7 +124,21 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     /// 排好版之后这一条的正文又变了（撤销、同步……）：排好的版不能用，否则一打字就把新内容盖掉。
     private var preparedIsStale: Bool {
         guard preparing, let target, let store else { return false }
-        return store.entry(for: target.date).logs.first { $0.id == target.logID }?.text != original
+        return Self.storedText(target, in: store) != original
+    }
+
+    /// 数据里现在的正文；日志已经不在了是 nil。
+    private static func storedText(_ target: Target, in store: JournalStore) -> String? {
+        let entry = store.entry(for: target.date)
+        return target.isSummary ? entry.summary : entry.logs.first { $0.id == target.logID }?.text
+    }
+
+    private static func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// 每日总结在编辑器和界面里用的编号：同一天总是同一个，按日期算出来。
+    static func summaryID(for date: Date) -> UUID {
+        let digits = JournalDates.key(date).filter(\.isNumber)
+        return UUID(uuidString: "5A4D4D52-59DA-4000-8000-" + String(repeating: "0", count: max(0, 12 - digits.count)) + digits.suffix(12)) ?? UUID()
     }
 
     /// 开始编辑一条日志；`point` 是点在渲染好的正文上的位置（光标放到那里），nil 时放在末尾。
@@ -120,10 +147,22 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     /// `prepare`：只提前排版，不进入编辑。
     func begin(_ log: DailyLogEntry, on date: Date, store: JournalStore, at point: CGPoint?, fontSize: CGFloat, lineSpacing: CGFloat,
                dark: Bool, muted: Bool = false, prepare: Bool = false) {
+        open(Target(logID: log.id, date: date), text: log.text, store: store, at: point, fontSize: fontSize, lineSpacing: lineSpacing, dark: dark, muted: muted, prepare: prepare)
+        if target?.logID == log.id { editedLog = log }
+    }
+
+    /// 开始编辑这一天的每日总结（可以是空的，从头写）。
+    func beginSummary(on date: Date, store: JournalStore, at point: CGPoint?, fontSize: CGFloat, lineSpacing: CGFloat, dark: Bool) {
+        open(Target(logID: Self.summaryID(for: date), date: date, isSummary: true), text: store.entry(for: date).summary, store: store,
+             at: point, fontSize: fontSize, lineSpacing: lineSpacing, dark: dark, muted: false, prepare: false)
+    }
+
+    private func open(_ next: Target, text: String, store: JournalStore, at point: CGPoint?, fontSize: CGFloat, lineSpacing: CGFloat,
+                      dark: Bool, muted: Bool, prepare: Bool) {
         guard !store.isReadOnly else { return }
         if prepare, target != nil, !preparing { return }
-        if target?.logID == log.id {
-            if !preparing || log.text == original {
+        if target?.logID == next.logID {
+            if !preparing || text == original {
                 if preparing, !prepare {
                     caret = point.map(caretPoint)
                     activate(place: placement(caret))
@@ -132,32 +171,32 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
             }
             end()
         }
-        cancelPrepare(log.id)
+        cancelPrepare(next.logID)
         finish()
         self.store = store
-        target = Target(logID: log.id, date: date)
+        target = next
         preparing = prepare
-        slot = slot(for: log.id)
+        slot = slot(for: next.logID)
         slot?.height = nil
         slot?.phase = prepare ? .prepared : .editing
-        original = log.text
-        source = log.text
+        original = text
+        sessionStart = text
+        source = text
         configured = false
         painted = false
-        let folds = HeadingFolds.folded(in: Self.foldID(log.id))
         let metrics = InlineEditorMetrics.css(fontSize: fontSize, lineSpacing: lineSpacing)
         shift = metrics["shift"] ?? 0
         caret = point.map(caretPoint)
         var colors = BoardLiveEditorSession.colors(dark: dark)
         if muted { colors["ink"] = colors["muted"] }
-        settings = ["key": "log." + log.id.uuidString, "source": log.text, "inline": true, "readOnly": false, "sourceMode": false,
+        settings = ["key": "log." + next.logID.uuidString, "source": text, "inline": true, "readOnly": false, "sourceMode": false,
                     "fontSize": fontSize, "colors": colors, "dark": dark,
-                    "metrics": metrics.merging(["tail": InlineEditorMetrics.tail(log.text, fontSize: fontSize, lineSpacing: lineSpacing)]) { $1 },
+                    "metrics": metrics.merging(["tail": InlineEditorMetrics.tail(text, fontSize: fontSize, lineSpacing: lineSpacing)]) { $1 },
                     "labels": BoardLiveEditorSession.labels.merging(["copyCode": AppLocalized("复制"), "code": AppLocalized("代码")]) { $1 },
-                    "folds": Dictionary(uniqueKeysWithValues: folds.map { ($0, true) })]
+                    "folds": HeadingFolds.editorFolds(in: Self.foldID(next.logID))]
         _ = makeWebView()
         configure()
-        if !prepare { watchClicks() }
+        if !prepare { watchClicks(); watchStore() }
     }
 
     /// 点的位置相对正文的文字区；编辑器的文字区左边多 2px 内边距、整篇往上提了 shift。
@@ -183,6 +222,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         slot?.phase = .editing
         webView.window?.makeFirstResponder(webView)
         watchClicks()
+        watchStore()
         // 还没配置好：配置时按 `caret` 放光标。
         if configured, let place { webView.evaluateJavaScript(place + "; 0") }
     }
@@ -190,39 +230,169 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     /// 保存并结束编辑（点了别处、换了窗口内容、应用退出）。
     /// `completion` 在网页交回最后几个字、存好之后调用（退出前要等它）；网页卡住时最多等一秒。
     func finish(completion: (() -> Void)? = nil) {
-        guard target != nil else { completion?(); return }
+        guard let target, let store else { completion?(); return }
         if preparing { end(); completion?(); return }
         let webView = webView
-        save()
+        // 已经收到的文字先存下（网页卡住也不丢），收尾和撤销步留到拿到最后几个字时。
+        autosave()
+        let session = FinishedEdit(target: target, store: store, log: editedLog, start: sessionStart, base: original, fallback: source)
         if ready, configured, let webView {
             // 停顿后才送过来的最后几个字：取一次快照补存。
-            let target = target, store = store, original = original
             var pending = completion
-            let complete = { pending?(); pending = nil }
-            webView.evaluateJavaScript("window.boardEditor.blur(); window.boardEditor.snapshot()") { result, _ in
-                defer { complete() }
-                guard let snapshot = result as? [String: Any], let text = snapshot["source"] as? String,
-                      let target, let store, text != original else { return }
-                if store.entry(for: target.date).logs.first(where: { $0.id == target.logID })?.text != text.trimmingCharacters(in: .whitespacesAndNewlines) {
-                    store.updateLog(target.logID, text: text, on: target.date)
-                }
+            var settled = false
+            let settle: (String) -> Void = { text in
+                guard !settled else { return }
+                settled = true
+                session.settle(text)
+                pending?()
+                pending = nil
             }
-            if completion != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: complete) }
+            webView.evaluateJavaScript("window.boardEditor.blur(); window.boardEditor.snapshot()") { result, _ in
+                settle(((result as? [String: Any])?["source"] as? String) ?? session.fallback)
+            }
+            if completion != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { settle(session.fallback) } }
         } else {
+            session.settle(session.fallback)
             completion?()
         }
         end()
     }
 
-    private func save() {
-        guard let target, let store, source != original else { return }
-        original = source
-        store.updateLog(target.logID, text: source, on: target.date)
+    /// 结束编辑时的一份记录：网页交回最后的文字时，编辑器可能已经挪到别的条目上了。
+    private struct FinishedEdit {
+        let target: Target
+        let store: JournalStore
+        let log: DailyLogEntry?
+        let start: String
+        let base: String
+        let fallback: String
+
+        /// 写入最后的文字；这期间别处也改了就两份都留。
+        @MainActor func settle(_ text: String) {
+            let mine = InlineMarkdownEditor.trimmed(text)
+            guard let stored = InlineMarkdownEditor.storedText(target, in: store) else {
+                if let log, mine != InlineMarkdownEditor.trimmed(start) { store.restoreEditedLog(log, text: mine, on: target.date) }
+                return
+            }
+            var final = mine
+            if stored != base, mine != stored { final = mine == base ? stored : SyncMerge.keepingBoth(mine: mine, theirs: stored) }
+            if target.isSummary { store.finishEditingSummary(from: start, text: final, on: target.date) }
+            else { store.finishEditingLog(target.logID, from: start, text: final, on: target.date) }
+        }
+    }
+
+    /// 编辑途中存一次：不结束编辑，不进撤销栈。正文临时删空时不写。
+    private func autosave() {
+        pendingAutosave?.cancel()
+        pendingAutosave = nil
+        guard let target, let store, !preparing else { return }
+        // 别处的改动还没处理（通知排在主线程上）：先不写，免得把它盖掉。
+        guard Self.storedText(target, in: store) == original else { reconcile(); return }
+        let text = Self.trimmed(source)
+        guard text != original, target.isSummary || !text.isEmpty else { return }
+        original = text
+        if target.isSummary { store.setSummary(text, on: target.date) }
+        else { store.autosaveLog(target.logID, text: text, on: target.date) }
+    }
+
+    private func scheduleAutosave() {
+        pendingAutosave?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.autosave() }
+        pendingAutosave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + autosaveDelay, execute: work)
+    }
+
+    /// 同步前调用：把编辑器里最新的文字存进数据（不结束编辑），这次同步才带得上，也才能和别处的改动正确合并。
+    func flushForSync(completion: @escaping () -> Void) {
+        guard target != nil, !preparing, ready, configured, let webView else { completion(); return }
+        var pending: (() -> Void)? = completion
+        let complete = { pending?(); pending = nil }
+        webView.evaluateJavaScript("window.boardEditor.snapshot()") { [weak self] result, _ in
+            defer { complete() }
+            guard let self, let snapshot = result as? [String: Any], snapshot["composing"] as? Bool != true,
+                  let text = snapshot["source"] as? String, self.target != nil else { return }
+            self.source = text
+            self.autosave()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: complete)
+    }
+
+    /// 编辑期间盯着数据：别处（同步）改了这一条要马上处理，不能等结束编辑时把它盖掉。
+    private func watchStore() {
+        guard storeWatch == nil, let store else { return }
+        storeWatch = store.$days.dropFirst().sink { [weak self] _ in
+            // 发布时数据还没换上，排到主线程下一轮再看。
+            DispatchQueue.main.async { self?.reconcile() }
+        }
+    }
+
+    private func reconcile() {
+        guard !reconcilePending, let target, let store, !preparing else { return }
+        guard Self.storedText(target, in: store) != original else { return }
+        reconcilePending = true
+        let finished = { [weak self] (text: String?, composing: Bool) in
+            guard let self else { return }
+            self.reconcilePending = false
+            guard self.target == target else { return }
+            if composing {
+                // 正在用输入法选字：选完再说。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.reconcile() }
+                return
+            }
+            if let text { self.source = text }
+            self.applyExternalChange()
+        }
+        guard ready, configured, let webView else { finished(nil, false); return }
+        webView.evaluateJavaScript("window.boardEditor.snapshot()") { result, _ in
+            let snapshot = result as? [String: Any]
+            finished(snapshot?["source"] as? String, snapshot?["composing"] as? Bool == true)
+        }
+    }
+
+    private func applyExternalChange() {
+        guard let target, let store else { return }
+        let mine = Self.trimmed(source)
+        guard let stored = Self.storedText(target, in: store) else {
+            // 这一条被别处删了：改过的内容存成新的一条，行本身已经不在了。
+            if let editedLog, mine != Self.trimmed(sessionStart) { store.restoreEditedLog(editedLog, text: mine, on: target.date) }
+            end()
+            return
+        }
+        guard stored != original else { return }
+        if mine == stored {
+            original = stored
+        } else if mine == original {
+            // 这边没有新改动：换成别处的新内容，撤销也不再退到它之前。
+            if original == Self.trimmed(sessionStart) { sessionStart = stored }
+            original = stored
+            source = stored
+            pushSource(stored)
+        } else {
+            // 两边都改了：和同步冲突一样两份都留。
+            let merged = SyncMerge.keepingBoth(mine: mine, theirs: stored)
+            original = merged
+            source = merged
+            if target.isSummary { store.setSummary(merged, on: target.date) }
+            else { store.autosaveLog(target.logID, text: merged, on: target.date) }
+            pushSource(merged)
+            NotificationCenter.default.post(name: .timelineEditorConflict, object: nil)
+        }
+    }
+
+    private func pushSource(_ text: String) {
+        guard let webView, ready, configured,
+              let data = try? JSONSerialization.data(withJSONObject: [text]), let array = String(data: data, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("window.boardEditor.setSource(\(array)[0]); 0")
     }
 
     private func end() {
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
         clickMonitor = nil
+        pendingAutosave?.cancel()
+        pendingAutosave = nil
+        storeWatch = nil
+        reconcilePending = false
+        editedLog = nil
         if let webView, let window = webView.window, window.firstResponder === webView || (window.firstResponder as? NSView)?.isDescendant(of: webView) == true {
             window.makeFirstResponder(nil)
         }
@@ -348,6 +518,7 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         case "change", "commit":
             guard body["key"] as? String == settings["key"] as? String, target != nil, let text = body["source"] as? String else { return }
             source = text
+            if !preparing { scheduleAutosave() }
         case "height":
             guard target != nil, configured, painted, let value = body["value"] as? Double, value > 0 else { return }
             slot?.height = CGFloat(value)
@@ -373,13 +544,13 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         if navigationAction.navigationType == .linkActivated {
             if let url = navigationAction.request.url.flatMap({ TaskText.linkURL($0.absoluteString) }) { SafariLinks.open(url) }
             decisionHandler(.cancel)
-        } else { decisionHandler(navigationAction.request.url?.isFileURL == true ? .allow : .cancel) }
+        } else { decisionHandler(BoardLiveEditorSession.allowsNavigation(to: navigationAction.request.url) ? .allow : .cancel) }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         // 正在编辑时网页进程崩了：已经收到的内容先存下，重新载入后告诉用户一声（不然界面像是自己跳了一下）。
         if target != nil, !preparing { NotificationCenter.default.post(name: .timelineEditorRecovered, object: "inline") }
-        save()
+        autosave()
         // 重新载入后接着编辑最新的正文（开始编辑时记下的那份已经过期），光标放在末尾。
         settings["source"] = source
         caret = nil
@@ -433,7 +604,9 @@ enum InlineEditorMetrics {
     /// 长笔记不用为这一个数把全文渲染一遍（选中一条就要算，在主线程上）。
     @MainActor static func tail(_ source: String, fontSize: CGFloat, lineSpacing: CGFloat) -> Double {
         var block = source
-        if let line = Array(MarkdownText.parse(source).children).last?.range?.lowerBound.line, line > 1 {
+        // 折叠块的开头和结尾是分开的块，只排最后一块认不出来：整篇排。
+        if !source.localizedCaseInsensitiveContains("</details"),
+           let line = Array(MarkdownText.parse(source).children).last?.range?.lowerBound.line, line > 1 {
             block = source.components(separatedBy: "\n").dropFirst(line - 1).joined(separator: "\n")
         }
         let rendered = MarkdownText.render(block, color: .labelColor, fontSize: fontSize, lineSpacing: lineSpacing, scale: 1)
@@ -566,7 +739,6 @@ struct InlineEditorHost: NSViewRepresentable {
 struct EditableLogText<Content: View>: View {
     private let editor = InlineMarkdownEditor.shared
     @ObservedObject private var slot: InlineEditSlot
-    let log: DailyLogEntry
     @ViewBuilder let content: (_ beginAt: ((CGPoint) -> Void)?) -> Content
     /// 开始编辑（点的位置）；第二个参数为 true 时只提前排版。
     let begin: (_ point: CGPoint?, _ prepare: Bool) -> Void
@@ -574,11 +746,15 @@ struct EditableLogText<Content: View>: View {
 
     init(log: DailyLogEntry, editable: Bool, begin: @escaping (_ point: CGPoint?, _ prepare: Bool) -> Void,
          @ViewBuilder content: @escaping (_ beginAt: ((CGPoint) -> Void)?) -> Content) {
-        self.log = log
+        self.init(id: log.id, editable: editable, begin: begin, content: content)
+    }
+
+    init(id: UUID, editable: Bool, begin: @escaping (_ point: CGPoint?, _ prepare: Bool) -> Void,
+         @ViewBuilder content: @escaping (_ beginAt: ((CGPoint) -> Void)?) -> Content) {
         self.editable = editable
         self.begin = begin
         self.content = content
-        _slot = ObservedObject(wrappedValue: InlineMarkdownEditor.shared.slot(for: log.id))
+        _slot = ObservedObject(wrappedValue: InlineMarkdownEditor.shared.slot(for: id))
     }
 
     var body: some View {

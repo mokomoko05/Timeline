@@ -78,6 +78,8 @@ html.touch:not(.inline) .board-check svg { width: 18px; height: 18px; }
 .board-details .arrow[data-open="true"] svg { transform: rotate(90deg); }
 .board-details .title { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .board-details:hover { color: var(--accent); }
+html.inline .board-details { min-height: var(--m-line); }
+html.inline .board-details .arrow { height: var(--m-line); }
 .cm-details-body { border-left: 1px solid var(--line); margin-left: 18px; padding-left: 12px; }
 .cm-panels { border: 0 !important; background: var(--background); color: var(--ink); }
 .cm-tooltip { background: var(--background); color: var(--ink); border: 1px solid var(--line); }
