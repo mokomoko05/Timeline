@@ -67,24 +67,6 @@ enum LogEventStyle {
     }
 }
 
-struct LogEventBadge: View {
-    @Environment(\.typography) private var typography
-    let log: DailyLogEntry
-
-    var body: some View {
-        HStack(spacing: 3) {
-            if let symbol = LogEventStyle.symbol(log) { Image(systemName: symbol) }
-            Text(log.focusMarker).tracking(0.3)
-        }
-            .font(.system(size: typography.pt(10), weight: .semibold, design: .monospaced))
-            .foregroundStyle(LogEventStyle.color(log))
-            .frame(width: typography.pt(46), height: typography.pt(18), alignment: .leading)
-            .fixedSize()
-            .help(LocalizedStringKey(LogEventStyle.status(log)))
-            .accessibilityLabel(log.focusMarker == "END" ? AppLocalized(LogEventStyle.status(log)) : log.focusMarker)
-    }
-}
-
 struct LogFocusGoal: View {
     let log: DailyLogEntry
 
@@ -100,71 +82,18 @@ struct LogFocusGoal: View {
     }
 }
 
-struct LogTimelineRail: Shape {
-    let hasPrevious: Bool
-    let hasNext: Bool
-    let nodeY: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: 8, y: hasPrevious ? rect.minY : nodeY))
-        path.addLine(to: CGPoint(x: 8, y: hasNext ? rect.maxY : nodeY))
-        return path
+@MainActor
+enum LogTaskLabel {
+    static func current(_ task: ScheduledTask, store: JournalStore, logDate: Date) -> String {
+        let number = task.task.number.map { "#\($0)" } ?? "任务"
+        let title = String(TaskText.rendered(task.task.title, alias: task.task.calendarName).characters)
+        return "\(number) \(title)"
     }
-}
 
-struct LogTimelineRow<Content: View>: View {
-    @Environment(\.typography) private var typography
-    let log: DailyLogEntry
-    let hasPrevious: Bool
-    let hasNext: Bool
-    var segment: LogTimelineSegment?
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text(LogEventStyle.time(log.createdAt))
-                .font(.system(size: typography.pt(11), design: .monospaced))
-                .foregroundStyle(Palette.muted).padding(.top, 3).fixedSize()
-            content()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 24).padding(.bottom, 14)
-                .overlay(alignment: .leading) {
-                    LogTimelineRail(hasPrevious: hasPrevious, hasNext: hasNext, nodeY: typography.pt(9))
-                        .stroke(Palette.line, lineWidth: 1)
-                        .overlay {
-                            GeometryReader { geometry in
-                                Path { path in
-                                    let nodeY = typography.pt(9)
-                                    if hasPrevious, segment?.focusBefore == true {
-                                        path.move(to: CGPoint(x: 8, y: 0))
-                                        path.addLine(to: CGPoint(x: 8, y: nodeY))
-                                    }
-                                    if hasNext, segment?.focusAfter == true {
-                                        path.move(to: CGPoint(x: 8, y: nodeY))
-                                        path.addLine(to: CGPoint(x: 8, y: geometry.size.height))
-                                    }
-                                }.stroke(Palette.accent.opacity(0.8), lineWidth: 1.5)
-                            }
-                        }
-                        .overlay(alignment: .topLeading) {
-                            Group {
-                                if let symbol = LogEventStyle.symbol(log) {
-                                    Image(systemName: symbol)
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(LogEventStyle.color(log))
-                                        .frame(width: 12, height: 12)
-                                        .background(Palette.background)
-                                } else {
-                                    Circle().fill(LogEventStyle.color(log))
-                                        .frame(width: log.isFocusMarker ? 7 : 5, height: log.isFocusMarker ? 7 : 5)
-                                }
-                            }
-                                .position(x: 8, y: typography.pt(9))
-                        }
-                        .frame(width: 16).allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                }
-        }
+    static func saved(_ log: DailyLogEntry, store: JournalStore, logDate: Date) -> String? {
+        if let id = log.taskID, let task = store.locate(id) { return current(task, store: store, logDate: logDate) }
+        guard let title = log.taskTitle else { return nil }
+        let number = log.taskNumber.map { "#\($0) " } ?? ""
+        return number + AppLocalizedFormat("%@（已删除）", title)
     }
 }

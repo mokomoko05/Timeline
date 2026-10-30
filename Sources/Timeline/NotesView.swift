@@ -5,6 +5,7 @@ import TimelineCore
 /// 笔记视图：每个 TODO 是一个主题，笔记按日期汇总；每个标签也是一个主题，汇总带这个标签的所有待办的笔记。
 struct NotesView: View {
     @Environment(\.typography) private var typography
+    @Environment(\.toastCenter) private var toast
     @ObservedObject private var languages = LanguageStore.shared
     @ObservedObject var store: JournalStore
     let initialSelection: UUID?
@@ -124,7 +125,7 @@ struct NotesView: View {
                 guard let name = deletingTag else { return }
                 let count = store.deleteTag(name)
                 if tagSelection.map({ JournalStore.isTag($0, under: name) }) == true { tagSelection = nil; nav.validate(in: store) }
-                error = "已从 \(count) 个待办和日志上去掉 #\(name)，内容都保留 · ⌘Z 撤销"
+                toast?.show(AppLocalizedFormat("已从 %lld 个待办和日志上去掉 #%@，内容都保留", count, name), actionTitle: "撤销") { store.undo() }
                 deletingTag = nil
             }
             Button("取消", role: .cancel) { deletingTag = nil }
@@ -329,7 +330,7 @@ struct NotesView: View {
         }
         renamingTag = nil
         if tagSelection.map({ JournalStore.isTag($0, under: old) }) == true { select(tag: JournalStore.renamedTag(tagSelection!, from: old, to: name)) }
-        error = "已重命名为 #\(name) · ⌘Z 撤销"
+        toast?.show(AppLocalizedFormat("已重命名为 #%@", name), actionTitle: "撤销") { store.undo() }
     }
 
     private func topicRow(_ topic: JournalStore.NoteTopic) -> some View {
@@ -491,7 +492,7 @@ struct NotesView: View {
             iconAction("doc.on.doc", "复制为 Markdown") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(Self.markdown(topic, notes: notes), forType: .string)
-                error = "已复制为 Markdown"
+                toast?.show("已复制为 Markdown")
             }
             if taskOutlineAvailable(NotesTimelineIndex.months(notes)) { outlineToggle }
         }
@@ -558,7 +559,7 @@ struct NotesView: View {
 
     private static func usesLazyLayout(_ notes: [JournalStore.LoggedLog], visibleCount: Int? = nil) -> Bool {
         (visibleCount ?? notes.count) > lazyThreshold
-            || notes.reduce(0) { $0 + $1.log.text.utf16.count } > DailyLogView.lazyCharacterBudget
+            || notes.reduce(0) { $0 + $1.log.text.utf16.count } > UnifiedJournalView.lazyCharacterBudget
     }
 
     private func visibleNoteCount(chapters: [NotebookChapter], notes: [JournalStore.LoggedLog], tag: String) -> Int {
@@ -687,11 +688,10 @@ struct NotesView: View {
     private func deleteNote(_ item: JournalStore.LoggedLog) {
         if InlineMarkdownEditor.shared.isEditing(item.log.id) { InlineMarkdownEditor.shared.finish() }
         store.deleteLog(item.log.id, on: item.date)
-        error = "已删除这条笔记，⌘Z 可撤销"
     }
 
     private func copy(_ log: DailyLogEntry) {
-        error = LogClipboard.copy(store: store, ids: [log.id]) > 0 ? "已复制这条笔记的文字" : "这条只有图片，没有文字可复制"
+        toast?.show(LogClipboard.copy(store: store, ids: [log.id]) > 0 ? "已复制这条笔记的文字" : "这条只有图片，没有文字可复制")
     }
 
     // MARK: - 右侧：一个标签名下所有待办的笔记
@@ -932,7 +932,7 @@ struct NotesView: View {
                 iconAction("doc.on.doc", "复制为 Markdown") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(Self.markdown(tag: tag, tasks: tasks, notes: notes), forType: .string)
-                    error = "已复制为 Markdown"
+                    toast?.show("已复制为 Markdown")
                 }
             }
             .font(.system(size: 12))
@@ -974,7 +974,7 @@ struct NotesView: View {
             .inputFieldSurface(focused: tagFocused)
             LogChipsBar(store: store, link: link, unlinked: unlinked, tags: tags, contextTags: [tag])
             if let error {
-                Text(LocalizedStringKey(error)).font(.system(size: 11)).foregroundStyle(error.hasPrefix("已") ? Palette.success : Palette.deadline)
+                Text(LocalizedStringKey(error)).font(.system(size: 11)).foregroundStyle(Palette.deadline)
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 12)
@@ -1054,7 +1054,7 @@ struct NotesView: View {
             .inputFieldSurface(focused: focused)
             LogChipsBar(store: store, link: .constant(nil), unlinked: .constant(false), tags: tags, showsLink: false)
             if let error {
-                Text(LocalizedStringKey(error)).font(.system(size: 11)).foregroundStyle(error.hasPrefix("已") ? Palette.success : Palette.deadline)
+                Text(LocalizedStringKey(error)).font(.system(size: 11)).foregroundStyle(Palette.deadline)
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 12)

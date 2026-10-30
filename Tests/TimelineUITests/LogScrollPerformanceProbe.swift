@@ -75,16 +75,6 @@ final class LogScrollPerformanceProbe: XCTestCase {
                      result.jumps, result.worstJump, result.heights.count))
     }
 
-    func testDailyLogScrolling() throws {
-        guard ProcessInfo.processInfo.environment["TIMELINE_SCROLL_PROBE"] != nil else { throw XCTSkip("probe only") }
-        // 普通的一天（整页一次排好）和特别长的一天（懒加载）。
-        for (count, longEvery) in [(30, 5), (90, 3)] {
-            let (store, day) = try Self.makeStore(logs: count, longEvery: longEvery)
-            try probe("journal \(count)", store: store, DailyLogView(store: store, date: day, collapse: nil, autoFocus: false))
-            try probe("journal \(count) reopened", store: store, DailyLogView(store: store, date: day, collapse: nil, autoFocus: false))
-        }
-    }
-
     /// 笔记窗口里的日记（`UnifiedJournalView`）：一天里很多条长日志。
     func testJournalWindowScrolling() throws {
         guard ProcessInfo.processInfo.environment["TIMELINE_SCROLL_PROBE"] != nil else { throw XCTSkip("probe only") }

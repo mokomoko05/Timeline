@@ -241,6 +241,18 @@ final class CommandCenter: ObservableObject {
     func send(_ command: AppCommand) { subject.send(command) }
 }
 
+private struct ToastCenterKey: EnvironmentKey {
+    static let defaultValue: ToastCenter? = nil
+}
+
+extension EnvironmentValues {
+    /// 笔记窗口的提示条。页面也会单独嵌进别处（测试、预览），那时没有提示条，所以是可选的。
+    var toastCenter: ToastCenter? {
+        get { self[ToastCenterKey.self] }
+        set { self[ToastCenterKey.self] = newValue }
+    }
+}
+
 /// 窗口底部短暂出现的反馈条，可带一个操作（通常是「撤销」）。
 @MainActor
 final class ToastCenter: ObservableObject {

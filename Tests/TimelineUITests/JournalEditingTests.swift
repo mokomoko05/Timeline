@@ -169,4 +169,142 @@ final class JournalEditingTests: XCTestCase {
         XCTAssertEqual(store.entry(for: date).logDraft, "/help ")
         XCTAssertEqual(buffer.text, "/help ")
     }
+
+    /// 标题只有 ⌘↩ 才保存；退出时没保存的要问：保存、放弃或回去接着改。
+    func testUnsavedTitleIsResolvedBeforeTermination() async throws {
+        var title = "原标题"
+        let host = NSHostingView(rootView: TaskTitleView(title: Binding(get: { title }, set: { title = $0 }), completed: false,
+            color: .primary, fontSize: 13, next: {}, requestedEdit: .constant(nil)).frame(width: 400, height: 50))
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 80), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        let edits = TaskTitleEdits.shared
+        let originalPrompt = edits.prompt
+        defer { edits.prompt = originalPrompt; window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        var answer = TaskTitleEdits.Choice.cancel
+        var asked = [Int]()
+        edits.prompt = { asked.append($0); return answer }
+
+        XCTAssertTrue(edits.resolveBeforeTermination(), "没有在改的标题，不问")
+        try XCTUnwrap(descendants(host, of: InteractiveTaskText.self).first).activate(at: .zero, clickCount: 2)
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(edits.hasUnsaved, "打开了但没改，不算未保存")
+        XCTAssertTrue(edits.resolveBeforeTermination())
+        XCTAssertTrue(asked.isEmpty)
+
+        let field = try XCTUnwrap(descendants(host, of: TaskTextField.self).first)
+        XCTAssertTrue(window.makeFirstResponder(field))
+        let editor = try XCTUnwrap(field.currentEditor() as? ImagePasteFieldEditorView)
+        editor.insertText("新标题", replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
+        XCTAssertTrue(edits.hasUnsaved)
+
+        XCTAssertFalse(edits.resolveBeforeTermination(), "选择回去接着改：不退出")
+        XCTAssertEqual(title, "原标题")
+        answer = .discard
+        XCTAssertTrue(edits.resolveBeforeTermination())
+        XCTAssertEqual(title, "原标题", "放弃：不写回")
+        answer = .save
+        XCTAssertTrue(edits.resolveBeforeTermination())
+        XCTAssertEqual(title, "新标题", "保存并退出")
+        XCTAssertEqual(asked, [1, 1, 1])
+        XCTAssertFalse(edits.hasUnsaved, "保存后不再算未保存")
+    }
+
+    /// 还有没保存的标题：隐藏的主界面不释放，否则改到一半的内容就没了。
+    func testHiddenContentIsKeptWhileATitleIsUnsaved() async throws {
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        var keeping = true, released = 0
+        let releaser = HiddenContentReleaser(window: window, delay: .seconds(60), keep: { keeping }, release: { released += 1 }, rebuild: {})
+        releaser.releaseNow()
+        XCTAssertEqual(released, 0)
+        keeping = false
+        releaser.releaseNow()
+        XCTAssertEqual(released, 1)
+    }
+
+    /// `/filter #N`：跨日期只看这个任务的日志，键盘也只在这些里走；`/filter` 恢复。没有这个编号时报错、草稿留着。
+    func testFilterCommandShowsLinkedLogsAcrossDatesAndClears() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let today = JournalDates.calendar.startOfDay(for: Date())
+        let yesterday = try XCTUnwrap(JournalDates.calendar.date(byAdding: .day, value: -1, to: today))
+        let task = try XCTUnwrap(store.addParsedTodo("读论文", on: today))
+        let number = try XCTUnwrap(task.task.number)
+        let linked = try XCTUnwrap(try store.quickLogEntry("昨天的进展", taskID: task.task.id, on: yesterday).entry)
+        _ = try store.quickLog("今天的进展", taskID: task.task.id, on: today)
+        _ = try store.quickLog("无关的日志", linkDefault: false, on: today)
+
+        let host = NSHostingView(rootView: UnifiedJournalView(store: store, workspace: NotesWorkspaceNavigation(date: today)).frame(width: 1000, height: 700))
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        let selection = LogKeyboardSelection.shared
+        selection.isActive = { true }
+        selection.currentMode = { .journal }
+        defer {
+            selection.isActive = { NotesWindowController.shared.isKey }
+            selection.currentMode = { NotesWindowController.shared.workspace.mode }
+            selection.select(nil)
+            window.contentView = nil
+            window.close()
+        }
+        func bodies() -> Set<String> { Set(descendants(host, of: InteractiveTaskText.self).map(\.string).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }) }
+        func run(_ command: String) async throws {
+            store.setLogDraft(command, on: today)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            let input = try XCTUnwrap(descendants(host, of: ImagePasteTextView.self).first)
+            XCTAssertTrue(window.makeFirstResponder(input))
+            input.keyDown(with: try commandReturn(window: window))
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+            host.layoutSubtreeIfNeeded()
+            window.makeFirstResponder(nil)
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(bodies().contains("无关的日志"))
+
+        try await run("/filter #\(number)")
+        XCTAssertEqual(store.entry(for: today).logDraft, "", "命令执行后清空草稿")
+        XCTAssertTrue(bodies().contains("昨天的进展"), "跨日期")
+        XCTAssertTrue(bodies().contains("今天的进展"))
+        XCTAssertFalse(bodies().contains("无关的日志"))
+        let down = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                                  characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 125))
+        XCTAssertTrue(selection.handle(down))
+        XCTAssertEqual(selection.selectedID, linked.id, "键盘从筛出来的第一条开始")
+        selection.select(nil)
+
+        try await run("/filter #9999")
+        XCTAssertEqual(store.entry(for: today).logDraft, "/filter #9999", "编号不存在：草稿留着改")
+        XCTAssertFalse(bodies().contains("无关的日志"), "筛选不变")
+
+        try await run("/filter")
+        XCTAssertTrue(bodies().contains("无关的日志"), "恢复当天的日志")
+        XCTAssertFalse(bodies().contains("昨天的进展"))
+
+        try await run("/summary")
+        XCTAssertEqual(store.entry(for: today).logDraft, "/summary", "去掉的命令报错而不是没反应，草稿留着")
+        XCTAssertEqual(store.entry(for: today).logs.count, 2)
+    }
+
+    /// 拖进来的文件：按顺序读出图片，其他文件跳过。
+    func testDroppedFilesKeepOrderAndSkipNonImages() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func file(_ name: String, _ content: String) throws -> NSItemProvider {
+            let url = directory.appendingPathComponent(name)
+            try Data(content.utf8).write(to: url)
+            return NSItemProvider(object: url as NSURL)
+        }
+        let datas = await ImageFileDrop.load([try file("a.png", "第一张"), try file("b.txt", "不是图片"), try file("c.jpg", "第二张")])
+        XCTAssertEqual(datas.map { String(decoding: $0, as: UTF8.self) }, ["第一张", "第二张"])
+    }
 }

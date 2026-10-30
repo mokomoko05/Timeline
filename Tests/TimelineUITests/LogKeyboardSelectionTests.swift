@@ -51,6 +51,15 @@ final class LogKeyboardSelectionTests: XCTestCase {
         store.undo()
         XCTAssertEqual(store.entry(for: day).logs.count, 3, "可以撤销")
 
+        // ⏎ 就地编辑时仍保持选中：编辑完 Esc 退出后，↑↓ 从这一条接着走。
+        let editing = try XCTUnwrap(selection.selectedID)
+        XCTAssertTrue(selection.handle(key(36)))
+        XCTAssertEqual(selection.selectedID, editing)
+        XCTAssertTrue(InlineMarkdownEditor.shared.isEditing(editing))
+        InlineMarkdownEditor.shared.finish()
+        XCTAssertTrue(selection.handle(key(126)))
+        XCTAssertEqual(selection.selectedID, logs[1].id, "从编辑过的那一条往上走")
+
         XCTAssertTrue(selection.handle(key(53)))
         XCTAssertNil(selection.selectedID)
         XCTAssertFalse(selection.handle(key(53)), "没有选中时 Esc 照常交给窗口（收起）")

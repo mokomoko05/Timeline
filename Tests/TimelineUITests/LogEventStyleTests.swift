@@ -55,23 +55,6 @@ final class LogEventStyleTests: XCTestCase {
         XCTAssertEqual(end.text, raw)
     }
 
-    func testTimelineRailConnectsVariableHeightEntriesAndStopsAtEndpoints() {
-        for height: CGFloat in [40, 150, 300] {
-            let rect = CGRect(x: 0, y: 0, width: 16, height: height)
-            let first = LogTimelineRail(hasPrevious: false, hasNext: true, nodeY: 9).path(in: rect).boundingRect
-            let middle = LogTimelineRail(hasPrevious: true, hasNext: true, nodeY: 9).path(in: rect).boundingRect
-            let last = LogTimelineRail(hasPrevious: true, hasNext: false, nodeY: 9).path(in: rect).boundingRect
-            XCTAssertEqual(first.minY, 9)
-            XCTAssertEqual(first.maxY, height)
-            XCTAssertEqual(middle.minY, 0)
-            XCTAssertEqual(middle.maxY, height)
-            XCTAssertEqual(last.minY, 0)
-            XCTAssertEqual(last.maxY, 9)
-            XCTAssertEqual(first.minX, middle.minX)
-            XCTAssertEqual(middle.minX, last.minX)
-        }
-    }
-
     func testJournalShowsGoalAndEveryNoteWithoutDisclosureAtLargeTextSize() async throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -143,4 +143,24 @@ final class MarkdownTextTests: XCTestCase {
         XCTAssertLessThanOrEqual(rect.maxY, narrow + 1)
         XCTAssertEqual(view.linkRegions().first?.url, URL(string: "https://example.com"))
     }
+
+    /// 中日韩字体没有斜体：`*重点*` 要真的倾斜；拉丁字母用字体自己的斜体，不再叠一层。
+    func testEmphasisSlantsCJKOnlyAndIsVisible() {
+        func render(_ source: String) -> NSAttributedString { MarkdownText.render(source, color: .black, fontSize: 13, lineSpacing: 2, scale: 1) }
+        func pixels(_ text: NSAttributedString) -> Data {
+            let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 200, pixelsHigh: 40, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                       colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            text.draw(at: NSPoint(x: 2, y: 2))
+            NSGraphicsContext.restoreGraphicsState()
+            return Data(bytes: rep.bitmapData!, count: rep.bytesPerRow * 40)
+        }
+        XCTAssertNotEqual(pixels(render("重要内容")), pixels(render("*重要内容*")), "中文看得出强调")
+        let mixed = render("*重要 important*")
+        XCTAssertNotNil(mixed.attribute(.obliqueness, at: 0, effectiveRange: nil))
+        let latin = (mixed.string as NSString).range(of: "important").location
+        XCTAssertNil(mixed.attribute(.obliqueness, at: latin, effectiveRange: nil), "拉丁字母不重复倾斜")
+        XCTAssertNil(render("重要内容").attribute(.obliqueness, at: 0, effectiveRange: nil), "没有强调的不倾斜")
+    }
 }

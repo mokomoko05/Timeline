@@ -8,6 +8,49 @@ extension Notification.Name {
     static let timelineEditorRecovered = Notification.Name("TimelineEditorRecovered")
 }
 
+/// 正在改、还没保存的任务标题。标题只有 ⌘↩ 才保存（失焦、提交通知都不算），退出应用或释放隐藏的界面时要先问过，不能悄悄丢掉。
+@MainActor
+final class TaskTitleEdits {
+    enum Choice { case save, discard, cancel }
+
+    static let shared = TaskTitleEdits()
+    /// 测试里换掉，不弹窗。
+    var prompt: (Int) -> Choice = TaskTitleEdits.askUser
+    private var edits: [UUID: (dirty: () -> Bool, save: () -> Void)] = [:]
+
+    var hasUnsaved: Bool { edits.values.contains { $0.dirty() } }
+
+    func register(_ token: UUID, dirty: @escaping () -> Bool, save: @escaping () -> Void) { edits[token] = (dirty, save) }
+    func remove(_ token: UUID) { edits[token] = nil }
+
+    /// 退出前调用；返回 false 表示用户要回去接着改。
+    func resolveBeforeTermination() -> Bool {
+        let unsaved = edits.values.filter { $0.dirty() }
+        guard !unsaved.isEmpty else { return true }
+        switch prompt(unsaved.count) {
+        case .cancel: return false
+        case .discard: return true
+        case .save:
+            unsaved.forEach { $0.save() }
+            return true
+        }
+    }
+
+    private static func askUser(_ count: Int) -> Choice {
+        let alert = NSAlert()
+        alert.messageText = AppLocalizedFormat("有 %lld 个任务标题还没保存", count)
+        alert.informativeText = AppLocalized("退出后没保存的修改会丢失。")
+        alert.addButton(withTitle: AppLocalized("保存并退出"))
+        alert.addButton(withTitle: AppLocalized("返回 Timeline"))
+        alert.addButton(withTitle: AppLocalized("放弃修改"))
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertSecondButtonReturn: return .cancel
+        default: return .discard
+        }
+    }
+}
+
 struct TaskTitleView: View {
     @Environment(\.typography) private var typography
     @Environment(\.isEnabled) private var enabled
@@ -24,6 +67,8 @@ struct TaskTitleView: View {
     @State private var editing = false
     @State private var editText = ""
     @State private var focused = false
+    @State private var editToken: UUID?
+    @State private var originalText = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -45,26 +90,46 @@ struct TaskTitleView: View {
         .foregroundStyle(completed ? Palette.muted : color)
         .tint(Palette.accent)
         .onChange(of: requestedEdit) { if $0 == itemID { requestedEdit = nil; startEditing() } }
-        .onAppear { if requestedEdit == itemID { requestedEdit = nil; startEditing() } }
+        .onAppear {
+            if requestedEdit == itemID { requestedEdit = nil; startEditing() }
+            if editing { registerEdit() }
+        }
+        .onDisappear { unregisterEdit() }
+    }
+
+    private func registerEdit() {
+        let token = editToken ?? UUID()
+        editToken = token
+        let text = $editText, original = originalText
+        TaskTitleEdits.shared.register(token, dirty: { text.wrappedValue != original }, save: finishEditing)
+    }
+
+    private func unregisterEdit() {
+        if let editToken { TaskTitleEdits.shared.remove(editToken) }
+        editToken = nil
     }
 
     private func startEditing() {
         guard enabled, !editing else { return }
         prepare()
         editText = title
+        originalText = title
         focused = false
         editing = true
+        registerEdit()
     }
 
     private func cancelEditing() {
         focused = false
         editing = false
+        unregisterEdit()
     }
 
     private func finishEditing() {
         guard editing else { return }
         focused = false
         editing = false
+        unregisterEdit()
         title = editText
     }
 }

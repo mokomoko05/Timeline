@@ -733,7 +733,7 @@ public final class JournalStore: ObservableObject {
         let command = entry.logDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !images.isEmpty
             ? LogCommand.entry(.note, "") : try LogCommand.parse(entry.logDraft)
         switch command {
-        case .help, .summary, .filter: return command
+        case .help, .filter: return command
         case .link(let number):
             var linkedID: UUID?
             if let number {
@@ -795,14 +795,6 @@ public final class JournalStore: ObservableObject {
 
     public func deleteLog(_ id: UUID, on date: Date) {
         change(date, action: "删除日志") { $0.logs.removeAll { $0.id == id } }
-    }
-
-    public func applyReview(_ text: String, on date: Date, append: Bool) {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        change(date) { entry in
-            entry.summary = append && !entry.summary.isEmpty ? entry.summary + "\n\n" + text : text
-        }
     }
 
     public func setDeadlineDraft(_ text: String, on date: Date) {

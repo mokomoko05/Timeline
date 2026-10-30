@@ -62,8 +62,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var settings: SettingsWindowController!
     private var undoItem: NSMenuItem?
     private var keyMonitor: Any?
-    private var boardTerminationPrepared = false
-    private var boardTerminationPending = false
+    private var editorsCommittedForTermination = false
+    private var editorsTerminationPending = false
     /// 用全局快捷键打开 Timeline 之前的前台应用，隐藏 Timeline 时把焦点还给它。
     private var hotKeysRegistered = false
     private var hotKeysAttempted = false
@@ -188,7 +188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         pages.setMain(makeMainContent())
         NotesWindowController.shared.host = self
         // 只释放主界面那一页；笔记页很小，一直留着。
-        mainContent = HiddenContentReleaser(window: window, delay: .seconds(30 * 60), release: { [weak self] in self?.pages.setMain(nil) }, rebuild: { [weak self] in
+        mainContent = HiddenContentReleaser(window: window, delay: .seconds(30 * 60), keep: { TaskTitleEdits.shared.hasUnsaved }, release: { [weak self] in self?.pages.setMain(nil) }, rebuild: { [weak self] in
             guard let self else { return }
             pages.setMain(makeMainContent())
         })
@@ -567,21 +567,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if boardTerminationPending { return .terminateLater }
-        if !boardTerminationPrepared, let editor = BoardLiveEditorSession.active, editor.ready {
-            boardTerminationPending = true
-            editor.commit { [weak self] in
-                guard let self else { sender.reply(toApplicationShouldTerminate: false); return }
-                self.boardTerminationPending = false
-                self.boardTerminationPrepared = true
-                let reply = self.applicationShouldTerminate(sender)
-                self.boardTerminationPrepared = false
-                sender.reply(toApplicationShouldTerminate: reply == .terminateNow)
+        if editorsTerminationPending { return .terminateLater }
+        // 编辑器是网页：等它们把最后几个字交回来再往下走（工作板、就地编辑都是）。
+        let board = BoardLiveEditorSession.active.flatMap { $0.ready ? $0 : nil }
+        if !editorsCommittedForTermination, board != nil || InlineMarkdownEditor.shared.target != nil {
+            editorsTerminationPending = true
+            InlineMarkdownEditor.shared.finish { [weak self] in
+                // 这里可能同步回调（只是预备、没在编辑）：回复要等 `.terminateLater` 返回之后。
+                let resume = { DispatchQueue.main.async { [weak self] in
+                    guard let self else { sender.reply(toApplicationShouldTerminate: false); return }
+                    self.editorsTerminationPending = false
+                    self.editorsCommittedForTermination = true
+                    let reply = self.applicationShouldTerminate(sender)
+                    self.editorsCommittedForTermination = false
+                    sender.reply(toApplicationShouldTerminate: reply == .terminateNow)
+                } }
+                if let board { board.commit(completion: resume) } else { resume() }
             }
             return .terminateLater
         }
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
         window.makeFirstResponder(nil)
+        guard TaskTitleEdits.shared.resolveBeforeTermination() else { return .terminateCancel }
         if shell.busyCount > 0 {
             let alert = NSAlert()
             alert.messageText = AppLocalizedFormat("有 %lld 个终端正在运行程序", shell.busyCount)

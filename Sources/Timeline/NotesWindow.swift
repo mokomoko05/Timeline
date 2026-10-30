@@ -266,6 +266,7 @@ struct UnifiedNotesView: View {
         }
         .environmentObject(interaction)
         .environmentObject(toast)
+        .environment(\.toastCenter, toast)
     }
 
     private var modeBar: some View {
@@ -290,6 +291,14 @@ struct UnifiedNotesView: View {
 
 /// 笔记窗口里的日记模式：沿用笔记的侧栏、卡片和编辑器。
 struct UnifiedJournalView: View {
+    /// 常见长日记一次排好，避免估算高度导致跳动；仍限制条目数和正文总量。
+    static let lazyCharacterBudget = 32_000
+
+    static func usesLazyLayout(_ logs: [DailyLogEntry]) -> Bool {
+        logs.count > 120 || logs.reduce(0) { $0 + $1.text.utf16.count } > lazyCharacterBudget
+    }
+
+    @Environment(\.toastCenter) private var toast
     @Environment(\.locale) private var locale
     @Environment(\.typography) private var typography
     @Environment(\.colorScheme) private var colorScheme
@@ -322,6 +331,8 @@ struct UnifiedJournalView: View {
     /// 已经按「打开这一天」定位过的日期：切到笔记再切回来时页面会重新出现，不能再把读到一半的位置拉走。
     @State private var openedDay: String?
     @State private var unlinked = false
+    /// `/filter #1 #3`：跨日期只看这些任务的日志；为空时是当天的日志。
+    @State private var filter: Set<UUID> = []
     /// 日记侧栏和笔记侧栏共用同一套搜索入口；日期、星期和日志正文都可检索。
     @State private var query = ""
     @FocusState private var searchFocused: Bool
@@ -357,8 +368,8 @@ struct UnifiedJournalView: View {
         .background(Palette.background)
         .foregroundStyle(Palette.ink)
         .onAppear { configureMention(); InlineMarkdownEditor.shared.preload() }
-        .onChange(of: date) { _ in unlinked = false; configureMention() }
-        .onChange(of: navigationRequest) { _ in query = "" }
+        .onChange(of: date) { _ in unlinked = false; filter = []; error = nil; configureMention() }
+        .onChange(of: navigationRequest) { _ in query = ""; filter = [] }
     }
 
     private var sidebar: some View {
@@ -407,7 +418,7 @@ struct UnifiedJournalView: View {
     private func dateRow(_ item: Date) -> some View {
         let selected = JournalDates.calendar.isDate(item, inSameDayAs: date)
         let logs = store.entry(for: item).logs
-        return Button { date = item } label: {
+        return Button { filter = []; date = item } label: {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
                     Image(systemName: "calendar").font(.system(size: 11)).foregroundStyle(selected ? Palette.accent : Palette.muted)
@@ -436,88 +447,159 @@ struct UnifiedJournalView: View {
             VStack(spacing: 0) {
                 header
                 Divider()
-                let all = entry.logsInTimeOrder
-                let runs = FocusRun.runs(in: all)
-                // 折叠的一轮专注只留结束那一条和它的小结，中间的开始、笔记、反馈都收起来。
-                let hidden = Set(runs.filter { foldedRuns.contains($0.id) }.flatMap { [$0.start.id] + $0.inner.map(\.id) })
-                let logs = all.filter { !hidden.contains($0.id) }
-                ScrollView {
-                    // 一天的日志不多时整列排好，滚动条按真实高度算（长日志也不会让它跳）。
-                    NotesStack(lazy: DailyLogView.usesLazyLayout(entry.logs), spacing: 0) {
-                        Color.clear.frame(height: 1).id("journal-top")
-                        if entry.logsInTimeOrder.isEmpty {
-                            VStack(spacing: 8) {
-                                Image(systemName: "book.pages").font(.system(size: 30, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
-                                Text("这一天还没有日志").font(.system(size: 14, weight: .medium))
-                            }
-                            .frame(maxWidth: .infinity).padding(.vertical, 60)
-                        } else {
-                            let summaries = Dictionary(uniqueKeysWithValues: runs.map { ($0.end.id, $0) })
-                            let segments = store.timelineSegments()
-                            ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
-                                VStack(alignment: .leading, spacing: 0) {
-                                    if index > 0, let gap = NoteThread.gapLabel(from: logs[index - 1].createdAt, to: log.createdAt) {
-                                        NoteThreadGap(label: gap)
-                                    }
-                                    journalRow(log, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id])
-                                        .id(log.id)
-                                        .recordsScrollPosition(log.id, in: tracker)
-                                    if let run = summaries[log.id] {
-                                        FocusRunSummary(run: run, folded: foldedRuns.contains(run.id), continues: index < logs.count - 1) {
-                                            withAnimation(Motion.quick) {
-                                                if foldedRuns.contains(run.id) { foldedRuns.remove(run.id) } else { foldedRuns.insert(run.id) }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Color.clear.frame(height: 1).id("journal-bottom")
-                    }
-                    .padding(20)
-                    .padding(.trailing, logs.isEmpty ? 0 : EntryRail.width)
-                    .tracksScroll(tracker)
-                }
-                // 右边是这一天的节奏条（代替滚动条：按时刻排，点、拖都能跳到某一条）；右下角是「回到顶部」「跳到最新」。
-                // 定位直接落到目标位置（和笔记页一致）：长日志的滚动动画一路排版，很卡。
-                .entryRail(DayRhythm.marks(logs), spans: DayRhythm.spans(all, date: date), ticks: DayRhythm.ticks, tracker: tracker,
-                           select: { proxy.scrollTo($0, anchor: .top) }, settle: { highlightedID = $0 }) { edge in
-                    proxy.scrollTo(edge == .top ? "journal-top" : "journal-bottom", anchor: edge == .top ? .top : .bottom)
-                }
-                .id(JournalDates.key(date))
-                .contentShape(Rectangle())
-                // 今天从最新一条开始（接着写），往日从当天第一条开始读。
-                .onAppear {
-                    registerKeyboardPage()
-                    if let id = revealLog { revealID = id; revealLog = nil }
-                    else if openedDay != JournalDates.key(date) { openDay(proxy) }
-                }
-                .onChange(of: revealLog) { id in if let id { revealID = id; revealLog = nil } }
-                .scrollsToKeyboardSelection(proxy)
-                // 带着要定位的那一条换日期时，不再按「打开这一天」滚到开头 / 末尾，免得把定位冲掉。
-                .onChange(of: date) { _ in
-                    tracker.reset()
-                    DispatchQueue.main.async {
-                        if revealID == nil && highlightedID == nil { openDay(proxy) } else { openedDay = JournalDates.key(date) }
-                    }
-                }
-                .onChange(of: revealID) { id in
-                    guard let id else { return }
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(id, anchor: .center)
-                        highlightedID = id
-                        revealID = nil
-                    }
-                }
-                .task(id: highlightedID) {
-                    guard highlightedID != nil else { return }
-                    try? await Task.sleep(for: .seconds(1.2))
-                    withAnimation(.easeOut(duration: 0.4)) { highlightedID = nil }
+                if filter.isEmpty {
+                    dayList(proxy)
+                } else {
+                    filterBar
+                    Divider()
+                    filteredList(proxy)
                 }
                 Divider()
                 composer
             }
         }
+        .imageFileDrop(enabled: !store.isReadOnly, add: addImages)
+    }
+
+    private func addImages(_ datas: [Data]) {
+        ImageTools.importImages(datas, in: store, queue: store.imageImports(for: "journal:" + JournalDates.key(date))) { [store, date] names in
+            for name in names { store.addDraftImage(name, on: date) }
+        }
+        focused = true
+    }
+
+    @ViewBuilder
+    private func dayList(_ proxy: ScrollViewProxy) -> some View {
+        let all = entry.logsInTimeOrder
+        let runs = FocusRun.runs(in: all)
+        // 折叠的一轮专注只留结束那一条和它的小结，中间的开始、笔记、反馈都收起来。
+        let hidden = Set(runs.filter { foldedRuns.contains($0.id) }.flatMap { [$0.start.id] + $0.inner.map(\.id) })
+        let logs = all.filter { !hidden.contains($0.id) }
+        ScrollView {
+            // 一天的日志不多时整列排好，滚动条按真实高度算（长日志也不会让它跳）。
+            NotesStack(lazy: Self.usesLazyLayout(entry.logs), spacing: 0) {
+                Color.clear.frame(height: 1).id("journal-top")
+                if entry.logsInTimeOrder.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "book.pages").font(.system(size: 30, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
+                        Text("这一天还没有日志").font(.system(size: 14, weight: .medium))
+                    }
+                    .frame(maxWidth: .infinity).padding(.vertical, 60)
+                } else {
+                    let summaries = Dictionary(uniqueKeysWithValues: runs.map { ($0.end.id, $0) })
+                    let segments = store.timelineSegments()
+                    ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
+                        VStack(alignment: .leading, spacing: 0) {
+                            if index > 0, let gap = NoteThread.gapLabel(from: logs[index - 1].createdAt, to: log.createdAt) {
+                                NoteThreadGap(label: gap)
+                            }
+                            journalRow(log, on: date, hasPrevious: index > 0, hasNext: index < logs.count - 1, segment: segments[log.id])
+                                .id(log.id)
+                                .recordsScrollPosition(log.id, in: tracker)
+                            if let run = summaries[log.id] {
+                                FocusRunSummary(run: run, folded: foldedRuns.contains(run.id), continues: index < logs.count - 1) {
+                                    withAnimation(Motion.quick) {
+                                        if foldedRuns.contains(run.id) { foldedRuns.remove(run.id) } else { foldedRuns.insert(run.id) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Color.clear.frame(height: 1).id("journal-bottom")
+            }
+            .padding(20)
+            .padding(.trailing, logs.isEmpty ? 0 : EntryRail.width)
+            .tracksScroll(tracker)
+        }
+        // 右边是这一天的节奏条（代替滚动条：按时刻排，点、拖都能跳到某一条）；右下角是「回到顶部」「跳到最新」。
+        // 定位直接落到目标位置（和笔记页一致）：长日志的滚动动画一路排版，很卡。
+        .entryRail(DayRhythm.marks(logs), spans: DayRhythm.spans(all, date: date), ticks: DayRhythm.ticks, tracker: tracker,
+                   select: { proxy.scrollTo($0, anchor: .top) }, settle: { highlightedID = $0 }) { edge in
+            proxy.scrollTo(edge == .top ? "journal-top" : "journal-bottom", anchor: edge == .top ? .top : .bottom)
+        }
+        .id(JournalDates.key(date))
+        .contentShape(Rectangle())
+        // 今天从最新一条开始（接着写），往日从当天第一条开始读。
+        .onAppear {
+            registerKeyboardPage()
+            if let id = revealLog { revealID = id; revealLog = nil }
+            else if openedDay != JournalDates.key(date) { openDay(proxy) }
+        }
+        .onChange(of: revealLog) { id in if let id { revealID = id; revealLog = nil } }
+        .scrollsToKeyboardSelection(proxy)
+        // 带着要定位的那一条换日期时，不再按「打开这一天」滚到开头 / 末尾，免得把定位冲掉。
+        .onChange(of: date) { _ in
+            tracker.reset()
+            DispatchQueue.main.async {
+                if revealID == nil && highlightedID == nil { openDay(proxy) } else { openedDay = JournalDates.key(date) }
+            }
+        }
+        .onChange(of: revealID) { id in
+            guard let id else { return }
+            DispatchQueue.main.async {
+                proxy.scrollTo(id, anchor: .center)
+                highlightedID = id
+                revealID = nil
+            }
+        }
+        .task(id: highlightedID) {
+            guard highlightedID != nil else { return }
+            try? await Task.sleep(for: .seconds(1.2))
+            withAnimation(.easeOut(duration: 0.4)) { highlightedID = nil }
+        }
+    }
+
+    private var filterBar: some View {
+        let tasks = filter.compactMap(store.locate).sorted { ($0.task.number ?? 0) < ($1.task.number ?? 0) }
+        return HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal.decrease.circle.fill").foregroundStyle(Palette.accent)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    ForEach(tasks, id: \.id) { task in
+                        let label = LogTaskLabel.current(task, store: store, logDate: date)
+                        Button { filter.remove(task.id) } label: {
+                            HStack(spacing: 4) {
+                                Text(label).lineLimit(1)
+                                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                            }
+                            .font(.system(size: typography.pt(11)))
+                            .padding(.horizontal, 7).frame(height: 22)
+                            .background(Palette.accent.opacity(0.16), in: Capsule())
+                        }
+                        .buttonStyle(.plain).help("移除这个筛选条件").accessibilityLabel(AppLocalizedFormat("移除筛选：%@", label))
+                    }
+                }
+            }
+            Button("清除筛选") { filter = [] }
+                .buttonStyle(HitAreaButtonStyle(compact: true)).font(.system(size: typography.pt(11))).foregroundStyle(Palette.accent)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 8)
+    }
+
+    /// 筛选时跨日期按天分组显示；点日期回到那一天。
+    private func filteredList(_ proxy: ScrollViewProxy) -> some View {
+        let items = store.logs(linkedTo: filter)
+        let groups = Dictionary(grouping: items, by: \.key).sorted { $0.key < $1.key }
+        let segments = store.timelineSegments()
+        return ScrollView {
+            NotesStack(lazy: Self.usesLazyLayout(items.map(\.log)), spacing: 0) {
+                if items.isEmpty {
+                    Text("没有匹配的日志").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.muted)
+                        .frame(maxWidth: .infinity).padding(.vertical, 60)
+                }
+                ForEach(groups, id: \.key) { group in
+                    let day = group.value[0].date
+                    NoteDayKnot(date: day, key: group.key, count: group.value.count) { filter = []; date = day }
+                    ForEach(Array(group.value.enumerated()), id: \.element.id) { index, item in
+                        journalRow(item.log, on: item.date, hasPrevious: index > 0, hasNext: index < group.value.count - 1, segment: segments[item.id])
+                            .id(item.id)
+                    }
+                }
+            }
+            .padding(20)
+        }
+        .scrollsToKeyboardSelection(proxy)
     }
 
     private var header: some View {
@@ -543,19 +625,19 @@ struct UnifiedJournalView: View {
             }
             Spacer()
             if let error {
-                Text(LocalizedStringKey(error)).font(.system(size: 11)).foregroundStyle(error.hasPrefix("已") ? Palette.success : Palette.deadline)
+                Text(LocalizedStringKey(error)).font(.system(size: 11)).foregroundStyle(Palette.deadline)
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 14)
     }
 
-    private func journalRow(_ log: DailyLogEntry, hasPrevious: Bool, hasNext: Bool, segment: LogTimelineSegment?) -> some View {
-        let taskLabel = log.showsTimelineContext || !hasPrevious ? LogTaskLabel.saved(log, store: store, logDate: date) : nil
+    private func journalRow(_ log: DailyLogEntry, on day: Date, hasPrevious: Bool, hasNext: Bool, segment: LogTimelineSegment?) -> some View {
+        let taskLabel = log.showsTimelineContext || !hasPrevious ? LogTaskLabel.saved(log, store: store, logDate: day) : nil
         let showsMetadata = NoteThread.kindLabel(log) != nil || taskLabel != nil || (log.showsTimelineTags && !log.tags.isEmpty)
         return NoteThreadRow(log: log, hasPrevious: hasPrevious, hasNext: hasNext,
                              focusBefore: segment?.focusBefore == true, focusAfter: segment?.focusAfter == true,
                              highlighted: highlightedID == log.id, actionWidth: store.isReadOnly ? 0 : 72, showsMetadata: showsMetadata,
-                             prepareEdit: !store.isReadOnly && log.hasEditableText ? { beginEdit(log, at: nil, prepare: true) } : nil) {
+                             prepareEdit: !store.isReadOnly && log.hasEditableText ? { beginEdit(log, on: day, at: nil, prepare: true) } : nil) {
             if let kind = NoteThread.kindLabel(log) {
                 Text(kind).foregroundStyle(LogEventStyle.color(log)).fontWeight(.medium)
             }
@@ -570,10 +652,10 @@ struct UnifiedJournalView: View {
         } content: {
             if !LogEventStyle.body(log).isEmpty {
                 // 先选中，再点击正文就地编辑；点别处、Esc 或 ⌘↩ 保存。
-                EditableLogText(log: log, editable: !store.isReadOnly && log.hasEditableText, begin: { beginEdit(log, at: $0, prepare: $1) }) { editAt in
+                EditableLogText(log: log, editable: !store.isReadOnly && log.hasEditableText, begin: { beginEdit(log, on: day, at: $0, prepare: $1) }) { editAt in
                     TaskLinkText(source: LogEventStyle.body(log), completed: false, color: LogEventStyle.quiet(log) ? Palette.muted : Palette.ink,
                                  fontSize: LogEventStyle.quiet(log) ? 12 : 13,
-                                 edit: { beginEdit(log, at: nil) }, open: SafariLinks.open, maxLines: 0,
+                                 edit: { beginEdit(log, on: day, at: nil) }, open: SafariLinks.open, maxLines: 0,
                                  markdown: true, compactLines: true, editAt: editAt, foldID: "log.\(log.id.uuidString)")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -595,9 +677,9 @@ struct UnifiedJournalView: View {
         } actions: {
             if !store.isReadOnly {
                 HStack(spacing: 0) {
-                    EntryMetadataButtons(store: store, log: log, date: date)
+                    EntryMetadataButtons(store: store, log: log, date: day)
                     journalAction("trash", "删除这条日志 · ⌘Z 撤销", destructive: true) {
-                        store.deleteLog(log.id, on: date); error = "已删除这条日志，⌘Z 可撤销"
+                        store.deleteLog(log.id, on: day)
                     }
                 }.fixedSize()
             }
@@ -647,34 +729,57 @@ struct UnifiedJournalView: View {
         let draft = entry.logDraft
         guard !store.isReadOnly, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !entry.logDraftImages.isEmpty else { return }
         do {
-            let command = try store.commitLog(on: date, linkDefault: !unlinked)
-            if case .entry = command {
+            switch try store.commitLog(on: date, linkDefault: !unlinked) {
+            case .entry:
                 error = nil; focused = true; unlinked = false; ImageIndexer.run(store: store)
-                revealID = store.entry(for: date).logs.max(by: { $0.createdAt < $1.createdAt })?.id
+                if filter.isEmpty { revealID = store.entry(for: date).logs.max(by: { $0.createdAt < $1.createdAt })?.id }
+            case .help:
+                store.setLogDraft("", on: date)
+                error = nil
+                toast?.show("日志命令：/note、/done、/block、/plan、/link、/unlink、/filter、/help", duration: 8)
+            case .filter(let numbers): applyFilter(numbers)
+            case .link: error = nil
             }
-            else if case .help = command { store.setLogDraft("", on: date); error = "日志命令：/link、/done、/filter、/help" }
         } catch let issue { error = AppErrorDescription(issue) }
     }
 
-    /// 键盘选中用的顺序：页面上从上到下（折叠的一轮专注里收起的那些不算）。
+    /// `/filter #1 #3` 按任务编号筛选；`/filter` 清除。
+    private func applyFilter(_ numbers: [Int]) {
+        let located = numbers.map { ($0, store.locate(number: $0)) }
+        if let missing = located.first(where: { $0.1 == nil }) {
+            error = AppErrorDescription(LogInputError.unknownTask(missing.0))
+            return
+        }
+        store.setLogDraft("", on: date)
+        error = nil
+        filter = Set(located.compactMap { $0.1?.id })
+        focused = true
+    }
+
+    /// 键盘选中用的顺序：页面上从上到下（折叠的一轮专注里收起的那些不算；筛选时是筛出来的那些）。
     private func registerKeyboardPage() {
+        func filtered(_ id: UUID) -> JournalStore.LoggedLog? { store.logs(linkedTo: filter).first { $0.id == id } }
         LogKeyboardSelection.shared.register(.journal, .init(order: {
+            if !filter.isEmpty {
+                return Dictionary(grouping: store.logs(linkedTo: filter), by: \.key).sorted { $0.key < $1.key }.flatMap(\.value).map(\.id)
+            }
             let all = entry.logsInTimeOrder
             let hidden = Set(FocusRun.runs(in: all).filter { foldedRuns.contains($0.id) }.flatMap { [$0.start.id] + $0.inner.map(\.id) })
             return all.filter { !hidden.contains($0.id) }.map(\.id)
         }, edit: { id in
-            guard let log = entry.logs.first(where: { $0.id == id }), !store.isReadOnly else { return }
-            beginEdit(log, at: nil)
+            guard !store.isReadOnly else { return }
+            if let item = filtered(id) { beginEdit(item.log, on: item.date, at: nil) }
+            else if let log = entry.logs.first(where: { $0.id == id }) { beginEdit(log, on: date, at: nil) }
         }, delete: { id in
             guard !store.isReadOnly else { return }
             if InlineMarkdownEditor.shared.isEditing(id) { InlineMarkdownEditor.shared.finish() }
-            store.deleteLog(id, on: date); error = "已删除这条日志，⌘Z 可撤销"
+            store.deleteLog(id, on: filtered(id)?.date ?? date)
         }))
     }
 
-    private func beginEdit(_ log: DailyLogEntry, at point: CGPoint?, prepare: Bool = false) {
+    private func beginEdit(_ log: DailyLogEntry, on day: Date, at point: CGPoint?, prepare: Bool = false) {
         guard log.hasEditableText else { return }
-        InlineMarkdownEditor.shared.begin(log, on: date, store: store, at: point, fontSize: typography.pt(LogEventStyle.quiet(log) ? 12 : 13),
+        InlineMarkdownEditor.shared.begin(log, on: day, store: store, at: point, fontSize: typography.pt(LogEventStyle.quiet(log) ? 12 : 13),
                                           lineSpacing: typography.lineSpacing, dark: colorScheme == .dark, muted: LogEventStyle.quiet(log), prepare: prepare)
     }
 

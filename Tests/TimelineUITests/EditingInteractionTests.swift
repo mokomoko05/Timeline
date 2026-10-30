@@ -35,58 +35,6 @@ final class EditingInteractionTests: XCTestCase {
     }
 
     @MainActor
-    func testSingleClickStartsEditingTheReviewUnlessReadOnly() async {
-        let editor = ReviewTextView()
-        editor.isEditable = false
-        editor.editingAllowed = false
-        XCTAssertFalse(editor.beginEditingIfClicked(), "只读时单击不进入编辑")
-        XCTAssertFalse(editor.isEditable)
-        editor.editingAllowed = true
-        XCTAssertTrue(editor.beginEditingIfClicked(), "单击就进入编辑，不用双击")
-        XCTAssertTrue(editor.isEditable)
-        XCTAssertFalse(editor.beginEditingIfClicked(), "已经在编辑时不重复处理")
-    }
-
-    @MainActor
-    func testReviewEditingRespectsReadOnlyAndEndsOnFocusLoss() async {
-        let editor = ReviewTextView()
-        editor.string = "每日总结"
-        editor.isEditable = false
-        editor.editingAllowed = false
-        editor.beginEditing()
-        XCTAssertFalse(editor.isEditable)
-        editor.editingAllowed = true
-        editor.beginEditing()
-        XCTAssertTrue(editor.isEditable)
-        editor.insertText("新", replacementRange: NSRange(location: 0, length: 0))
-        XCTAssertTrue(editor.resignFirstResponder())
-        XCTAssertFalse(editor.isEditable)
-        XCTAssertEqual(editor.string, "新每日总结")
-    }
-
-    @MainActor
-    func testEmptyReviewFillsClickableAreaAfterResizing() async {
-        let scroll = ReviewScrollView(frame: NSRect(x: 0, y: 0, width: 320, height: 180))
-        let editor = ReviewTextView(frame: .zero)
-        scroll.documentView = editor
-        scroll.tile()
-        XCTAssertGreaterThanOrEqual(editor.frame.height, scroll.contentSize.height)
-        scroll.setFrameSize(NSSize(width: 320, height: 240))
-        scroll.tile()
-        XCTAssertGreaterThanOrEqual(editor.frame.height, scroll.contentSize.height)
-    }
-
-    @MainActor
-    func testReviewEscapePreservesTextAndClosesEditor() async {
-        let editor = ReviewTextView()
-        editor.beginEditing()
-        editor.string = "保留修改"
-        editor.cancelOperation(nil)
-        XCTAssertFalse(editor.isEditable)
-        XCTAssertEqual(editor.string, "保留修改")
-    }
-
-    @MainActor
     func testEurosysNativeLinkOpensWithoutEnteringEditing() async throws {
         let address = "file:///Users/example/Reading/eurosys27-extra-paper1384.pdf"
         let text = TaskLinkText.styledText("[eurosys](\(address))", completed: false, color: .labelColor, fontSize: 13)

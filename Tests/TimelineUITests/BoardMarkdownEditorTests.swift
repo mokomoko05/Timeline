@@ -184,4 +184,16 @@ private struct EditorFixture {
         window.contentView = nil
         window.close()
     }
+
+    /// ⌘Enter 要拦截去保存，普通 Enter 不拦截（交给系统换行）。不直接调用 `keyDown`：脱离 window 的
+    /// `NSTextView` 走 `super.keyDown` → `interpretKeyEvents` 行为不稳定，和真机不一致；只验证判断本身。
+    func testPlainEnterDoesNotInterceptCommandEnterDoes() {
+        func event(_ modifiers: NSEvent.ModifierFlags) -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: 0, context: nil,
+                             characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!
+        }
+        let editor = KeyTrackingTextView()
+        XCTAssertFalse(editor.shouldInterceptReturn(event([])), "普通 Enter 不拦截，交给系统换行")
+        XCTAssertTrue(editor.shouldInterceptReturn(event(.command)), "⌘Enter 拦截去保存")
+    }
 }

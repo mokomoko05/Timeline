@@ -37,6 +37,42 @@ func waitForBoardEditor(_ current: @autoclosure () -> WKWebView) async throws {
 
 @MainActor
 final class BoardLiveEditorTests: XCTestCase {
+    /// 光标不在表格里时画成表格（列数、对齐、行内格式都对），光标进去露出源码；代码块、列表里的不算表格。
+    func testTablesRenderUntilTheCaretEntersThem() async throws {
+        let table = "| **甲** | 乙 |\n| --- | --: |\n| `1` | a\\|b |"
+        let source = "开头\n\n\(table)\n\n```\n| x | y |\n| --- | --- |\n```\n\n- | x | y |\n  | --- | --- |\n\n结尾"
+        let fixture = try LiveFixture(source: source)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        func state() async throws -> [String: Any] {
+            try await fixture.webView.evaluateJavaScript("""
+            ({tables: document.querySelectorAll('.cm-table-block').length,
+              strong: document.querySelector('.cm-table-block th strong')?.textContent ?? '',
+              cell: document.querySelectorAll('.cm-table-block td')[1]?.textContent ?? '',
+              align: document.querySelectorAll('.cm-table-block td')[1]?.style.textAlign ?? '',
+              text: document.querySelector('.cm-content').textContent})
+            """) as? [String: Any] ?? [:]
+        }
+        var current = try await state()
+        XCTAssertEqual(current["tables"] as? Int, 1, "只有顶层那一个")
+        XCTAssertEqual(current["strong"] as? String, "甲")
+        XCTAssertEqual(current["cell"] as? String, "a|b", "转义的竖线留在单元格里")
+        XCTAssertEqual(current["align"] as? String, "right")
+
+        let inside = (source as NSString).range(of: "乙").location
+        _ = try await fixture.webView.evaluateJavaScript("(()=>{const e=window.boardEditor;e.focus();e.select(\(inside));})()")
+        try await Task.sleep(for: .milliseconds(60))
+        current = try await state()
+        XCTAssertEqual(current["tables"] as? Int, 0, "光标进去露出源码")
+        XCTAssertTrue((current["text"] as? String)?.contains("| --- | --: |") == true)
+        _ = try await fixture.webView.evaluateJavaScript("window.boardEditor.select(0)")
+        try await Task.sleep(for: .milliseconds(60))
+        current = try await state()
+        XCTAssertEqual(current["tables"] as? Int, 1, "光标离开又画成表格")
+        let unchanged = try await fixture.webView.evaluateJavaScript("window.boardEditor.snapshot().source") as? String
+        XCTAssertEqual(unchanged, source, "画成表格不改正文")
+    }
+
     func testRemoteBoardChangesRefreshVisibleAndCachedEditorWithoutRestoringOldText() async throws {
         let fixture = try LiveFixture(source: "Before sync")
         defer { fixture.close() }

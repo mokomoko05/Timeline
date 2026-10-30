@@ -119,4 +119,132 @@ final class InlineMarkdownEditorTests: XCTestCase {
         XCTAssertFalse(editor.isEditing(log.id))
         try await wait { store.entry(for: date).logs.first?.text == "原文，补充" }
     }
+
+    private func host(_ log: DailyLogEntry) -> (NSHostingView<AnyView>, QuietWindow) {
+        let root = AnyView(EditableLogText(log: log, editable: true, begin: { _, _ in }) { _ in Text(log.text) }.frame(width: 300, height: 200, alignment: .top))
+        let host = NSHostingView(rootView: root)
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        return (host, window)
+    }
+
+    private func makeLog(_ text: String, directory: URL) throws -> (JournalStore, Date, DailyLogEntry) {
+        let store = JournalStore(directory: directory)
+        let date = Date()
+        store.setLogDraft(text, on: date)
+        _ = try store.commitLog(on: date, linkDefault: false)
+        return (store, date, try XCTUnwrap(store.entry(for: date).logs.first))
+    }
+
+    private func type(_ text: String, in webView: WKWebView) async throws {
+        _ = try await webView.evaluateJavaScript("(()=>{const v=window.boardEditor.view();v.dispatch({changes:{from:v.state.doc.length,insert:'\(text)'},userEvent:'input.type'});})()")
+    }
+
+    private func source(of webView: WKWebView) async -> String? {
+        (try? await webView.evaluateJavaScript("window.boardEditor.snapshot().source")) as? String
+    }
+
+    /// 网页进程崩了：重新载入后接着编辑崩溃前的内容，结束编辑也不会把内容退回开始编辑时的样子。
+    func testCrashRecoveryKeepsLatestTextAndFinishDoesNotRollBack() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (store, date, log) = try makeLog("原文", directory: directory)
+        let (host, window) = host(log)
+        let editor = InlineMarkdownEditor.shared
+        defer { editor.finish(); window.contentView = nil; window.close() }
+        editor.begin(log, on: date, store: store, at: nil, fontSize: 13, lineSpacing: 2, dark: false)
+        try await wait { host.layoutSubtreeIfNeeded(); return editor.height != nil }
+        let webView = try XCTUnwrap(editor.webView)
+        try await type("，崩溃前", in: webView)
+        try await Task.sleep(for: .milliseconds(300))
+
+        _ = try await webView.evaluateJavaScript("window.beforeCrash = true; 0")
+        editor.webViewWebContentProcessDidTerminate(webView)
+        XCTAssertEqual(store.entry(for: date).logs.first?.text, "原文，崩溃前")
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            let reloaded = (try? await webView.evaluateJavaScript("window.beforeCrash === undefined")) as? Bool
+            let shown = await self.source(of: webView)
+            return reloaded == true && shown == "原文，崩溃前"
+        }
+        try await type("，崩溃后", in: webView)
+        var finished = false
+        editor.finish { finished = true }
+        try await wait { finished }
+        XCTAssertEqual(store.entry(for: date).logs.first?.text, "原文，崩溃前，崩溃后")
+    }
+
+    /// 排好版之后正文变了（比如撤销）：点进去编辑的是最新正文，打字不会盖掉它。
+    func testPreparedEditorPicksUpChangedTextBeforeEditing() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (store, date, log) = try makeLog("原文", directory: directory)
+        let (host, window) = host(log)
+        let editor = InlineMarkdownEditor.shared
+        defer { editor.finish(); window.contentView = nil; window.close() }
+        editor.begin(log, on: date, store: store, at: nil, fontSize: 13, lineSpacing: 2, dark: false, prepare: true)
+        try await wait { host.layoutSubtreeIfNeeded(); return editor.height != nil }
+        store.updateLog(log.id, text: "新内容", on: date)
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 10, y: 190), modifierFlags: [], timestamp: 0,
+                                                     windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        XCTAssertNil(editor.takeOver(event), "排好的版已经过期，不能直接接管鼠标")
+
+        let fresh = try XCTUnwrap(store.entry(for: date).logs.first)
+        editor.begin(fresh, on: date, store: store, at: nil, fontSize: 13, lineSpacing: 2, dark: false)
+        XCTAssertTrue(editor.isEditing(log.id))
+        let webView = try XCTUnwrap(editor.webView)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            let shown = await self.source(of: webView)
+            return editor.height != nil && shown == "新内容"
+        }
+        try await type("x", in: webView)
+        var finished = false
+        editor.finish { finished = true }
+        try await wait { finished }
+        XCTAssertEqual(store.entry(for: date).logs.first?.text, "新内容x")
+    }
+
+    /// 退出前的 `finish`：刚打的字还没送到原生层（停顿 150 ms 才送），也要等网页交回来存好才算完。
+    func testFinishWithCompletionWaitsForTheLastCharacters() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (store, date, log) = try makeLog("原文", directory: directory)
+        let (host, window) = host(log)
+        let editor = InlineMarkdownEditor.shared
+        defer { window.contentView = nil; window.close() }
+        editor.begin(log, on: date, store: store, at: nil, fontSize: 13, lineSpacing: 2, dark: false)
+        try await wait { host.layoutSubtreeIfNeeded(); return editor.height != nil }
+        try await type("，最后几个字", in: try XCTUnwrap(editor.webView))
+        var finished = false
+        editor.finish { finished = true }
+        XCTAssertFalse(finished, "要等网页回话")
+        try await wait { finished }
+        XCTAssertEqual(store.entry(for: date).logs.first?.text, "原文，最后几个字", "回调时已经存好")
+    }
+
+    /// 只排最后一块量出来的尾部空白，和把全文排一遍一样。
+    func testTailFromLastBlockMatchesFullRender() {
+        func full(_ source: String) -> Double {
+            let rendered = MarkdownText.render(source, color: .labelColor, fontSize: 13, lineSpacing: 2, scale: 1)
+            let string = rendered.string as NSString
+            let last = rendered.attributedSubstring(from: string.paragraphRange(for: NSRange(location: string.length - 1, length: 0)))
+            let storage = NSTextStorage(attributedString: last)
+            let manager = NSLayoutManager()
+            storage.addLayoutManager(manager)
+            let container = NSTextContainer(size: NSSize(width: 1000, height: CGFloat.greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            manager.addTextContainer(container)
+            manager.ensureLayout(for: container)
+            return Double(manager.extraLineFragmentUsedRect.height)
+        }
+        let intro = "# 标题\n\n第一段\n\n"
+        for source in ["只有一段", intro + "结尾一段", intro + "## 结尾标题", intro + "- 一项\n- 两项", intro + "1. 一\n   - 嵌套",
+                       intro + "> 引用\n> 第二行", intro + "```swift\nlet a = 1\n\nlet b = 2\n```", intro + "| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |",
+                       intro + "---", intro + "$$\nx^2\n$$", intro + "<details>\n<summary>标题</summary>\n\n内容\n\n</details>"] {
+            XCTAssertEqual(InlineEditorMetrics.tail(source, fontSize: 13, lineSpacing: 2), full(source), accuracy: 0.01, source)
+        }
+    }
 }

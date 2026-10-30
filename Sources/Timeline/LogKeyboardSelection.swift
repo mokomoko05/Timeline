@@ -100,8 +100,8 @@ final class LogKeyboardSelection: ObservableObject {
         case 126: return move(-1, in: order)
         case 125: return move(1, in: order)
         case 36, 76:
+            // 保持选中：编辑完按 Esc 退出后，↑↓ 从这一条接着走。
             guard let id = selectedID else { return false }
-            select(nil)
             page.edit(id)
         case 51, 117:
             guard let id = selectedID, let index = order.firstIndex(of: id) else { return false }

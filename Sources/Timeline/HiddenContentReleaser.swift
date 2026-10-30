@@ -14,14 +14,17 @@ final class HiddenContentReleaser {
 
     private let delay: Duration
     private weak var window: NSWindow?
+    /// 这时不释放：界面里还有没保存、也提交不了的内容（改到一半的任务标题）。
+    private let keep: () -> Bool
     private let release: () -> Void
     private let rebuild: () -> Void
     private(set) var released = false
     private var pending: Task<Void, Never>?
     private var observer: NSObjectProtocol?
 
-    init(window: NSWindow, delay: Duration, release: @escaping () -> Void, rebuild: @escaping () -> Void) {
+    init(window: NSWindow, delay: Duration, keep: @escaping () -> Bool = { false }, release: @escaping () -> Void, rebuild: @escaping () -> Void) {
         self.delay = delay
+        self.keep = keep
         self.window = window
         self.release = release
         self.rebuild = rebuild
@@ -71,6 +74,7 @@ final class HiddenContentReleaser {
         guard let window, !window.isVisible, !released else { return }
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
         if let editor = window.firstResponder as? NSTextView, editor.isEditable, !editor.string.isEmpty { return }
+        if keep() { return }
         released = true
         release()
         ImageTools.purgeThumbnails()

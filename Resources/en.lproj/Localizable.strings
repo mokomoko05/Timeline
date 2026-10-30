@@ -291,14 +291,14 @@
 "删除标签（内容保留）…" = "Delete tag (keep content)…";
 "删除标签 #%@？" = "Delete tag #%@?";
 "只去掉这个标签（连同子标签），待办和笔记本身都保留。可以 ⌘Z 撤销。" = "Remove this tag and its subtags while keeping tasks and notes. Press ⌘Z to undo.";
-"已从 %lld 个待办和日志上去掉 #%@，内容都保留 · ⌘Z 撤销" = "Removed #%2$@ from %1$lld tasks and entries; content kept · ⌘Z to undo";
+"已从 %lld 个待办和日志上去掉 #%@，内容都保留" = "Removed #%2$@ from %1$lld tasks and entries; content kept";
 "重命名 #%@" = "Rename #%@";
 "新名字" = "New name";
 "合并" = "Merge";
 "重命名" = "Rename";
 "#%@ 已经存在：会把两个标签合并，内容汇到一起。" = "#%@ already exists. The tags and their content will be merged.";
 "所有待办、日志里的 #%@（包括它的子标签）都会改成新名字。可以 ⌘Z 撤销。" = "Rename #%@ and its subtags across all tasks and entries. Press ⌘Z to undo.";
-"已重命名为 #%@ · ⌘Z 撤销" = "Renamed to #%@ · ⌘Z to undo";
+"已重命名为 #%@" = "Renamed to #%@";
 "在清单中显示" = "Show in task list";
 "复制为 Markdown" = "Copy as Markdown";
 "查看 #%@ 名下所有待办的笔记" = "View notes from all tasks tagged #%@";
@@ -539,7 +539,7 @@
 "编辑这条日志" = "Edit this entry";
 "删除这条日志 · ⌘Z 撤销" = "Delete this entry · ⌘Z to undo";
 "已删除这条日志，⌘Z 可撤销" = "Entry deleted; ⌘Z to undo";
-"日志命令：/link、/done、/filter、/help" = "Journal commands: /link, /done, /filter, /help";
+"日志命令：/note、/done、/block、/plan、/link、/unlink、/filter、/help" = "Journal commands: /note, /done, /block, /plan, /link, /unlink, /filter, /help";
 "条日志" = "entries";
 "关闭" = "Close";
 "关闭笔记" = "Close notes";
@@ -1205,3 +1205,7 @@
 "正在同步或找不到这台设备，请稍后再试。" = "Syncing, or this device can't be found. Try again shortly.";
 "还有其他内容没有同步完，暂时不能停用这台设备。请等同步完成后再试。" = "Other content hasn't finished syncing, so this device can't be retired yet. Try again after sync completes.";
 "有 %lld 张原图在本机和同步文件夹里都找不到。其他内容不受影响，找回后会自动补传。" = "%lld original images can't be found on this device or in the sync folder. Other content isn't affected, and they'll upload automatically if found.";
+"有 %lld 个任务标题还没保存" = "%lld task titles have unsaved changes";
+"退出后没保存的修改会丢失。" = "Unsaved changes will be lost when you quit.";
+"保存并退出" = "Save and Quit";
+"放弃修改" = "Discard Changes";

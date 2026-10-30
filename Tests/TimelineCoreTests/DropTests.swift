@@ -96,17 +96,6 @@ final class DropTests: XCTestCase {
         XCTAssertFalse(next[0].task.dropped)
     }
 
-    func testReviewDoesNotListDroppedAsDone() throws {
-        let store = makeStore()
-        let a = try XCTUnwrap(store.addParsedTodo("做完的", on: day)).task.id
-        let b = try XCTUnwrap(store.addParsedTodo("放弃的", on: day)).task.id
-        store.toggleTodo(a, on: store.locate(a)!.date)
-        store.dropTodo(b, on: store.locate(b)!.date)
-        let entry = store.entry(for: store.locate(a)!.date)
-        let text = DailyReview.render(entry)
-        XCTAssertTrue(text.contains("做完的"))
-        XCTAssertFalse(text.contains("放弃的"), "复盘的「完成」里不出现放弃的")
-    }
 }
 
 @MainActor

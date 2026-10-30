@@ -30,7 +30,6 @@ final class LogLinkTests: XCTestCase {
         XCTAssertEqual(try LogCommand.parse("/filter"), .filter([]))
         XCTAssertThrowsError(try LogCommand.parse("/link abc"))
         XCTAssertThrowsError(try LogCommand.parse("/filter #1 x"))
-        XCTAssertTrue(LogCommand.commands.contains("/link") && LogCommand.commands.contains("/filter"))
     }
 
     func testSplitTaskReference() {

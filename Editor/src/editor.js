@@ -112,6 +112,136 @@ class MathWidget extends WidgetType {
   ignoreEvent() { return false; }
 }
 
+// 表格单元格里的行内格式：只有这几种，和原生正文一样不执行 HTML（用 DOM 节点拼，不用 innerHTML）。
+const tableInline = /`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_|~~([^~]+)~~|\[([^\]]+)\]\(([^)\s]+)\)/g;
+
+function appendTableCell(cell, text) {
+  let last = 0;
+  for (const match of text.matchAll(tableInline)) {
+    cell.append(text.slice(last, match.index));
+    last = match.index + match[0].length;
+    const [, code, strong, strong2, em, em2, strike, label, url] = match;
+    const value = code ?? strong ?? strong2 ?? em ?? em2 ?? strike ?? label;
+    const element = document.createElement(code != null ? "code" : strong != null || strong2 != null ? "strong" : em != null || em2 != null ? "em" : strike != null ? "s" : "a");
+    element.textContent = value;
+    if (url != null) element.dataset.url = url;
+    cell.append(element);
+  }
+  cell.append(text.slice(last));
+}
+
+function splitTableRow(text) {
+  const cells = [];
+  let current = "", code = false;
+  const row = text.trim().replace(/^\|/, "");
+  for (let index = 0; index < row.length; index++) {
+    const character = row[index];
+    if (character === "\\" && row[index + 1] === "|") { current += "|"; index++; continue; }
+    if (character === "`") code = !code;
+    if (character === "|" && !code) { cells.push(current.trim()); current = ""; continue; }
+    current += character;
+  }
+  if (current.trim()) cells.push(current.trim());
+  return cells;
+}
+
+class TableWidget extends WidgetType {
+  constructor(source) { super(); this.source = source; }
+  eq(other) { return other.source === this.source; }
+  toDOM(view) {
+    const lines = this.source.split("\n");
+    const alignments = splitTableRow(lines[1]).map(cell => cell.startsWith(":") && cell.endsWith(":") ? "center" : cell.endsWith(":") ? "right" : "left");
+    const wrapper = document.createElement("div");
+    wrapper.className = "cm-table-block";
+    const table = document.createElement("table");
+    [lines[0], ...lines.slice(2)].forEach((line, rowIndex) => {
+      const row = table.insertRow();
+      const cells = splitTableRow(line);
+      alignments.forEach((alignment, column) => {
+        const cell = document.createElement(rowIndex === 0 ? "th" : "td");
+        cell.style.textAlign = alignment;
+        appendTableCell(cell, cells[column] ?? "");
+        row.append(cell);
+      });
+    });
+    wrapper.append(table);
+    // 点表格：光标放进源码里（露出源码可以改）。只读时不拦，留给原生选区；链接仍按 ⌘ 点。
+    wrapper.addEventListener("mousedown", event => {
+      if (view.state.readOnly || event.button !== 0 || (event.metaKey && event.target.closest("[data-url]"))) return;
+      event.preventDefault();
+      const position = view.posAtDOM(wrapper);
+      view.focus();
+      view.dispatch({selection: {anchor: Math.min(view.state.doc.length, position + 1)}});
+    });
+    return wrapper;
+  }
+  ignoreEvent() { return false; }
+}
+
+// 顶层的表格：表头行、分隔行，到空行或别的块为止。代码围栏里的不算；列表、引用里的表格照旧显示源码。
+const tableDelimiter = /^ {0,3}\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const tableEnd = /^\s*(?:$|#{1,6}\s|>|```|~~~)/;
+
+function findTables(doc) {
+  const tables = [];
+  let fence = null, header = null, table = null, position = 0;
+  const close = () => { if (table) tables.push(table); table = null; };
+  for (const text of doc.iterLines()) {
+    const from = position;
+    position += text.length + 1;
+    if (fence) {
+      if (text.trimStart().startsWith(fence)) fence = null;
+      continue;
+    }
+    const fenceMatch = /^\s*(`{3,}|~{3,})/.exec(text);
+    if (fenceMatch) { close(); header = null; fence = fenceMatch[1]; continue; }
+    if (table) {
+      if (tableEnd.test(text)) close();
+      else { table.to = from + text.length; continue; }
+    }
+    if (header && text.includes("-") && (text.includes("|") || header.text.includes("|")) && tableDelimiter.test(text)
+        && splitTableRow(text).length === splitTableRow(header.text).length) {
+      table = {from: header.from, to: from + text.length};
+      header = null;
+      continue;
+    }
+    header = text.includes("|") && !/^ {4}|^\s*(?:>|[-+*]\s|\d+[.)]\s)/.test(text) ? {from, text} : null;
+  }
+  close();
+  return tables;
+}
+
+function tableDecorations(state, tables) {
+  const selection = revealSelection(state);
+  const ranges = [];
+  for (const table of tables) {
+    if (selection && selection.from <= table.to && selection.to >= table.from) continue;
+    ranges.push(Decoration.replace({widget: new TableWidget(state.doc.sliceString(table.from, table.to)), block: true}).range(table.from, table.to));
+  }
+  return Decoration.set(ranges);
+}
+
+const tableBlocks = StateField.define({
+  create(state) {
+    const tables = findTables(state.doc);
+    return {tables, key: revealedBlocks(state, tables), decorations: tableDecorations(state, tables)};
+  },
+  update(value, transaction) {
+    if (transaction.state.field(compositionState)) {
+      if (!transaction.docChanged) return value;
+      const tables = value.tables.map(table => ({from: transaction.changes.mapPos(table.from, -1), to: transaction.changes.mapPos(table.to, 1)}));
+      return {...value, tables, decorations: value.decorations.map(transaction.changes)};
+    }
+    const finished = transaction.effects.some(effect => effect.is(setComposing) && !effect.value);
+    const tables = transaction.docChanged || finished ? findTables(transaction.state.doc) : value.tables;
+    if (!tables.length && !value.tables.length) return value;
+    const key = revealedBlocks(transaction.state, tables);
+    if (!transaction.docChanged && !finished && key === value.key && transaction.startState.readOnly === transaction.state.readOnly) return value;
+    return {tables, key, decorations: tableDecorations(transaction.state, tables)};
+  },
+  provide: field => EditorView.decorations.from(field, value => value.decorations)
+});
+
 // 一行里的公式（和原生层 MarkdownMath 的规则一样）：$ 后面紧跟非空白，结束的 $ 前面不是空白、后面不是数字；行内代码、\$ 跳过。
 function inlineMath(text) {
   const found = [];
@@ -1006,7 +1136,7 @@ const inlinePreview = ViewPlugin.fromClass(class {
   provide: plugin => EditorView.atomicRanges.of(view => view.plugin(plugin)?.atomic ?? Decoration.none)
 });
 
-const livePreviewExtensions = [live, mathBlocks, inlinePreview];
+const livePreviewExtensions = [live, mathBlocks, tableBlocks, inlinePreview];
 
 const highlighting = HighlightStyle.define([
   {tag: tags.processingInstruction, class: "cm-syntax"},

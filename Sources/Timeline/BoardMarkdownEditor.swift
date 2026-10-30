@@ -153,3 +153,24 @@ final class BoardMarkdownTextView: KeyTrackingTextView {
         onCompositionEnded?()
     }
 }
+
+/// ⌘Enter 保存：在 `keyDown` 里直接拦截，不走 `doCommandBy`（`insertNewline` 这个 selector 在输入法组词、
+/// 候选框等场景下的派发时机不可靠，`NSApp.currentEvent` 和「记录上一次 keyDown 再在 doCommandBy 里读」
+/// 都验证过不准）。`keyDown` 拿到的 `event` 就是这次按键本身，修饰键判断不会错。
+class KeyTrackingTextView: NSTextView {
+    var onSubmitShortcut: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        if shouldInterceptReturn(event), let onSubmitShortcut {
+            onSubmitShortcut()
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    /// 这次按键要不要当成提交拦截掉。拆出来是因为脱离 window 的 `NSTextView` 调用 `super.keyDown`
+    /// 走 `interpretKeyEvents` 行为不稳定，单测只验证这个判断本身。
+    func shouldInterceptReturn(_ event: NSEvent) -> Bool {
+        event.keyCode == 36 && event.modifierFlags.contains(.command) && !hasMarkedText()
+    }
+}

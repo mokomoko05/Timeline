@@ -34,7 +34,6 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     private var store: JournalStore?
     private var original = ""
     private var source = ""
-    private var composing = false
     private var ready = false
     private var configured = false
     /// 编辑器的内容已经画到屏幕上了：这之后才把渲染好的正文换成编辑器（之前的高度消息不算）。
@@ -103,10 +102,16 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     /// 在正文上按下鼠标：编辑器已经在这一条上面排好、画好了，就开始编辑，返回编辑器，这一下（和之后的拖动、松开）交给它，
     /// 光标由编辑器自己放，和在工作板里点一样；还没准备好返回 nil，照旧松开后再换。
     func takeOver(_ event: NSEvent) -> NSView? {
-        guard preparing, painted, let webView, let window = webView.window, event.window === window, !webView.isHiddenOrHasHiddenAncestor,
+        guard preparing, painted, !preparedIsStale, let webView, let window = webView.window, event.window === window, !webView.isHiddenOrHasHiddenAncestor,
               webView.bounds.contains(webView.convert(event.locationInWindow, from: nil)) else { return nil }
         activate(place: nil)
         return webView
+    }
+
+    /// 排好版之后这一条的正文又变了（撤销、同步……）：排好的版不能用，否则一打字就把新内容盖掉。
+    private var preparedIsStale: Bool {
+        guard preparing, let target, let store else { return false }
+        return store.entry(for: target.date).logs.first { $0.id == target.logID }?.text != original
     }
 
     /// 开始编辑一条日志；`point` 是点在渲染好的正文上的位置（光标放到那里），nil 时放在末尾。
@@ -118,11 +123,14 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         guard !store.isReadOnly else { return }
         if prepare, target != nil, !preparing { return }
         if target?.logID == log.id {
-            if preparing, !prepare {
-                caret = point.map(caretPoint)
-                activate(place: placement(caret))
+            if !preparing || log.text == original {
+                if preparing, !prepare {
+                    caret = point.map(caretPoint)
+                    activate(place: placement(caret))
+                }
+                return
             }
-            return
+            end()
         }
         cancelPrepare(log.id)
         finish()
@@ -180,21 +188,28 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
     }
 
     /// 保存并结束编辑（点了别处、换了窗口内容、应用退出）。
-    func finish() {
-        guard target != nil else { return }
-        if preparing { end(); return }
+    /// `completion` 在网页交回最后几个字、存好之后调用（退出前要等它）；网页卡住时最多等一秒。
+    func finish(completion: (() -> Void)? = nil) {
+        guard target != nil else { completion?(); return }
+        if preparing { end(); completion?(); return }
         let webView = webView
         save()
         if ready, configured, let webView {
             // 停顿后才送过来的最后几个字：取一次快照补存。
             let target = target, store = store, original = original
+            var pending = completion
+            let complete = { pending?(); pending = nil }
             webView.evaluateJavaScript("window.boardEditor.blur(); window.boardEditor.snapshot()") { result, _ in
+                defer { complete() }
                 guard let snapshot = result as? [String: Any], let text = snapshot["source"] as? String,
                       let target, let store, text != original else { return }
                 if store.entry(for: target.date).logs.first(where: { $0.id == target.logID })?.text != text.trimmingCharacters(in: .whitespacesAndNewlines) {
                     store.updateLog(target.logID, text: text, on: target.date)
                 }
             }
+            if completion != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: complete) }
+        } else {
+            completion?()
         }
         end()
     }
@@ -333,7 +348,6 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         case "change", "commit":
             guard body["key"] as? String == settings["key"] as? String, target != nil, let text = body["source"] as? String else { return }
             source = text
-            composing = body["composing"] as? Bool ?? false
         case "height":
             guard target != nil, configured, painted, let value = body["value"] as? Double, value > 0 else { return }
             slot?.height = CGFloat(value)
@@ -366,6 +380,10 @@ final class InlineMarkdownEditor: NSObject, ObservableObject, WKScriptMessageHan
         // 正在编辑时网页进程崩了：已经收到的内容先存下，重新载入后告诉用户一声（不然界面像是自己跳了一下）。
         if target != nil, !preparing { NotificationCenter.default.post(name: .timelineEditorRecovered, object: "inline") }
         save()
+        // 重新载入后接着编辑最新的正文（开始编辑时记下的那份已经过期），光标放在末尾。
+        settings["source"] = source
+        caret = nil
+        selectsWord = false
         ready = false
         configured = false
         painted = false
@@ -411,9 +429,14 @@ enum InlineEditorMetrics {
     }
 
     /// 渲染好的正文最后一个换行后面还有一个空的行片段（原生的高度算上了它）：量出它的高度，编辑器底下留同样的空，
-    /// 换成编辑器时下面的内容不往上跳。只和最后一段的样式有关（正文、代码、标题……），只排最后一段。
+    /// 换成编辑器时下面的内容不往上跳。只和最后一段的样式有关（正文、代码、标题……），只排最后一块，
+    /// 长笔记不用为这一个数把全文渲染一遍（选中一条就要算，在主线程上）。
     @MainActor static func tail(_ source: String, fontSize: CGFloat, lineSpacing: CGFloat) -> Double {
-        let rendered = MarkdownText.render(source, color: .labelColor, fontSize: fontSize, lineSpacing: lineSpacing, scale: 1)
+        var block = source
+        if let line = Array(MarkdownText.parse(source).children).last?.range?.lowerBound.line, line > 1 {
+            block = source.components(separatedBy: "\n").dropFirst(line - 1).joined(separator: "\n")
+        }
+        let rendered = MarkdownText.render(block, color: .labelColor, fontSize: fontSize, lineSpacing: lineSpacing, scale: 1)
         guard rendered.length > 0 else { return 0 }
         let string = rendered.string as NSString
         let last = rendered.attributedSubstring(from: string.paragraphRange(for: NSRange(location: string.length - 1, length: 0)))

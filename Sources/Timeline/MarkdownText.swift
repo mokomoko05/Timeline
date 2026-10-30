@@ -86,6 +86,7 @@ enum MarkdownText {
 
     private final class Renderer {
         private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        private static let cjkPattern = try? NSRegularExpression(pattern: "[\\p{Han}\\p{Hiragana}\\p{Katakana}\\p{Hangul}\\u3000-\\u303F\\uFF00-\\uFFEF]+")
         let output = NSMutableAttributedString()
         let color: NSColor
         let size: CGFloat
@@ -151,12 +152,21 @@ enum MarkdownText {
                 result.append(inline(child, font: childFont))
             }
             if node is Strikethrough { result.addAttribute(.strikethroughStyle, value: 1, range: result.fullRange) }
+            if node is Emphasis { slantCJK(result) }
             let destination = (node as? Link)?.destination ?? (node as? Markdown.Image)?.source
             if let destination, let url = TaskText.linkURL(destination) {
                 if result.length == 0 { result.append(text(destination, font: font)) }
                 result.addAttributes([.link: url, .foregroundColor: NativePalette.accent, .underlineStyle: 1, .cursor: NSCursor.pointingHand], range: result.fullRange)
             }
             return result
+        }
+
+        /// 中日韩字体没有斜体，系统字体的斜体对它们不起作用（看起来和正文一样）：这些字单独倾斜。拉丁字母用真正的斜体。
+        func slantCJK(_ content: NSMutableAttributedString) {
+            guard let pattern = Self.cjkPattern else { return }
+            for match in pattern.matches(in: content.string, range: content.fullRange) {
+                content.addAttribute(.obliqueness, value: 0.2, range: match.range)
+            }
         }
 
         /// 公式附件；排不出来时显示原文（等宽、淡底色，和行内代码一样）。

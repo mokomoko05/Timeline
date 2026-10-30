@@ -68,8 +68,7 @@ final class MarkdownIntegrationTests: XCTestCase {
         _ = try store.quickLog(source, taskID: task.id, on: day)
         let views: [(String, AnyView)] = [
             ("notes", AnyView(NotesView(store: store, initialSelection: task.id, reveal: { _ in }, openDay: { _ in }))),
-            ("logs", AnyView(DailyLogView(store: store, date: day, collapse: nil, autoFocus: false)
-                .environmentObject(WorkspaceInteraction()).environmentObject(ToastCenter())))
+            ("logs", AnyView(UnifiedJournalView(store: store, workspace: NotesWorkspaceNavigation(date: day))))
         ]
         func textViews(_ view: NSView) -> [InteractiveTaskText] {
             (view as? InteractiveTaskText).map { [$0] } ?? view.subviews.flatMap(textViews)

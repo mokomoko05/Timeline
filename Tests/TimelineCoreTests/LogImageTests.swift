@@ -153,10 +153,4 @@ final class LogImageTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: store.imageURL(orphan).path))
     }
 
-    func testReviewMentionsImageOnlyLogs() throws {
-        let (store, _) = makeStore()
-        let name = try store.storeImage(Data([1]), fileExtension: "png")
-        _ = try store.quickLog("", images: [name], on: day)
-        XCTAssertTrue(DailyReview.render(store.entry(for: day)).contains("[图片 1 张]"))
-    }
 }

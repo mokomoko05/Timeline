@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import TimelineCore
+import UniformTypeIdentifiers
 
 /// 缩略图：缓存里有就直接显示，否则后台解码，期间显示同样大小的占位。
 @MainActor
@@ -48,7 +49,7 @@ struct ImageThumb: View {
             case .loaded(let image): Image(nsImage: image).resizable().scaledToFit()
             case .loading: Color.clear
             case .missing:
-                Image(systemName: "photo.badge.exclamationmark").font(.system(size: size * 0.35)).foregroundStyle(TerminalPalette.muted)
+                Image(systemName: "photo.badge.exclamationmark").font(.system(size: size * 0.35)).foregroundStyle(Palette.muted)
             }
         }
         .frame(width: size, height: size)
@@ -128,75 +129,57 @@ struct PendingImagesStrip: View {
                         .accessibilityLabel("待发送图片 \(index + 1)")
                 }
                 Text("\(names.count) 张图片，回车随日志一起保存")
-                    .font(.system(size: typography.pt(11))).foregroundStyle(TerminalPalette.muted)
+                    .font(.system(size: typography.pt(11))).foregroundStyle(Palette.muted)
             }
             .padding(.vertical, 6).padding(.horizontal, 4)
         }
     }
 }
 
-/// 日志行展开后显示的缩略图。
-struct LogImageGallery: View {
-    let store: JournalStore
-    let names: [String]
-    let preview: (Int) -> Void
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(Array(names.enumerated()), id: \.element) { index, name in
-                    Button { preview(index) } label: { ImageFit(url: store.imageURL(name), maxWidth: 360, maxHeight: 190) }
-                        .buttonStyle(.plain)
-                        .help("点击查看大图").accessibilityLabel("图片 \(index + 1) / \(names.count)，查看大图")
+/// 从访达拖进来的文件：按拖入的先后读出图片，不是图片的跳过。
+enum ImageFileDrop {
+    @MainActor static func load(_ providers: [NSItemProvider]) async -> [Data] {
+        var result: [Data] = []
+        for provider in providers {
+            let data: Data? = await withCheckedContinuation { continuation in
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    continuation.resume(returning: url.flatMap { ImageTools.isImageFile($0) ? try? Data(contentsOf: $0) : nil })
                 }
             }
-            .padding(.vertical, 4)
+            if let data { result.append(data) }
         }
-        .padding(.leading, 76)
+        return result
     }
 }
 
-/// 大图预览：← → 切换，Esc 关闭，可在「预览」中打开或复制。
-/// 选择要筛选的任务：当天清单里的任务，以及所有被日志关联过的任务。
-struct LogFilterPopover: View {
-    @ObservedObject var store: JournalStore
-    let date: Date
-    @Binding var selection: Set<UUID>
+private struct ImageFileDropModifier: ViewModifier {
+    let enabled: Bool
+    let add: ([Data]) -> Void
+    @State private var targeted = false
 
-    var body: some View {
-        let summaries = store.logTaskSummaries(on: date)
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("按任务筛选日志").font(.headline)
-                Spacer()
-                Button("清除") { selection = [] }.disabled(selection.isEmpty)
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                if targeted {
+                    RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.accent, style: StrokeStyle(lineWidth: 2, dash: [6]))
+                        .background(Palette.accent.opacity(0.08)).allowsHitTesting(false)
+                        .overlay(Text("松开以添加图片").foregroundStyle(Palette.accent))
+                }
             }
-            Text("勾选任务以筛选日志")
-                .font(.caption).foregroundStyle(Palette.muted)
-            if summaries.isEmpty {
-                Text("还没有待办").font(.callout).foregroundStyle(Palette.muted).padding(.vertical, 8)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(summaries) { task in
-                            Toggle(isOn: Binding(get: { selection.contains(task.id) },
-                                                 set: { if $0 { selection.insert(task.id) } else { selection.remove(task.id) } })) {
-                                HStack(spacing: 6) {
-                                    if let number = task.number {
-                                        Text("#\(number)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
-                                    }
-                                    Text(task.title).lineLimit(1)
-                                    if task.deleted { Text("（已删除）").font(.caption).foregroundStyle(Palette.muted) }
-                                    Spacer(minLength: 8)
-                                    Text("\(task.count) 条").font(.caption).foregroundStyle(Palette.muted)
-                                }
-                            }
-                            .toggleStyle(.checkbox).padding(.vertical, 3)
-                        }
-                    }
-                }.frame(maxHeight: 280)
+            .onDrop(of: [UTType.fileURL], isTargeted: $targeted) { providers in
+                guard enabled else { return false }
+                Task { @MainActor in
+                    let datas = await ImageFileDrop.load(providers)
+                    if !datas.isEmpty { add(datas) }
+                }
+                return true
             }
-        }
-        .padding(16).frame(width: 340)
+    }
+}
+
+extension View {
+    /// 接受从访达拖来的图片文件。
+    func imageFileDrop(enabled: Bool, add: @escaping ([Data]) -> Void) -> some View {
+        modifier(ImageFileDropModifier(enabled: enabled, add: add))
     }
 }

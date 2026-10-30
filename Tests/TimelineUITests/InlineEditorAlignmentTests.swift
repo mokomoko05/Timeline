@@ -212,4 +212,47 @@ final class InlineEditorAlignmentTests: XCTestCase {
         }
         XCTAssertTrue(head >= expected && head <= expected + 2, "光标落在按下的字旁边：\(head)，期望 \(expected)…\(expected + 2)")
     }
+
+    /// 换成编辑器时高度不变，下面的内容不跳：对齐用例之外的几种内容。
+    func testEditorHeightMatchesForTablesRulesAndMath() async throws {
+        let samples = ["分隔线": "上面\n\n---\n\n下面",
+                       "表格": "上面\n\n| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n\n下面",
+                       "行内公式": "公式 $x^2 + y^2$ 在这里\n\n下面",
+                       "独立公式": "上面\n\n$$\n\\frac{a}{b}\n$$\n\n下面",
+                       "长表格": "| a | b |\n| --- | --- |\n" + String(repeating: "| 1 | 2 |\n", count: 11),"对齐和行内格式的表格": "| **甲** | `乙` | [丙](https://a.com) |\n| :-- | :-: | --: |\n| 1 | 2 | 3 |"]
+        let editor = InlineMarkdownEditor.shared
+        for (name, text) in samples.sorted(by: { $0.key < $1.key }) {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = JournalStore(directory: directory)
+            let date = Date()
+            store.setLogDraft(text, on: date)
+            _ = try store.commitLog(on: date, linkDefault: false)
+            let log = try XCTUnwrap(store.entry(for: date).logs.first)
+            let root = VStack(alignment: .leading, spacing: 0) {
+                EditableLogText(log: log, editable: true, begin: { _, _ in }) { editAt in
+                    TaskLinkText(source: log.text, completed: false, color: Palette.ink, fontSize: 13, edit: {}, open: { _ in },
+                                 maxLines: 0, markdown: true, compactLines: true, editAt: editAt)
+                }
+                Spacer(minLength: 0)
+            }.frame(width: 420, height: 600, alignment: .top)
+            let host = NSHostingView(rootView: root)
+            let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderFront(nil)
+            defer { editor.finish(); window.contentView = nil; window.close() }
+            host.layoutSubtreeIfNeeded()
+            let nativeHeight = try XCTUnwrap(find(host)).frame.height
+            editor.begin(log, on: date, store: store, at: nil, fontSize: 13, lineSpacing: 2, dark: true, prepare: true)
+            try await wait { host.layoutSubtreeIfNeeded(); return editor.height != nil }
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(editor.height ?? 0, nativeHeight, accuracy: 1, name)
+            if name.contains("表格") {
+                let cells = try await editor.webView?.evaluateJavaScript("document.querySelectorAll('.cm-table-block td, .cm-table-block th').length") as? Int
+                XCTAssertGreaterThan(cells ?? 0, 0, "光标不在里面时画成表格，不露源码")
+            }
+            editor.finish()
+        }
+    }
 }

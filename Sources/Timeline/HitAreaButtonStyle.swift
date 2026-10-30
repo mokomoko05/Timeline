@@ -1,30 +1,5 @@
 import SwiftUI
 
-struct ItemActionButton: View {
-    @Environment(\.typography) private var typography
-    let symbol: String
-    let title: String
-    var destructive = false
-    var compact = false
-    var showsTitle = false
-    /// 开着的开关（比如已固定）：用强调色。
-    var active = false
-    let action: () -> Void
-
-    var body: some View {
-        Button(role: destructive ? .destructive : nil, action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: symbol).frame(width: 18, height: 18)
-                if showsTitle { Text(LocalizedStringKey(title)) }
-            }.font(.system(size: typography.pt(11)))
-        }
-        .buttonStyle(HitAreaButtonStyle(compact: compact))
-        .foregroundStyle(destructive ? Palette.deadline : (active ? Palette.accent : Palette.muted))
-        .help(LocalizedStringKey(title))
-        .accessibilityLabel(LocalizedStringKey(title))
-    }
-}
-
 /// 「能按」的立体反馈：悬停时按钮浮起来（有底色渐变、细边、一点阴影、指针变成小手），按下时压下去（缩小、阴影收掉）。
 /// 阴影只在悬停的那一个按钮上才有，不会给每个按钮常驻一层阴影。
 struct RaisedSurface: ViewModifier {

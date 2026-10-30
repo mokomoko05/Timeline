@@ -167,12 +167,11 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
 }
 
 public enum LogCommand: Equatable {
-    case entry(DailyLogKind, String), help, summary
+    case entry(DailyLogKind, String), help
     /// `/link #1` 关联任务；`/link` 或 `/unlink`（nil）取消关联。
     case link(Int?)
     /// `/filter #1 #3` 只看这些任务相关的日志；`/filter`（空）清除筛选。
     case filter([Int])
-    public static let commands = ["/note", "/done", "/block", "/plan", "/link", "/unlink", "/filter", "/summary", "/help"]
 
     public static func parse(_ input: String) throws -> LogCommand {
         let input = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -182,7 +181,6 @@ public enum LogCommand: Equatable {
         let body = parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines) : ""
         if let kind = DailyLogKind(rawValue: String(command.dropFirst())), command.hasPrefix("/") { return .entry(kind, body) }
         if command == "/help", body.isEmpty { return .help }
-        if command == "/summary", body.isEmpty { return .summary }
         if command == "/unlink", body.isEmpty { return .link(nil) }
         if command == "/link" {
             if body.isEmpty { return .link(nil) }
@@ -232,26 +230,5 @@ public enum LogInputError: LocalizedError {
         case .badTaskReference(let text): return "无法识别任务编号「\(text)」，请写成 #1。"
         case .unknownTask(let number): return "没有 #\(number) 号任务。编号显示在任务行左边，创建后不会变。"
         }
-    }
-}
-
-public enum DailyReview {
-    public static func render(_ entry: DayEntry) -> String {
-        var sections: [String] = []
-        for kind in [DailyLogKind.done, .block, .plan, .note] {
-            let logs = entry.logs.filter { $0.kind == kind }
-            var lines = logs.map { log -> String in
-                let message = log.text.isEmpty && !log.images.isEmpty ? "[图片 \(log.images.count) 张]" : String(TaskText.rendered(log.text).characters)
-                guard let task = log.taskTitle, !message.contains(task) else { return "- \(message)" }
-                return "- \(message)（\(task)）"
-            }
-            if kind == .done {
-                let logged = Set(logs.compactMap(\.taskID))
-                lines += entry.todos.filter { $0.isDone && !logged.contains($0.id) }
-                    .map { "- " + String(TaskText.rendered($0.title).characters) }
-            }
-            if !lines.isEmpty || kind != .note { sections.append("## \(kind.title)\n" + lines.joined(separator: "\n")) }
-        }
-        return sections.joined(separator: "\n\n")
     }
 }

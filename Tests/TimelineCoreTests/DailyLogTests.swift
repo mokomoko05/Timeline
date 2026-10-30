@@ -21,7 +21,7 @@ final class DailyLogTests: XCTestCase {
         XCTAssertEqual(try LogCommand.parse("/note /literal"), .entry(.note, "/literal"))
         XCTAssertEqual(try LogCommand.parse("/Users/me/paper.pdf"), .entry(.note, "/Users/me/paper.pdf"))
         XCTAssertEqual(try LogCommand.parse("/help"), .help)
-        XCTAssertEqual(try LogCommand.parse("/summary"), .summary)
+        XCTAssertThrowsError(try LogCommand.parse("/summary"), "复盘命令已经去掉，按未知命令提示")
         XCTAssertThrowsError(try LogCommand.parse("/unknown text"))
         XCTAssertThrowsError(try LogCommand.parse(" \n "))
         let log = DailyLogEntry(createdAt: date(7), kind: .note, text: "/literal")
@@ -103,14 +103,14 @@ final class DailyLogTests: XCTestCase {
     }
 
     @MainActor
-    func testHelpAndReviewCommandsDoNotModifySummaryOrCreateLogs() async throws {
+    func testHelpAndRemovedSummaryCommandDoNotModifySummaryOrCreateLogs() async throws {
         let store = JournalStore(directory: try directory())
         let day = date(7)
         store.setSummary("保留", on: day)
         store.setLogDraft("/help", on: day)
         XCTAssertEqual(try store.commitLog(on: day), .help)
         store.setLogDraft("/summary", on: day)
-        XCTAssertEqual(try store.commitLog(on: day), .summary)
+        XCTAssertThrowsError(try store.commitLog(on: day))
         XCTAssertEqual(store.entry(for: day).summary, "保留")
         XCTAssertTrue(store.entry(for: day).logs.isEmpty)
     }
@@ -149,36 +149,6 @@ final class DailyLogTests: XCTestCase {
         XCTAssertEqual(store.entry(for: day).logs.first?.taskTitle, "论文")
         XCTAssertEqual(store.entry(for: day).logs.first?.taskID, task.id)
         XCTAssertTrue(store.entry(for: day).hasContent)
-    }
-
-    @MainActor
-    func testReviewGroupsLogsDeduplicatesDoneTasksAndPreservesOriginalUntilApplied() async throws {
-        let store = JournalStore(directory: try directory())
-        let day = date(7)
-        store.addTodo("论文", on: day)
-        let task = try XCTUnwrap(store.entry(for: day).todos.first)
-        store.setLogTask(task.id, on: day)
-        store.setLogDraft("/done 已完成精读", on: day)
-        try store.commitLog(on: day)
-        for command in ["/block 实验环境出错", "/plan 补对照实验", "想到一个优化思路"] {
-            store.setLogDraft(command, on: day)
-            try store.commitLog(on: day)
-        }
-        store.setSummary("原总结", on: day)
-        let review = DailyReview.render(store.entry(for: day))
-        XCTAssertTrue(review.contains("## 进展\n- 已完成精读（论文）"))
-        XCTAssertTrue(review.contains("## 卡点\n- 实验环境出错"))
-        XCTAssertTrue(review.contains("## 明日计划\n- 补对照实验"))
-        XCTAssertTrue(review.contains("## 随手记录\n- 想到一个优化思路"))
-        XCTAssertFalse(review.contains("\n- 论文"))
-        XCTAssertEqual(store.entry(for: day).summary, "原总结")
-        store.applyReview(review, on: day, append: true)
-        XCTAssertEqual(store.entry(for: day).summary, "原总结\n\n" + review)
-        store.undo()
-        XCTAssertEqual(store.entry(for: day).summary, "原总结")
-        XCTAssertEqual(store.entry(for: day).logs.count, 4)
-        store.applyReview("修改后的复盘", on: day, append: false)
-        XCTAssertEqual(store.entry(for: day).summary, "修改后的复盘")
     }
 
     @MainActor
