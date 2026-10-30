@@ -324,12 +324,20 @@ final class BoardWebSession: NSObject, ObservableObject {
 
     /// 离开这一页、退到后台：编辑器停顿一下才送改动，先直接从编辑器取一次最新的全文，再写回。
     func commit(completion: @escaping () -> Void = {}) {
-        guard ready, Self.owner(pool) === self, let webView else { flush(); completion(); return }
+        guard ready, Self.owner(pool) === self, let webView else { flush(persist: false); finishCommit(completion); return }
         let key = self.key
         webView.evaluateJavaScript("window.boardEditor.snapshot()") { [weak self] result, _ in
             guard let self else { completion(); return }
             if let snapshot = result as? [String: Any], snapshot["key"] as? String == key { self.accept(snapshot) }
-            self.flush()
+            self.flush(persist: false)
+            self.finishCommit(completion)
+        }
+    }
+
+    private func finishCommit(_ completion: @escaping () -> Void) {
+        Task { @MainActor in
+            // 保存错误由 JournalStore 保留并展示，下一次同步仍会重试等待。
+            do { try await store.saveAndWait() } catch { }
             completion()
         }
     }
@@ -343,7 +351,7 @@ final class BoardWebSession: NSObject, ObservableObject {
     }
 
     /// 把编辑器里的文字写进数据并存盘（没变就什么也不做）。
-    func flush() {
+    func flush(persist: Bool = true) {
         pendingWrite?.cancel()
         pendingWrite = nil
         guard !discarded, !composing, source != storedSource else { return }
@@ -358,7 +366,7 @@ final class BoardWebSession: NSObject, ObservableObject {
             storedSource = source
             store.updateLog(id, text: source, on: date)
         }
-        store.save()
+        if persist { store.saveInBackground() }
     }
 
     /// 「取消」：放弃这次的修改。
@@ -396,6 +404,14 @@ final class BoardWebSession: NSObject, ObservableObject {
         """
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.webView?.evaluateJavaScript(script) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2 + Double(text.count) * 0.1) { [weak self] in self?.reportLatencies() }
+    }
+
+    func runCommitProbe() {
+        guard PerfProbe.enabled, ready, let webView else { print("[perf] BOARD_COMMIT unavailable"); return }
+        webView.evaluateJavaScript("(() => { const view = window.boardEditor.view(); view.dispatch(view.state.replaceSelection(' Performance edit')); })(); 0") { [weak self] _, error in
+            guard let self, error == nil else { print("[perf] BOARD_COMMIT script failed"); return }
+            self.commit { PerfProbe.lap("BOARD_COMMIT durable=\(self.store.errorMessage == nil)") }
+        }
     }
 
     private func reportLatencies() {

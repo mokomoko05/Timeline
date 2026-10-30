@@ -215,7 +215,9 @@ final class FolderSyncTests: XCTestCase {
         let file = try XCTUnwrap(streamFiles(mac).last)
         let valid = try Data(contentsOf: file)
         try Data("corrupted".utf8).write(to: file)
-        do { try await phone.sync(); XCTFail("Corruption should fail verification") } catch { }
+        try await phone.sync()
+        XCTAssertFalse(phone.fileErrors.isEmpty)
+        XCTAssertEqual(phone.phase, .failed)
         XCTAssertEqual(phone.store.boards.first { $0.id == board.id }?.markdown, "Safe")
         try valid.write(to: file)
         try await sync(phone)

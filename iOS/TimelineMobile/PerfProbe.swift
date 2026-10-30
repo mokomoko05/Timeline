@@ -121,6 +121,26 @@ enum PerfProbe {
         store.save()
     }
 
+    /// 仅性能隔离数据集使用；不接触日常数据和同步目录。
+    static func seedLargeLibrary(at directory: URL?) {
+        guard isolated, let directory, UserDefaults.standard.string(forKey: "perfDataset") == "large",
+              !FileManager.default.fileExists(atPath: directory.appendingPathComponent("journal.sqlite").path),
+              !FileManager.default.fileExists(atPath: directory.appendingPathComponent("journal.json").path) else { return }
+        struct Library: Encodable { var version = 8; var days: [String: DayEntry] }
+        var days: [String: DayEntry] = [:]
+        for index in 0..<250 {
+            let date = JournalDates.calendar.date(byAdding: .day, value: -index, to: Date())!
+            var day = DayEntry()
+            day.todos = [Todo(title: "Record task \(index)")]
+            day.logs = (0..<40).map { DailyLogEntry(createdAt: date + Double($0), kind: .note, text: "Record \(index)-\($0) **performance** content for search and date projection") }
+            days[JournalDates.key(date)] = day
+        }
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try JSONEncoder().encode(Library(days: days)).write(to: directory.appendingPathComponent("journal.json"), options: .atomic)
+        } catch { print("[perf] FIXTURE FAIL \(error)") }
+    }
+
     /// 带公式的日志：测公式排版的开销。
     private static let demoMath = (0..<12).map { index in
         "第 \(index + 1) 条：设 $x_\(index) = \\alpha^{\(index)} + \\beta$，则\n\n$$\n\\sum_{k=1}^{\(index + 2)} \\frac{x_k^2}{\\sqrt{k+\(index)}} = \\int_0^{\\infty} e^{-t^{\(index % 3 + 1)}}\\,dt\n$$"
@@ -284,7 +304,14 @@ enum PerfProbe {
             ("调整工作板收藏顺序", { send("boardFavoriteMove") }),
             ("关闭工作板收藏", { send("boardFavoritesClose") }),
             ("打开工作板", { send("openBoard") }),
+            ("编辑工作板并保存", { send("boardEditAndSave") }),
             ("返回工作板列表", { send("boardBack") }),
+            ("打开同步设置", { switchTab(.settings) }),
+            ("打开备份与恢复", { send("openBackup") }),
+            ("校验完整备份", { send("backupValidation") }),
+            ("切到全局搜索", { switchTab(.search) }),
+            ("输入全局搜索", { send("globalSearch") }),
+            ("清空全局搜索", { send("globalSearchClear") }),
             ("切到待办", { switchTab(.tasks) }),
             ("打开笔记多的待办", { switchTab(.tasks); send("openNotedTask") }),
             ("节奏条放大镜", { send("railLoupe") }),

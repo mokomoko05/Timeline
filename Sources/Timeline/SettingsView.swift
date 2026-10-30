@@ -4,7 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var loginItem: LoginItem
     var cloudSync: CloudSyncController?
-    let reminders: ReminderScheduler
+    @ObservedObject var reminders: ReminderScheduler
     @ObservedObject private var themes = ThemeStore.shared
     @ObservedObject private var languages = LanguageStore.shared
     let failedHotKeys: () -> Set<HotKeyAction>?
@@ -36,6 +36,9 @@ struct SettingsView: View {
             }
             Section("通知") {
                 NotificationSettingsView(access: reminders.notificationAccess, refreshReminders: reminders.refresh)
+                if !reminders.status.isEmpty { Text(AppLocalizedLines(reminders.status)).font(.caption).foregroundStyle(Palette.danger) }
+                Text("提醒在本机收到任务更新后安排；其他设备离线或未同步时，提醒可能尚未安排。")
+                    .font(.caption).foregroundStyle(Palette.muted)
             }
             Section("专注计时") {
                 Toggle("隐藏专注工作台", isOn: $focusPanelHidden)

@@ -20,7 +20,7 @@ public struct DeletedItem: Codable, Identifiable, Equatable {
     }
 }
 
-/// 最近删除只存在本机（`Trash.json`），不同步：每台设备各自留一份，别的设备同步过来的删除也会进来，
+/// 最近删除只存在本机 SQLite（兼容导入旧 `Trash.json`），不同步：每台设备各自留一份，别的设备同步过来的删除也会进来，
 /// 所以任何一台设备上误删了，其他设备都还能找回来。保留 30 天。
 extension JournalStore {
     public static let deletedRetention: TimeInterval = 30 * 24 * 3600
@@ -29,8 +29,7 @@ extension JournalStore {
     public var trashURL: URL { directory.appendingPathComponent("Trash.json") }
 
     func loadRecentlyDeleted(now: Date = Date()) {
-        guard let data = try? Data(contentsOf: trashURL),
-              let items = try? JSONDecoder().decode([DeletedItem].self, from: data) else { return }
+        let items = recentlyDeleted
         let kept = items.filter { now.timeIntervalSince($0.deletedAt) < Self.deletedRetention }
         recentlyDeleted = kept
         if kept.count != items.count { writeRecentlyDeleted() }
@@ -38,11 +37,8 @@ extension JournalStore {
 
     private func writeRecentlyDeleted() {
         guard !isReadOnly else { return }
-        if recentlyDeleted.isEmpty {
-            try? FileManager.default.removeItem(at: trashURL)
-        } else if let data = try? JSONEncoder().encode(recentlyDeleted) {
-            try? data.write(to: trashURL, options: .atomic)
-        }
+        // 与删除/恢复正文一起进入同一 SQLite 事务；失败沿用保存提示和重试。
+        recoveryChanged()
     }
 
     /// 比较修改前后的这几天：消失的日志、待办进最近删除（只是挪到别的日期不算），又出现的（撤销、恢复）移出来。

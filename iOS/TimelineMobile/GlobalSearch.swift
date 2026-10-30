@@ -41,12 +41,16 @@ final class Navigator: ObservableObject {
 
 /// 全局搜索：待办、工作板正文、日志与笔记、图片里的文字、每日小结一起搜，和 Mac 的全局搜索同一套规则。
 /// 上面按范围筛（带各自的条数），命中的词高亮；点开就在搜索页里推进对应的页面并定位到那一行 / 那一条，返回还是这些结果。
+private struct SearchRequest: Equatable { let query: String; let revision: Int }
+
 struct GlobalSearchView: View {
     @ObservedObject var store: JournalStore
     @State private var query = ""
     @State private var scope = SearchScope.all
     @State private var results = SearchResults()
     @State private var path = NavigationPath()
+    @State private var index = JournalSearchIndex()
+    @State private var revision = 0
 
     private var trimmed: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -78,14 +82,25 @@ struct GlobalSearchView: View {
                 }
             }
             .notesDestinations(store)
-            .task(id: query) {
+            .task(id: SearchRequest(query: query, revision: revision)) {
                 // 停顿一下再搜，打字时不每个字都扫一遍全部数据。
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 guard !Task.isCancelled else { return }
-                results = SearchResults(store: store, query: query)
+                let requestQuery = query
+                let snapshot = JournalSearchSnapshot(days: store.days, boards: store.boards)
+                let matches: JournalSearchMatches
+                do { matches = try await index.search(snapshot, query: requestQuery) } catch { return }
+                guard !Task.isCancelled, requestQuery == query else { return }
+                results = SearchResults(store: store, query: query, matches: matches)
+                if PerfProbe.enabled { PerfProbe.lap("SEARCH_READY hits=\(results.hits.count) query=\(query)") }
                 // 截图检查用：`-searchOpen board|log|image|summary|task` 搜完直接打开这一类的第一条。
                 if let kind = UserDefaults.standard.string(forKey: "searchOpen"), path.isEmpty,
                    let hit = results.hits.first(where: { "\($0.kind)" == kind }) { open(hit) }
+            }
+            .onReceive(store.objectWillChange.debounce(for: .milliseconds(180), scheduler: RunLoop.main)) { revision &+= 1 }
+            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+                if note.object as? String == "globalSearch" { query = "Record" }
+                if note.object as? String == "globalSearchClear" { query = "" }
             }
             .onAppear {
                 // 待办按拼音搜要先转写标题：一进搜索页就在后台转好。
@@ -280,7 +295,7 @@ struct DayPage: View {
     var reveal: UUID?
 
     var body: some View {
-        let logs = store.allLogs(includeFocus: true).filter { $0.key == key }
+        let logs = store.logs(on: key)
         let date = JournalDates.date(for: key)
         let summary = store.days[key]?.summary.nilIfEmpty
         ScrollViewReader { proxy in
@@ -430,13 +445,13 @@ struct SearchResults {
     init() {}
 
     @MainActor
-    init(store: JournalStore, query raw: String) {
+    init(store: JournalStore, query raw: String, matches: JournalSearchMatches? = nil) {
         let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
         let tag = TagText.searchTag(query)
         // 多个词各自出现即可；待办还能按拼音、拼音首字母找。
         let terms = tag == nil ? LinkMatcher.terms(query) : []
-        let tasks = tag == nil ? LinkMatcher.searchTasks(store.tasks(), terms: terms) : LinkMatcher.searchTasks(store.tasks(matching: query), terms: [])
+        let tasks = matches?.tasks ?? (tag == nil ? LinkMatcher.searchTasks(store.tasks(), terms: terms) : LinkMatcher.searchTasks(store.tasks(matching: query), terms: []))
         hits = tasks.prefix(80).map { item in
             var parts: [String] = []
             if let number = item.task.number { parts.append("#\(number)") }
@@ -446,31 +461,36 @@ struct SearchResults {
                              detail: parts.joined(separator: " · "), target: .task(item.id), completed: item.task.completed)
         }
         if let tag {
-            for item in store.logs(forTag: tag).reversed() { hits.append(Self.logHit(item, store: store, terms: [])) }
+            for item in matches?.locatedLogs ?? Array(store.logs(forTag: tag).reversed()) { hits.append(Self.logHit(item, store: store, terms: [])) }
             hits = Array(hits.prefix(Self.limit))
             return
         }
         for board in store.boards where !store.isBoardArchived(board) {
+            if let matches, matches.boardLines[board.id] == nil { continue }
             var found = 0
-            for (index, line) in board.markdown.components(separatedBy: .newlines).enumerated() where LinkMatcher.containsAll(line, terms) {
+            let matching: [(Int, String)]
+            if let matches { matching = (matches.boardText[board.id] ?? [:]).sorted { $0.key < $1.key }.map { ($0.key, $0.value) } }
+            else { matching = board.markdown.components(separatedBy: .newlines).enumerated().filter { LinkMatcher.containsAll($0.element, terms) }.map { ($0.offset, $0.element) } }
+            for (index, line) in matching {
                 hits.append(SearchHit(id: "board-\(board.id)-\(index)", kind: .board, title: Self.readable(line),
                                       detail: LF("%@ · 第 %lld 行", store.boardTitle(board), index + 1), target: .board(board.id, line: index + 1)))
                 found += 1
                 if found == Self.boardLinesPerBoard { break }
             }
         }
-        for item in store.allLogs(includeFocus: true).reversed() {
+        for item in matches?.locatedLogs ?? Array(store.allLogs(includeFocus: true).reversed()) {
             let log = item.log
+            if let matches, !matches.logs.contains(log.id) && !matches.images.contains(log.id) { continue }
             let text = ([log.text, log.focusGoal ?? "", log.taskTitle ?? ""] + log.tags + log.taskTags).joined(separator: "\n")
-            if LinkMatcher.containsAll(text, terms) {
+            if matches.map({ $0.logs.contains(log.id) }) ?? LinkMatcher.containsAll(text, terms) {
                 hits.append(Self.logHit(item, store: store, terms: terms))
-            } else if !log.images.isEmpty, LinkMatcher.containsAll(log.recognizedText, terms) {
+            } else if !log.images.isEmpty, matches.map({ $0.images.contains(log.id) }) ?? LinkMatcher.containsAll(log.recognizedText, terms) {
                 hits.append(Self.imageHit(item, store: store, terms: terms))
             }
             if hits.count > Self.limit { break }
         }
-        for key in store.days.keys.sorted(by: >) {
-            guard let summary = store.days[key]?.summary, !summary.isEmpty, LinkMatcher.containsAll(summary, terms), let date = JournalDates.date(for: key) else { continue }
+        for key in (matches?.summaries ?? Set(store.days.keys)).sorted(by: >) {
+            guard let summary = store.days[key]?.summary, !summary.isEmpty, matches.map({ $0.summaries.contains(key) }) ?? LinkMatcher.containsAll(summary, terms), let date = JournalDates.date(for: key) else { continue }
             let line = Self.bestLine(summary.components(separatedBy: .newlines), terms: terms) ?? summary
             hits.append(SearchHit(id: "summary-\(key)", kind: .summary, title: Self.readable(line),
                                   detail: LF("%@ · 每日小结", DayText.relative(date) ?? DayText.short(date)), target: .summary(key)))

@@ -18,10 +18,10 @@ enum SyncImageMaintenance {
         guard state.imageLease == nil || now.timeIntervalSince(state.lastLeasePublication ?? .distantPast) >= 86400 else { return 0 }
         let data = try IncrementalSync.encode(SyncImageLease(device: device, images: protected.sorted()))
         let digest = IncrementalSync.digest(data)
-        state.lastLeasePublication = now
-        guard state.protectedImagesDigest != digest else { return 0 }
+        guard state.protectedImagesDigest != digest else { state.lastLeasePublication = now; return 0 }
         let file = device + "-" + digest + ".json"
         try FolderSync.coordinatedWrite(data, to: folder.appendingPathComponent(leases).appendingPathComponent(file))
+        state.lastLeasePublication = now
         state.protectedImagesDigest = digest
         state.imageLease = file
         state.pendingCloud.insert(leases + "/" + file)
@@ -33,7 +33,7 @@ enum SyncImageMaintenance {
     static func collect(folder: URL, device: String, now: Date, state: inout IncrementalState,
                         uploadPending: (URL) throws -> Bool) throws {
         guard now.timeIntervalSince(state.lastMaintenance ?? .distantPast) >= 86400 else { return }
-        guard state.imageInventoryComplete == true else { return }
+        guard state.imageInventoryComplete == true, (state.streamErrors ?? [:]).isEmpty, (state.attachmentErrors ?? [:]).isEmpty else { return }
         let manager = FileManager.default
         var known = Set(state.peers.keys)
         for directory in [FolderSync.devicesFolder, IncrementalSync.directory] {
@@ -44,6 +44,7 @@ enum SyncImageMaintenance {
             }
         }
         known.remove(device)
+        known.subtract(state.retiredDevices ?? [])
         guard state.pendingCloud.isEmpty, let ownLease = state.imageLease else { return }
         var protected = state.protectedImages ?? []
         var activeLeases = [ownLease]

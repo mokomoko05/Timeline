@@ -117,14 +117,14 @@ final class SyncModel: ObservableObject {
     }
 
     func syncNow() async {
-        store.save()
+        do { try await store.saveAndWait() } catch { return }
         await sync?.syncUntilExported()
     }
 }
 
 /// 进后台后向系统多要一点时间把同步做完；做完或系统收回时间时结束，只结束一次。
 @MainActor
-private final class BackgroundTask {
+final class BackgroundTask {
     private var identifier = UIBackgroundTaskIdentifier.invalid
 
     init() {

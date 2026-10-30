@@ -81,17 +81,17 @@ final class JournalWriter: @unchecked Sendable {
         }
     }
 
-    func writeNow(_ document: JournalDocument, version: Int, state: SyncState? = nil) -> Error? {
-        queue.sync { write(document, version: version, state: state) }
+    func writeNow(_ document: JournalDocument, version: Int, state: SyncState? = nil, changedDays: Set<String>? = nil) -> Error? {
+        queue.sync { write(document, version: version, state: state, changedDays: changedDays) }
     }
 
-    func write(_ document: JournalDocument, version: Int,
+    func write(_ document: JournalDocument, version: Int, changedDays: Set<String>? = nil,
                timing: (@Sendable (TimeInterval, TimeInterval, TimeInterval) -> Void)? = nil,
                completion: @escaping @Sendable (Error?) -> Void) {
         let queued = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
         queue.async { [self] in
             let started = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
-            let error = write(document, version: version)
+            let error = write(document, version: version, changedDays: changedDays)
             let finished = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
             DispatchQueue.main.async {
                 timing?((started - queued) * 1000, (finished - started) * 1000, (ProcessInfo.processInfo.systemUptime - finished) * 1000)
@@ -100,23 +100,48 @@ final class JournalWriter: @unchecked Sendable {
         }
     }
 
-    /// 同步入队，保证主线程上分配的版本顺序不会被 async 执行器重排。
-    func commit(_ document: JournalDocument, version: Int, state: SyncState,
-                completion: @escaping @Sendable (Error?) -> Void) {
-        queue.async { [self] in completion(write(document, version: version, state: state)) }
-    }
-
-    func saveTransport(_ state: SyncState) throws {
-        try queue.sync {
-            guard let database else { throw CocoaError(.fileNoSuchFile) }
-            try database.saveTransport(state)
-            stateLock.withLock { persistedState?.ledger = state.ledger }
+    func writeAwaited(_ document: JournalDocument, version: Int, changedDays: Set<String>?,
+                      timing: (@Sendable (TimeInterval, TimeInterval, TimeInterval) -> Void)?,
+                      completion: @escaping @Sendable (Error?) -> Void) {
+        let queued = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
+        queue.async { [self] in
+            let started = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
+            let error = write(document, version: version, changedDays: changedDays)
+            let finished = timing == nil ? 0 : ProcessInfo.processInfo.systemUptime
+            if let timing {
+                DispatchQueue.main.async { timing((started - queued) * 1000, (finished - started) * 1000, (ProcessInfo.processInfo.systemUptime - finished) * 1000) }
+            }
+            completion(error)
         }
     }
+
+    /// 同步入队，保证主线程上分配的版本顺序不会被 async 执行器重排。
+    func commit(_ document: JournalDocument, version: Int, state: SyncState, changedDays: Set<String>? = nil,
+                completion: @escaping @Sendable (Error?) -> Void) {
+        queue.async { [self] in completion(write(document, version: version, state: state, changedDays: changedDays)) }
+    }
+
+    func saveTransport(_ state: SyncState, completion: @escaping @Sendable (Error?) -> Void) {
+        queue.async { [self] in
+            do {
+                guard let database else { throw CocoaError(.fileNoSuchFile) }
+                try database.saveTransport(state)
+                stateLock.withLock { persistedState?.ledger = state.ledger }
+                completion(nil)
+            } catch { completion(error) }
+        }
+    }
+
+    func loadDays(from start: String, through end: String, completion: @escaping @Sendable (Result<[String: DayEntry], Error>) -> Void) {
+        queue.async { [self] in
+            completion(Result { guard let database else { throw CocoaError(.fileNoSuchFile) }; return try database.loadDays(from: start, through: end) })
+        }
+    }
+
     func waitUntilIdle() { queue.sync {} }
     func statistics() -> (rows: Int, bytes: Int) { queue.sync { (database?.lastChangedRows ?? 0, database?.lastPayloadBytes ?? 0) } }
 
-    private func write(_ document: JournalDocument, version: Int, state: SyncState? = nil) -> Error? {
+    private func write(_ document: JournalDocument, version: Int, state: SyncState? = nil, changedDays: Set<String>? = nil) -> Error? {
         guard version > writtenVersion else { return nil }
         do {
             if database == nil { try migrate(document, state: state) }
@@ -127,7 +152,7 @@ final class JournalWriter: @unchecked Sendable {
                     self.startupBackup = nil
                 }
                 try makeDailyBackup(database?.document ?? document)
-                try database?.save(document, state: state)
+                try database?.save(document, state: state, changedDays: changedDays)
                 if let state { remember(state) }
             }
             writtenVersion = version

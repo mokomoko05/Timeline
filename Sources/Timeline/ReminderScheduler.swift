@@ -27,7 +27,8 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
                 UNNotificationAction(identifier: Self.snooze60Action, title: "推迟 1 小时", options: []),
             ], intentIdentifiers: [], options: [])
         ])
-        changes = Self.planChanges(in: store).sink { [weak self] _ in
+        changes = store.$days.debounce(for: .milliseconds(350), scheduler: RunLoop.main)
+            .map { ReminderLifecycleSnapshot(days: $0) }.removeDuplicates().sink { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
     }
@@ -70,7 +71,10 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
             let existing = await center.pendingNotificationRequests()
             guard !Task.isCancelled else { return }
             let desired = Set(plans.map(\.id))
-            center.removePendingNotificationRequests(withIdentifiers: existing.map(\.identifier).filter { $0.hasPrefix("timeline.") && !desired.contains($0) })
+            let activeTasks = Set(store.tasks().filter { !$0.task.completed }.map(\.id))
+            center.removePendingNotificationRequests(withIdentifiers: existing.filter {
+                ReminderLifecycle.shouldRemove($0.identifier, taskID: ($0.content.userInfo["task"] as? String).flatMap(UUID.init(uuidString:)), desired: desired, activeTasks: activeTasks, enabled: isEnabled)
+            }.map(\.identifier))
             do {
                 for plan in plans {
                     guard !Task.isCancelled else { return }
@@ -128,9 +132,11 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
                 snoozed.sound = .default
                 snoozed.categoryIdentifier = Self.category
                 snoozed.userInfo = content.userInfo
-                let id = "timeline-snooze.\(taskID?.uuidString ?? UUID().uuidString)"
-                try? await center.add(UNNotificationRequest(identifier: id, content: snoozed,
+                guard let taskID, store.locate(taskID)?.task.completed == false, isEnabled else { break }
+                let id = "timeline-snooze.\(taskID.uuidString)"
+                do { try await center.add(UNNotificationRequest(identifier: id, content: snoozed,
                                                             trigger: UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)))
+                } catch { status = AppLocalizedFormat("提醒未能保存：%@", error.localizedDescription) }
             default:
                 if let key, let date = JournalDates.date(for: key) {
                     NotificationCenter.default.post(name: .timelineNavigate, object: date)

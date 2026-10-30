@@ -13,33 +13,33 @@ public struct BoardVersion: Codable, Identifiable, Equatable {
     }
 }
 
-/// 每页工作板一个文件（`BoardHistory/<id>.json`），只存在本机。一段连续编辑开始前，把改之前的内容存一版；
+/// 历史与正文一起提交到本机 SQLite；兼容导入旧 `BoardHistory/<id>.json`。一段连续编辑开始前，把改之前的内容存一版；
 /// 同一页 10 分钟内的连续修改只存一版。同步覆盖或合并冲突前一定存一版。每页最多留 `limit` 版。
 final class BoardHistory: @unchecked Sendable {
     static let interval: TimeInterval = 10 * 60
     static let limit = 60
 
-    let directory: URL
-    private let writesInBackground: Bool
-    private let queue = DispatchQueue(label: "local.timeline.board-history")
-    /// 主线程上的缓存：每页已经存过的版本。读过一次文件就不再读。
+    /// 主线程上的值缓存；旧文件只在迁移时导入。
     private var versions: [UUID: [BoardVersion]] = [:]
+    private var persistedSnapshot: [String: [BoardVersion]] = [:]
 
-    init(directory: URL, writesInBackground: Bool) {
-        self.directory = directory
-        self.writesInBackground = writesInBackground
+    init(initial: [String: [BoardVersion]] = [:]) {
+        versions = Dictionary(initial.compactMap { key, value in UUID(uuidString: key).map { ($0, value) } }, uniquingKeysWith: { a, b in Array((a + b).sorted { $0.savedAt > $1.savedAt }.prefix(Self.limit)) })
+        persistedSnapshot = Dictionary(versions.map { ($0.key.uuidString, $0.value) }, uniquingKeysWith: { a, _ in a })
     }
 
-    private func url(for id: UUID) -> URL { directory.appendingPathComponent(id.uuidString + ".json") }
-
-    /// 新的在前。
-    func versions(of id: UUID) -> [BoardVersion] {
-        if let cached = versions[id] { return cached }
-        queue.sync {}
-        let loaded = (try? Data(contentsOf: url(for: id))).flatMap { try? JSONDecoder().decode([BoardVersion].self, from: $0) } ?? []
-        versions[id] = loaded
-        return loaded
+    static func legacyVersions(in directory: URL) throws -> [String: [BoardVersion]] {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [:] }
+        var result: [String: [BoardVersion]] = [:]
+        for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) where file.pathExtension == "json" {
+            guard let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent) else { continue }
+            result[id.uuidString] = try JSONDecoder().decode([BoardVersion].self, from: Data(contentsOf: file))
+        }
+        return result
     }
+
+    /// 新的在前。旧文件已在迁移时统一导入，前台不读盘。
+    func versions(of id: UUID) -> [BoardVersion] { versions[id] ?? [] }
 
     /// 存下 `markdown` 作为这页的一个版本；`force` 为 false 时，离上一版不到 10 分钟就跳过。
     func record(_ markdown: String, for id: UUID, now: Date = Date(), force: Bool = false) {
@@ -52,16 +52,23 @@ final class BoardHistory: @unchecked Sendable {
         list.insert(BoardVersion(savedAt: now, markdown: markdown), at: 0)
         if list.count > Self.limit { list.removeLast(list.count - Self.limit) }
         versions[id] = list
-        let target = url(for: id), directory = directory
-        let write = {
-            guard let data = try? JSONEncoder().encode(list) else { return }
-            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try? data.write(to: target, options: .atomic)
-        }
-        if writesInBackground { queue.async(execute: write) } else { queue.sync(execute: write) }
+        persistedSnapshot[id.uuidString] = list
     }
 
-    func waitUntilIdle() { queue.sync {} }
+    func importVersions(_ incoming: [String: [BoardVersion]]) {
+        for (key, list) in incoming {
+            guard let id = UUID(uuidString: key) else { continue }
+            let previous = versions(of: id)
+            let ids = Set(previous.map(\.id))
+            versions[id] = Array((previous + list.filter { !ids.contains($0.id) }).sorted { $0.savedAt > $1.savedAt }.prefix(Self.limit))
+            persistedSnapshot[id.uuidString] = versions[id]
+        }
+    }
+
+    var snapshot: [String: [BoardVersion]] {
+        persistedSnapshot
+    }
+
 }
 
 extension JournalStore {
@@ -100,5 +107,5 @@ extension JournalStore {
         replaceBoards(updated, action: "恢复工作板版本")
     }
 
-    public func waitForBoardHistory() { boardHistory.waitUntilIdle() }
+    public func waitForBoardHistory() { save() }
 }

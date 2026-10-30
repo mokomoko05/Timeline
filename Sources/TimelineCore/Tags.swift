@@ -307,19 +307,22 @@ extension JournalStore {
 }
 
 /// 待办标题与查询词的匹配：字面、拼音、拼音首字母、漏字模糊。
-@MainActor
+/// 缓存由锁保护，转写在锁外计算；全局搜索可在后台复用同一规则。
 public enum LinkMatcher {
     /// 质量：0 编号精确；1 标题开头或某个词开头；2 标题 / 标签包含；3 拼音或首字母；4 漏字模糊（最差）。
     public static let fuzzy = 4
 
     private struct Pinyin: Sendable { let full: String; let initials: String }
+    private static let cacheLock = NSLock()
     private static var cache: [String: Pinyin] = [:]
 
     private static func pinyin(_ title: String) -> Pinyin {
-        if let hit = cache[title] { return hit }
+        if let hit = cacheLock.withLock({ cache[title] }) { return hit }
         let entry = transliterate(title)
-        if cache.count > 4000 { cache.removeAll() }
-        cache[title] = entry
+        cacheLock.withLock {
+            if cache.count > 4000 { cache.removeAll() }
+            cache[title] = entry
+        }
         return entry
     }
 
@@ -331,11 +334,13 @@ public enum LinkMatcher {
 
     /// 拼音转写每个标题要几毫秒，第一次按拼音搜时几百个待办一起转会卡一下：在后台先转好放进缓存。
     static func warm(_ titles: [String]) async {
-        let missing = Array(Set(titles.filter { cache[$0] == nil }))
+        let missing = cacheLock.withLock { Array(Set(titles.filter { cache[$0] == nil })) }
         guard !missing.isEmpty else { return }
         let computed = await Task.detached(priority: .userInitiated) { missing.map { ($0, transliterate($0)) } }.value
-        if cache.count + computed.count > 4000 { cache.removeAll() }
-        for (title, entry) in computed where cache[title] == nil { cache[title] = entry }
+        cacheLock.withLock {
+            if cache.count + computed.count > 4000 { cache.removeAll() }
+            for (title, entry) in computed where cache[title] == nil { cache[title] = entry }
+        }
     }
 
     static func quality(of item: ScheduledTask, query: String, number: Int?) -> Int? {

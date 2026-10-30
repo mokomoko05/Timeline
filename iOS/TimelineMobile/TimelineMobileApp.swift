@@ -42,7 +42,12 @@ struct TimelineMobileApp: App {
                 focus.refresh()
                 reminders.refresh()
             case .background:
-                store.save()
+                let saving = BackgroundTask()
+                Task { @MainActor in
+                    defer { saving.end() }
+                    await BoardWebSession.commitActiveEditors()
+                    do { try await store.saveAndWait() } catch { }
+                }
                 sync.setActive(false)
                 if !PerfProbe.isolated { BackgroundRefresh.schedule() }
             default: break
@@ -66,7 +71,8 @@ final class AppServices {
     let spotlight: SpotlightIndexer
 
     private init() {
-        let directory = PerfProbe.isolated ? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Timeline-Performance", isDirectory: true) : nil
+        let directory = PerfProbe.isolated ? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(UserDefaults.standard.string(forKey: "perfDataset") == "large" ? "Timeline-Performance-large" : "Timeline-Performance", isDirectory: true) : nil
+        PerfProbe.seedLargeLibrary(at: directory)
         let store = JournalStore(directory: directory)
         store.writesInBackground = true
         self.store = store

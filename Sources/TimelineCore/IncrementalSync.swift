@@ -21,6 +21,7 @@ struct SyncReceipt: Codable, Equatable, Sendable {
     var seen: [String: Int]
     var serial: Int?
     var imageLease: String?
+    var capabilities: [String]?
 }
 
 struct IncrementalState: Codable, Equatable, Sendable {
@@ -52,6 +53,10 @@ struct IncrementalState: Codable, Equatable, Sendable {
     var lastLeasePublication: Date?
     var lastMaintenance: Date?
     var imageCandidates: [String: Date]?
+    var streamErrors: [String: String]?
+    var attachmentErrors: [String: String]?
+    var retiredDevices: Set<String>?
+    var waitingFiles: Set<String>?
 }
 
 enum IncrementalSync {
@@ -119,43 +124,52 @@ enum IncrementalSync {
     static func read(folder: URL, device: String, state: inout IncrementalState,
                      merge: inout SyncMerge, records: inout [String: SyncRecord]) throws -> ReadResult {
         var result = ReadResult()
+        state.streamErrors = [:]
+        state.waitingFiles = []
         let root = folder.appendingPathComponent(directory)
         if FileManager.default.fileExists(atPath: root.path) {
             for peer in try FolderSync.coordinatedDirectoryContents(root).map(\.lastPathComponent).sorted() where safe(peer) && peer != device {
-                let path = root.appendingPathComponent(peer)
-                guard (try? path.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
-                let (files, waiting) = try list(path)
-                result.waiting = result.waiting || waiting
-                let parsed = files.compactMap { url -> (URL, Int, Bool)? in
-                    let parts = url.deletingPathExtension().lastPathComponent.split(separator: "-")
-                    guard parts.count == 3, let sequence = Int(parts[0]), sequence > 0,
-                          parts[1] == "c" || parts[1] == "d", parts[2].count == 64 else { return nil }
-                    return (url, sequence, parts[1] == "c")
-                }.sorted { $0.1 < $1.1 }
-                var received = state.received[peer] ?? 0
-                // 新检查点完整覆盖早期增量，可以跨过已清理或尚未下载的旧批次。
-                let newest = parsed.filter { $0.2 && $0.1 > received }.last?.1
-                var sequences = Set<Int>()
-                for (file, sequence, checkpoint) in parsed where sequence > received {
-                    if let newest, sequence < newest { continue }
-                    guard sequences.insert(sequence).inserted else { throw CocoaError(.fileReadCorruptFile) }
-                    if !checkpoint && sequence != received + 1 { result.waiting = true; continue }
-                    guard try available(file) else { result.waiting = true; continue }
-                    guard let data = try FolderSync.coordinatedRead(file) else { result.waiting = true; continue }
-                    result.bytes += data.count
-                    let hash = file.deletingPathExtension().lastPathComponent.split(separator: "-").last.map(String.init)
-                    guard hash == digest(data) else { throw CocoaError(.fileReadCorruptFile) }
-                    let batch = try JSONDecoder().decode(SyncBatch.self, from: data)
-                    guard batch.format == 2 else { throw FolderSync.SyncError.newerFormat(batch.name) }
-                    guard batch.device == peer, batch.sequence == sequence, batch.checkpoint == checkpoint,
-                          checkpoint || batch.base == received else { throw CocoaError(.fileReadCorruptFile) }
-                    state.migrated.insert(peer)
-                    merge.describeDevice = { [peers = state.peers] in peers[$0]?.name ?? $0 }
-                    if merge.merge(batch.records, into: &records) { result.changed = true }
-                    received = sequence
-                    state.received[peer] = received
-                    let receipt = SyncReceipt(device: peer, name: batch.name, date: batch.exportedAt, seen: batch.seen)
-                    state.peers[peer] = combine(state.peers[peer], receipt)
+                var problemPath = "streams/" + peer
+                do {
+                    let path = root.appendingPathComponent(peer)
+                    guard (try? path.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+                    let (files, waiting) = try list(path)
+                    result.waiting = result.waiting || waiting
+                    let parsed = files.compactMap { url -> (URL, Int, Bool)? in
+                        let parts = url.deletingPathExtension().lastPathComponent.split(separator: "-")
+                        guard parts.count == 3, let sequence = Int(parts[0]), sequence > 0,
+                              parts[1] == "c" || parts[1] == "d", parts[2].count == 64 else { return nil }
+                        return (url, sequence, parts[1] == "c")
+                    }.sorted { $0.1 < $1.1 }
+                    var received = state.received[peer] ?? 0
+                    // 新检查点完整覆盖早期增量，可以跨过已清理或尚未下载的旧批次。
+                    let newest = parsed.filter { $0.2 && $0.1 > received }.last?.1
+                    var sequences = Set<Int>()
+                    for (file, sequence, checkpoint) in parsed where sequence > received {
+                        problemPath = "streams/" + peer + "/" + file.lastPathComponent
+                        if let newest, sequence < newest { continue }
+                        guard sequences.insert(sequence).inserted else { throw CocoaError(.fileReadCorruptFile) }
+                        if !checkpoint && sequence != received + 1 { state.waitingFiles?.insert("streams/" + peer + "/sequence-" + String(received + 1)); result.waiting = true; continue }
+                        guard try available(file) else { state.waitingFiles?.insert(problemPath); result.waiting = true; continue }
+                        guard let data = try FolderSync.coordinatedRead(file) else { state.waitingFiles?.insert(problemPath); result.waiting = true; continue }
+                        result.bytes += data.count
+                        let hash = file.deletingPathExtension().lastPathComponent.split(separator: "-").last.map(String.init)
+                        guard hash == digest(data) else { throw CocoaError(.fileReadCorruptFile) }
+                        let batch = try JSONDecoder().decode(SyncBatch.self, from: data)
+                        guard batch.format == 2 else { throw FolderSync.SyncError.newerFormat(batch.name) }
+                        guard batch.device == peer, batch.sequence == sequence, batch.checkpoint == checkpoint,
+                              checkpoint || batch.base == received else { throw CocoaError(.fileReadCorruptFile) }
+                        state.migrated.insert(peer)
+                        merge.describeDevice = { [peers = state.peers] in peers[$0]?.name ?? $0 }
+                        if merge.merge(batch.records, into: &records) { result.changed = true }
+                        received = sequence
+                        state.received[peer] = received
+                        let receipt = SyncReceipt(device: peer, name: batch.name, date: batch.exportedAt, seen: batch.seen)
+                        state.peers[peer] = combine(state.peers[peer], receipt)
+                    }
+                } catch {
+                    state.streamErrors?[problemPath] = error.localizedDescription
+                    result.waiting = true
                 }
             }
         }
@@ -167,15 +181,22 @@ enum IncrementalSync {
                 String($0.lastPathComponent.split(separator: "-")[0])
             }
             for (peer, files) in groups where peer != device {
-                guard let file = files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }).last,
-                      state.receiptFiles[peer] != file.lastPathComponent else { continue }
-                guard try available(file), let data = try FolderSync.coordinatedRead(file) else { result.waiting = true; continue }
-                result.bytes += data.count
-                guard file.deletingPathExtension().lastPathComponent.hasSuffix(digest(data)) else { throw CocoaError(.fileReadCorruptFile) }
-                let receipt = try JSONDecoder().decode(SyncReceipt.self, from: data)
-                guard receipt.device == peer else { throw CocoaError(.fileReadCorruptFile) }
-                state.receiptFiles[peer] = file.lastPathComponent
-                state.peers[peer] = combine(state.peers[peer], receipt)
+                var problemPath = "receipts/" + peer
+                do {
+                    guard let file = files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }).last,
+                          state.receiptFiles[peer] != file.lastPathComponent else { continue }
+                    problemPath = "receipts/" + file.lastPathComponent
+                    guard try available(file), let data = try FolderSync.coordinatedRead(file) else { state.waitingFiles?.insert(problemPath); result.waiting = true; continue }
+                    result.bytes += data.count
+                    guard file.deletingPathExtension().lastPathComponent.hasSuffix(digest(data)) else { throw CocoaError(.fileReadCorruptFile) }
+                    let receipt = try JSONDecoder().decode(SyncReceipt.self, from: data)
+                    guard receipt.device == peer else { throw CocoaError(.fileReadCorruptFile) }
+                    state.receiptFiles[peer] = file.lastPathComponent
+                    state.peers[peer] = combine(state.peers[peer], receipt)
+                } catch {
+                    state.streamErrors?[problemPath] = error.localizedDescription
+                    result.waiting = true
+                }
             }
         }
         if state.peers.values.contains(where: { ($0.seen[$0.device] ?? 0) > (state.received[$0.device] ?? 0) }) { result.waiting = true }
@@ -210,12 +231,12 @@ enum IncrementalSync {
         }
         state.pending = []
         // 回执只随接收位置变化更新；普通轮询不写文件，也不刷新确认时间。
-        let signature = digest(try encode(state.received)) + (state.imageLease ?? "")
+        let signature = digest(try encode(state.received)) + (state.imageLease ?? "") + ":device-retirement-v1"
         let receiptRoot = folder.appendingPathComponent(receipts)
         if state.publishedReceipt?.contains(signature) != true {
             state.receiptSerial = (state.receiptSerial ?? 0) + 1
             let receipt = SyncReceipt(device: device, name: name, date: now, seen: state.received,
-                                      serial: state.receiptSerial, imageLease: state.imageLease)
+                                      serial: state.receiptSerial, imageLease: state.imageLease, capabilities: ["device-retirement-v1"])
             let data = try encode(receipt)
             let file = device + "-" + String(format: "%016lld", Int64(state.receiptSerial ?? 1)) + "-" + digest(data) + ".json"
             try FolderSync.coordinatedWrite(data, to: receiptRoot.appendingPathComponent(file))

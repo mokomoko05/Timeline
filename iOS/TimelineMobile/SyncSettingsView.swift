@@ -8,6 +8,7 @@ struct SyncSettingsView: View {
     @EnvironmentObject private var languages: LanguageStore
     @EnvironmentObject private var reminders: ReminderScheduler
     @State private var choosing = false
+    @State private var openingBackup = false
     /// 作为弹出的页面显示（iOS 18 起设置不在标签栏里）：右上角有「完成」。
     var presented = false
     @Environment(\.dismiss) private var dismiss
@@ -24,6 +25,7 @@ struct SyncSettingsView: View {
                     if let folder = sync.folderName, let state = sync.sync {
                         LabeledContent("同步文件夹", value: folder)
                         SyncStatusRows(state: state) { Task { await sync.syncNow() } }
+                        NavigationLink("同步设备") { SyncDevicesView(state: state) }
                         Button("更换文件夹") { choosing = true }
                         Button("停止同步", role: .destructive) { sync.disconnect() }
                     } else {
@@ -37,6 +39,7 @@ struct SyncSettingsView: View {
                 }
                 Section {
                     Toggle("在 iPhone 上提醒待办", isOn: Binding(get: { reminders.isEnabled }, set: { reminders.isEnabled = $0 }))
+                    if let error = reminders.schedulingError { Text(error).font(.caption).foregroundStyle(.red) }
                     if reminders.isEnabled, reminders.authorization == .denied {
                         Button("通知未开启，去设置里允许") {
                             if let url = URL(string: UIApplication.openNotificationSettingsURLString) { UIApplication.shared.open(url) }
@@ -45,7 +48,7 @@ struct SyncSettingsView: View {
                 } header: {
                     Text("提醒")
                 } footer: {
-                    Text("在 Mac 或 iPhone 上给待办设的提醒，都会在这台 iPhone 上响。应用在后台时会不定时同步一次，新设的提醒也能排上。")
+                    Text("提醒在这台设备收到任务更新后安排。后台刷新由系统决定；临近提醒时间时，请打开应用确认同步及提醒权限。")
                 }
                 Section {
                     Label("主屏 / 锁屏小组件「快速记录」", systemImage: "square.grid.2x2")
@@ -60,6 +63,7 @@ struct SyncSettingsView: View {
                     Section("数据") { Text(message).foregroundStyle(.red) }
                 }
                 Section("本机数据") {
+                    NavigationLink("备份与恢复", value: "backup")
                     LabeledContent("待办", value: "\(store.tasks().count)")
                     LabeledContent("日志", value: "\(store.allLogs(includeFocus: true).count)")
                     LabeledContent("工作板", value: "\(store.boards.count)")
@@ -70,7 +74,12 @@ struct SyncSettingsView: View {
                     }
                 }
             }
+            .navigationDestination(for: String.self) { _ in BackupRestoreView(store: store) }
+            .navigationDestination(isPresented: $openingBackup) { BackupRestoreView(store: store) }
             .navigationTitle("设置")
+            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+                if note.object as? String == "openBackup" { openingBackup = true }
+            }
             .toolbar {
                 if presented { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
             }
@@ -87,8 +96,8 @@ private struct SyncStatusRows: View {
     let syncNow: () -> Void
 
     var body: some View {
-        Label(LocalizedStringKey(state.statusTitle), systemImage: state.lastError == nil ? "icloud" : "exclamationmark.icloud")
-            .foregroundStyle(state.lastError == nil ? Color.primary : .red)
+        Label(LocalizedStringKey(state.statusTitle), systemImage: state.lastError == nil && state.fileErrors.isEmpty ? "icloud" : "exclamationmark.icloud")
+            .foregroundStyle(state.lastError == nil && state.fileErrors.isEmpty ? Color.primary : .red)
         if let error = state.lastError { Text(LocalizedStringKey(error)).font(.caption).foregroundStyle(.red) }
         if state.waitingForUpload {
             Text("本机更新已写入共享文件夹，正在等待 iCloud 确认上传。应用不能强制系统立即上传。")
@@ -101,6 +110,18 @@ private struct SyncStatusRows: View {
             Text("已请求下载其他设备的更新，下载完成后会自动合并。")
                 .font(.caption).foregroundStyle(.secondary)
         }
+        if let date = state.localSavedAt { LabeledContent("本机已保存", value: date.formatted(date: .omitted, time: .standard)) }
+        ForEach(state.fileErrors.keys.sorted(), id: \.self) { path in
+            VStack(alignment: .leading) { Text(path).font(.caption.monospaced()); Text(state.fileErrors[path] ?? "").font(.caption).foregroundStyle(.red) }
+        }
+        DisclosureGroup("阶段耗时与等待文件") {
+            ForEach(state.stageDurations.keys.sorted(), id: \.self) { phase in
+                LabeledContent(LocalizedStringKey(SyncPhase(rawValue: phase)?.title ?? phase), value: "\(Int((state.stageDurations[phase] ?? 0) * 1000)) ms")
+            }
+            ForEach(state.blockingFiles, id: \.self) { Text($0).font(.caption.monospaced()) }
+        }
+        Text("本机同步完成表示本机本轮工作完成；对方是否收到，请查看下方设备接收确认。")
+            .font(.caption).foregroundStyle(.secondary)
         if let date = state.lastCheck { LabeledContent("最近检查", value: date.formatted(date: .abbreviated, time: .standard)) }
         if let date = state.lastExport { LabeledContent("已写入共享文件夹", value: date.formatted(date: .abbreviated, time: .standard)) }
         if let date = state.lastUpload { LabeledContent("iCloud 确认上传", value: date.formatted(date: .abbreviated, time: .standard)) }

@@ -262,6 +262,9 @@ struct BoardPage: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) { session.runTypingTest(PerfProbe.typingText) }
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+                if note.object as? String == "boardEditAndSave" { session.runCommitProbe() }
+            }
             .onDisappear { session.commit() }
     }
 }

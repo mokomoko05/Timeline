@@ -11,10 +11,10 @@ public enum SyncPhase: String, Equatable, Sendable {
         case .reading: return "检查更新…"
         case .merging: return "合并更新…"
         case .saving: return "保存更新…"
-        case .publishing: return "上传更新…"
+        case .publishing: return "写入同步文件夹…"
         case .waitingForUpload: return "等待上传"
         case .waitingForDownload: return "等待下载"
-        case .completed: return "同步完成"
+        case .completed: return "本机同步完成"
         case .failed: return "同步未完成"
         }
     }
@@ -51,7 +51,7 @@ public final class SyncButtonFeedback: ObservableObject {
     public init(sync: FolderSync, completionDuration: TimeInterval = 2) {
         self.sync = sync
         self.completionDuration = completionDuration
-        observation = sync.objectWillChange.sink { [weak self] in
+        observation = Publishers.Merge(sync.objectWillChange.map { _ in () }, sync.store.$errorMessage.dropFirst().map { _ in () }).sink { [weak self] in
             guard let self, !self.refreshScheduled else { return }
             self.refreshScheduled = true
             Task { @MainActor [weak self] in
@@ -86,8 +86,14 @@ public final class SyncButtonFeedback: ObservableObject {
             completed = false
             hideTask?.cancel()
         }
+        if sync.store.errorMessage != nil {
+            awaitingCompletion = false; completed = false
+            hideTask?.cancel()
+            setVisible(true); setPhase(.failed)
+            return
+        }
         // 接收远端内容所需的回执也可能等待上传，但不是本机编辑反馈。
-        if !isWorking, !awaitingCompletion, !completed, !sync.hasLocalChanges, sync.lastError == nil {
+        if !isWorking, !awaitingCompletion, !completed, !sync.hasLocalChanges, sync.lastError == nil, sync.fileErrors.isEmpty {
             setVisible(false)
             setPhase(.idle)
             return
@@ -97,6 +103,7 @@ public final class SyncButtonFeedback: ObservableObject {
             setPhase(sync.phase.isRunning ? sync.phase : (sync.waitingForUpload ? .waitingForUpload : (sync.waitingForDownload ? .waitingForDownload : .preparing)))
             return
         }
+        if !sync.fileErrors.isEmpty { completed = false; setVisible(true); setPhase(.failed); return }
         if sync.waitingForUpload { completed = false; setVisible(true); setPhase(.waitingForUpload); return }
         if sync.waitingForDownload { completed = false; setVisible(true); setPhase(.waitingForDownload); return }
         if sync.lastError != nil { completed = false; setVisible(true); setPhase(.failed); return }

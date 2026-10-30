@@ -24,7 +24,7 @@ struct JournalView: View {
     @State private var index = DayIndex()
 
     var body: some View {
-        let (byDay, keys) = index.update(store.allLogs(includeFocus: true), tasks: store.tasks())
+        let (byDay, keys) = index.update(store, selection: selection)
         let _ = PerfProbe.journalProjected((byDay[selection] ?? []).map(\.id))
         NavigationStack {
             VStack(spacing: 0) {
@@ -99,7 +99,7 @@ struct JournalView: View {
                     query = ""
                     selection = key
                 } else if let id = Navigator.shared.take({ if case .log(let id) = $0 { id } else { nil } }),
-                          let key = byDay.first(where: { $0.value.contains { $0.log.id == id } })?.key {
+                          let key = store.days.first(where: { $0.value.logs.contains { $0.id == id } })?.key {
                     query = ""
                     selection = key
                     // 换天后滚动视图是新建的，等它出现再滚过去。
@@ -174,7 +174,7 @@ struct JournalView: View {
 
     /// 从日历跳过去：先在后台把那天的正文解析好（打开日历时多半已经预读过），再换天，换的那一下不在主线程上解析。
     private func jump(to key: String, keys: [String], byDay: [String: [JournalStore.LoggedLog]]) {
-        let logs = (byDay[key] ?? []).map(\.log)
+        let logs = (byDay[key] ?? store.logs(on: key)).map(\.log)
         Task {
             await Task.detached(priority: .userInitiated) {
                 for log in logs { let body = LogStyle.body(log); if !body.isEmpty { MarkdownBlock.warm(body) } }
@@ -195,7 +195,7 @@ struct JournalView: View {
 
     /// 正文的整理（去前缀、拼用时）也放到后台。
     private func prewarm(keys: [String], byDay: [String: [JournalStore.LoggedLog]]) {
-        let logs = keys.flatMap { byDay[$0] ?? [] }.map(\.log)
+        let logs = keys.flatMap { byDay[$0] ?? store.logs(on: $0) }.map(\.log)
         guard !logs.isEmpty else { return }
         Task.detached(priority: .utility) {
             for log in logs { let body = LogStyle.body(log); if !body.isEmpty { MarkdownBlock.warm(body) } }
@@ -203,29 +203,24 @@ struct JournalView: View {
     }
 }
 
-/// 按天分好的日志。全部日志没变（数据层缓存的还是同一份）时直接用上次的结果：
-/// 开关「记一笔」、换天这类只动页面状态的操作不用把几千条日志重新分组，下面的行也因为输入没变而不重算。
-/// 待办变了（改名）也重新分一次：行里显示着关联待办的标题。
+/// 页面只准备当前日及相邻两天的正文；切页和开关编辑器不整理全库日志。
+@MainActor
 private final class DayIndex {
-    /// 留着上次那两份（也让它们的存储不被释放、地址不会被新数组复用），比较是不是同一份。
-    private var source: [JournalStore.LoggedLog]?
-    private var tasks: [ScheduledTask]?
-    private var today = ""
-    private var result: ([String: [JournalStore.LoggedLog]], [String]) = ([:], [])
-
-    func update(_ logs: [JournalStore.LoggedLog], tasks current: [ScheduledTask]) -> ([String: [JournalStore.LoggedLog]], [String]) {
-        let now = JournalDates.key(Date())
-        if let source, let tasks, now == today, same(source, logs), same(tasks, current) { return result }
-        tasks = current
-        let byDay = Dictionary(grouping: logs, by: \.key)
-        result = (byDay, Set(byDay.keys).union([now]).sorted())
-        source = logs
-        today = now
-        return result
-    }
-
-    private func same<T>(_ a: [T], _ b: [T]) -> Bool {
-        a.count == b.count && a.withUnsafeBufferPointer { old in b.withUnsafeBufferPointer { $0.baseAddress == old.baseAddress } }
+    private var days: [String: DayEntry] = [:]
+    private var cache: [String: [JournalStore.LoggedLog]] = [:]
+    func update(_ store: JournalStore, selection: String) -> ([String: [JournalStore.LoggedLog]], [String]) {
+        let keys = Set(store.days.compactMap { $0.value.logs.isEmpty ? nil : $0.key }).union([JournalDates.key(Date())]).sorted()
+        var wanted = Set([selection])
+        if let index = keys.firstIndex(of: selection) {
+            if index > 0 { wanted.insert(keys[index - 1]) }
+            if index + 1 < keys.count { wanted.insert(keys[index + 1]) }
+        }
+        cache = cache.filter { wanted.contains($0.key) }
+        for key in wanted where cache[key] == nil || days[key]?.logs != store.days[key]?.logs {
+            cache[key] = store.logs(on: key)
+        }
+        days = store.days
+        return (cache, keys)
     }
 }
 

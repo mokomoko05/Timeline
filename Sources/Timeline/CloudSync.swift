@@ -76,7 +76,7 @@ final class CloudSyncController: ObservableObject {
     func syncNow() async {
         guard let sync else { AppRouter.showSettings(); return }
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
-        store.save()
+        do { try await store.saveAndWait() } catch { return }
         await sync.syncUntilExported()
     }
 }
@@ -151,6 +151,8 @@ private struct WorkspaceCloudSyncButton: View {
 
 struct CloudSyncSettings: View {
     @ObservedObject var controller: CloudSyncController
+    @State private var retiring: FolderSync.Device?
+    @State private var retirementError: String?
 
     var body: some View {
         Toggle("通过 iCloud Drive 与 iPhone 同步", isOn: Binding(get: { controller.isEnabled }, set: controller.setEnabled))
@@ -165,6 +167,16 @@ struct CloudSyncSettings: View {
                 Button("立即同步") { Task { await controller.syncNow() } }.disabled(sync.isSyncing)
                 Button("在访达中显示") { controller.revealFolder() }
             }
+            if let retirementError { Text(retirementError).foregroundStyle(Palette.deadline) }
+            Text("停用旧设备不会删除已有数据；再次上线时以新身份接入。请先确认旧设备没有未同步内容。")
+                .font(.caption).foregroundStyle(Palette.muted)
+                .confirmationDialog("停用这台同步设备？", isPresented: Binding(get: { retiring != nil }, set: { if !$0 { retiring = nil } })) {
+                    Button("停用", role: .destructive) {
+                        guard let device = retiring else { return }
+                        Task { do { try await sync.retireDevice(device.id) } catch { retirementError = error.localizedDescription } }
+                    }
+                    Button("取消", role: .cancel) { retiring = nil }
+                }
             if sync.waitingForUpload {
                 Text("本机更新已写入共享文件夹，正在等待 iCloud 确认上传。应用不能强制系统立即上传。")
                     .font(.caption).foregroundStyle(Palette.muted)
@@ -175,6 +187,15 @@ struct CloudSyncSettings: View {
             }
             DisclosureGroup("同步详情") {
                 VStack(alignment: .leading, spacing: 6) {
+                    if let date = sync.localSavedAt { detail("本机已保存", date: date) }
+                    ForEach(sync.fileErrors.keys.sorted(), id: \.self) { path in
+                        Text(path + ": " + (sync.fileErrors[path] ?? "")).foregroundStyle(Palette.deadline).textSelection(.enabled)
+                    }
+                    ForEach(sync.stageDurations.keys.sorted(), id: \.self) { phase in
+                        HStack { Text(AppLocalized(SyncPhase(rawValue: phase)?.title ?? phase)); Spacer(); Text("\(Int((sync.stageDurations[phase] ?? 0) * 1000)) ms") }
+                    }
+                    ForEach(sync.blockingFiles, id: \.self) { Text($0).font(.caption.monospaced()).textSelection(.enabled) }
+                    Text("本机同步完成表示本机本轮工作完成；对方是否收到，请查看下方设备接收确认。")
                     if let since = sync.uploadWaitingSince { detail("本次上传等待开始", date: since) }
                     if let date = sync.lastCheck { detail("最近检查", date: date) }
                     if let date = sync.lastExport { detail("已写入共享文件夹", date: date) }
@@ -194,6 +215,9 @@ struct CloudSyncSettings: View {
                     ForEach(sync.devices) { device in
                         HStack {
                             Text(device.name)
+                            if device.isRetired { Text("已停用").foregroundStyle(Palette.muted) }
+                            else if device.supportsRetirement { Button("停用此设备") { retiring = device } }
+                            else { Text("升级此设备后可停用").foregroundStyle(Palette.muted) }
                             Spacer()
                             Text(device.exportedAt.formatted(date: .abbreviated, time: .standard))
                             Text("对方最近导出的数据").foregroundStyle(Palette.muted)

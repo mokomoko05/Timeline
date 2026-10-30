@@ -8,6 +8,7 @@ final class JournalDatabase {
     private var syncState: SyncState?
     private(set) var lastChangedRows = 0
     private(set) var lastPayloadBytes = 0
+    private(set) var lastComparedDays = 0
     let url: URL
 
     struct Failure: LocalizedError {
@@ -33,6 +34,9 @@ final class JournalDatabase {
                 try execute("PRAGMA wal_autocheckpoint=512")
                 try execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID")
                 try execute("CREATE TABLE IF NOT EXISTS entities (key TEXT PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID")
+                try execute("CREATE TABLE IF NOT EXISTS recovery (key TEXT PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID")
+                try execute("CREATE TABLE IF NOT EXISTS outbox (key TEXT PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID")
+                try execute("CREATE INDEX IF NOT EXISTS entity_dates ON entities(json_extract(CAST(value AS TEXT), '$.day'))")
                 try execute("CREATE TABLE IF NOT EXISTS sync_records (key TEXT PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID")
                 if version == 0 { try execute("PRAGMA user_version=1") }
             }
@@ -70,10 +74,13 @@ final class JournalDatabase {
         guard sqlite3_exec(output, "PRAGMA journal_mode=DELETE", nil, nil, nil) == SQLITE_OK else { throw CocoaError(.fileWriteUnknown) }
     }
 
-    private func rows(_ table: String) throws -> [String: Data] {
+    private func rows(_ table: String, predicate: String = "", parameters: [String] = []) throws -> [String: Data] {
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(connection, "SELECT key,value FROM \(table)", -1, &statement, nil) == SQLITE_OK else { throw failure() }
+        guard sqlite3_prepare_v2(connection, "SELECT key,value FROM \(table) \(predicate)", -1, &statement, nil) == SQLITE_OK else { throw failure() }
         defer { sqlite3_finalize(statement) }
+        for (index, value) in parameters.enumerated() {
+            guard sqlite3_bind_text(statement, Int32(index + 1), value, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) == SQLITE_OK else { throw failure() }
+        }
         var result: [String: Data] = [:]
         while true {
             let code = sqlite3_step(statement)
@@ -126,6 +133,16 @@ final class JournalDatabase {
         for (day, items) in todos { result.days[day, default: DayEntry()].todos = items.sorted { $0.0 < $1.0 }.map(\.1) }
         for (day, items) in logs { result.days[day, default: DayEntry()].logs = items.sorted { $0.0 < $1.0 }.map(\.1) }
         if !boards.isEmpty { result.boards = boards.sorted { $0.0 < $1.0 }.map(\.1) }
+        // 旧 schema 没有 recovery 表时仍可只读打开。
+        if try scalar("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='recovery'") > 0 {
+            let recovery = try rows("recovery")
+            if let trash = recovery["trash"] { result.recentlyDeleted = try decoder.decode([DeletedItem].self, from: trash) }
+            var history: [String: [BoardVersion]] = [:]
+            for (key, data) in recovery where key.hasPrefix("board/") {
+                history[String(key.dropFirst(6))] = try decoder.decode([BoardVersion].self, from: data)
+            }
+            if result.boardHistory != nil || !history.isEmpty { result.boardHistory = history }
+        }
         document = result
         return result
     }
@@ -136,6 +153,9 @@ final class JournalDatabase {
         var state = try JSONDecoder().decode(SyncState.self, from: data)
         state.records = try rows("sync_records").mapValues { try JSONDecoder().decode(SyncRecord.self, from: $0) }
         if let ledger = meta["transport"] { state.ledger = try JSONDecoder().decode(IncrementalState.self, from: ledger) }
+        if meta["transportOutbox"] != nil {
+            state.ledger?.pending = try rows("outbox").sorted { $0.key < $1.key }.map { try JSONDecoder().decode(SyncBatch.self, from: $0.value) }
+        }
         syncState = state
         return state
     }
@@ -147,12 +167,14 @@ final class JournalDatabase {
     }
 
     /// 队列上比较值快照，仅编码变动实体；缓存仅在 COMMIT 成功后更新。
-    func save(_ next: JournalDocument, state: SyncState? = nil) throws {
+    func save(_ next: JournalDocument, state: SyncState? = nil, changedDays: Set<String>? = nil) throws {
         var edits: [String: Data?] = [:]
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         let old = document
-        for day in Set(next.days.keys).union(old?.days.keys.map { $0 } ?? []) {
+        let candidates = old == nil ? Set(next.days.keys) : (changedDays ?? Set(next.days.keys).union(old?.days.keys.map { $0 } ?? []))
+        lastComparedDays = candidates.count
+        for day in candidates {
             let before = old?.days[day], after = next.days[day]
             guard before != after else { continue }
             var metadata = after
@@ -176,7 +198,8 @@ final class JournalDatabase {
             }
         }
         // 移动跨日期的实体时删除与新增不能由字典遍历顺序决定。
-        for (day, entry) in next.days {
+        for day in candidates {
+            guard let entry = next.days[day] else { continue }
             if let before = old?.days[day], before == entry { continue }
             for (index, todo) in entry.todos.enumerated() where edits.keys.contains("todo/" + todo.id.uuidString) {
                 edits["todo/" + todo.id.uuidString] = .some(try encoder.encode(Located(day: day, position: index, value: todo)))
@@ -195,15 +218,23 @@ final class JournalDatabase {
         }
         var header = next
         header.days = [:]; header.boards = next.boards?.isEmpty == true ? [] : nil
+        header.recentlyDeleted = nil; header.boardHistory = next.boardHistory == nil ? nil : [:]
         let headerData = try encoder.encode(header)
         lastChangedRows = 0; lastPayloadBytes = 0
         try execute("BEGIN IMMEDIATE")
         do {
             for (key, value) in edits { try put("entities", key: key, data: value) }
             try put("metadata", key: "journal", data: headerData)
+            if next.recentlyDeleted != old?.recentlyDeleted {
+                try put("recovery", key: "trash", data: next.recentlyDeleted.map { try encoder.encode($0) })
+            }
+            for id in Set(next.boardHistory?.keys.map { $0 } ?? []).union(old?.boardHistory?.keys.map { $0 } ?? [])
+                where next.boardHistory?[id] != old?.boardHistory?[id] {
+                try put("recovery", key: "board/" + id, data: next.boardHistory?[id].map { try encoder.encode($0) })
+            }
             if let state {
                 // 基线元数据丢失或重建时，旧记录不能混进新设备基线。
-                if syncState == nil { try execute("DELETE FROM sync_records") }
+                if syncState == nil { try execute("DELETE FROM sync_records"); try execute("DELETE FROM outbox") }
                 if syncState?.records != state.records {
                     for key in Set(syncState?.records.keys.map { $0 } ?? []).union(state.records.keys) where syncState?.records[key] != state.records[key] {
                         try put("sync_records", key: key, data: try state.records[key].map { try encoder.encode($0) })
@@ -212,7 +243,7 @@ final class JournalDatabase {
                 var context = state
                 context.records = [:]; context.ledger = nil
                 try put("metadata", key: "sync", data: encoder.encode(context))
-                try put("metadata", key: "transport", data: state.ledger.map { try encoder.encode($0) })
+                try saveLedger(state.ledger, previous: syncState?.ledger)
             }
             try execute("COMMIT")
             document = next
@@ -223,8 +254,48 @@ final class JournalDatabase {
     func saveTransport(_ state: SyncState) throws {
         guard let saved = try syncState ?? loadSyncState(), saved.device == state.device, saved.commitID == state.commitID,
               saved.folderPath == state.folderPath else { throw CocoaError(.fileWriteUnknown) }
-        let data = try state.ledger.map { try IncrementalSync.encode($0) }
-        try put("metadata", key: "transport", data: data)
-        syncState?.ledger = state.ledger
+        try execute("BEGIN IMMEDIATE")
+        do {
+            try saveLedger(state.ledger, previous: saved.ledger)
+            try execute("COMMIT")
+            syncState?.ledger = state.ledger
+        } catch { try? execute("ROLLBACK"); throw error }
     }
+    /// 待发批次独立成行，附件状态/上传进度变化不再重编码所有待发正文。
+    private func saveLedger(_ ledger: IncrementalState?, previous: IncrementalState?) throws {
+        let before = Dictionary((previous?.pending ?? []).map { (String(format: "%016lld", Int64($0.sequence)), $0) }, uniquingKeysWith: { _, b in b })
+        let after = Dictionary((ledger?.pending ?? []).map { (String(format: "%016lld", Int64($0.sequence)), $0) }, uniquingKeysWith: { _, b in b })
+        let alreadySplit = try scalar("SELECT count(*) FROM metadata WHERE key='transportOutbox'") > 0
+        for key in Set(before.keys).union(after.keys) where !alreadySplit || before[key] != after[key] {
+            try put("outbox", key: key, data: after[key].map { try IncrementalSync.encode($0) })
+        }
+        var metadata = ledger
+        metadata?.pending = []
+        try put("metadata", key: "transport", data: metadata.map { try IncrementalSync.encode($0) })
+        try put("metadata", key: "transportOutbox", data: Data([1]))
+    }
+
+    /// 日期范围走 SQLite 索引；不解码区间外的正文。
+    func loadDays(from start: String, through end: String) throws -> [String: DayEntry] {
+        guard JournalDates.date(for: start) != nil, JournalDates.date(for: end) != nil, start <= end else { throw CocoaError(.fileReadInvalidFileName) }
+        var entities = try rows("entities", predicate: "WHERE key BETWEEN ? AND ?", parameters: ["day/" + start, "day/" + end])
+        entities.merge(try rows("entities", predicate: "WHERE json_extract(CAST(value AS TEXT), '$.day') BETWEEN ? AND ?", parameters: [start, end])) { _, b in b }
+        var days: [String: DayEntry] = [:]
+        var todos: [String: [(Int, Todo)]] = [:], logs: [String: [(Int, DailyLogEntry)]] = [:]
+        let decoder = JSONDecoder()
+        for (key, data) in entities {
+            if key.hasPrefix("day/") { days[String(key.dropFirst(4))] = try decoder.decode(DayEntry.self, from: data) }
+            else if key.hasPrefix("todo/") {
+                let item = try decoder.decode(Located<Todo>.self, from: data)
+                todos[item.day, default: []].append((item.position, item.value))
+            } else if key.hasPrefix("log/") {
+                let item = try decoder.decode(Located<DailyLogEntry>.self, from: data)
+                logs[item.day, default: []].append((item.position, item.value))
+            }
+        }
+        for (key, values) in todos { days[key, default: DayEntry()].todos = values.sorted { $0.0 < $1.0 }.map(\.1) }
+        for (key, values) in logs { days[key, default: DayEntry()].logs = values.sorted { $0.0 < $1.0 }.map(\.1) }
+        return days
+    }
+
 }

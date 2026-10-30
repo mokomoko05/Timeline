@@ -103,4 +103,20 @@ final class SyncButtonFeedbackTests: XCTestCase {
         XCTAssertEqual(feedback.phase, .failed)
         XCTAssertFalse(feedback.isWorking)
     }
+    func testLocalSaveFailureNeverShowsSyncCompletedAndRetryCanRecover() async throws {
+        try await sync.sync()
+        try sync.store.setDatabaseWriteFailure(true)
+        _ = try sync.store.quickLog("Unsaved edit", on: Date())
+        let feedback = SyncButtonFeedback(sync: sync, completionDuration: 0.05)
+        await feedback.run { do { try await self.sync.store.saveAndWait() } catch { } }
+        XCTAssertTrue(feedback.shouldShow)
+        XCTAssertEqual(feedback.phase, .failed)
+        try sync.store.setDatabaseWriteFailure(false)
+        await feedback.run {
+            do { try await self.sync.store.saveAndWait() } catch { return }
+            await self.sync.syncUntilExported()
+        }
+        XCTAssertEqual(feedback.phase, .completed)
+    }
+
 }

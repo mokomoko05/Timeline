@@ -46,6 +46,8 @@ public final class FolderSync: ObservableObject {
         public var name: String
         public var exportedAt: Date
         public var hasReceivedLocalChanges: Bool? = nil
+        public var isRetired = false
+        public var supportsRetirement = false
     }
 
     public enum SyncError: LocalizedError {
@@ -53,9 +55,11 @@ public final class FolderSync: ObservableObject {
         case folderUnavailable(String)
         case newerFormat(String)
         case timeout
+        case upgradeRequired
 
         public var errorDescription: String? {
             switch self {
+            case .upgradeRequired: return "这台设备需要先升级 Timeline 并完成同步，才能安全停用。旧版设备仍可正常同步。"
             case .timeout: return "同步尚未完成，请检查网络和 iCloud 云盘状态后重试。"
             case .readOnly: return "当前数据只读，已暂停同步。"
             case .folderUnavailable(let path): return "无法访问同步文件夹：\(path)"
@@ -82,10 +86,16 @@ public final class FolderSync: ObservableObject {
     @Published public private(set) var lastWrittenBytes = 0
     @Published public private(set) var pendingUploadBytes = 0
     @Published public private(set) var pendingUploadFiles = 0
+    @Published public private(set) var fileErrors: [String: String] = [:]
+    @Published public private(set) var stageDurations: [String: Double] = [:]
+    @Published public private(set) var blockingFiles: [String] = []
+    @Published public private(set) var localSavedAt: Date?
+    private var stageStarted = ProcessInfo.processInfo.systemUptime
+    private var timedPhase: SyncPhase = .idle
 
     /// 界面先显示持续状态，后台检查不让「等待上传」反复切成「正在同步」。
     public var statusTitle: String {
-        if lastError != nil { return "同步未完成" }
+        if lastError != nil || !fileErrors.isEmpty { return "同步未完成" }
         if waitingForUpload { return "等待 iCloud 上传" }
         if waitingForDownload { return "等待 iCloud 下载" }
         if isSyncing { return "正在检查同步" }
@@ -145,6 +155,8 @@ public final class FolderSync: ObservableObject {
         }
         state.folderPath = folderPath
         hasLocalChanges = state.ledger?.pending.isEmpty == false || state.ledger?.pendingCloud.contains(where: { $0.hasPrefix("streams/" + state.device + "/") }) == true
+        fileErrors = (state.ledger?.streamErrors ?? [:]).merging(state.ledger?.attachmentErrors ?? [:]) { _, b in b }
+        blockingFiles = Array((state.ledger?.pendingCloud ?? []).union(state.ledger?.waitingFiles ?? []).union(fileErrors.keys)).sorted()
         let statusURL = url.deletingLastPathComponent().appendingPathComponent("status.json")
         if let data = try? Data(contentsOf: statusURL), let report = try? JSONDecoder().decode([String: String].self, from: data) {
             let formatter = ISO8601DateFormatter()
@@ -305,13 +317,13 @@ public final class FolderSync: ObservableObject {
             let changed = try await runOnce()
             for name in deferredImageRequests { enqueueImage(name) }
             lastCheck = now()
-            if !rerun && !waitingForDownload && !waitingForUpload { lastSync = now() }
+            if !rerun && !waitingForDownload && !waitingForUpload && fileErrors.isEmpty { lastSync = now() }
             if !waitingForUpload && !waitingForDownload {
                 lastError = nil
                 lastErrorCode = nil
                 if failureStreak != 0 { failureStreak = 0 }
             }
-            await recordProgress(waitingForUpload ? "waitingForUpload" : (waitingForDownload ? "waitingForDownload" : "finished"))
+            await recordProgress(!fileErrors.isEmpty ? "failed" : (waitingForUpload ? "waitingForUpload" : (waitingForDownload ? "waitingForDownload" : "finished")))
             return changed
         } catch {
             let underlying = error as NSError
@@ -336,7 +348,7 @@ public final class FolderSync: ObservableObject {
             if finished {
                 attempt = nil
                 finished = false
-                if failed { return }
+                if failed || !fileErrors.isEmpty { return }
                 nextAttempt = Date().addingTimeInterval(1)
                 if !isSyncing, !needsExport, syncedContent == store.syncContent, !waitingForUpload, !waitingForDownload { return }
             }
@@ -369,10 +381,13 @@ public final class FolderSync: ObservableObject {
         case "failed", "timedOut": next = .failed
         default: next = phase
         }
-        if phase != next { phase = next }
+        if stage == "preparing" { stageDurations = [:]; stageStarted = ProcessInfo.processInfo.systemUptime; timedPhase = .preparing }
+        setPhase(next)
         let url = stateURL.deletingLastPathComponent().appendingPathComponent("status.json")
         let formatter = ISO8601DateFormatter()
         var report = ["stage": stage, "time": formatter.string(from: Date()), "error": error ?? lastError ?? "", "device": state.device]
+        report["blockingFiles"] = blockingFiles.joined(separator: "\n")
+        report["stageDurationsMS"] = stageDurations.sorted { $0.key < $1.key }.map { "\($0.key)=\(Int($0.value * 1000))" }.joined(separator: ",")
         report["waitingForUpload"] = String(waitingForUpload)
         report["waitingForDownload"] = String(waitingForDownload)
         report["pendingUploadFiles"] = String(pendingUploadFiles)
@@ -387,6 +402,14 @@ public final class FolderSync: ObservableObject {
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             if let data = try? JSONEncoder().encode(report) { try? data.write(to: url, options: .atomic) }
         }.value
+    }
+
+    private func setPhase(_ next: SyncPhase) {
+        guard phase != next else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if timedPhase.isRunning { stageDurations[timedPhase.rawValue, default: 0] += now - stageStarted }
+        stageStarted = now; timedPhase = next
+        phase = next
     }
 
     private struct Outcome: @unchecked Sendable {
@@ -410,12 +433,17 @@ public final class FolderSync: ObservableObject {
         let outcome = try await Task.detached(priority: .utility) {
             try Self.merge(content: content, state: previous, localChanged: localChanged, baseline: baseline, folder: folder, deviceName: deviceName, now: time)
         }.value
-        phase = .merging
+        setPhase(.merging)
         // 合并期间本机又改了：作废这次结果，稍后重来。
         guard store.syncContent == content else { rerun = true; return false }
         if outcome.firstMerge {
-            try? FileManager.default.createDirectory(at: store.backupsDirectory, withIntermediateDirectories: true)
-            try? store.export(to: store.backupsDirectory.appendingPathComponent("before-first-sync-\(JournalDates.key(time)).json"))
+            let backup = store.backupsDirectory.appendingPathComponent("before-first-sync-\(JournalDates.key(time))-\(UUID().uuidString).json")
+            let document = store.documentSnapshot
+            try await Task.detached(priority: .utility) {
+                try FileManager.default.createDirectory(at: backup.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try JournalWriter.encode(document).write(to: backup, options: .atomic)
+            }.value
+            guard store.syncContent == content else { rerun = true; return false }
         }
         let applied = outcome.content != content
         if applied {
@@ -455,23 +483,37 @@ public final class FolderSync: ObservableObject {
         if recordsChanged || applied || store.hasPendingSave || durableState.ledger != previous.ledger {
             try await store.saveForSync(state: durableState)
         }
+        localSavedAt = store.lastSaved
         state = durableState
         syncedContent = outcome.content
         devices = outcome.devices.map { device in
             var device = device
+            device.isRetired = durableState.ledger?.retiredDevices?.contains(device.id) == true
             if let ledger = durableState.ledger, let peer = ledger.peers[device.id] {
+                device.supportsRetirement = peer.capabilities?.contains("device-retirement-v1") == true
                 device.hasReceivedLocalChanges = (peer.seen[durableState.device] ?? 0) >= ledger.sequence && ledger.sequence > 0
             }
             return device
         }
-        phase = .publishing
+        setPhase(.publishing)
         let transfer = try await Task.detached(priority: .utility) {
             let persisted = snapshotState
             return try Self.accessing(folder) { () throws -> (Int, Int, URL, IncrementalState, Int, Int) in
                 var ledger = persisted.ledger ?? IncrementalState()
-                let imageBytes = try Self.syncImages(ledger.queuedImages ?? [], local: images, folder: folder, ledger: &ledger)
-                let leaseBytes = try SyncImageMaintenance.publish(protected: ledger.protectedImages ?? names, folder: folder, device: persisted.device, now: time, state: &ledger)
+                // 正文与附件各自持久化。先发布正文，附件失败不会撤回已发布增量。
                 let publication = try IncrementalSync.publish(folder: folder, device: persisted.device, name: deviceName, now: time, state: &ledger)
+                var imageBytes = 0
+                ledger.attachmentErrors = [:]
+                var leaseBytes = 0
+                do { leaseBytes = try SyncImageMaintenance.publish(protected: ledger.protectedImages ?? names, folder: folder, device: persisted.device, now: time, state: &ledger) }
+                catch { ledger.attachmentErrors?["image-leases/" + persisted.device] = error.localizedDescription }
+                let imageQueue = ledger.queuedImages ?? []
+                var remaining = Set<String>()
+                for name in imageQueue.sorted() {
+                    do { imageBytes += try Self.syncImages([name], local: images, folder: folder, ledger: &ledger) }
+                    catch { remaining.insert(name); ledger.attachmentErrors?["images/" + name] = error.localizedDescription }
+                }
+                ledger.queuedImages = remaining
                 try IncrementalSync.compact(folder: folder, device: persisted.device, uploadPending: uploadPending)
                 for relative in ledger.pendingCloud {
                     let url = folder.appendingPathComponent(relative)
@@ -485,15 +527,19 @@ public final class FolderSync: ObservableObject {
                 }
                 if ledger != persisted.ledger { ledger.revision += 1 }
 
-                return (pendingCount, pendingBytes, publication.url, ledger, publication.bytes + imageBytes + leaseBytes, publication.batches)
+                return (pendingCount + (ledger.queuedImages?.count ?? 0), pendingBytes, publication.url, ledger, publication.bytes + imageBytes + leaseBytes, publication.batches)
             }
         }.value
         var transferredState = snapshotState
         transferredState.ledger = transfer.3
-        if transfer.3 != snapshotState.ledger { try store.saveSyncTransport(transferredState) }
+        if transfer.3 != snapshotState.ledger { try await store.saveSyncTransport(transferredState) }
         let revisionChanged = exportedRevision != transfer.2
         exportedRevision = transfer.2
         state.ledger = transfer.3
+        let problems = (transfer.3.streamErrors ?? [:]).merging(transfer.3.attachmentErrors ?? [:]) { _, new in new }
+        if fileErrors != problems { fileErrors = problems }
+        let blocked = Array(transfer.3.pendingCloud.union(Set(problems.keys)).union(transfer.3.waitingFiles ?? [])).sorted()
+        if blockingFiles != blocked { blockingFiles = blocked }
         needsExport = !transfer.3.pending.isEmpty
         lastReadBytes = outcome.readBytes
         lastWrittenBytes = transfer.4
@@ -517,6 +563,13 @@ public final class FolderSync: ObservableObject {
     nonisolated private static func merge(content: SyncContent, state previous: SyncState, localChanged: Bool, baseline: SyncContent?,
                                           folder: URL, deviceName: String, now: Date) throws -> Outcome {
         var state = previous
+        let retirement = try accessing(folder) { try retiredDevices(in: folder) }
+        let retired = retirement.devices
+        if retired.contains(state.device) {
+            // 被停用设备重新上线：保留正文和墓碑，以新身份及完整检查点重新接入。
+            state = SyncState(device: makeDeviceID(), folderPath: previous.folderPath, records: previous.records)
+            state.names = previous.names
+        }
         var merge = SyncMerge(device: state.device, now: now)
         if localChanged || state.records.isEmpty {
             if let baseline, !state.records.isEmpty {
@@ -529,12 +582,15 @@ public final class FolderSync: ObservableObject {
         var mergedRemote = false
         var pendingDownload = false
         var ledger = state.ledger ?? IncrementalState()
+        ledger.retiredDevices = retired
         var readBytes = 0
         try accessing(folder) {
             let incoming = try IncrementalSync.read(folder: folder, device: state.device, state: &ledger, merge: &merge, records: &state.records)
             readBytes = incoming.bytes
             mergedRemote = incoming.changed
-            pendingDownload = incoming.waiting
+            pendingDownload = incoming.waiting || !retirement.waiting.isEmpty || !retirement.errors.isEmpty
+            ledger.streamErrors = (ledger.streamErrors ?? [:]).merging(retirement.errors) { _, b in b }
+            ledger.waitingFiles?.formUnion(retirement.waiting)
             try coordinatedCreateDirectory(folder.appendingPathComponent(devicesFolder))
             let (files, placeholders) = try remoteFiles(in: folder, excluding: state.device, ignoring: ledger.migrated)
             pendingDownload = pendingDownload || placeholders
@@ -542,37 +598,42 @@ public final class FolderSync: ObservableObject {
             // 云端占位文件尚未下载时保留原缓存；其余已被清理的旧版本不再占本地状态。
             if !placeholders { state.remote = state.remote.filter { present.contains($0.key) } }
             for file in files {
-                let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey, .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
-                let id = file.deletingPathExtension().lastPathComponent
-                let ownerID = file.deletingLastPathComponent().lastPathComponent == updatesFolder ? String(id.split(separator: "-", maxSplits: 1).first ?? Substring(id)) : id
-                if ledger.migrated.contains(ownerID) { continue }
-                // iCloud 云盘不会主动把别的设备更新过的文件拉到本机（iOS 上尤其如此）：本机这份不是最新的，
-                // 就请系统下载，这一轮先用手上的，下载完修改时间变了再合并。
-                if values?.isUbiquitousItem == true, let status = values?.ubiquitousItemDownloadingStatus, status != .current {
-                    try? FileManager.default.startDownloadingUbiquitousItem(at: file)
+                do {
+                    let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey, .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
+                    let id = file.deletingPathExtension().lastPathComponent
+                    let ownerID = file.deletingLastPathComponent().lastPathComponent == updatesFolder ? String(id.split(separator: "-", maxSplits: 1).first ?? Substring(id)) : id
+                    if ledger.migrated.contains(ownerID) { continue }
+                    // iCloud 云盘不会主动把别的设备更新过的文件拉到本机（iOS 上尤其如此）：本机这份不是最新的，
+                    // 就请系统下载，这一轮先用手上的，下载完修改时间变了再合并。
+                    if values?.isUbiquitousItem == true, let status = values?.ubiquitousItemDownloadingStatus, status != .current {
+                        try? FileManager.default.startDownloadingUbiquitousItem(at: file)
+                        pendingDownload = true
+                    }
+                    // iCloud 替换文件时可能保留修改时间和字节数。必须按实际内容判断，
+                    // 否则等长的 Board 编辑会一直被当成“已经同步过”。读取、摘要均在后台。
+                    guard let data = try coordinatedRead(file) else { continue }
+                    readBytes += data.count
+                    let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                    var mark = SyncState.RemoteMark(modified: values?.contentModificationDate ?? .distantPast, size: data.count, digest: digest)
+                    if state.remote[id]?.digest == digest, let name = state.names[id], let exportedAt = state.remote[id]?.exportedAt {
+                        devices.append(Device(id: ownerID, name: name, exportedAt: exportedAt))
+                        continue
+                    }
+                    let snapshot = try JSONDecoder().decode(SyncSnapshot.self, from: data)
+                    if snapshot.format == 2 && snapshot.records.isEmpty { pendingDownload = true; continue }
+                    guard snapshot.format <= SyncSnapshot.currentFormat else { throw SyncError.newerFormat(snapshot.name) }
+                    mark.exportedAt = snapshot.exportedAt
+                    state.names[snapshot.device] = snapshot.name
+                    state.names[id] = snapshot.name
+                    merge.describeDevice = { [names = state.names] in names[$0] ?? $0 }
+                    merge.merge(snapshot.records, into: &state.records)
+                    state.remote[id] = mark
+                    mergedRemote = true
+                    devices.append(Device(id: snapshot.device, name: snapshot.name, exportedAt: snapshot.exportedAt))
+                } catch {
+                    ledger.streamErrors?[file.deletingLastPathComponent().lastPathComponent + "/" + file.lastPathComponent] = error.localizedDescription
                     pendingDownload = true
                 }
-                // iCloud 替换文件时可能保留修改时间和字节数。必须按实际内容判断，
-                // 否则等长的 Board 编辑会一直被当成“已经同步过”。读取、摘要均在后台。
-                guard let data = try coordinatedRead(file) else { continue }
-                readBytes += data.count
-                let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-                var mark = SyncState.RemoteMark(modified: values?.contentModificationDate ?? .distantPast, size: data.count, digest: digest)
-                if state.remote[id]?.digest == digest, let name = state.names[id], let exportedAt = state.remote[id]?.exportedAt {
-                    devices.append(Device(id: ownerID, name: name, exportedAt: exportedAt))
-                    continue
-                }
-                let snapshot = try JSONDecoder().decode(SyncSnapshot.self, from: data)
-                if snapshot.format == 2 && snapshot.records.isEmpty { pendingDownload = true; continue }
-                guard snapshot.format <= SyncSnapshot.currentFormat else { throw SyncError.newerFormat(snapshot.name) }
-                mark.exportedAt = snapshot.exportedAt
-                state.names[snapshot.device] = snapshot.name
-                state.names[id] = snapshot.name
-                merge.describeDevice = { [names = state.names] in names[$0] ?? $0 }
-                merge.merge(snapshot.records, into: &state.records)
-                state.remote[id] = mark
-                mergedRemote = true
-                devices.append(Device(id: snapshot.device, name: snapshot.name, exportedAt: snapshot.exportedAt))
             }
         }
         for peer in ledger.peers.values {
@@ -667,7 +728,7 @@ public final class FolderSync: ObservableObject {
         var written = 0
         let remote = folder.appendingPathComponent(imagesFolder)
         try coordinatedCreateDirectory(remote)
-        for name in names.sorted() where !name.contains("/") && !name.hasPrefix(".") {
+        for name in names.sorted() where !name.contains("/") && !name.contains("\\") && !name.hasPrefix(".") {
             let mine = local.appendingPathComponent(name), theirs = remote.appendingPathComponent(name)
             if manager.fileExists(atPath: mine.path) {
                 let placeholder = remote.appendingPathComponent("." + name + ".icloud")
@@ -678,9 +739,9 @@ public final class FolderSync: ObservableObject {
                 }
                 ledger.pendingCloud.insert(imagesFolder + "/" + name)
                 ledger.uploadedImages.insert(name)
-            } else if manager.fileExists(atPath: theirs.path) {
+            } else if manager.fileExists(atPath: theirs.path) || manager.fileExists(atPath: remote.appendingPathComponent("." + name + ".icloud").path) {
                 ledger.uploadedImages.insert(name)
-            }
+            } else { throw ImageExportError.unavailable }
         }
         // 尚未下载到本地的远端图片不需要本机上传；本机的待发图片在失败时
         // 仍保留于持久化队列，只有整轮传输成功才会提交这个清空操作。
@@ -753,5 +814,40 @@ public final class FolderSync: ObservableObject {
         if let coordinationError { throw coordinationError }
         guard let result else { throw CocoaError(.fileReadUnknown) }
         return try result.get()
+    }
+}
+
+extension FolderSync {
+    /// 显式退役；先持久化完整检查点，保留旧流，离线旧设备仍可安全重新接入。
+    public func retireDevice(_ id: String) async throws {
+        guard !store.isReadOnly else { throw SyncError.readOnly }
+        guard !isSyncing, IncrementalSync.safe(id), id != deviceID,
+              devices.contains(where: { $0.id == id && !$0.isRetired }) else { throw SyncError.timeout }
+        guard devices.first(where: { $0.id == id })?.supportsRetirement == true else { throw SyncError.upgradeRequired }
+        try await sync()
+        guard !isSyncing, !waitingForDownload, fileErrors.isEmpty else { throw SyncError.timeout }
+        isSyncing = true
+        defer { isSyncing = false; syncSoon() }
+        let own = deviceID, folder = folder
+        var next = state
+        var ledger = next.ledger ?? IncrementalState()
+        let batch = SyncBatch(device: own, name: deviceName, sequence: ledger.sequence + 1,
+                              base: ledger.sequence, checkpoint: true, exportedAt: now(), records: next.records, seen: ledger.received)
+        ledger.sequence = batch.sequence; ledger.checkpointSequence = batch.sequence
+        ledger.deltaCount = 0; ledger.deltaBytes = 0
+        ledger.received[own] = batch.sequence
+        ledger.pending.append(batch)
+        let relative = "retired-devices/" + id + ".json"
+        ledger.pendingCloud.insert(relative)
+        ledger.revision += 1
+        next.ledger = ledger
+        try await store.saveForSync(state: next)
+        state = next
+        let marker = SyncRetirement(device: id, retiredBy: own, date: now())
+        try await Task.detached(priority: .utility) {
+            try Self.accessing(folder) {
+                try Self.coordinatedWrite(IncrementalSync.encode(marker), to: folder.appendingPathComponent(relative))
+            }
+        }.value
     }
 }

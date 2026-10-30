@@ -213,6 +213,8 @@ struct JournalDocument: Codable, Equatable {
     var boards: [Board]?
     var boardFavoriteOrder: [UUID]?
     var syncCommitID: String?
+    var recentlyDeleted: [DeletedItem]?
+    var boardHistory: [String: [BoardVersion]]?
 }
 
 @MainActor
@@ -248,8 +250,11 @@ public final class JournalStore: ObservableObject {
     @Published public internal(set) var pinnedTaskID: UUID?
     /// 最近删除（本机保留 30 天，不同步），新删的在前。
     @Published public internal(set) var recentlyDeleted: [DeletedItem] = []
-    /// 工作板的历史版本，存在 `BoardHistory/` 里，用到时才读。
-    lazy var boardHistory = BoardHistory(directory: directory.appendingPathComponent("BoardHistory", isDirectory: true), writesInBackground: writesInBackground)
+    /// 工作板历史与正文在同一个 SQLite 事务中提交。
+    private var loadedBoardHistory: [String: [BoardVersion]] = [:]
+    lazy var boardHistory = BoardHistory(initial: loadedBoardHistory)
+    private var persistenceSuspended = false
+    private var changedPersistenceDays: Set<String>? = nil
     public let directory: URL
     /// 只供保存逻辑判断，界面不读；不发布，否则每次写盘完成清除标记时都会让所有窗口再重算一遍。
     public private(set) var hasPendingSave = false
@@ -397,6 +402,13 @@ public final class JournalStore: ObservableObject {
                     throw CocoaError(.fileReadUnknown)
                 }
                 syncCommitID = document.syncCommitID
+                recentlyDeleted = document.recentlyDeleted ?? []
+                if document.recentlyDeleted == nil, FileManager.default.fileExists(atPath: trashURL.path) {
+                    recentlyDeleted = try JSONDecoder().decode([DeletedItem].self, from: Data(contentsOf: trashURL))
+                    hasPendingSave = true; documentVersion += 1
+                }
+                loadedBoardHistory = try document.boardHistory ?? BoardHistory.legacyVersions(in: self.directory.appendingPathComponent("BoardHistory"))
+                if document.boardHistory == nil { hasPendingSave = true; documentVersion += 1 }
                 days = document.days
                 tagRegistry = TagText.merge([], (document.tags ?? []).compactMap(TagText.normalize))
                 pinnedTaskID = document.pinnedTask
@@ -404,7 +416,7 @@ public final class JournalStore: ObservableObject {
                 boardFavoriteOrder = document.boardFavoriteOrder
                 if !readOnlySnapshot {
                     if storedDocument == nil {
-                        hasPendingSave = true
+                        hasPendingSave = true; documentVersion += 1
                         try data.write(to: backupURL, options: .atomic)
                     }
                 }
@@ -413,7 +425,7 @@ public final class JournalStore: ObservableObject {
                         try FileManager.default.createDirectory(at: backupsDirectory, withIntermediateDirectories: true)
                         try data.write(to: backupsDirectory.appendingPathComponent("before-board-markdown-v\(document.version).json"), options: .atomic)
                     }
-                    hasPendingSave = true
+                    hasPendingSave = true; documentVersion += 1
                 }
                 nextTaskNumber = max(document.nextTaskNumber ?? 1, (days.values.flatMap(\.todos).compactMap(\.number).max() ?? 0) + 1)
                 if document.version < 6 {
@@ -423,9 +435,9 @@ public final class JournalStore: ObservableObject {
                         try data.write(to: backupsDirectory.appendingPathComponent("before-ddl-migration-v\(document.version).json"), options: .atomic)
                     }
                     adoptScheduledDayAsDeadline(in: &days)
-                    hasPendingSave = true
+                    hasPendingSave = true; documentVersion += 1
                 }
-                if assignMissingNumbers(in: &days) { hasPendingSave = true }
+                if assignMissingNumbers(in: &days) { hasPendingSave = true; documentVersion += 1 }
             }
             if readOnlySnapshot { isReadOnly = true; hasPendingSave = false } else { loadRecentlyDeleted() }
         } catch {
@@ -1111,6 +1123,19 @@ public final class JournalStore: ObservableObject {
         public let deleted: Bool
     }
 
+    /// 按日读取当前内存内容，含尚未落盘的编辑，不创建跨日期全文列表。
+    public func logs(on key: String, includeFocus: Bool = true) -> [LoggedLog] {
+        guard let day = days[key], let date = JournalDates.date(for: key) else { return [] }
+        return day.logs.filter { includeFocus || !$0.focus }.sorted { $0.createdAt < $1.createdAt }.map { LoggedLog(key: key, date: date, log: $0) }
+    }
+
+    /// 后台读取已提交的日期范围，供归档/批量处理；不等待主线程。
+    public func loadSavedDays(from start: String, through end: String) async throws -> [String: DayEntry] {
+        try await withCheckedThrowingContinuation { continuation in
+            writer.loadDays(from: start, through: end) { continuation.resume(with: $0) }
+        }
+    }
+
     /// 全部日志（跨日期），按时间从早到晚；`includeFocus` 为 false 时不含专注计时的开始、结束记录。
     public func allLogs(includeFocus: Bool = false) -> [LoggedLog] {
         let all = chronology()
@@ -1232,8 +1257,9 @@ public final class JournalStore: ObservableObject {
         }
         guard changed else { return }
         invalidateNotebookIndex(logsChanged: true, tasksChanged: false)
+        changedPersistenceDays?.formUnion(Set(days.keys).union(updated.keys).filter { days[$0] != updated[$0] })
         days = updated
-        hasPendingSave = true
+        hasPendingSave = true; documentVersion += 1
         scheduleSave()
     }
 
@@ -1369,7 +1395,7 @@ public final class JournalStore: ObservableObject {
         pendingSave?.cancel()
         pendingSave = nil
         documentVersion += 1
-        finishSave(writer.writeNow(documentSnapshot, version: documentVersion), version: documentVersion)
+        finishSave(writer.writeNow(documentSnapshot, version: documentVersion, changedDays: changedPersistenceDays), version: documentVersion)
     }
 
     /// 交互界面确认保存时等待写队列，不在主线程上等待编码、磁盘和旧队列任务。
@@ -1379,11 +1405,16 @@ public final class JournalStore: ObservableObject {
         pendingSave?.cancel(); pendingSave = nil
         documentVersion += 1
         let version = documentVersion, document = documentSnapshot
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            writer.write(document, version: version, timing: timing) { [weak self] error in
-                MainActor.assumeIsolated { self?.finishSave(error, version: version) }
-                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                writer.writeAwaited(document, version: version, changedDays: changedPersistenceDays, timing: timing) { error in
+                    if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                }
             }
+            finishSave(nil, version: version)
+        } catch {
+            finishSave(error, version: version)
+            throw error
         }
     }
 
@@ -1397,7 +1428,7 @@ public final class JournalStore: ObservableObject {
         document.syncCommitID = state.commitID
         do {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                writer.commit(document, version: version, state: state) { error in
+                writer.commit(document, version: version, state: state, changedDays: changedPersistenceDays) { error in
                     if let error { continuation.resume(throwing: error) }
                     else { continuation.resume() }
                 }
@@ -1411,18 +1442,42 @@ public final class JournalStore: ObservableObject {
     }
 
     func persistedSyncState() throws -> SyncState? { try writer.loadSyncState() }
-    func saveSyncTransport(_ state: SyncState) throws { try writer.saveTransport(state) }
+    func saveSyncTransport(_ state: SyncState) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            writer.saveTransport(state) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
     var persistenceStatistics: (rows: Int, bytes: Int) { writer.statistics() }
 
     /// 修改后的保存：开启后台写入时不阻塞界面，否则同 `save()`。
+    func recoveryChanged() {
+        hasPendingSave = true; documentVersion += 1
+        scheduleSave()
+    }
+
+    public func saveInBackground() {
+        guard !persistenceSuspended else { return }
+        guard !isReadOnly else { return }
+        pendingSave?.cancel(); pendingSave = nil
+        hasPendingSave = true; documentVersion += 1
+        documentVersion += 1
+        let version = documentVersion
+        writer.write(documentSnapshot, version: version, changedDays: changedPersistenceDays) { [weak self] error in
+            MainActor.assumeIsolated { self?.finishSave(error, version: version) }
+        }
+    }
+
     private func persist() {
+        guard !persistenceSuspended else { return }
         guard writesInBackground else { save(); return }
         guard !isReadOnly else { return }
         pendingSave?.cancel()
         pendingSave = nil
         documentVersion += 1
         let version = documentVersion
-        writer.write(documentSnapshot, version: version) { [weak self] error in
+        writer.write(documentSnapshot, version: version, changedDays: changedPersistenceDays) { [weak self] error in
             MainActor.assumeIsolated { self?.finishSave(error, version: version) }
         }
     }
@@ -1456,6 +1511,7 @@ public final class JournalStore: ObservableObject {
         lastSaved = Date()
         // 期间又有修改：等那次写入完成再清除标记。值没变就不赋值，免得通知所有观察的窗口。
         guard version == documentVersion else { return }
+        changedPersistenceDays = []
         if hasPendingSave { hasPendingSave = false }
         if errorMessage != nil { errorMessage = nil }
     }
@@ -1710,7 +1766,36 @@ public final class JournalStore: ObservableObject {
         if let errorMessage { throw NSError(domain: "Timeline", code: 1, userInfo: [NSLocalizedDescriptionKey: errorMessage]) }
     }
 
-    private func readBackup(_ url: URL) throws -> JournalDocument {
+    func archiveForPackageRestore() async throws {
+        let writer = writer, archive = backupsDirectory.appendingPathComponent("before-restore-database-" + UUID().uuidString)
+        try await Task.detached(priority: .utility) { try writer.prepareForRestore(archive: archive) }.value
+        isReadOnly = false
+    }
+
+    func applyPackageRestore(_ document: JournalDocument) {
+        let previousBackground = writesInBackground
+        writesInBackground = true
+        persistenceSuspended = true
+        defer { writesInBackground = previousBackground; persistenceSuspended = false }
+        isReadOnly = false
+        var restored = document.days
+        if document.version < 6 { adoptScheduledDayAsDeadline(in: &restored) }
+        nextTaskNumber = max(nextTaskNumber, document.nextTaskNumber ?? 1, (restored.values.flatMap(\.todos).compactMap(\.number).max() ?? 0) + 1)
+        assignMissingNumbers(in: &restored)
+        undoManager.beginUndoGrouping()
+        tagRegistry = TagText.merge(tagRegistry, (document.tags ?? []).compactMap(TagText.normalize))
+        replaceBoards(document.boards ?? [], action: "恢复备份")
+        setBoardFavoriteOrder(document.boardFavoriteOrder ?? [])
+        replaceDays(restored, action: "恢复备份", force: true)
+        pinTask(document.pinnedTask)
+        undoManager.endUndoGrouping()
+        // 保留恢复前的最近删除和历史，同时导入备份中额外的恢复记录。
+        let existing = Set(recentlyDeleted.map(\.id))
+        recentlyDeleted += (document.recentlyDeleted ?? []).filter { !existing.contains($0.id) }
+        boardHistory.importVersions(document.boardHistory ?? [:])
+    }
+
+    func readBackup(_ url: URL) throws -> JournalDocument {
         let document = try JSONDecoder().decode(JournalDocument.self, from: Data(contentsOf: url))
         guard (1...8).contains(document.version), document.days.keys.allSatisfy({ JournalDates.date(for: $0) != nil }) else { throw CocoaError(.fileReadCorruptFile) }
         let ids = document.days.values.flatMap { $0.todos.map(\.id) }
@@ -1750,16 +1835,17 @@ public final class JournalStore: ObservableObject {
         }
     }
 
-    private func replaceDays(_ updated: [String: DayEntry], action: String, force: Bool = false, debounce: Bool = false) {
+    func replaceDays(_ updated: [String: DayEntry], action: String, force: Bool = false, debounce: Bool = false) {
         guard !isReadOnly, force || updated != days else { return }
         registerUndo(days, replacing: updated, action: action)
         let tasksChanged = Set(days.keys).union(updated.keys).contains(where: { (days[$0]?.todos ?? []) != (updated[$0]?.todos ?? []) })
         let logsChanged = Set(days.keys).union(updated.keys).contains { (days[$0]?.logs ?? []) != (updated[$0]?.logs ?? []) }
         invalidateNotebookIndex(logsChanged: logsChanged, tasksChanged: tasksChanged)
         if tasksChanged || logsChanged { trackDeletions(from: days, to: updated, keys: Set(days.keys).union(updated.keys)) }
+        changedPersistenceDays?.formUnion(Set(days.keys).union(updated.keys).filter { days[$0] != updated[$0] })
         days = updated
         if tasksChanged { invalidateTaskIndex() }
-        hasPendingSave = true
+        hasPendingSave = true; documentVersion += 1
         if debounce { scheduleSave() } else { persist() }
     }
 
@@ -1776,9 +1862,10 @@ public final class JournalStore: ObservableObject {
         let logsChanged = entry.logs != (days[key]?.logs ?? [])
         invalidateNotebookIndex(logsChanged: logsChanged, tasksChanged: tasksChanged)
         if tasksChanged || logsChanged { trackDeletions(from: days, to: updated, keys: [key]) }
+        changedPersistenceDays?.insert(key)
         days = updated
         if tasksChanged { invalidateTaskIndex() }
-        hasPendingSave = true
+        hasPendingSave = true; documentVersion += 1
         if debounce {
             scheduleSave()
         } else {
@@ -1788,13 +1875,14 @@ public final class JournalStore: ObservableObject {
 
     /// 标签注册表变了：落盘（注册表不进撤销栈）。
     func registryChanged() {
-        hasPendingSave = true
+        hasPendingSave = true; documentVersion += 1
         persist()
     }
 
-    private var documentSnapshot: JournalDocument {
+    var documentSnapshot: JournalDocument {
         JournalDocument(days: days, nextTaskNumber: nextTaskNumber, tags: tagRegistry.isEmpty ? nil : tagRegistry,
-                        pinnedTask: pinnedTaskID, boards: boards.isEmpty ? nil : boards, boardFavoriteOrder: boardFavoriteOrder, syncCommitID: syncCommitID)
+                        pinnedTask: pinnedTaskID, boards: boards.isEmpty ? nil : boards, boardFavoriteOrder: boardFavoriteOrder, syncCommitID: syncCommitID,
+                        recentlyDeleted: recentlyDeleted, boardHistory: boardHistory.snapshot)
     }
 
     /// 同步用的内容快照：值类型，可以交给后台线程整理。
@@ -1813,6 +1901,7 @@ public final class JournalStore: ObservableObject {
         canUndoDelete = false
         invalidateNotebookIndex(logsChanged: logsChanged, tasksChanged: tasksChanged)
         if tasksChanged || logsChanged { trackDeletions(from: days, to: content.days, keys: Set(days.keys).union(content.days.keys)) }
+        changedPersistenceDays?.formUnion(Set(days.keys).union(content.days.keys).filter { days[$0] != content.days[$0] })
         days = content.days
         if boards != content.boards {
             // 别的设备改过的工作板：先把本机这一版存进历史，冲突合并或覆盖后都能找回来。
@@ -1826,7 +1915,7 @@ public final class JournalStore: ObservableObject {
         if pinnedTaskID != content.pinnedTask { pinnedTaskID = content.pinnedTask }
         if boardFavoriteOrder != content.boardFavoriteOrder { boardFavoriteOrder = content.boardFavoriteOrder }
         if tasksChanged { invalidateTaskIndex() }
-        hasPendingSave = true
+        hasPendingSave = true; documentVersion += 1
         if persistImmediately { persist() }
     }
 
@@ -1844,11 +1933,12 @@ public final class JournalStore: ObservableObject {
         if previous.map(\.owner) != updated.map(\.owner) || previous.map(\.archived) != updated.map(\.archived) {
             cachedTagSummaries = nil
         }
-        hasPendingSave = true
+        hasPendingSave = true; documentVersion += 1
         if debounce { scheduleSave() } else { persist() }
     }
 
     private func scheduleSave() {
+        guard !persistenceSuspended else { return }
         pendingSave?.cancel()
         pendingSave = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return }

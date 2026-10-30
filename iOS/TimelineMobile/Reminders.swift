@@ -15,6 +15,7 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
     static let snooze60Action = "timeline.snooze60"
     static let limit = 60
 
+    @Published private(set) var schedulingError: String?
     @Published private(set) var authorization: UNAuthorizationStatus = .notDetermined
     private let store: JournalStore
     private let center = UNUserNotificationCenter.current()
@@ -46,7 +47,7 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
         // 日志、草稿不改变提醒：先合并输入，计划真的变了才去碰系统通知。
         changes = store.$days
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
-            .map { ReminderPlan.pending(days: $0) }
+            .map { ReminderLifecycleSnapshot(days: $0) }
             .removeDuplicates()
             .sink { [weak self] _ in self?.refresh() }
     }
@@ -74,14 +75,20 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
         }
         authorization = status
         guard !Task.isCancelled else { return }
-        let existing = await center.pendingNotificationRequests().filter { $0.identifier.hasPrefix("timeline.") }
+        let existing = await center.pendingNotificationRequests().filter { ReminderLifecycle.isManaged($0.identifier) }
+        guard !Task.isCancelled else { return }
         let desired = Set(plans.map(\.id))
-        center.removePendingNotificationRequests(withIdentifiers: existing.map(\.identifier).filter { !desired.contains($0) })
+        let activeTasks = Set(store.tasks().filter { !$0.task.completed }.map(\.id))
+        center.removePendingNotificationRequests(withIdentifiers: existing.filter {
+            ReminderLifecycle.shouldRemove($0.identifier, taskID: ($0.content.userInfo["task"] as? String).flatMap(UUID.init(uuidString:)), desired: desired, activeTasks: activeTasks, enabled: isEnabled)
+        }.map(\.identifier))
         guard status == .authorized || status == .provisional || status == .ephemeral else { return }
+        schedulingError = nil
         for plan in plans {
             guard !Task.isCancelled else { return }
             if let request = existing.first(where: { $0.identifier == plan.id }), Self.matches(request, plan: plan) { continue }
-            try? await center.add(Self.request(for: plan))
+            do { try await center.add(Self.request(for: plan)) }
+            catch { schedulingError = error.localizedDescription; return }
         }
     }
 
@@ -131,9 +138,11 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
                 snoozed.categoryIdentifier = Self.category
                 snoozed.userInfo = info
                 let delay: TimeInterval = action == Self.snooze10Action ? 600 : 3600
-                try? await UNUserNotificationCenter.current().add(UNNotificationRequest(
-                    identifier: "timeline-snooze.\(taskID?.uuidString ?? UUID().uuidString)", content: snoozed,
+                guard let taskID, store.locate(taskID)?.task.completed == false, isEnabled else { break }
+                do { try await UNUserNotificationCenter.current().add(UNNotificationRequest(
+                    identifier: "timeline-snooze.\(taskID.uuidString)", content: snoozed,
                     trigger: UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)))
+                } catch { schedulingError = error.localizedDescription }
             case UNNotificationDefaultActionIdentifier:
                 if let taskID { Navigator.shared.open(.task(taskID)) }
             default: break
