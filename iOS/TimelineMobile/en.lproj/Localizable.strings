@@ -445,7 +445,13 @@
 "停用旧设备不会删除已有数据；再次上线时以新身份接入。请先确认旧设备没有未同步内容。" = "Retiring a device keeps existing data. It rejoins with a new identity. Confirm all edits have synced first.";
 "本机已保存" = "Saved locally";
 "阶段耗时与等待文件" = "Stage timings and waiting files";
-"本机同步完成表示本机本轮工作完成；对方是否收到，请查看下方设备接收确认。" = "Local sync complete means this device finished its work. Check the device receipts below to confirm delivery.";
+"顶栏的云图标表示修改已存在本机、iCloud 还没确认上传，传完后自动消失；对方是否收到，请查看下方设备接收确认。" = "The cloud icon in the top bar means your edits are saved on this device and iCloud hasn't confirmed the upload yet. It goes away once they're uploaded. Check the device receipts below to confirm delivery.";
+"修改已存在本机，等待上传到 iCloud" = "Edits saved on this device, waiting to upload to iCloud";
+"正在同步" = "Syncing";
+"已同步到 iCloud" = "Synced to iCloud";
+"有文件同步不了" = "Some files can't sync";
+"还在等 iCloud" = "Still waiting for iCloud";
+"修改已存在本机。iCloud 的传输由系统安排，完成后图标会自动消失。" = "Your edits are saved on this device. iOS schedules iCloud transfers, and the icon goes away when they finish.";
 "提醒在这台设备收到任务更新后安排。后台刷新由系统决定；临近提醒时间时，请打开应用确认同步及提醒权限。" = "Reminders are scheduled after this device receives task updates. Background refresh is controlled by iOS; open the app to confirm sync and permissions before an imminent reminder.";
 "提醒在本机收到任务更新后安排；其他设备离线或未同步时，提醒可能尚未安排。" = "Reminders are scheduled after this device receives task updates. Offline devices or pending sync may delay scheduling.";
 "备份与恢复" = "Backup and restore";

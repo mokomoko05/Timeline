@@ -376,7 +376,14 @@ function collectBlocks(state, tree) {
       html.push({from: node.from, to: node.to});
     } else {
       const match = /^ATXHeading([1-6])$/.exec(name);
-      if (match) headings.push({from: node.from, level: Number(match[1])});
+      if (match) {
+        // 引用里的标题只管到这个引用的结尾（嵌套时是最里面那层）。
+        let quote = null;
+        for (let parent = node.node.parent; parent && !quote; parent = parent.parent) {
+          if (parent.name === "Blockquote") quote = {from: parent.from, to: parent.to};
+        }
+        headings.push({from: node.from, level: Number(match[1]), quote});
+      }
     }
     return false;
   }});
@@ -419,33 +426,36 @@ function parseDetails(doc, html) {
 }
 
 // 标题的折叠范围：到下一个同级或更高级的标题为止；标题在折叠块里时不越过折叠块的结尾，
-// 折叠块里的标题也只和同一个折叠块里的标题比较。收起时末尾的空行留着，和下一个标题之间仍有间隔。
+// 折叠块里的标题也只和同一个折叠块里的标题比较；引用里的标题同样只在这个引用里算，不越过引用的结尾，
+// 也不打断引用外面的标题。收起时末尾的空行留着，和下一个标题之间仍有间隔。
 function parseHeadings(doc, found, details) {
   const headings = [], seen = new Map();
-  for (const {from, level} of found) {
+  for (const {from, level, quote} of found) {
     const line = doc.lineAt(from);
-    const text = line.text.replace(/^\s{0,3}#{1,6}\s*/, "").replace(/\s+#+\s*$/, "").trim();
+    const text = line.text.replace(/^(?:\s{0,3}>)*\s{0,4}#{1,6}\s*/, "").replace(/\s+#+\s*$/, "").trim();
     const name = `h${level}:${text}`;
     const occurrence = seen.get(name) ?? 0;
     seen.set(name, occurrence + 1);
     const container = details.filter(item => item.from < line.from && line.from < item.closingFrom)
       .reduce((inner, item) => !inner || item.from > inner.from ? item : inner, null);
-    headings.push({from: line.from, lineTo: line.to, level, key: `${name}#${occurrence}`, container, next: null});
+    headings.push({from: line.from, lineTo: line.to, level, key: `${name}#${occurrence}`, container, quote, next: null});
   }
   // 每个折叠块（和整页）各一个栈：遇到同级或更高级的标题，栈里比它低的标题就到此为止。
   const stacks = new Map();
   for (const heading of headings) {
-    const stack = stacks.get(heading.container) ?? [];
-    stacks.set(heading.container, stack);
+    const scope = heading.quote ? "q" + heading.quote.from : heading.container;
+    const stack = stacks.get(scope) ?? [];
+    stacks.set(scope, stack);
     while (stack.length && stack[stack.length - 1].level >= heading.level) stack.pop().next = heading;
     stack.push(heading);
   }
   for (const heading of headings) {
-    let boundary = heading.container ? heading.container.closingFrom : doc.length + 1;
+    let boundary = heading.quote ? heading.quote.to : heading.container ? heading.container.closingFrom : doc.length + 1;
     if (heading.next && heading.next.from < boundary) boundary = heading.next.from;
     let last = doc.lineAt(Math.max(heading.lineTo, boundary - 1)).number;
     if (boundary <= doc.length && doc.lineAt(boundary).from === boundary) last = doc.lineAt(boundary).number - 1;
-    while (last > doc.lineAt(heading.from).number && !doc.line(last).text.trim()) last--;
+    const blank = heading.quote ? /^[\s>]*$/ : /^\s*$/;
+    while (last > doc.lineAt(heading.from).number && blank.test(doc.line(last).text)) last--;
     heading.end = doc.line(last).to;
   }
   return headings.filter(heading => heading.end > heading.lineTo);
@@ -715,13 +725,17 @@ function structure(state, blocks, states, headings, flash) {
     }
   }
   // 引用：一个引用的每一行都铺底色，只有第一行、最后一行是框的上下边；隔着空行的两段引用是两块，空行不铺。
+  // 引用里的标题收起后，框的下边落在最后一行还看得见的行上。
   for (const quote of blocks.quotes) {
     const first = state.doc.lineAt(quote.from).number, last = state.doc.lineAt(Math.max(quote.from, quote.to - 1)).number;
+    const lines = [];
     for (let number = first; number <= last; number++) {
       const line = state.doc.line(number);
-      if (concealed(line.from, line.to)) continue;
-      ranges.push(Decoration.line({class: "cm-quote" + (number === first ? " cm-quote-start" : "") + (number === last ? " cm-quote-end" : "")}).range(line.from));
+      if (!concealed(line.from, line.to)) lines.push(line);
     }
+    lines.forEach((line, index) => {
+      ranges.push(Decoration.line({class: "cm-quote" + (index === 0 ? " cm-quote-start" : "") + (index === lines.length - 1 ? " cm-quote-end" : "")}).range(line.from));
+    });
   }
   if (flash && !concealed(flash.from, flash.to)) {
     ranges.push(Decoration.line({class: "cm-search-line"}).range(state.doc.lineAt(flash.from).from));

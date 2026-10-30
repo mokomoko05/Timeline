@@ -111,9 +111,9 @@ final class SyncModel: ObservableObject {
         }
     }
 
-    func syncWithFeedback() async {
-        guard let toolbar else { return }
-        await toolbar.feedback.run { await syncNow() }
+    func syncWithFeedback() async -> SyncIndicatorOutcome {
+        guard let toolbar else { return .waiting }
+        return await toolbar.indicator.run { await syncNow() }
     }
 
     func syncNow() async {

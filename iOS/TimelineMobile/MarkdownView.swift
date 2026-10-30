@@ -77,24 +77,11 @@ private struct MarkdownContent: View {
                         HStack(alignment: .center, spacing: 8) {
                             headingText(level, text)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                            Button { toggleFold(key) } label: {
-                                Image(systemName: "chevron.down")
-                                    .font(.system(size: size * 0.85, weight: .semibold))
-                                    .foregroundStyle(Palette.muted)
-                                    .rotationEffect(.degrees(folded.contains(key) ? -90 : 0))
-                                    .animation(Motion.adapt(.easeOut(duration: 0.15)), value: folded.contains(key))
-                                    .frame(width: size * 1.9, height: size * 1.9)
-                                    .background(Palette.muted.opacity(0.12), in: RoundedRectangle(cornerRadius: size * 0.55, style: .continuous))
-                                    .frame(width: 44, height: 44)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(folded.contains(key) ? "展开" : "收起")
-                            .padding(.vertical, -8)
+                            HeadingFoldButton(folded: folded.contains(key), size: size) { toggleFold(key) }
                         }
                         .id(anchor(key))
                     } else {
-                        BlockView(block: block, size: size, toggleTask: toggleTask)
+                        BlockView(block: block, size: size, toggleTask: toggleTask, folds: MarkdownFolds(folded: folded, toggle: toggleFold))
                     }
                 case .flow(let run):
                     RichTextView(text: RichText.make(document, run: run, source: source, size: size), size: size)
@@ -183,6 +170,36 @@ private struct MarkdownContent: View {
         if folded.contains(key) { folded.remove(key) } else { folded.insert(key) }
         if let defaultsKey { UserDefaults.standard.set(Array(folded), forKey: defaultsKey) }
     }
+}
+
+/// 标题右边的收起 / 展开按钮。
+private struct HeadingFoldButton: View {
+    let folded: Bool
+    let size: CGFloat
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            Image(systemName: "chevron.down")
+                .font(.system(size: size * 0.85, weight: .semibold))
+                .foregroundStyle(Palette.muted)
+                .rotationEffect(.degrees(folded ? -90 : 0))
+                .animation(Motion.adapt(.easeOut(duration: 0.15)), value: folded)
+                .frame(width: size * 1.9, height: size * 1.9)
+                .background(Palette.muted.opacity(0.12), in: RoundedRectangle(cornerRadius: size * 0.55, style: .continuous))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(folded ? "展开" : "收起")
+        .padding(.vertical, -8)
+    }
+}
+
+/// 收起了哪些标题、怎么切换：引用里的标题和顶层的共用一份（折叠键在整篇里唯一，也和编辑器一样）。
+private struct MarkdownFolds {
+    let folded: Set<String>
+    let toggle: (String) -> Void
 }
 
 /// 解析结果：顶层块，以及每个可以收起的标题管到哪里、内容长不长。
@@ -279,6 +296,16 @@ indirect enum MarkdownBlock {
         let math = MarkdownMath.extract(source)
         var context = Context(seen: [:], formulas: math.formulas)
         let blocks = blocks(Document(parsing: math.source), context: &context)
+        let document = MarkdownDocument(blocks: blocks, sections: sections(of: blocks))
+        lock.lock()
+        if cache.count > 600 { cache.removeAll() }
+        cache[source] = document
+        lock.unlock()
+        return document
+    }
+
+    /// 同一层的块里，每个标题管到哪里：到下一个同级或更高级标题为止（引用里的标题只在这个引用里算）。
+    static func sections(of blocks: [MarkdownBlock]) -> [Int: (end: Int, long: Bool)] {
         var sections: [Int: (end: Int, long: Bool)] = [:]
         for (index, block) in blocks.enumerated() {
             guard let level = block.headingLevel else { continue }
@@ -287,12 +314,7 @@ indirect enum MarkdownBlock {
             while end < blocks.count, (blocks[end].headingLevel ?? 7) > level { weight += blocks[end].weight; end += 1 }
             if end > index + 1 { sections[index] = (end, weight > 900) }
         }
-        let document = MarkdownDocument(blocks: blocks, sections: sections)
-        lock.lock()
-        if cache.count > 600 { cache.removeAll() }
-        cache[source] = document
-        lock.unlock()
-        return document
+        return sections
     }
 
     /// 在后台先解析好、把正文按上次的宽度排好版，翻到时直接用（日记里的正文是 15 号字）。
@@ -444,6 +466,7 @@ private struct BlockView: View {
     let block: MarkdownBlock
     let size: CGFloat
     let toggleTask: ((Int) -> Void)?
+    var folds: MarkdownFolds?
 
     var body: some View {
         switch block {
@@ -473,7 +496,7 @@ private struct BlockView: View {
                                 if item.checkbox == true, case .paragraph(let text) = child {
                                     Text(markdown: text, size: size).font(.system(size: size)).strikethrough().foregroundStyle(Palette.muted)
                                 } else {
-                                    BlockView(block: child, size: size, toggleTask: toggleTask)
+                                    BlockView(block: child, size: size, toggleTask: toggleTask, folds: folds)
                                 }
                             }
                         }
@@ -482,7 +505,21 @@ private struct BlockView: View {
             }
         case .quote(let blocks):
             VStack(alignment: .leading, spacing: size * 0.4) {
-                ForEach(Array(blocks.enumerated()), id: \.offset) { _, child in BlockView(block: child, size: size, toggleTask: toggleTask) }
+                let sections = MarkdownBlock.sections(of: blocks)
+                ForEach(quoteVisible(blocks, sections: sections), id: \.self) { index in
+                    if let folds, case .heading(_, _, let key, _) = blocks[index], sections[index] != nil {
+                        HStack(alignment: .center, spacing: 8) {
+                            BlockView(block: blocks[index], size: size, toggleTask: toggleTask)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            HeadingFoldButton(folded: folds.folded.contains(key), size: size) { folds.toggle(key) }
+                        }
+                        .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+                            if note.object as? String == "foldQuotedHeading" { folds.toggle(key) }
+                        }
+                    } else {
+                        BlockView(block: blocks[index], size: size, toggleTask: toggleTask, folds: folds)
+                    }
+                }
             }
             // 灰底引用框（像论坛里的引用）：左边一道竖线。连着的 > 行是一块，隔着空行就是两块。
             .padding(.vertical, 8).padding(.leading, 14).padding(.trailing, 10)
@@ -510,6 +547,21 @@ private struct BlockView: View {
         case .html(let text):
             Text(text).font(.system(size: size * 0.9, design: .monospaced)).foregroundStyle(Palette.muted)
         }
+    }
+
+    /// 引用里要显示的块：跳过收起的标题下面的内容。引用通常很短，收起时不留排好的版。
+    private func quoteVisible(_ blocks: [MarkdownBlock], sections: [Int: (end: Int, long: Bool)]) -> [Int] {
+        var result: [Int] = []
+        var index = 0
+        while index < blocks.count {
+            result.append(index)
+            if case .heading(_, _, let key, _) = blocks[index], folds?.folded.contains(key) == true, let section = sections[index] {
+                index = section.end
+            } else {
+                index += 1
+            }
+        }
+        return result
     }
 
     @ViewBuilder private func marker(_ item: MarkdownBlock.Item, index: Int, start: Int?) -> some View {

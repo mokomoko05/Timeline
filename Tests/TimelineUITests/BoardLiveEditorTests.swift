@@ -484,6 +484,36 @@ final class BoardLiveEditorTests: XCTestCase {
         XCTAssertNotEqual(background, "rgba(0, 0, 0, 0)")
     }
 
+    /// 引用里的标题：按钮画得出来，点得到；收起只藏这个引用里的内容，框的下边落在标题行；键和原生正文一样。
+    func testHeadingsInsideQuotesFoldOnlyWithinTheQuote() async throws {
+        let defaults = InMemoryDefaults()
+        let fixture = try LiveFixture(source: "# Top\n\ntext\n\n> ## Quoted\n> body\n>\n> ## Second\n> more\n\nAfter\n\n## Sibling\n\nz", defaults: defaults)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        try await browse(fixture.session, fixture.webView)
+        let snapshot = "[...document.querySelectorAll('.cm-line')].map(e=>[e.textContent,!!e.querySelector('.board-heading-fold'),e.classList.contains('cm-quote-end')])"
+        var lines = try await fixture.webView.evaluateJavaScript(snapshot) as? [[Any]] ?? []
+        XCTAssertEqual(lines.filter { $0[1] as? Bool == true }.map { $0[0] as? String }, ["Top", "Quoted", "Second", "Sibling"])
+        let hit = try await fixture.webView.evaluateJavaScript("""
+        (()=>{const b=[...document.querySelectorAll('.cm-quote .board-heading-fold')][0];const r=b.getBoundingClientRect();
+        return document.elementFromPoint(r.left+r.width/2,r.top+r.height/2).closest('.board-heading-fold')===b})()
+        """) as? Bool
+        XCTAssertEqual(hit, true, "按钮在最上面，点得到")
+        _ = try await fixture.webView.evaluateJavaScript("[...document.querySelectorAll('.cm-quote .board-heading-fold')][0].click()")
+        try await Task.sleep(for: .milliseconds(50))
+        lines = try await fixture.webView.evaluateJavaScript(snapshot) as? [[Any]] ?? []
+        let text = lines.map { $0[0] as? String ?? "" }.joined(separator: "|")
+        XCTAssertFalse(text.contains("body"), text)
+        XCTAssertTrue(text.contains("Second") && text.contains("more") && text.contains("After") && text.contains("Sibling"), "只收起到下一个同级标题，不越过引用: \(text)")
+        _ = try await fixture.webView.evaluateJavaScript("[...document.querySelectorAll('.cm-quote .board-heading-fold')][1].click()")
+        try await Task.sleep(for: .milliseconds(50))
+        lines = try await fixture.webView.evaluateJavaScript(snapshot) as? [[Any]] ?? []
+        XCTAssertEqual(lines.filter { $0[2] as? Bool == true }.compactMap { ($0[0] as? String)?.replacingOccurrences(of: "⋯", with: "") }, ["Second"], "最后一节也收起：框的下边落在标题行")
+        XCTAssertTrue(lines.contains { ($0[0] as? String) == "After" }, "引用外面的内容还在")
+        let saved = defaults.dictionary(forKey: BoardLiveEditorSession.foldsKey(fixture.store.boards[0].id)) as? [String: Bool]
+        XCTAssertEqual(saved, ["h2:Quoted#0": true, "h2:Second#0": true])
+    }
+
     /// 所有工作板共用一个编辑器（一份网页进程）：换走再换回来，正文、光标、撤销历史和折叠都还是这块工作板自己的。
     func testBoardsShareOneEditorAndKeepTheirOwnStateWhenSwitching() async throws {
         let fixture = try LiveFixture(source: Self.foldSource)

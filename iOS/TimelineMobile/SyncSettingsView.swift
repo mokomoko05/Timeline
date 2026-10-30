@@ -120,7 +120,7 @@ private struct SyncStatusRows: View {
             }
             ForEach(state.blockingFiles, id: \.self) { Text($0).font(.caption.monospaced()) }
         }
-        Text("本机同步完成表示本机本轮工作完成；对方是否收到，请查看下方设备接收确认。")
+        Text("顶栏的云图标表示修改已存在本机、iCloud 还没确认上传，传完后自动消失；对方是否收到，请查看下方设备接收确认。")
             .font(.caption).foregroundStyle(.secondary)
         if let date = state.lastCheck { LabeledContent("最近检查", value: date.formatted(date: .abbreviated, time: .standard)) }
         if let date = state.lastExport { LabeledContent("已写入共享文件夹", value: date.formatted(date: .abbreviated, time: .standard)) }

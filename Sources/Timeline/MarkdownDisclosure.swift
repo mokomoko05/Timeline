@@ -290,6 +290,16 @@ struct BoardFoldLayout: Equatable {
     private static let headingMarks = try! NSRegularExpression(pattern: #"^\s{0,3}#{1,6}\s*"#)
     private static let closingMarks = try! NSRegularExpression(pattern: #"\s+#+\s*$"#)
     private static let htmlBlock = try! NSRegularExpression(pattern: #"^[ ]{0,3}</?[A-Za-z]"#)
+    private static let quoteMarks = try! NSRegularExpression(pattern: #"^(?:[ ]{0,3}>[ ]?)+"#)
+    private static let fence = try! NSRegularExpression(pattern: #"^[ ]{0,3}(?:`{3,}|~{3,})"#)
+
+    /// 引用的层数和去掉 `>` 之后的文字（行内 lazy continuation 属于上一段，收起时跟着那一段走，这里不用算）。
+    private static func unquote(_ raw: String) -> (depth: Int, text: String) {
+        let range = NSRange(location: 0, length: (raw as NSString).length)
+        guard let match = quoteMarks.firstMatch(in: raw, range: range) else { return (0, raw) }
+        let marks = (raw as NSString).substring(with: match.range)
+        return (marks.filter { $0 == ">" }.count, (raw as NSString).substring(from: match.range.length))
+    }
 
     init(_ source: String) {
         let lines = source.components(separatedBy: "\n")
@@ -305,33 +315,49 @@ struct BoardFoldLayout: Equatable {
         disclosureKeys = keys
         let containers = closingLines.map { (open: $0.key, close: $0.value) }
 
-        struct Found { let line: Int; let level: Int; let key: String; let container: Int? }
+        struct Found { let line: Int; let level: Int; let key: String; let container: Int?; let quote: ClosedRange<Int>? }
         var found: [Found] = []
         var seen: [String: Int] = [:]
         var inHTML = false
+        var quotedFence = false
+        let depths = lines.map { Self.unquote($0).depth }
         for (index, raw) in lines.enumerated() where !codeLines.contains(index) {
             if raw.trimmingCharacters(in: .whitespaces).isEmpty { inHTML = false; continue }
             let range = NSRange(location: 0, length: (raw as NSString).length)
             // 和 Markdown 解析一致：HTML 块（比如 <details> 开头的几行）一直到空行为止，里面的 # 不是标题。
             if inHTML { continue }
             if Self.htmlBlock.firstMatch(in: raw, range: range) != nil { inHTML = true; continue }
-            guard let match = Self.atxHeading.firstMatch(in: raw, range: range) else { continue }
-            var text = Self.headingMarks.stringByReplacingMatches(in: raw, range: range, withTemplate: "")
+            let (depth, body) = Self.unquote(raw)
+            let bodyRange = NSRange(location: 0, length: (body as NSString).length)
+            // 引用里的代码块（`MarkdownDisclosures.scan` 只认顶层的围栏）：里面的 # 不是标题。
+            if depth == 0 { quotedFence = false }
+            else if Self.fence.firstMatch(in: body, range: bodyRange) != nil { quotedFence.toggle(); continue }
+            if quotedFence { continue }
+            guard let match = Self.atxHeading.firstMatch(in: body, range: bodyRange) else { continue }
+            var text = Self.headingMarks.stringByReplacingMatches(in: body, range: bodyRange, withTemplate: "")
             text = Self.closingMarks.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: (text as NSString).length), withTemplate: "")
             let level = match.range(at: 1).length
             let name = "h\(level):\(text.trimmingCharacters(in: .whitespacesAndNewlines))"
             let occurrence = seen[name, default: 0]
             seen[name] = occurrence + 1
             let container = containers.filter { $0.open < index && index < $0.close }.max { $0.open < $1.open }?.open
-            found.append(Found(line: index, level: level, key: "\(name)#\(occurrence)", container: container))
+            var quote: ClosedRange<Int>?
+            if depth > 0 {
+                var start = index, end = index
+                while start > 0, depths[start - 1] >= depth { start -= 1 }
+                while end + 1 < lines.count, depths[end + 1] >= depth { end += 1 }
+                quote = start...end
+            }
+            found.append(Found(line: index, level: level, key: "\(name)#\(occurrence)", container: container, quote: quote))
         }
         var result: [Heading] = []
         for (position, heading) in found.enumerated() {
-            var boundary = heading.container.flatMap { closingLines[$0] } ?? lines.count
-            if let next = found[(position + 1)...].first(where: { $0.container == heading.container && $0.level <= heading.level }),
+            var boundary = heading.quote.map { $0.upperBound + 1 } ?? heading.container.flatMap { closingLines[$0] } ?? lines.count
+            if let next = found[(position + 1)...].first(where: { $0.container == heading.container && $0.quote == heading.quote && $0.level <= heading.level }),
                next.line < boundary { boundary = next.line }
             var last = boundary - 1
-            while last > heading.line && lines[last].trimmingCharacters(in: .whitespaces).isEmpty { last -= 1 }
+            let blank = heading.quote == nil ? CharacterSet.whitespaces : CharacterSet.whitespaces.union(CharacterSet(charactersIn: ">"))
+            while last > heading.line && lines[last].trimmingCharacters(in: blank).isEmpty { last -= 1 }
             if last > heading.line { result.append(Heading(line: heading.line, level: heading.level, key: heading.key, lastLine: last)) }
         }
         headings = result

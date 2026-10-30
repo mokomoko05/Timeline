@@ -105,6 +105,42 @@ final class MarkdownHeadingFoldTests: XCTestCase {
         XCTAssertEqual(BoardFoldLayout("# **Bold** title ##\nbody").headings.map(\.key), ["h1:**Bold** title#0"], "标题文字取原文，和编辑器一样")
     }
 
+    /// 引用里的标题也能折叠：只管到这个引用的结尾，不吞掉引用外面的内容，键和编辑器一样（同名标题在整篇里按次序编号）。
+    func testHeadingsInsideQuotesFoldWithinTheQuote() {
+        let quoted = "# A\n\ntop\n\n> ## A\n> inner\n>\n> ## B\n> second\n\nafter\n\n## A\n\nlast"
+        func text(_ folds: Set<String>) -> NSAttributedString { MarkdownText.render(quoted, color: .labelColor, fontSize: 13, folds: folds) }
+        XCTAssertEqual(keys(text([])), ["h1:A#0", "h2:A#0", "h2:B#0", "h2:A#1"])
+        let folded = text(["h2:A#0"]).string
+        XCTAssertFalse(folded.contains("inner"))
+        XCTAssertTrue(folded.contains("second") && folded.contains("after") && folded.contains("top") && folded.contains("last"))
+        XCTAssertEqual(keys(MarkdownText.render(quoted, color: .labelColor, fontSize: 13, folds: ["h1:A#0"])), ["h1:A#0"], "外层收起时里面的标题不画")
+        XCTAssertEqual(keys(text(["h2:A#0"])), ["h1:A#0", "h2:A#0", "h2:B#0", "h2:A#1"], "收起不改变后面同名标题的编号")
+
+        let view = InteractiveTaskText(frame: NSRect(x: 0, y: 0, width: 360, height: 400))
+        view.markdown = true
+        view.onToggleHeading = { _ in }
+        view.textStorage?.setAttributedString(text([]))
+        let regions = view.headingRegions()
+        XCTAssertEqual(regions.map(\.key).sorted(), ["h1:A#0", "h2:A#0", "h2:A#1", "h2:B#0"], "引用里的标题也有按钮")
+        let inQuote = regions.first { $0.key == "h2:B#0" }
+        XCTAssertLessThan(inQuote?.rect.maxX ?? .infinity, 360, "按钮在引用框里")
+        if let path = ProcessInfo.processInfo.environment["TIMELINE_QUOTE_FOLD_SNAPSHOT"] {
+            view.appearance = NSAppearance(named: .darkAqua)
+            view.drawsBackground = true
+            view.backgroundColor = .windowBackgroundColor
+            if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            }
+        }
+
+        let board = BoardFoldLayout(quoted)
+        XCTAssertEqual(board.headings.map(\.key), ["h1:A#0", "h2:A#0", "h2:B#0", "h2:A#1"], "和编辑器的键一样")
+        XCTAssertEqual(board.headings.map(\.lastLine), [14, 5, 8, 14], "引用里的标题不越过引用；引用外的标题不被引用里的标题打断")
+        XCTAssertEqual(BoardFoldLayout("> ```\n> # not a heading\n> ```\n> # Real\n> body").headings.map(\.key), ["h1:Real#0"], "引用里的代码块不算标题")
+        XCTAssertEqual(BoardFoldLayout("> # T\n>\n\nafter").headings.map(\.key), [], "标题下面只有空的 > 行：没有东西可收")
+    }
+
     /// 笔记里的看板内容和工作板共用折叠记忆：工作板里收起的标题在这里也收起，这里点标题，工作板那边也跟着变。
     func testBoardPreviewInNotesFollowsTheBoardsFolds() async throws {
         let defaults = InMemoryDefaults()

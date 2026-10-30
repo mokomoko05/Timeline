@@ -657,7 +657,8 @@ final class InteractiveTaskText: NSTextView {
         storage.enumerateAttribute(MarkdownText.headingFoldKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
             guard let key = value as? String else { return }
             let folded = storage.attribute(MarkdownText.headingFoldedKey, at: range.location, effectiveRange: nil) as? Bool ?? false
-            let tail = (storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle)?.tailIndent ?? 0
+            let style = storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle
+            let tail = style?.tailIndent ?? 0
             let side = max(16, -tail - 6)
             let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             var first: NSRect?
@@ -666,7 +667,8 @@ final class InteractiveTaskText: NSTextView {
                 stop.pointee = true
             }
             guard let line = first else { return }
-            let right = self.textContainerOrigin.x + container.size.width - container.lineFragmentPadding
+            // 引用框里的标题：按钮留在框内，不贴着框的右边。
+            let right = self.textContainerOrigin.x + container.size.width - container.lineFragmentPadding - (style?.textBlocks.isEmpty == false ? 6 : 0)
             let rect = NSRect(x: right - side, y: self.textContainerOrigin.y + line.midY - side / 2, width: side, height: side)
             if rect.intersects(self.bounds) { regions.append((key, rect, folded)) }
         }

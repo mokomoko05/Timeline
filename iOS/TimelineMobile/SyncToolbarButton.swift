@@ -6,75 +6,91 @@ struct SyncToolbarItems: ToolbarContent {
     @ObservedObject var sync: SyncModel
 
     var body: some ToolbarContent {
-        if let state = sync.sync, let presentation = sync.toolbar {
-            ConfiguredSyncToolbarItems(sync: sync, state: state, presentation: presentation)
+        if let presentation = sync.toolbar {
+            ConfiguredSyncToolbarItems(sync: sync, presentation: presentation)
         }
     }
 }
 
 private struct ConfiguredSyncToolbarItems: ToolbarContent {
     let sync: SyncModel
-    let state: FolderSync
     @ObservedObject var presentation: SyncToolbarPresentation
 
     var body: some ToolbarContent {
         if presentation.visible {
-            ToolbarItem(placement: .topBarLeading) {
-                SyncProgressButton(state: state, sync: sync, feedback: presentation.feedback)
+            if #available(iOS 26.0, *) {
+                ToolbarItem(placement: .topBarLeading) { SyncStatusButton(sync: sync, indicator: presentation.indicator) }
+                    .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .topBarLeading) { SyncStatusButton(sync: sync, indicator: presentation.indicator) }
             }
         }
     }
 }
 
-private struct SyncProgressButton: View {
-    @ObservedObject var state: FolderSync
+/// 一个不带文字的小云图标：平时是淡灰色，只有真的需要处理时才有颜色。点一下立即同步，长按看详情。
+private struct SyncStatusButton: View {
     let sync: SyncModel
-    @ObservedObject var feedback: SyncButtonFeedback
+    @ObservedObject var indicator: SyncIndicator
     @Environment(\.openSettings) private var openSettings
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var showingError = false
+    @State private var outcome: SyncIndicatorOutcome?
 
-    var body: some View { button }
-    private func showDetails() { openSettings?() }
-
-    private var button: some View {
-        Button {
-            performSync()
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: feedback.phase.symbol)
-                    .id(feedback.phase.symbol)
-                    .transition(.scale(scale: reduceMotion ? 1 : 0.6).combined(with: .opacity))
-                    .frame(width: 18)
-                Text(LocalizedStringKey(feedback.phase.title))
-                    .contentTransition(.opacity)
-                    .lineLimit(1)
-                if feedback.isWorking || feedback.phase.isRunning {
-                    ProgressView().controlSize(.mini).transition(.opacity)
+    var body: some View {
+        Button(action: performSync) {
+            ZStack {
+                if indicator.state == .working {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: indicator.state.symbol)
+                        .font(.system(size: 15))
+                        .foregroundStyle(tint)
+                        .id(indicator.state.symbol)
                 }
             }
-            .font(.subheadline)
-            .foregroundStyle(feedback.phase == .completed ? Color.green : (feedback.phase == .failed ? Color.red : (state.waitingForUpload || state.waitingForDownload ? Color.orange : Color.accentColor)))
-            .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.85), value: feedback.phase)
+            .frame(width: 32, height: 32)
+            .contentShape(Rectangle())
+            .animation(Motion.adapt(.easeInOut(duration: 0.2)), value: indicator.state)
         }
-        .disabled(feedback.isWorking)
-        .accessibilityLabel("立即同步")
+        .buttonStyle(.plain)
+        .disabled(indicator.state == .working)
+        .accessibilityLabel(LocalizedStringKey(indicator.state.title))
+        .accessibilityHint("立即同步")
         .accessibilityIdentifier("sync-now")
-        .accessibilityValue(LocalizedStringKey(feedback.phase == .idle ? state.statusTitle : feedback.phase.title))
-        .contextMenu { Button("同步详情", systemImage: "info.circle", action: showDetails) }
-        .alert("同步未完成", isPresented: $showingError) {
-            Button("同步详情", action: showDetails)
+        .contextMenu { Button("同步详情", systemImage: "info.circle") { openSettings?() } }
+        .alert(alertTitle, isPresented: showingOutcome) {
+            if case .failed = outcome { Button("同步详情") { openSettings?() } }
             Button("好", role: .cancel) {}
         } message: {
-            Text(state.lastError ?? "")
+            Text(alertMessage)
         }
+    }
+
+    private var tint: Color {
+        switch indicator.state {
+        case .attention: return Palette.danger
+        case .confirmed: return Palette.success
+        default: return Palette.muted
+        }
+    }
+
+    private var showingOutcome: Binding<Bool> {
+        Binding(get: { outcome != nil && outcome != .confirmed }, set: { if !$0 { outcome = nil } })
+    }
+
+    private var alertTitle: LocalizedStringKey {
+        if case .failed = outcome { return "同步未完成" }
+        return "还在等 iCloud"
+    }
+
+    private var alertMessage: String {
+        if case .failed(let message) = outcome { return message.components(separatedBy: "\n").map(L).joined(separator: "\n") }
+        return L("修改已存在本机。iCloud 的传输由系统安排，完成后图标会自动消失。")
     }
 
     private func performSync() {
         Task { @MainActor in
-            await sync.syncWithFeedback()
-            showingError = state.lastError != nil && state.lastErrorCode != "Timeline.SyncTimeout"
-            if PerfProbe.enabled { print("[perf] SYNC_FEEDBACK result=\(feedback.phase.rawValue)") }
+            outcome = await sync.syncWithFeedback()
+            if PerfProbe.enabled { print("[perf] SYNC_INDICATOR result=\(indicator.state.rawValue)") }
         }
     }
 }

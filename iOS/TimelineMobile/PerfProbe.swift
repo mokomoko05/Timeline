@@ -292,10 +292,12 @@ enum PerfProbe {
             ("同步工作板", { Task { await AppServices.shared.sync.syncNow() } }),
             ("点击同步按钮", {
                 _ = try? store.quickLog("Sync feedback probe", linkDefault: false, on: Date())
-                Task { await AppServices.shared.sync.syncWithFeedback() }
+                Task { _ = await AppServices.shared.sync.syncWithFeedback() }
             }),
-            ("检查同步完成提示", { if let toolbar = AppServices.shared.sync.toolbar { print("[perf] SYNC_FEEDBACK phase=\(toolbar.feedback.phase.rawValue) visible=\(toolbar.visible) working=\(toolbar.feedback.isWorking)") } }),
-            ("检查同步提示收起", { if let toolbar = AppServices.shared.sync.toolbar { print("[perf] SYNC_FEEDBACK phase=\(toolbar.feedback.phase.rawValue) visible=\(toolbar.visible) working=\(toolbar.feedback.isWorking)") } }),
+            ("检查同步完成提示", { if let toolbar = AppServices.shared.sync.toolbar { print("[perf] SYNC_INDICATOR state=\(toolbar.indicator.state.rawValue) visible=\(toolbar.visible)") } }),
+            ("检查同步提示收起", { if let toolbar = AppServices.shared.sync.toolbar { print("[perf] SYNC_INDICATOR state=\(toolbar.indicator.state.rawValue) visible=\(toolbar.visible)") } }),
+            ("收起引用标题", { switchTab(.journal); send("foldQuotedHeading") }),
+            ("展开引用标题", { send("foldQuotedHeading") }),
             ("准备工作板收藏", { store.setBoardFavoriteOrder(Array(store.boards.prefix(3).map(\.id))) }),
             ("搜索工作板", { send("boardSearch") }),
             ("清空工作板搜索", { send("boardSearchClear") }),

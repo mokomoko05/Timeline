@@ -318,7 +318,8 @@ public final class FolderSync: ObservableObject {
             for name in deferredImageRequests { enqueueImage(name) }
             lastCheck = now()
             if !rerun && !waitingForDownload && !waitingForUpload && fileErrors.isEmpty { lastSync = now() }
-            if !waitingForUpload && !waitingForDownload {
+            // 这一轮成功了就清掉之前的错误；只有「手动同步超时」在还没传完时留着。
+            if (!waitingForUpload && !waitingForDownload) || lastErrorCode != "Timeline.SyncTimeout" {
                 lastError = nil
                 lastErrorCode = nil
                 if failureStreak != 0 { failureStreak = 0 }

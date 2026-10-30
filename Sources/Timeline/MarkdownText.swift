@@ -63,7 +63,8 @@ enum MarkdownText {
         var hidden: [ClosedRange<Int>] = []
     }
 
-    /// `folds` 不为 nil 时顶层标题可以折叠：里面是收起的标题键，收起的标题下面到下一个同级或更高级标题为止都不显示。
+    /// `folds` 不为 nil 时顶层和引用里的标题可以折叠：里面是收起的标题键，收起的标题下面到下一个同级或更高级标题为止都不显示
+    /// （引用里的标题只管到这个引用的结尾）。
     /// `boardFolds` 不为 nil 时按工作板的折叠画（见 `BoardFoldMarks`）。
     static func render(_ source: String, color: NSColor, fontSize: CGFloat, monospaced: Bool = false, lineSpacing: CGFloat = UIScale.lineSpacing, scale: CGFloat = UIScale.factor, document: Document? = nil, interactiveTasks: Bool = false, folds: Set<String>? = nil, boardFolds: BoardFoldMarks? = nil) -> NSAttributedString {
         let math = MarkdownMath.extract(source)
@@ -72,7 +73,9 @@ enum MarkdownText {
         renderer.boardFolds = boardFolds
         renderer.formulas = math.formulas
         renderer.sourceLines = math.source.components(separatedBy: "\n")
-        renderer.blocks(document ?? Document(parsing: math.source))
+        let document = document ?? Document(parsing: math.source)
+        if folds != nil { renderer.assignHeadingKeys(document) }
+        renderer.blocks(document)
         return renderer.output
     }
 
@@ -93,6 +96,8 @@ enum MarkdownText {
         var folds: Set<String>?
         var boardFolds: BoardFoldMarks?
         var formulas: [MarkdownMath.Formula] = []
+        /// 标题所在的行 → 折叠键。先走一遍整篇再画：同名标题的次序不随上面的内容收起而变，也和编辑器一样把引用里的标题算进去。
+        private var headingKeys: [Int: String] = [:]
         init(color: NSColor, size: CGFloat, monospaced: Bool, lineSpacing: CGFloat, interactiveTasks: Bool) {
             self.color = color
             self.size = size
@@ -205,12 +210,28 @@ enum MarkdownText {
             return line
         }
 
+        func assignHeadingKeys(_ document: Document) {
+            var seen: [String: Int] = [:]
+            func visit(_ node: Markup) {
+                if let heading = node as? Heading {
+                    guard let line = heading.range?.lowerBound.line else { return }
+                    let name = "h\(heading.level):\(MarkdownMath.restore(heading.plainText, formulas: formulas).trimmingCharacters(in: .whitespaces))"
+                    let occurrence = seen[name, default: 0]
+                    seen[name] = occurrence + 1
+                    headingKeys[line] = "\(name)#\(occurrence)"
+                } else if node is Document || node is BlockQuote || node is ListItem || node is OrderedList || node is UnorderedList {
+                    node.children.forEach(visit)
+                }
+            }
+            visit(document)
+        }
+
         func blocks(_ node: Markup, indent: CGFloat = 0) {
             let children = Array(node.children)
-            let foldable = folds != nil && node is Document
-            let marks = node is Document ? boardFolds : nil
+            let scoped = node is Document || node is BlockQuote
+            let foldable = folds != nil && scoped
+            let marks = scoped ? boardFolds : nil
             var previousEnd: Int?
-            var seen: [String: Int] = [:]
             var index = 0
             while index < children.count {
                 let child = children[index]
@@ -230,11 +251,10 @@ enum MarkdownText {
                     renderHeading(heading, indent: indent, fold: (mark.key, mark.folded))
                     continue
                 }
-                guard foldable, let heading = child as? Heading else { block(child, indent: indent); continue }
-                let name = "h\(heading.level):\(MarkdownMath.restore(heading.plainText, formulas: formulas).trimmingCharacters(in: .whitespaces))"
-                let occurrence = seen[name, default: 0]
-                seen[name] = occurrence + 1
-                let key = "\(name)#\(occurrence)"
+                guard foldable, let heading = child as? Heading, let key = heading.range.flatMap({ headingKeys[$0.lowerBound.line] }) else {
+                    block(child, indent: indent)
+                    continue
+                }
                 var sectionEnd = index
                 while sectionEnd < children.count, ((children[sectionEnd] as? Heading)?.level ?? 7) > heading.level { sectionEnd += 1 }
                 let hasBody = sectionEnd > index
