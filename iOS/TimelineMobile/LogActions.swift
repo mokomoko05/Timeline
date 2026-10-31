@@ -1,3 +1,4 @@
+import Photos
 import PhotosUI
 import SwiftUI
 import TimelineCore
@@ -61,6 +62,17 @@ extension View {
     }
 }
 
+/// 第一次选图前申请照片访问权限。选图器本身不依赖这个权限，用户拒绝后照样能选。
+enum PhotoLibraryAccess {
+    @MainActor static func requestThen(_ present: @escaping @MainActor () -> Void) {
+        guard PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined else { return present() }
+        Task { @MainActor in
+            _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+            present()
+        }
+    }
+}
+
 private struct LogActionsHost: ViewModifier {
     // 操作闭包读取的是实时 store；宿主本身不因每次内容修改重建整页环境。
     let store: JournalStore
@@ -78,7 +90,7 @@ private struct LogActionsHost: ViewModifier {
                 case .select(let logged): LogSelectSheet(logged: logged)
                 }
             }
-            .photosPicker(isPresented: $actions.pickingImages, selection: $pickedImages, maxSelectionCount: 6, matching: .images, preferredItemEncoding: .current)
+            .photosPicker(isPresented: $actions.pickingImages, selection: $pickedImages, maxSelectionCount: 6, matching: .images, preferredItemEncoding: .current, photoLibrary: .shared())
             .onChange(of: pickedImages) { _, items in
                 guard !items.isEmpty, let id = actions.imageTarget else { return }
                 pickedImages = []
@@ -90,7 +102,7 @@ private struct LogActionsHost: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
                 if note.object as? String == "pickLogImages", let logged = store.allLogs().first {
                     actions.imageTarget = logged.id
-                    actions.pickingImages = true
+                    PhotoLibraryAccess.requestThen { actions.pickingImages = true }
                 }
                 // 性能 / 截图检查：打开最长那条日志的「选择文字」。
                 if note.object as? String == "selectText", actions.sheet == nil,
@@ -179,7 +191,7 @@ extension LogActions {
         if !store.isReadOnly {
             items += [
                 MenuItem(title: L("编辑"), symbol: "pencil", disabled: !log.hasEditableText) { [self] in editing = logged },
-                MenuItem(title: L("添加图片"), symbol: "photo.badge.plus") { [self] in imageTarget = log.id; pickingImages = true },
+                MenuItem(title: L("添加图片"), symbol: "photo.badge.plus") { [self] in imageTarget = log.id; PhotoLibraryAccess.requestThen { self.pickingImages = true } },
                 MenuItem(title: L(log.tags.isEmpty ? "加标签…" : "标签…"), symbol: "tag") { [self] in sheet = .tags(logged) },
                 MenuItem(title: L(log.taskID == nil ? "关联待办…" : "更改关联待办…"), symbol: "link") { [self] in sheet = .link(logged) },
             ]

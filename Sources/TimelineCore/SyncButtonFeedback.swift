@@ -44,6 +44,8 @@ public final class SyncButtonFeedback: ObservableObject {
     private let completionDuration: TimeInterval
     private var awaitingCompletion = false
     private var completed = false
+    /// 用户自己点的同步失败了要马上说；自动同步的失败和底部提示条一样，持续一阵才算（见 `FolderSync.persistentError`）。
+    private var manualFailure = false
     private var refreshScheduled = false
     private var observation: AnyCancellable?
     private var hideTask: Task<Void, Never>?
@@ -76,11 +78,14 @@ public final class SyncButtonFeedback: ObservableObject {
         await operation()
         isWorking = false
         if Task.isCancelled { awaitingCompletion = false; refresh(); return }
+        manualFailure = sync.lastError != nil
         if sync.lastError != nil, sync.lastErrorCode != "Timeline.SyncTimeout" { awaitingCompletion = false }
         refresh()
     }
 
     private func refresh() {
+        if sync.lastError == nil { manualFailure = false }
+        let failed = manualFailure || sync.persistentError != nil
         if sync.hasLocalChanges {
             awaitingCompletion = true
             completed = false
@@ -93,7 +98,7 @@ public final class SyncButtonFeedback: ObservableObject {
             return
         }
         // 接收远端内容所需的回执也可能等待上传，但不是本机编辑反馈。
-        if !isWorking, !awaitingCompletion, !completed, !sync.hasLocalChanges, sync.lastError == nil, sync.fileErrors.isEmpty {
+        if !isWorking, !awaitingCompletion, !completed, !sync.hasLocalChanges, !failed, sync.fileErrors.isEmpty {
             setVisible(false)
             setPhase(.idle)
             return
@@ -106,7 +111,7 @@ public final class SyncButtonFeedback: ObservableObject {
         if !sync.fileErrors.isEmpty { completed = false; setVisible(true); setPhase(.failed); return }
         if sync.waitingForUpload { completed = false; setVisible(true); setPhase(.waitingForUpload); return }
         if sync.waitingForDownload { completed = false; setVisible(true); setPhase(.waitingForDownload); return }
-        if sync.lastError != nil { completed = false; setVisible(true); setPhase(.failed); return }
+        if failed { completed = false; setVisible(true); setPhase(.failed); return }
         if sync.hasLocalChanges {
             setVisible(true)
             setPhase(sync.isSyncing && sync.phase.isRunning ? sync.phase : .idle)
@@ -117,7 +122,7 @@ public final class SyncButtonFeedback: ObservableObject {
             setPhase(sync.phase.isRunning ? sync.phase : .publishing)
             return
         }
-        if awaitingCompletion, !sync.isSyncing, sync.lastSync != nil {
+        if awaitingCompletion, !sync.isSyncing, sync.lastSync != nil, sync.lastError == nil {
             awaitingCompletion = false
             completed = true
             hideTask?.cancel()

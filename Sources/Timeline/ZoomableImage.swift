@@ -15,8 +15,9 @@ struct ZoomableImage: NSViewRepresentable {
     }
 }
 
-/// AppKit handles panning, scroll bars and trackpad magnification. Loading is tied to
-/// the file URL, so zooming does not decode the original image on each SwiftUI update.
+/// AppKit handles panning, scroll bars and trackpad magnification; the mouse wheel zooms
+/// toward the pointer. Loading is tied to the file URL, so zooming does not decode the
+/// original image on each SwiftUI update.
 final class ImageZoomScrollView: NSScrollView {
     private let picture = PannableImageView()
     private var url: URL?
@@ -106,13 +107,14 @@ final class ImageZoomScrollView: NSScrollView {
         }
     }
 
+    /// 按整个滚动视图算：接着鼠标时滚动条占位，用 contentView 算的话放大出滚动条后这个值会变，下一次布局就把图片拉回去。
     private var fitScale: CGFloat {
         guard picture.frame.width > 0, picture.frame.height > 0 else { return 1 }
-        return max(0.001, min(contentView.frame.width / picture.frame.width, contentView.frame.height / picture.frame.height))
+        return max(0.001, min(bounds.width / picture.frame.width, bounds.height / picture.frame.height))
     }
 
     private func fitIfNeeded() {
-        guard !fitting, picture.image != nil, contentView.frame.width > 0, contentView.frame.height > 0 else { return }
+        guard !fitting, picture.image != nil, bounds.width > 0, bounds.height > 0 else { return }
         fitting = true
         defer { fitting = false }
         let target = min(maxMagnification, max(minMagnification, fitScale * relativeZoom))
@@ -131,6 +133,31 @@ final class ImageZoomScrollView: NSScrollView {
         super.magnify(with: event)
         relativeZoom = min(8, max(0.25, magnification / fitScale))
         fitIfNeeded()
+        onZoom?(relativeZoom)
+    }
+
+    /// 鼠标滚轮缩放；触控板双指（带手势阶段）仍是平移，捏合缩放走 `magnify`。
+    override func scrollWheel(with event: NSEvent) {
+        guard event.phase.isEmpty, event.momentumPhase.isEmpty else { return super.scrollWheel(with: event) }
+        let lines = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / 10 : event.scrollingDeltaY
+        guard lines != 0, picture.image != nil else { return }
+        // 按手指实际转动的方向算：滚轮向前总是放大，不随「自然滚动」设置反过来。
+        let forward = event.isDirectionInvertedFromDevice ? -lines : lines
+        zoom(by: pow(1.1, min(5, max(-5, forward))), keeping: event.locationInWindow)
+    }
+
+    /// 缩放时让窗口坐标 `point` 下的那个像素留在原地（图片比视口小时仍居中）。
+    func zoom(by factor: CGFloat, keeping point: NSPoint) {
+        let clip = contentView
+        let before = clip.convert(point, from: nil)
+        let fraction = NSPoint(x: (before.x - clip.bounds.minX) / clip.bounds.width,
+                               y: (before.y - clip.bounds.minY) / clip.bounds.height)
+        relativeZoom = min(8, max(0.25, relativeZoom * factor))
+        magnification = min(maxMagnification, max(minMagnification, fitScale * relativeZoom))
+        let origin = NSPoint(x: before.x - fraction.x * clip.bounds.width,
+                             y: before.y - fraction.y * clip.bounds.height)
+        clip.scroll(to: clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin)
+        reflectScrolledClipView(clip)
         onZoom?(relativeZoom)
     }
 }

@@ -2,6 +2,11 @@ import XCTest
 @testable import TimelineCore
 
 final class TaskTextTests: XCTestCase {
+    func testDeletedTaskTitleKeepsBareURLClickable() {
+        let flattened = String(TaskText.rendered("看 https://example.com/a 这篇").characters)
+        XCTAssertEqual(TaskText.rendered(flattened).runs.compactMap(\.link), [URL(string: "https://example.com/a")!])
+    }
+
     func testMarkdownAliasRendersAsClickableName() {
         let rendered = TaskText.rendered("阅读 [论文](https://arxiv.org/abs/1234.5678)")
         XCTAssertEqual(String(rendered.characters), "阅读 论文")

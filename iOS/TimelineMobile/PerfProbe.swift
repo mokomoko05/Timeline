@@ -331,6 +331,10 @@ enum PerfProbe {
             ("检查日志图片", { checkLogImages(store) }),
             ("粘贴图片到编辑器", { pasteIntoLogEditor(store) }),
             ("查看日志图片", { if let name = store.allLogs().first(where: { !$0.log.images.isEmpty })?.log.images.first { send("viewLogImage:" + name) } }),
+            ("放一张大图", { switchTab(.journal); addLargeImage(store) }),
+            ("图片双击放大", { zoomViewedImage() }),
+            ("图片捏合缩放", { pinchViewedImage() }),
+            ("图片双击还原", { zoomViewedImage() }),
             ("添加图片面板", { send("pickLogImages") }),
             ("滚动全文", { scrollThrough() }),
             ("长按长文", { pressLongText() }),
@@ -590,6 +594,55 @@ extension PerfProbe {
     /// 一帧一帧推着某个动作走 `duration` 秒（`step` 收到 0…1 的进度），报这段时间掉了多少帧。
     static func drive(duration: CFTimeInterval, step: @escaping (CGFloat) -> Void, done: @escaping () -> Void) {
         driver = Driver(duration: duration, step: step, done: done)
+    }
+
+    /// 给最新一条日志放一张 1200 万像素的图（图片查看器的测速素材）；放过就不再放。
+    private static func addLargeImage(_ store: JournalStore) {
+        guard !store.allLogs().contains(where: { !$0.log.images.isEmpty }), let log = store.allLogs().first?.log else { return }
+        let id = log.id
+        Task {
+            let data = await Task.detached(priority: .utility) {
+                let format = UIGraphicsImageRendererFormat()
+                format.scale = 1
+                format.opaque = true
+                return UIGraphicsImageRenderer(size: CGSize(width: 4000, height: 3000), format: format).image { context in
+                    for x in stride(from: 0, to: 4000, by: 100) {
+                        UIColor(hue: CGFloat(x) / 4000, saturation: 0.8, brightness: 0.9, alpha: 1).setFill()
+                        context.fill(CGRect(x: x, y: 0, width: 100, height: 3000))
+                    }
+                }.pngData()
+            }.value
+            if let data { LogImages.add([{ data }], to: id, store: store) }
+        }
+    }
+
+    private static func viewedImage() -> ImageZoomScrollView? {
+        func find(_ view: UIView) -> ImageZoomScrollView? {
+            if let zoom = view as? ImageZoomScrollView, zoom.window != nil, zoom.imageView.image != nil { return zoom }
+            return view.subviews.lazy.compactMap(find).first
+        }
+        return UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).lazy.compactMap(find).first
+    }
+
+    /// 双击图片右上方那个位置；0.6 秒后报这个像素离手指多远（放大时该留在手指下面，除非贴到图片边界；还原时图片回到居中）。
+    private static func zoomViewedImage() {
+        guard let view = viewedImage() else { print("[perf] 没有打开的图片"); return }
+        let screen = CGPoint(x: view.bounds.width * 0.7, y: view.bounds.height * 0.45)
+        let finger = CGPoint(x: view.bounds.minX + screen.x, y: view.bounds.minY + screen.y)
+        let pixel = view.convert(finger, to: view.imageView)
+        view.toggleZoom(at: finger)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            let after = view.imageView.convert(pixel, to: view)
+            let moved = hypot(after.x - view.bounds.minX - screen.x, after.y - view.bounds.minY - screen.y)
+            print(String(format: "[perf] IMAGE_ZOOM scale=%.2f pixelMovedPt=%.1f", view.zoomScale, moved))
+        }
+    }
+
+    /// 模拟器里没法真的双指捏合：一帧一帧改缩放比例，测缩放期间掉帧。
+    private static func pinchViewedImage() {
+        guard let view = viewedImage() else { print("[perf] 没有打开的图片"); return }
+        let start = view.zoomScale
+        drive(duration: 1, step: { view.zoomScale = start + (4 - start) * $0 }, done: { view.zoomScale = start })
     }
 
     /// 「长按长文」：在屏幕上第一块很长的日志中间弹出长按菜单（模拟器里没法真的长按，用菜单交互测试用的入口）。

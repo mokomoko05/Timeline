@@ -103,6 +103,23 @@ final class SyncButtonFeedbackTests: XCTestCase {
         XCTAssertEqual(feedback.phase, .failed)
         XCTAssertFalse(feedback.isWorking)
     }
+    func testAutomaticFailureStaysQuietUntilItPersistsButNeverShowsCompleted() async throws {
+        try await sync.sync()
+        sync.persistentErrorDelay = 0.1
+        let feedback = SyncButtonFeedback(sync: sync, completionDuration: 0.05)
+        sync.uploadPending = { _ in throw NSError(domain: "Test.Upload", code: 1) }
+        _ = try sync.store.quickLog("Edit", on: Date())
+        do { try await sync.sync() } catch {}
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertNotNil(sync.lastError)
+        XCTAssertNotEqual(feedback.phase, .failed, "偶发失败不报")
+        XCTAssertNotEqual(feedback.phase, .completed)
+        try await Task.sleep(nanoseconds: 120_000_000)
+        do { try await sync.sync() } catch {}
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertEqual(feedback.phase, .failed, "持续失败才报")
+    }
+
     func testLocalSaveFailureNeverShowsSyncCompletedAndRetryCanRecover() async throws {
         try await sync.sync()
         try sync.store.setDatabaseWriteFailure(true)

@@ -192,6 +192,36 @@ final class NotesAndImagesTests: XCTestCase {
         picture.mouseDragged(with: mouse(.leftMouseDragged, x: 148))
         picture.mouseUp(with: mouse(.leftMouseUp, x: 148))
         XCTAssertLessThan(scroll.contentView.bounds.origin.x, start, "放大后的图片可拖动查看")
+        var reported: CGFloat?
+        scroll.onZoom = { reported = $0 }
+        scroll.scrollerStyle = .legacy
+        scroll.layoutSubtreeIfNeeded()
+        let pointer = NSPoint(x: 400, y: 80)
+        let pixel = picture.convert(pointer, from: nil)
+        let zoomed = scroll.magnification
+        scroll.zoom(by: 1.5, keeping: pointer)
+        XCTAssertEqual(scroll.magnification, zoomed * 1.5, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(reported), 3, accuracy: 0.01)
+        scroll.needsLayout = true
+        scroll.layoutSubtreeIfNeeded()
+        let after = picture.convert(pixel, to: nil)
+        XCTAssertEqual(after.x, pointer.x, accuracy: 1, "放大后鼠标下面还是同一个像素")
+        XCTAssertEqual(after.y, pointer.y, accuracy: 1)
+        scroll.zoom(by: 1 / 1.2, keeping: pointer)
+        let outward = picture.convert(pixel, to: nil)
+        XCTAssertEqual(outward.x, pointer.x, accuracy: 1, "缩小时也一样")
+        XCTAssertEqual(outward.y, pointer.y, accuracy: 1)
+        scroll.zoom(by: 100, keeping: pointer)
+        XCTAssertEqual(try XCTUnwrap(reported), 8, "不超过工具栏的放大上限")
+        let beforeWheel = scroll.magnification
+        scroll.zoom(by: 1 / 2, keeping: pointer)
+        func wheel(_ lines: Int32) throws -> NSEvent {
+            try XCTUnwrap(NSEvent(cgEvent: XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0))))
+        }
+        let halved = scroll.magnification
+        XCTAssertEqual(halved, beforeWheel / 2, accuracy: 0.01)
+        scroll.scrollWheel(with: try wheel(1))
+        XCTAssertNotEqual(scroll.magnification, halved, accuracy: 0.0001, "滚轮缩放图片，不是滚动")
         if let path = ProcessInfo.processInfo.environment["TIMELINE_IMAGE_VIEWER_SNAPSHOT"] {
             let model = ImageViewerModel()
             model.load([.init(name: "copy.tiff", caption: "阅读笔记")], index: 0)

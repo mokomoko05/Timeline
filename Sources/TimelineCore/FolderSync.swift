@@ -112,10 +112,14 @@ public final class FolderSync: ObservableObject {
         return lastSync == nil ? "尚未完成同步检查" : "本轮同步检查已完成"
     }
     @Published public private(set) var lastError: String?
-    /// 连续失败的轮数：偶尔一次失败（文件正被 iCloud 占用之类）下一轮通常就好了，界面只在连续失败时提醒。
+    /// 连续失败的轮数。
     @Published public private(set) var failureStreak = 0
-    /// 值得在设置页以外提醒用户的同步问题：连续失败两轮以上。
-    public var persistentError: String? { failureStreak >= 2 ? lastError : nil }
+    /// 值得在设置页以外提醒用户的同步问题：从第一次失败起过了 `persistentErrorDelay` 还没成功过。
+    /// 不按轮数算：打字时每次停顿都同步一轮，文件被 iCloud 占用这类小问题几秒内就能连败好几轮，其实很快就好了。
+    public var persistentError: String? { failurePersisted ? lastError : nil }
+    var persistentErrorDelay: TimeInterval = 30
+    private var failingSince: TimeInterval?
+    @Published private var failurePersisted = false
     @Published public private(set) var devices: [Device] = []
     /// 其他设备的文件在 iCloud 上有更新、本机还没下载到：已经请系统下载，几秒后再看。
     @Published public private(set) var waitingForDownload = false
@@ -334,6 +338,8 @@ public final class FolderSync: ObservableObject {
                 lastError = nil
                 lastErrorCode = nil
                 if failureStreak != 0 { failureStreak = 0 }
+                failingSince = nil
+                if failurePersisted { failurePersisted = false }
             }
             await recordProgress(!fileErrors.isEmpty ? "failed" : (waitingForUpload ? "waitingForUpload" : (waitingForDownload ? "waitingForDownload" : "finished")))
             return changed
@@ -343,7 +349,21 @@ public final class FolderSync: ObservableObject {
             await recordProgress("failed", error: error.localizedDescription)
             lastError = error.localizedDescription
             failureStreak += 1
+            noteFailure()
             throw error
+        }
+    }
+
+    /// 到期时再试一轮，这一轮还失败才提醒：不会在下一轮马上要成功的时候闪一下，用户停下不打字时也能按时提醒。
+    private func noteFailure() {
+        let uptime = ProcessInfo.processInfo.systemUptime
+        let started = failingSince ?? uptime
+        failingSince = started
+        let remaining = started + persistentErrorDelay - uptime
+        if remaining <= 0 {
+            if !failurePersisted { failurePersisted = true }
+        } else if automatic != nil {
+            retry(after: remaining)
         }
     }
 

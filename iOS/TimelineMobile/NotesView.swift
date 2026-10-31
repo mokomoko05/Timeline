@@ -178,7 +178,7 @@ struct TaskPage: View {
                 if let number = task?.number ?? topic?.number {
                     Text("#\(number)").font(.title3.weight(.semibold).monospacedDigit()).foregroundStyle(Palette.accent)
                 }
-                Text(task.map { TaskText.rendered($0.title) } ?? AttributedString(topic?.title ?? L("已删除的任务")))
+                Text(task.map { TaskText.rendered($0.title) } ?? topic.map { TaskText.rendered($0.title) } ?? AttributedString(L("已删除的任务")))
                     .font(.title2.weight(.bold))
                     .foregroundStyle(task?.completed == true ? Palette.muted : Palette.ink)
             }

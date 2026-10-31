@@ -584,28 +584,16 @@ private struct ViewerActionLabel: LabelStyle {
     }
 }
 
-/// 双指缩放、双击放大；单击（图上或旁边的黑底）退出查看。
+/// 双指按手指位置缩放、放大后拖动查看，双击放大；单击（图上或旁边的黑底）退出查看。
 private struct ZoomableImage: View {
     let url: URL
     let close: () -> Void
-    @State private var scale: CGFloat = 1
-    @State private var settled: CGFloat = 1
     @State private var original: UIImage?
 
     var body: some View {
         Group {
         if let image = original {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
-                .scaleEffect(scale)
-                .gesture(MagnificationGesture()
-                    .onChanged { scale = max(1, settled * $0) }
-                    .onEnded { _ in settled = scale })
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) { withAnimation { scale = scale > 1 ? 1 : 2.5; settled = scale } }
-                .onTapGesture(perform: close)
+            ZoomingImage(image: image, close: close)
         } else {
             ProgressView().tint(.white)
         }
@@ -621,6 +609,90 @@ private struct ZoomableImage: View {
         original = await Task.detached(priority: .userInitiated) { [url] in UIImage(contentsOfFile: url.path)?.preparingForDisplay() }.value
     }
 
+}
+
+private struct ZoomingImage: UIViewRepresentable {
+    let image: UIImage
+    let close: () -> Void
+
+    func makeUIView(context: Context) -> ImageZoomScrollView { ImageZoomScrollView() }
+    func updateUIView(_ view: ImageZoomScrollView, context: Context) {
+        view.close = close
+        view.display(image)
+    }
+}
+
+/// 缩放和拖动都交给 UIScrollView：跟手的锚点由系统算，每帧只改 transform，SwiftUI 不用重算。
+final class ImageZoomScrollView: UIScrollView, UIScrollViewDelegate {
+    var close: (() -> Void)?
+    let imageView = UIImageView()
+    private var fittedSize: CGSize = .zero
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        delegate = self
+        maximumZoomScale = 8
+        showsHorizontalScrollIndicator = false
+        showsVerticalScrollIndicator = false
+        contentInsetAdjustmentBehavior = .never
+        decelerationRate = .fast
+        addSubview(imageView)
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(doubleTapped))
+        doubleTap.numberOfTapsRequired = 2
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
+        tap.require(toFail: doubleTap)
+        addGestureRecognizer(doubleTap)
+        addGestureRecognizer(tap)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func display(_ image: UIImage) {
+        guard imageView.image !== image else { return }
+        imageView.image = image
+        fittedSize = .zero
+        setNeedsLayout()
+    }
+
+    /// 视口变了（底部提示出现之类）只重新适配，保留用户的缩放比例。
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.size != fittedSize, bounds.width > 0, bounds.height > 0,
+              let size = imageView.image?.size, size.width > 0, size.height > 0 else { return }
+        fittedSize = bounds.size
+        let scale = zoomScale
+        zoomScale = 1
+        let fit = min(bounds.width / size.width, bounds.height / size.height)
+        imageView.frame = CGRect(x: 0, y: 0, width: size.width * fit, height: size.height * fit)
+        contentSize = imageView.frame.size
+        zoomScale = scale
+        centerImage()
+        if zoomScale <= 1 { contentOffset = CGPoint(x: -contentInset.left, y: -contentInset.top) }
+    }
+
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+    func scrollViewDidZoom(_ scrollView: UIScrollView) { centerImage() }
+
+    private func centerImage() {
+        let vertical = max(0, (bounds.height - contentSize.height) / 2)
+        let horizontal = max(0, (bounds.width - contentSize.width) / 2)
+        contentInset = UIEdgeInsets(top: vertical, left: horizontal, bottom: vertical, right: horizontal)
+    }
+
+    @objc private func tapped() { close?() }
+    @objc private func doubleTapped(_ gesture: UITapGestureRecognizer) { toggleZoom(at: gesture.location(in: self)) }
+
+    /// 双击的那个位置放大后留在手指下面（靠近边缘时受图片边界限制）。
+    func toggleZoom(at point: CGPoint) {
+        let animated = !UIAccessibility.isReduceMotionEnabled
+        guard zoomScale <= 1 else { return setZoomScale(1, animated: animated) }
+        let onImage = convert(point, to: imageView)
+        let size = CGSize(width: bounds.width / 2.5, height: bounds.height / 2.5)
+        let x = min(max(0, onImage.x), imageView.bounds.width), y = min(max(0, onImage.y), imageView.bounds.height)
+        zoom(to: CGRect(x: x - (point.x - bounds.minX) / bounds.width * size.width,
+                        y: y - (point.y - bounds.minY) / bounds.height * size.height,
+                        width: size.width, height: size.height), animated: animated)
+    }
 }
 
 /// 缩略图缓存：列表来回滚动时不重复解码大图。

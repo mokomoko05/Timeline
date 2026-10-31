@@ -518,6 +518,7 @@ struct ComposeSheet: View {
     @State private var mention = MentionModel()
     private var images: [String] { get { draft.images } nonmutating set { draft.images = newValue } }
     @State private var picked: [PhotosPickerItem] = []
+    @State private var pickingPhotos = false
     @State private var takingPhoto = false
     @State private var error: String?
     @Environment(\.closeEditor) private var closeEditor
@@ -674,15 +675,14 @@ struct ComposeSheet: View {
             // 两个按钮在光标处插入 `@` / `#`：弹出同一个列表，接着打字就是搜索。
             Button { mention.start(.task) } label: { Label("关联待办", systemImage: "at") }
             Button { mention.start(.tag) } label: { Label("标签", systemImage: "number") }
-            PhotosPicker(selection: $picked, maxSelectionCount: 6, matching: .images, preferredItemEncoding: .current) {
-                Label("图片", systemImage: "photo")
-            }
+            Button { PhotoLibraryAccess.requestThen { pickingPhotos = true } } label: { Label("图片", systemImage: "photo") }
             Spacer()
             // 直接拍照：拍好的照片放进这条日志。
             Button { takingPhoto = true } label: { Label("拍照", systemImage: "camera") }
                 .disabled(!CameraPicker.available)
         }
         .font(.subheadline)
+        .photosPicker(isPresented: $pickingPhotos, selection: $picked, maxSelectionCount: 6, matching: .images, preferredItemEncoding: .current, photoLibrary: .shared())
         .fullScreenCover(isPresented: $takingPhoto) {
             CameraPicker { image in attach(photo: image) }.ignoresSafeArea()
         }

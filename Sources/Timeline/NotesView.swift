@@ -441,8 +441,12 @@ struct NotesView: View {
                 if let number = topic.number {
                     Text("#\(number)").font(.system(size: 13, weight: .semibold)).monospacedDigit().foregroundStyle(Palette.accent)
                 }
-                Text(topic.title).font(.system(size: 18, weight: .semibold)).lineLimit(2)
+                // 从任务原文渲染：`topic.title` 已压成纯文字，`[别名](网址)` 的链接在那里丢了。
+                Text(TaskText.rendered(store.locate(topic.id)?.task.title ?? topic.title))
+                    .font(.system(size: 18, weight: .semibold)).lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
+                    .tint(Palette.accent)
+                    .environment(\.openURL, OpenURLAction { SafariLinks.open($0); return .handled })
             }
             HStack(spacing: 12) {
                 if topic.dropped { Label("已放弃", systemImage: "nosign").foregroundStyle(Palette.muted) } else if topic.completed { Label("已完成", systemImage: "checkmark.circle.fill").foregroundStyle(Palette.success) }

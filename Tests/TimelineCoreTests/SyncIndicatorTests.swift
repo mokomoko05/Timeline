@@ -136,4 +136,58 @@ final class SyncIndicatorTests: XCTestCase {
         XCTAssertNil(sync.lastError, "这一轮成功了，只是在等上传")
         XCTAssertEqual(sync.failureStreak, 0)
     }
+
+    private func breakFolder() throws -> () throws -> Void {
+        let parent = sync.folder.deletingLastPathComponent()
+        let moved = parent.appendingPathComponent("moved-away")
+        try FileManager.default.createDirectory(at: sync.folder, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: sync.folder, to: moved)
+        try Data().write(to: sync.folder)
+        return { [folder = sync.folder] in
+            try FileManager.default.removeItem(at: folder)
+            try FileManager.default.moveItem(at: moved, to: folder)
+        }
+    }
+
+    func testRepeatedFailuresWhileTypingStayQuietUntilTheDelayPasses() async throws {
+        try await sync.sync()
+        sync.persistentErrorDelay = 0.2
+        let restore = try breakFolder()
+        for _ in 0..<3 { do { try await sync.sync() } catch {} }
+        XCTAssertEqual(sync.failureStreak, 3)
+        XCTAssertNotNil(sync.lastError)
+        XCTAssertNil(sync.persistentError, "连败几轮但还没到时间：不提醒")
+        try await settle(0.25)
+        do { try await sync.sync() } catch {}
+        XCTAssertNotNil(sync.persistentError, "到时间还没成功才提醒")
+        try restore()
+        try await sync.sync()
+        XCTAssertNil(sync.persistentError)
+    }
+
+    func testASuccessBeforeTheDelayRestartsTheClock() async throws {
+        try await sync.sync()
+        sync.persistentErrorDelay = 0.2
+        var restore = try breakFolder()
+        do { try await sync.sync() } catch {}
+        try await settle(0.25)
+        try restore()
+        try await sync.sync()
+        restore = try breakFolder()
+        do { try await sync.sync() } catch {}
+        XCTAssertNil(sync.persistentError, "中间成功过，这是新的一串失败")
+        try restore()
+    }
+
+    func testAutomaticSyncRetriesAtTheDeadlineAndReportsWithoutFurtherEdits() async throws {
+        try await sync.sync()
+        sync.persistentErrorDelay = 0.2
+        let restore = try breakFolder()
+        sync.startAutomaticSync(interval: 3600)
+        let deadline = Date().addingTimeInterval(3)
+        while sync.persistentError == nil, Date() < deadline { try await settle(0.02) }
+        XCTAssertNotNil(sync.persistentError, "用户停下不打字也要按时提醒")
+        sync.stopAutomaticSync()
+        try restore()
+    }
 }
