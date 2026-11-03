@@ -516,7 +516,8 @@ struct ContentView: View {
             DeadlineDayCell.previewItems(dueItems: dueByDay[JournalDates.key(date)] ?? [], hideCompleted: hideCompleted)
         }
         let weekdays = DateFormatters.formatter(locale: locale).veryShortStandaloneWeekdaySymbols ?? []
-        let ordered = (0..<7).map { weekdays[($0 + weekStart - 1) % 7] }
+        // LazyVGrid 中两个 ForEach 的身份共享同一空间，星期标题不能与日期槽位的 0...6 重复。
+        let ordered = (0..<7).map { (id: "weekday-\($0)", title: weekdays[($0 + weekStart - 1) % 7]) }
         return VStack(spacing: 12) {
             HStack {
                 if !tasksVisible {
@@ -553,11 +554,11 @@ struct ContentView: View {
                 let metrics = CalendarGridMetrics(size: geometry.size, counts: previews.map(\.count), scale: typography.scale)
                 ScrollView(.vertical) {
                     LazyVGrid(columns: Array(repeating: GridItem(.fixed(metrics.columnWidth), spacing: 6), count: 7), spacing: 6) {
-                        ForEach(Array(ordered.enumerated()), id: \.offset) { _, weekday in
-                            Text(weekday).font(.system(size: typography.pt(11), weight: .medium))
+                        ForEach(ordered, id: \.id) { weekday in
+                            Text(weekday.title).font(.system(size: typography.pt(11), weight: .medium))
                                 .foregroundStyle(Palette.muted).frame(height: metrics.weekdayHeight)
                         }
-                        // 月历位置固定：换月更新内容，复用这 42 个格子及其原生文本视图。
+                        // 月历位置固定：换月更新内容，复用日期格子及其原生文本视图。
                         ForEach(Array(dates.enumerated()), id: \.offset) { index, date in
                             DeadlineDayCell(store: store, date: date, selectedDate: selectedDate,
                                             displayedMonth: displayedMonth, height: metrics.weekHeights[index / 7],

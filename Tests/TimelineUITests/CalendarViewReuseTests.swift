@@ -6,6 +6,53 @@ import TimelineCore
 
 @MainActor
 final class CalendarViewReuseTests: XCTestCase {
+    func testMainCalendarShowsEveryDateAndFirstWeekTasksAcrossMonthChanges() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        func date(_ month: Int, _ day: Int = 1) -> Date {
+            JournalDates.calendar.date(from: DateComponents(year: 2026, month: month, day: day))!
+        }
+        for day in 1...7 {
+            let task = try XCTUnwrap(store.addParsedTodo("November day \(day)", on: date(11, day)))
+            store.setDeadline(task.id, to: date(11, day))
+        }
+        func descendants<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
+            (view as? T).map { [$0] } ?? view.subviews.flatMap { descendants(type, in: $0) }
+        }
+        for sundayFirst in [false, true] {
+            let defaults = InMemoryDefaults()
+            defaults.set(sundayFirst, forKey: Prefs.weekStartsSunday)
+            let host = NSHostingView(rootView: ContentView(store: store, loginItem: LoginItem())
+                .environmentObject(ReminderScheduler(store: store)).environmentObject(WorkspaceInteraction())
+                .environmentObject(CommandCenter()).environmentObject(ToastCenter())
+                .defaultAppStorage(defaults))
+            let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 1400, height: 1000), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderBack(nil)
+            defer { window.contentView = nil; window.close() }
+            try await Task.sleep(for: .milliseconds(100))
+            for month in [11, 10, 11, 12, 11] {
+                NotificationCenter.default.post(name: .timelineNavigate, object: date(month))
+                try await Task.sleep(for: .milliseconds(100))
+                host.layoutSubtreeIfNeeded()
+                let expected = JournalDates.monthGrid(date(month), weekStart: sundayFirst ? 1 : 2)
+                let cells = descendants(CalendarClickView.self, in: host)
+                XCTAssertEqual(cells.count, expected.count, "Every date must have a cell, including the first seven grid positions; month=\(month), sundayFirst=\(sundayFirst)")
+                let frames = cells.map { $0.convert($0.bounds, to: host) }
+                XCTAssertEqual(Set(frames.map { "\($0.minX),\($0.minY)" }).count, expected.count, "Date cells must not overlap each other")
+                if month == 11 {
+                    let previews = descendants(InteractiveTaskText.self, in: host).filter(\.compactLines)
+                    for day in 1...7 {
+                        let preview = previews.first { $0.source == "November day \(day)" }
+                        XCTAssertNotNil(preview, "November \(day) must show its task preview")
+                    }
+                }
+            }
+        }
+    }
+
     func testCalendarPreviewReusesTextAndUpdatesTaskActionsAfterChangingDates() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
