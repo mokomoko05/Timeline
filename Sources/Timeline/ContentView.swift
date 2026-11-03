@@ -557,7 +557,8 @@ struct ContentView: View {
                             Text(weekday).font(.system(size: typography.pt(11), weight: .medium))
                                 .foregroundStyle(Palette.muted).frame(height: metrics.weekdayHeight)
                         }
-                        ForEach(Array(dates.enumerated()), id: \.element) { index, date in
+                        // 月历位置固定：换月更新内容，复用这 42 个格子及其原生文本视图。
+                        ForEach(Array(dates.enumerated()), id: \.offset) { index, date in
                             DeadlineDayCell(store: store, date: date, selectedDate: selectedDate,
                                             displayedMonth: displayedMonth, height: metrics.weekHeights[index / 7],
                                             items: previews[index],

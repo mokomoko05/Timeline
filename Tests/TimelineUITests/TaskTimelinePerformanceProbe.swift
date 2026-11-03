@@ -85,7 +85,8 @@ final class TaskTimelinePerformanceProbe: XCTestCase {
         defer { window.contentView = nil; window.close() }
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
         host.layoutSubtreeIfNeeded()
-        for offset in [-60, -30, -15, -60, -60, -59, -58, -59, -59] {
+        let repetitions = Int(ProcessInfo.processInfo.environment["TIMELINE_TASK_PROBE_REPEATS"] ?? "1") ?? 1
+        for offset in Array(repeating: [-60, -30, -15, -60, -60, -59, -58, -59, -59], count: repetitions).flatMap({ $0 }) {
             TextLayoutProbe.reset()
             let started = CACurrentMediaTime()
             NotificationCenter.default.post(name: .timelineNavigate, object: day(offset))

@@ -42,6 +42,7 @@ A native macOS + iPhone app for tasks, focus sessions, notes and a daily journal
 - **2026-11-03**
   - Mac: task and board edits sync after five seconds of inactivity; notifications without content changes no longer start a sync.
   - Mac: past dates in the task timeline start collapsed, and opening the main window returns to today. Selecting a calendar date reveals nearby dates and jumps to that day, including empty dates.
+  - Mac: timeline history loads as needed, and calendar previews reuse their text views when switching months to reduce date-navigation layout work.
 
 - **2026-10-30**
   - Local data moved to incremental SQLite storage; saves now write only what changed.

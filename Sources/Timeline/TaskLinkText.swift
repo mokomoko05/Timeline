@@ -43,6 +43,8 @@ struct TaskLinkText: NSViewRepresentable {
         view.layerContentsRedrawPolicy = .onSetNeedsDisplay
         view.isEditable = false
         view.isSelectable = true
+        // 展示正文仍支持选字和链接，但不参与写作工具；否则首次更新选区会同步加载系统写作工具框架。
+        if #available(macOS 15.0, *) { view.writingToolsBehavior = .none }
         view.drawsBackground = false
         view.textContainerInset = NSSize(width: 5, height: 4)
         view.textContainer?.lineFragmentPadding = 0
@@ -76,6 +78,10 @@ struct TaskLinkText: NSViewRepresentable {
             HeadingFolds.toggle(key, in: id)
             foldRevision += 1
         } } : nil
+        if view.dragTaskID != dragTaskID {
+            // 月历槽位可能换成正文完全相同的另一项，也不能把上一项的选区带过去。
+            view.setSelectedRange(NSRange(location: 0, length: 0))
+        }
         view.dragTaskID = dragTaskID
         view.textContainerInset = NSSize(width: compactLines ? 2 : 5, height: compactLines ? 0 : 4)
         let foreground = NSColor(completed ? Palette.muted : color)
@@ -124,6 +130,7 @@ struct TaskLinkText: NSViewRepresentable {
             view.textStorage?.setAttributedString(entry.styled)
             TextLayoutProbe.end("setTextStorage", since: storageStarted)
             if !sourceChanged { view.selectedRanges = selection }
+            else { view.setSelectedRange(NSRange(location: 0, length: 0)) }
             view.rendered = entry
             view.measuredText = nil
             view.invalidateIntrinsicContentSize()
@@ -137,6 +144,10 @@ struct TaskLinkText: NSViewRepresentable {
         let started = TextLayoutProbe.start()
         defer { TextLayoutProbe.end("sizeProposals", since: started) }
         let width = max(1, proposal.width ?? 240)
+        // 月历预览只画一行且外层已有固定行高；高度与宽度无关，不为每个试探宽度另建 TextKit 测量栈。
+        if compactLines, maxLines == 1, !markdown {
+            return CGSize(width: width, height: typography.pt(fontSize) + 4)
+        }
         // 用单独的排版栈测量，不碰视图自己的文本容器（SwiftUI 会用很多个宽度试探，缩放窗口时每帧都是新宽度；
         // 之前是改容器、排版、再还原重排，一次测量要排两遍中文）。同一个宽度的结果缓存起来。
         let textWidth = max(1, width - nsView.textContainerInset.width * 2)

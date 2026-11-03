@@ -27,7 +27,7 @@ struct DeadlineDayCell: View, Equatable {
     let editTask: (ScheduledTask) -> Void
     @State private var targeted = false
     @ObservedObject private var dragSession = TaskDragSession.shared
-    @State private var checkboxFrames: [String: CGRect] = [:]
+    @State private var checkboxFrames = CalendarCellRegions()
     @State private var hovered = false
     /// 日志按钮在 preference 里的固定标识：和勾选框一样，点它只打开日志，不触发「选中日期」。
     static let logButtonID = UUID(uuidString: "00000000-0000-0000-0000-00000000106E")!
@@ -133,14 +133,17 @@ struct DeadlineDayCell: View, Equatable {
                 }
             }
             .frame(height: headerHeight)
-            ForEach(items.prefix(shown)) { item in
+            // 预览按槽位复用文本；有编辑状态的控件仍按任务身份重建。
+            ForEach(Array(items.prefix(shown).enumerated()), id: \.offset) { _, item in
                 HStack(alignment: .top, spacing: 0) {
                     TaskPriorityButton(store: store, task: item.task, dragOrigin: .calendar)
+                        .id(item.id)
                         .background(GeometryReader { proxy in
                             Color.clear.preference(key: CheckboxFramesKey.self, value: [item.id.uuidString + "-priority": proxy.frame(in: .named(Self.space))])
                         })
                     if item.task.dueHasTime {
                         TaskDeadlineButton(store: store, task: item.task, compact: true, stacksRange: false)
+                            .id(item.id)
                             .background(GeometryReader { proxy in
                                 Color.clear.preference(key: CheckboxFramesKey.self, value: [item.id.uuidString + "-time": proxy.frame(in: .named(Self.space))])
                             })
@@ -196,9 +199,13 @@ struct DeadlineDayCell: View, Equatable {
         .animation(Motion.quick, value: hovered)
         .contentShape(Rectangle())
         .coordinateSpace(name: Self.space)
-        .onPreferenceChange(CheckboxFramesKey.self) { if checkboxFrames != $0 { checkboxFrames = $0 } }
-        .background(CalendarCellClicks(select: select, expand: open, excluded: Array(checkboxFrames.values)))
+        .onPreferenceChange(CheckboxFramesKey.self) { checkboxFrames.frames = $0 }
+        .background(CalendarCellClicks(select: select, expand: open, exclusionProvider: { [checkboxFrames] in Array(checkboxFrames.frames.values) }))
         .onHover { hovered = $0 }
+        .onChange(of: date) { _ in
+            hovered = false
+            targeted = false
+        }
         .help("单击选择 · 双击添加事项")
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityDescription)
@@ -209,6 +216,10 @@ struct DeadlineDayCell: View, Equatable {
         .onDrop(of: [TaskDragPayload.type], delegate: CalendarTaskDropTarget(store: store, destination: date, targeted: $targeted))
         .onChange(of: dragSession.activeID) { if $0 == nil { targeted = false } }
     }
+}
+
+private final class CalendarCellRegions {
+    var frames: [String: CGRect] = [:]
 }
 
 private struct CheckboxFramesKey: PreferenceKey {
