@@ -101,7 +101,8 @@ struct TaskTimelinePane: View {
             }
             .onChange(of: interaction.selectedTaskID) { id in
                 if interaction.suppressNextTaskScroll { interaction.suppressNextTaskScroll = false; return }
-                if let id, presentation.navigation.request?.target != AnyHashable(TaskTimelineAnchor.task(id)) {
+                // 上次请求的目标不代表当前视口；手动滚走后重新选择同一任务仍需定位。
+                if let id {
                     if rowRegions.rows[id] != nil { presentation.scroll(to: id, anchor: nil) }
                     else { revealTask(id, anchor: nil) }
                 }
@@ -117,6 +118,9 @@ struct TaskTimelinePane: View {
                 if selectDate { navigate(date) }
                 presentation.reveal(near: date, index: index.index(for: tasks))
                 if rowRegions.rows[id] == nil { section = TaskTimelineSection.dayID(date) }
+            } else if rowRegions.rows[id] == nil {
+                // 未设日期的任务也可能还没进入懒布局，先创建所属分组再定位行。
+                section = "undated"
             }
             if item.task.completed { presentation.expanded.insert(id) }
         }
