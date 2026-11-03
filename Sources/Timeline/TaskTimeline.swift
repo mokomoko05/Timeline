@@ -2,6 +2,10 @@ import AppKit
 import SwiftUI
 import TimelineCore
 
+enum TaskTimelineAnchor: Hashable {
+    case task(UUID)
+}
+
 /// 已结束事项在当天原位置展开、收起；不跨日期合并。
 struct TaskTimelineItem: Identifiable {
     let tasks: [ScheduledTask]
@@ -107,11 +111,13 @@ enum TaskTimelineSection: Identifiable {
     }
 
     static func sections(for tasks: [ScheduledTask], today: Date = Date(), revealedDates: Set<Date> = []) -> [Self] {
-        let calendar = JournalDates.calendar
+        sections(index: TaskTimelineIndex(tasks: tasks), today: today, revealedDates: revealedDates)
+    }
+
+    static func sections(index: TaskTimelineIndex, today: Date, revealedDates: Set<Date>) -> [Self] {
+        let calendar = index.calendar
         let today = calendar.startOfDay(for: today)
-        let ordered = tasks.sorted(by: precedes)
-        let dated = ordered.filter { $0.task.timelineDate != nil }
-        let byDay = Dictionary(grouping: dated) { calendar.startOfDay(for: $0.task.timelineDate!) }
+        let byDay = index.byDay
         // 今天和明天是稳定的近期窗口；其余日期来自任务和用户主动展开的有限日期。
         let nearTerm = Set((0...1).compactMap { calendar.date(byAdding: .day, value: $0, to: today) })
         var days = nearTerm
@@ -119,7 +125,7 @@ enum TaskTimelineSection: Identifiable {
         days.formUnion(byDay.keys)
         let sortedDays = days.sorted()
         guard let first = sortedDays.first, let last = sortedDays.last else {
-            return [.undated(ordered)]
+            return [.undated(index.ordered)]
         }
         var result: [Self] = [.gap(nil, first)]
         var previous: Date?
@@ -131,7 +137,7 @@ enum TaskTimelineSection: Identifiable {
             previous = day
         }
         result.append(.gap(last, nil))
-        result.append(.undated(ordered.filter { $0.task.timelineDate == nil }))
+        result.append(.undated(index.undated))
         var compact: [Self] = []
         var historyDates: [Date] = []
         var historyTasks: [ScheduledTask] = []
@@ -260,66 +266,27 @@ struct TaskTimelineView: View {
     let navigate: (Date) -> Void
     var selectTask: () -> Void = {}
     var next: () -> Void = {}
-    var revealedDates: Binding<Set<Date>> = .constant([])
+    @Binding var revealedDates: Set<Date>
+    var usesLazyLayout = false
     /// 不订阅：拖动时只有让位的行重画，整条时间轴不重算。
     @State private var reorder = TaskReorderModel()
+    @State private var indexCache = TaskTimelineIndexCache()
     static let reorderSpace = "timeline-order"
 
+    init(store: JournalStore, tasks: [ScheduledTask], today: Date, selectedDate: Date,
+         expanded: Binding<Set<UUID>>, requestedEdit: Binding<UUID?>, navigate: @escaping (Date) -> Void,
+         selectTask: @escaping () -> Void = {}, next: @escaping () -> Void = {}, revealedDates: Binding<Set<Date>> = .constant([]), usesLazyLayout: Bool = false) {
+        self.store = store; self.tasks = tasks; self.today = today; self.selectedDate = selectedDate
+        _expanded = expanded; _requestedEdit = requestedEdit; _revealedDates = revealedDates
+        self.navigate = navigate; self.selectTask = selectTask; self.next = next
+        self.usesLazyLayout = usesLazyLayout
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if revealedDates.wrappedValue.contains(where: { $0 < JournalDates.calendar.startOfDay(for: today) }) {
-                Button("收起历史") {
-                    revealedDates.wrappedValue = revealedDates.wrappedValue.filter { $0 >= JournalDates.calendar.startOfDay(for: today) }
-                }
-                .buttonStyle(.plain).font(.caption).foregroundStyle(Palette.muted)
-                .padding(.leading, TaskTimelineLayout.cardInset(typography)).padding(.vertical, 6)
-            }
-            ForEach(TaskTimelineSection.sections(for: tasks, today: today, revealedDates: revealedDates.wrappedValue)) { section in
-                switch section {
-                case .day(let date, let items):
-                    TimelineDayView(store: store, date: date, tasks: items, selectedDate: selectedDate,
-                                    expanded: $expanded, requestedEdit: $requestedEdit,
-                                    navigate: navigate, selectTask: selectTask, next: next)
-                        .id(section.id)
-                case .gap(let before, let after):
-                    TimelineGapView(before: before, after: after)
-                        .modifier(TimelineSlotRow(key: section.id))
-                        .id(section.id)
-                case .undated(let items):
-                    TimelineDayView(store: store, date: nil, tasks: items, selectedDate: selectedDate,
-                                    expanded: $expanded, requestedEdit: $requestedEdit,
-                                    navigate: navigate, selectTask: selectTask, next: next)
-                        .id(section.id)
-                case .finished(let dates, let items):
-                    FinishedTimelineDatesView(store: store, dates: dates, tasks: items, selectedDate: selectedDate,
-                        expanded: $expanded, requestedEdit: $requestedEdit, navigate: navigate,
-                        selectTask: selectTask, next: next)
-                        .id(section.id)
-                case .history(let dates, let items):
-                    Button {
-                        revealedDates.wrappedValue.formUnion(dates)
-                        expanded.formUnion(items.map(\.id))
-                    } label: {
-                        HStack(spacing: 7) {
-                            Text("历史")
-                            Text(JournalDates.key(dates[0]))
-                            if dates.count > 1 { Text("–"); Text(JournalDates.key(dates[dates.count - 1])) }
-                            Text("\(items.count) 项")
-                            Image(systemName: "chevron.right")
-                            Spacer(minLength: 0)
-                        }
-                        .font(.system(size: typography.pt(11))).foregroundStyle(Palette.muted)
-                        .padding(.leading, TaskTimelineLayout.cardInset(typography)).frame(minHeight: 36).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain).help("展开这段历史时间轴")
-                    .background { TimelineAxisStroke(highlighted: false) }
-                    .modifier(TimelineSlotRow(key: section.id))
-                    .id(section.id)
-                }
-            }
+        Group {
+            if usesLazyLayout { LazyVStack(alignment: .leading, spacing: 0) { sections } }
+            else { VStack(alignment: .leading, spacing: 0) { sections } }
         }
-        // 增删任务不再让整条时间轴插值移动（每一行的原生文本都要跟着重排，帧率很低）；新任务和放下的任务用落点高亮提示。
-        .animation(Motion.quick, value: expanded)
         .coordinateSpace(name: Self.reorderSpace)
         .environment(\.taskReorder, store.isReadOnly ? nil : reorder)
         .environment(\.timelineReorderSpace, Self.reorderSpace)
@@ -327,8 +294,64 @@ struct TaskTimelineView: View {
         .onAppear(perform: configureReorder)
     }
 
+    @ViewBuilder private var sections: some View {
+        if revealedDates.contains(where: { $0 < JournalDates.calendar.startOfDay(for: today) }) {
+            Button("收起历史") {
+                revealedDates = revealedDates.filter { $0 >= JournalDates.calendar.startOfDay(for: today) }
+            }
+            .buttonStyle(.plain).font(.caption).foregroundStyle(Palette.muted)
+            .padding(.leading, TaskTimelineLayout.cardInset(typography)).padding(.vertical, 6)
+        }
+        ForEach(indexCache.sections(for: tasks, today: today, revealedDates: revealedDates)) { section in
+            switch section {
+            case .day(let date, let items):
+                TimelineDayView(store: store, date: date, tasks: items, selectedDate: selectedDate,
+                                expanded: $expanded, requestedEdit: $requestedEdit,
+                                navigate: navigate, selectTask: selectTask, next: next)
+                    .equatable()
+                    .id(section.id)
+            case .gap(let before, let after):
+                TimelineGapView(before: before, after: after)
+                    .modifier(TimelineSlotRow(key: section.id))
+                    .id(section.id)
+            case .undated(let items):
+                TimelineDayView(store: store, date: nil, tasks: items, selectedDate: selectedDate,
+                                expanded: $expanded, requestedEdit: $requestedEdit,
+                                navigate: navigate, selectTask: selectTask, next: next)
+                    .equatable()
+                    .id(section.id)
+            case .finished(let dates, let items):
+                FinishedTimelineDatesView(store: store, dates: dates, tasks: items, selectedDate: selectedDate,
+                    expanded: $expanded, requestedEdit: $requestedEdit, navigate: navigate,
+                    selectTask: selectTask, next: next)
+                    .id(section.id)
+            case .history(let dates, let items):
+                Button {
+                    revealedDates.formUnion(dates)
+                    expanded.formUnion(items.map(\.id))
+                } label: {
+                    HStack(spacing: 7) {
+                        Text("历史")
+                        Text(JournalDates.key(dates[0]))
+                        if dates.count > 1 { Text("–"); Text(JournalDates.key(dates[dates.count - 1])) }
+                        Text("\(items.count) 项")
+                        Image(systemName: "chevron.right")
+                        Spacer(minLength: 0)
+                    }
+                    .font(.system(size: typography.pt(11))).foregroundStyle(Palette.muted)
+                    .padding(.leading, TaskTimelineLayout.cardInset(typography)).frame(minHeight: 36).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).help("展开这段历史时间轴")
+                .background { TimelineAxisStroke(highlighted: false) }
+                .modifier(TimelineSlotRow(key: section.id))
+                .id(section.id)
+            }
+        }
+    }
+
     /// 队列就是时间轴上所有让位块（任务、日期、空档……）按位置从上到下；整条时间轴是一列，位置的先后就是显示的先后。
     private func configureReorder() {
+        reorder.includesNewlyVisibleRows = usesLazyLayout
         reorder.groupProvider = { [weak reorder] _ in
             (reorder?.frames ?? [:]).sorted { $0.value.minY < $1.value.minY }.map(\.key)
         }
@@ -349,7 +372,7 @@ struct TaskTimelineView: View {
     }
 }
 
-struct TimelineDayView: View {
+struct TimelineDayView: View, Equatable {
     @ObservedObject var store: JournalStore
     @Environment(\.typography) private var typography
     let date: Date?
@@ -361,6 +384,9 @@ struct TimelineDayView: View {
     let selectTask: () -> Void
     let next: () -> Void
     var showsFinishedTasks = false
+    /// 绑定的旧值也会读到最新状态，比较时必须保留这一轮属于本日期的值。
+    private let expandedTasks: Set<UUID>
+    private let editingTask: UUID?
     @State private var calendarDropTargeted = false
     /// 拖到这一天时插入线的位置（分组坐标）。
     @State private var insertionY: CGFloat?
@@ -369,6 +395,24 @@ struct TimelineDayView: View {
     @Environment(\.timelineReorderSpace) private var reorderSpace
     /// 这一天在时间轴里的位置：从日历拖进来时，把各行的位置换算到这一天里。只在拖放时读，不触发刷新。
     @State private var origin = DayOrigin()
+
+    init(store: JournalStore, date: Date?, tasks: [ScheduledTask], selectedDate: Date,
+         expanded: Binding<Set<UUID>>, requestedEdit: Binding<UUID?>, navigate: @escaping (Date) -> Void,
+         selectTask: @escaping () -> Void, next: @escaping () -> Void, showsFinishedTasks: Bool = false) {
+        self.store = store; self.date = date; self.tasks = tasks; self.selectedDate = selectedDate
+        _expanded = expanded; _requestedEdit = requestedEdit
+        self.navigate = navigate; self.selectTask = selectTask; self.next = next
+        self.showsFinishedTasks = showsFinishedTasks
+        expandedTasks = Set(tasks.lazy.filter { expanded.wrappedValue.contains($0.id) }.map(\.id))
+        editingTask = requestedEdit.wrappedValue.flatMap { id in tasks.contains { $0.id == id } ? id : nil }
+    }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        // 日期刻度使用自己的 date；月历选中别的日子不改变这些任务行。
+        lhs.store === rhs.store && lhs.date == rhs.date && lhs.tasks == rhs.tasks
+            && lhs.expandedTasks == rhs.expandedTasks && lhs.editingTask == rhs.editingTask
+            && lhs.showsFinishedTasks == rhs.showsFinishedTasks
+    }
     /// 今天有定了时刻的事项时，「现在」画在第一个还没到点的未完成事项前面；都已过点时画在最后。
     private var nowMarkerTarget: UUID? {
         guard axisTone == .today, displayed.contains(where: { $0.task.dueHasTime && !$0.task.completed }) else { return nil }
@@ -386,7 +430,7 @@ struct TimelineDayView: View {
         if calendar.isDateInToday(date) { return .today }
         return date < calendar.startOfDay(for: Date()) ? .past : .future
     }
-    private var displayed: [ScheduledTask] { tasks.sorted(by: TaskTimelineSection.precedes) }
+    private var displayed: [ScheduledTask] { tasks.sorted(by: ScheduledTask.listOrder) }
     private var visibleIDs: [UUID] {
         if showsFinishedTasks { return displayed.map(\.id) }
         return TaskTimelineItem.items(for: displayed, expanded: expanded).filter { !$0.folded }.flatMap(\.tasks).map(\.id)
@@ -457,7 +501,7 @@ struct TimelineDayView: View {
     private func taskRow(_ item: ScheduledTask) -> some View {
         ManagedTaskRow(store: store, date: item.date, task: item.task, requestedEdit: $requestedEdit,
                        timeline: true, next: next, select: selectTask)
-            .id(item.id)
+            .id(TaskTimelineAnchor.task(item.id))
             .modifier(TimelineReorderRow(id: item.id, model: reorder))
             .background(GeometryReader { geometry in
                 Color.clear.preference(key: TaskRowGlobalFramesKey.self, value: [item.id: geometry.frame(in: .global)])
@@ -477,17 +521,17 @@ struct FinishedTaskTimelineBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: TaskTimelineLayout.spacing) {
             Button {
-                withAnimation(Motion.quick) {
-                    if item.folded { expanded.formUnion(item.tasks.map(\.id)) }
-                    else { expanded.subtract(item.tasks.map(\.id)) }
-                }
+                if item.folded { expanded.formUnion(item.tasks.map(\.id)) }
+                else { expanded.subtract(item.tasks.map(\.id)) }
             } label: {
                 HStack(spacing: 7) {
                     let completed = item.tasks.filter(\.task.isDone).count
                     let dropped = item.tasks.filter(\.task.isDropped).count
                     if completed > 0 { Text("已完成 \(completed) 项") }
                     if dropped > 0 { Text("已放弃 \(dropped) 项") }
-                    Image(systemName: item.folded ? "chevron.right" : "chevron.down")
+                    Image(systemName: "chevron.right")
+                        .rotationEffect(.degrees(item.folded ? 0 : 90))
+                        .animation(Motion.quick, value: item.folded)
                     Spacer(minLength: 0)
                 }
                 .font(.system(size: typography.pt(11))).foregroundStyle(Palette.muted)
@@ -501,7 +545,7 @@ struct FinishedTaskTimelineBlock: View {
                 ForEach(item.tasks) { task in
                     ManagedTaskRow(store: store, date: task.date, task: task.task, requestedEdit: $requestedEdit,
                                    timeline: true, select: selectTask)
-                        .id(task.id)
+                        .id(TaskTimelineAnchor.task(task.id))
                         .modifier(TimelineReorderRow(id: task.id, model: reorder))
                         .background(GeometryReader { geometry in
                             Color.clear.preference(key: TaskRowGlobalFramesKey.self, value: [task.id: geometry.frame(in: .global)])
@@ -551,10 +595,8 @@ struct FinishedTimelineDatesView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(Motion.quick) {
-                    if isExpanded { expanded.subtract(tasks.map(\.id)) }
-                    else { expanded.formUnion(tasks.map(\.id)) }
-                }
+                if isExpanded { expanded.subtract(tasks.map(\.id)) }
+                else { expanded.formUnion(tasks.map(\.id)) }
             } label: {
                 HStack(spacing: 7) {
                     Text(dates[0].formatted(.dateTime.month(.twoDigits).day(.twoDigits)))
@@ -566,7 +608,9 @@ struct FinishedTimelineDatesView: View {
                     let dropped = tasks.filter(\.task.isDropped).count
                     if completed > 0 { Text("已完成 \(completed) 项") }
                     if dropped > 0 { Text("已放弃 \(dropped) 项") }
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    Image(systemName: "chevron.right")
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .animation(Motion.quick, value: isExpanded)
                     Spacer(minLength: 0)
                 }
                 .font(.system(size: typography.pt(11)))
@@ -590,6 +634,7 @@ struct FinishedTimelineDatesView: View {
                         tasks: tasks.filter { $0.task.timelineDate.map { JournalDates.calendar.isDate($0, inSameDayAs: date) } == true },
                         selectedDate: selectedDate, expanded: $expanded, requestedEdit: $requestedEdit,
                         navigate: navigate, selectTask: selectTask, next: next, showsFinishedTasks: true)
+                        .equatable()
                         .id(TaskTimelineSection.dayID(date))
                 }
             }

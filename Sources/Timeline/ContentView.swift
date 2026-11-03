@@ -35,9 +35,8 @@ struct ContentView: View {
     @State private var scrollTarget: UUID?
     /// 点摘要里的数字时，要定位的任务类型（`overdue` / `today`）。
     @State private var scrollGroup: String?
-    @State private var expandedFinished: Set<UUID> = []
-    @State private var revealedTimelineDates: Set<Date> = []
-    @State private var timelineNavigation = UUID()
+    @State private var timeline = TaskTimelinePresentation()
+    @State private var taskIndex = TaskTimelineIndexCache()
     /// 待办行的位置，用来判断一次点击是不是点在待办上（不是 @Published，更新它不会触发重绘）。
     @State private var rowRegions = TaskRowRegions()
     @AppStorage(Prefs.hideCompleted) private var hideCompleted = false
@@ -66,12 +65,13 @@ struct ContentView: View {
     private var entry: DayEntry { store.entry(for: selectedDate) }
     /// 全部任务（不属于某一天），按截止时间排序；隐藏已完成时过滤掉已完成的。
     private var orderedTasks: [ScheduledTask] {
-        store.tasks().sorted(by: TaskTimelineSection.precedes)
-            .filter { !hideCompleted || !$0.task.completed }
+        let ordered = taskIndex.index(for: store.tasks()).ordered
+        return hideCompleted ? ordered.filter { !$0.task.completed } : ordered
     }
     private var visibleTasks: [ScheduledTask] {
-        TaskTimelineSection.sections(for: orderedTasks, today: JournalDates.date(for: currentDayKey) ?? Date(), revealedDates: revealedTimelineDates)
-            .flatMap { $0.visibleTasks(expanded: expandedFinished) }
+        taskIndex.sections(for: store.tasks(), today: JournalDates.date(for: currentDayKey) ?? Date(), revealedDates: timeline.revealedDates)
+            .flatMap { $0.visibleTasks(expanded: timeline.expanded) }
+            .filter { !hideCompleted || !$0.task.completed }
     }
     private var weekStart: Int { weekStartsSunday ? 1 : 2 }
     private var footerVisible: Bool { issues.current != nil || !reminders.status.isEmpty }
@@ -149,13 +149,14 @@ struct ContentView: View {
             todoDraft.attach(store: store, date: selectedDate)
             refreshOverview()
         }
-        .onChange(of: selectedDate) { todoDraft.attach(store: store, date: $0) }
+        .onChange(of: selectedDate) { date in
+            todoDraft.attach(store: store, date: date)
+            if notesWindow.isVisible { notesWindow.showJournal(store: store, date: date) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .timelineShowMain)) { _ in
-            revealedTimelineDates = []
-            expandedFinished = []
+            timeline.reset(today: Date())
             selectedDate = JournalDates.calendar.startOfDay(for: Date())
             displayedMonth = JournalDates.monthStart(Date())
-            timelineNavigation = UUID()
         }
         .onReceive(dayTimer) { now in
             refreshOverview()
@@ -488,69 +489,10 @@ struct ContentView: View {
                 }
             }
             summaryBar
-            ScrollViewReader { proxy in
-                ScrollView {
-                    TaskTimelineView(store: store, tasks: visible, today: JournalDates.date(for: currentDayKey) ?? Date(),
-                                     selectedDate: selectedDate, expanded: $expandedFinished, requestedEdit: $requestedEdit,
-                                     navigate: select, selectTask: { interaction.activePane = .tasks }, next: { addingTodo = true },
-                                     revealedDates: $revealedTimelineDates)
-                        .padding(.vertical, 12)
-                        .onPreferenceChange(TaskRowGlobalFramesKey.self) { rowRegions.rows = $0 }
-                }
-                .background(GeometryReader { proxy in
-                    Color.clear.onAppear { rowRegions.viewport = proxy.frame(in: .global) }
-                        .onChange(of: proxy.frame(in: .global)) { rowRegions.viewport = $0 }
-                })
-                .onAppear {
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(TaskTimelineSection.dayID(selectedDate), anchor: .top)
-                    }
-                }
-                .onChange(of: scrollTarget) { id in
-                    if let id {
-                        if let item = store.locate(id) {
-                            if item.task.completed { expandedFinished.insert(id) }
-                            if let due = item.task.timelineDate { select(due) }
-                        }
-                        DispatchQueue.main.async { proxy.scrollTo(id, anchor: .center) }
-                        scrollTarget = nil
-                    }
-                }
-                .onChange(of: selectedDate) { date in
-                    // 日志窗口开着：跟着主窗口换到同一天。
-                    if notesWindow.isVisible { notesWindow.showJournal(store: store, date: date) }
-                }
-                .onChange(of: scrollGroup) { id in
-                    if let id {
-                        if id == "undated" {
-                            proxy.scrollTo("undated", anchor: .top)
-                        } else if id == "today" {
-                            proxy.scrollTo(TaskTimelineSection.dayID(Date()), anchor: .top)
-                        } else if let item = visible.first(where: { !$0.task.completed && (id == "overdue" ? ($0.task.effectiveDeadline ?? .distantFuture) < Date() : JournalDates.calendar.isDateInToday($0.task.timelineDate ?? .distantPast)) }) {
-                            if let date = item.task.timelineDate { revealTimeline(near: date) }
-                            DispatchQueue.main.async { proxy.scrollTo(item.id, anchor: .top) }
-                        }
-                        scrollGroup = nil
-                    }
-                }
-                .onChange(of: requestedEdit) { id in
-                    if let id {
-                        if let date = store.locate(id)?.task.timelineDate { revealTimeline(near: date) }
-                        if store.locate(id)?.task.completed == true { expandedFinished.insert(id) }
-                        DispatchQueue.main.async { proxy.scrollTo(id, anchor: .center) }
-                    }
-                }
-                .onChange(of: interaction.selectedTaskID) { id in
-                    if interaction.suppressNextTaskScroll { interaction.suppressNextTaskScroll = false; return }
-                    if let id { proxy.scrollTo(id) }
-                }
-                // 展开完成后的下一次布局再定位；重复点击同一天也能重新跳转。
-                .onChange(of: timelineNavigation) { _ in
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(TaskTimelineSection.dayID(selectedDate), anchor: .top)
-                    }
-                }
-            }
+            TaskTimelinePane(store: store, tasks: visible, today: JournalDates.date(for: currentDayKey) ?? Date(),
+                selectedDate: selectedDate, presentation: timeline, requestedEdit: $requestedEdit,
+                scrollTarget: $scrollTarget, scrollGroup: $scrollGroup, rowRegions: rowRegions,
+                navigate: select, next: { addingTodo = true })
             .frame(maxHeight: .infinity)
             ObservingDraft(draft: todoDraft) { _ in TaskComposerRow(store: store, text: draft, focused: $addingTodo, options: $creationOptions,
                             defaultDate: selectedDate, submit: addTodo, cancel: { addingTodo = false }, previous: {
@@ -672,7 +614,7 @@ struct ContentView: View {
             selectedDate = JournalDates.calendar.startOfDay(for: date)
         }
         revealTimeline(near: date)
-        if clickExpands || forceExpand { tasksVisible = true }
+        if (clickExpands || forceExpand) && !tasksVisible { tasksVisible = true }
     }
 
     private var footer: some View {
@@ -710,19 +652,16 @@ struct ContentView: View {
 
     private func select(_ date: Date) {
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
-        tasksVisible = true
-        selectedDate = JournalDates.calendar.startOfDay(for: date)
-        displayedMonth = JournalDates.monthStart(date)
+        if !tasksVisible { tasksVisible = true }
+        let day = JournalDates.calendar.startOfDay(for: date)
+        let month = JournalDates.monthStart(date)
+        if selectedDate != day { selectedDate = day }
+        if displayedMonth != month { displayedMonth = month }
         revealTimeline(near: date)
     }
 
     private func revealTimeline(near date: Date) {
-        let dates = TaskTimelineSection.datesNear(date)
-        revealedTimelineDates.formUnion(dates)
-        expandedFinished.formUnion(orderedTasks.filter {
-            $0.task.timelineDate.map { dates.contains(JournalDates.calendar.startOfDay(for: $0)) } == true
-        }.map(\.id))
-        timelineNavigation = UUID()
+        timeline.reveal(near: date, index: taskIndex.index(for: store.tasks()))
     }
 
     private func toggleTasks() {

@@ -75,6 +75,8 @@ final class TaskReorderModel: ObservableObject {
     var commit: ([UUID]) -> Void = { _ in }
     /// 这个落点放不放得下（时间轴：落点上面得有一个日期）；放不下就滑回原位，不提交。
     var accepts: ([UUID]) -> Bool = { _ in true }
+    /// 懒布局的时间轴：自动滚动后，新出现的日期和任务继续加入本次拖动队列。
+    var includesNewlyVisibleRows = false
 
     @Published private(set) var activeID: UUID?
     /// 松手后正在滑进新位置的那一行。
@@ -120,6 +122,7 @@ final class TaskReorderModel: ObservableObject {
     /// `translation`：指针相对按下时在清单内容里向下移动的距离（已包含自动滚动的距离）。
     func update(_ translation: CGFloat) {
         guard activeID != nil else { return }
+        if includesNewlyVisibleRows { extendVisibleGroup() }
         let clamped = ReorderMath.clamp(translation, frames: groupFrames, active: activeIndex)
         // 指针没动（自动滚动的定时器每帧都会调用）就不要再发布，避免无谓的重绘。
         guard abs(clamped - dragOffset) > 0.01 else { return }
@@ -127,6 +130,21 @@ final class TaskReorderModel: ObservableObject {
         drag.value = clamped
         let newTarget = ReorderMath.targetIndex(frames: groupFrames, active: activeIndex, translation: clamped)
         if newTarget != target { target = newTarget }
+    }
+
+    private func extendVisibleGroup() {
+        guard let activeID else { return }
+        let candidates = groupProvider(activeID)
+        let known = Set(group)
+        let additions = candidates.filter { !known.contains($0) && frames[$0] != nil }
+        guard !additions.isEmpty else { return }
+        let destination = group[target]
+        var retained = Dictionary(uniqueKeysWithValues: zip(group, groupFrames))
+        for id in additions { retained[id] = frames[id] }
+        group = retained.keys.sorted { retained[$0]!.minY < retained[$1]!.minY }
+        groupFrames = group.map { retained[$0]! }
+        activeIndex = group.firstIndex(of: activeID)!
+        target = group.firstIndex(of: destination)!
     }
 
     func offset(for id: UUID) -> CGFloat {

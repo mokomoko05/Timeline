@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 import TimelineCore
@@ -298,6 +299,69 @@ final class TaskTimelineTests: XCTestCase {
         XCTAssertLessThan(empty.count, 20, "Browsing a distant date must keep the timeline finite")
     }
 
+    func testTimelineIndexUpdatesAfterDateStatusOrderAndRemovalChanges() {
+        let cache = TaskTimelineIndexCache()
+        var first = scheduled("First", offset: -20)
+        let second = scheduled("Second", offset: 0)
+        let original = [first, second]
+        XCTAssertEqual(cache.index(for: original).byDay[day(-20)]?.map(\.id), [first.id])
+        let revealed = TaskTimelineSection.datesNear(day(-20))
+        XCTAssertTrue(cache.sections(for: original, today: today, revealedDates: revealed).flatMap(\.tasks).contains { $0.id == first.id })
+        var updated = first.task
+        updated.dueDate = today
+        updated.completed = true
+        updated.listPosition = -10
+        first = ScheduledTask(date: first.date, task: updated)
+        let moved = cache.index(for: [first, second])
+        XCTAssertNil(moved.byDay[day(-20)])
+        XCTAssertEqual(moved.byDay[today]?.map(\.id), [first.id, second.id])
+        XCTAssertTrue(moved.byDay[today]?.first?.task.completed == true)
+        let removed = cache.sections(for: [second], today: today, revealedDates: [])
+        XCTAssertEqual(removed.flatMap(\.tasks).map(\.id), [second.id])
+        XCTAssertFalse(dates(removed).contains(day(-20)))
+    }
+
+    func testRepeatedTimelineNavigationDoesNotPublishContentChanges() {
+        let presentation = TaskTimelinePresentation()
+        let task = scheduled("Historical", offset: -20, completed: true)
+        let index = TaskTimelineIndex(tasks: [task])
+        presentation.reveal(near: day(-20), index: index)
+        let first = presentation.navigation.request
+        var changes = 0
+        let observation = presentation.objectWillChange.sink { changes += 1 }
+        presentation.reveal(near: day(-20), index: index)
+        XCTAssertEqual(changes, 0, "A repeated click must only issue a scroll request")
+        XCTAssertNotEqual(first, presentation.navigation.request)
+        XCTAssertEqual(presentation.navigation.request?.target, AnyHashable(TaskTimelineSection.dayID(day(-20))))
+        XCTAssertTrue(presentation.expanded.contains(task.id))
+        presentation.reset(today: today)
+        XCTAssertTrue(presentation.expanded.isEmpty)
+        XCTAssertTrue(presentation.revealedDates.isEmpty)
+        withExtendedLifetime(observation) {}
+    }
+
+    func testTimelineReorderContinuesAcrossDatesThatAppearDuringAutoscroll() {
+        let model = TaskReorderModel()
+        model.includesNewlyVisibleRows = true
+        let first = UUID(), second = UUID(), third = UUID()
+        model.frames = [first: CGRect(x: 0, y: 0, width: 400, height: 40),
+                        second: CGRect(x: 0, y: 46, width: 400, height: 40)]
+        model.groupProvider = { [weak model] _ in
+            guard let model else { return [] }
+            return model.frames.keys.sorted { model.frames[$0]!.minY < model.frames[$1]!.minY }
+        }
+        var committed: [UUID] = []
+        model.commit = { committed = $0 }
+        XCTAssertTrue(model.begin(first))
+        model.update(50)
+        // 懒布局会移除屏幕外的行，并上报新进入视口的日期 / 任务。
+        model.frames.removeValue(forKey: second)
+        model.frames[third] = CGRect(x: 0, y: 92, width: 400, height: 40)
+        model.update(100)
+        model.finish()
+        XCTAssertEqual(committed, [second, third, first])
+    }
+
     func testMainWindowOpensAtTodayAndNavigatesIntoCollapsedHistory() async throws {
         let defaults = UserDefaults.standard
         let previous = defaults.object(forKey: "tasksPaneExpanded")
@@ -333,7 +397,7 @@ final class TaskTimelineTests: XCTestCase {
             (view as? TaskHandleView).map { [$0] } ?? view.subviews.flatMap(handles)
         }
         func assertVisible(_ id: UUID, file: StaticString = #filePath, line: UInt = #line) throws {
-            let handle = try XCTUnwrap(handles(host).first { $0.taskID == id }, file: file, line: line)
+            let handle = try XCTUnwrap(handles(host).first { $0.taskID == id && $0.reorder != nil }, file: file, line: line)
             XCTAssertFalse(handle.visibleRect.isEmpty, "The target must be inside the scroll viewport", file: file, line: line)
         }
         try await Task.sleep(for: .milliseconds(300))
@@ -348,11 +412,22 @@ final class TaskTimelineTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         host.layoutSubtreeIfNeeded()
         try assertVisible(old.id)
+        // 连续点日历时旧定位不能把最后选中的日期拉走。
+        NotificationCenter.default.post(name: .timelineNavigate, object: oldDay)
+        NotificationCenter.default.post(name: .timelineNavigate, object: JournalDates.calendar.date(byAdding: .day, value: 8, to: today)!)
+        NotificationCenter.default.post(name: .timelineNavigate, object: oldDay)
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
+        try assertVisible(old.id)
         NotificationCenter.default.post(name: .timelineShowMain, object: nil)
         try await Task.sleep(for: .milliseconds(200))
         host.layoutSubtreeIfNeeded()
-        XCTAssertFalse(handles(host).contains { $0.taskID == old.id })
+        XCTAssertFalse(handles(host).contains { $0.taskID == old.id && $0.reorder != nil })
         try assertVisible(current.id)
+        NotificationCenter.default.post(name: .timelineReveal, object: old.id)
+        try await Task.sleep(for: .milliseconds(200))
+        host.layoutSubtreeIfNeeded()
+        try assertVisible(old.id)
     }
 
     func testMergedFinishedDatesExpandWithoutMovingTheirToggleAndCollapseToOneRow() throws {
