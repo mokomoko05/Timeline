@@ -138,6 +138,8 @@ public final class FolderSync: ObservableObject {
     /// 连续等下载的轮数：iCloud 一直没下载下来时别无限地每几秒查一次。
     private var downloadWaits = 0
     private var automatic: AnyCancellable?
+    private let localChanges = PassthroughSubject<Void, Never>()
+    private var localQuietUntil: TimeInterval = 0
     private var contentObservation: AnyCancellable?
     private var observedContent: SyncContent?
     private var contentCheckScheduled = false
@@ -246,10 +248,10 @@ public final class FolderSync: ObservableObject {
         return String((0..<8).map { _ in letters.randomElement()! })
     }
 
-    /// 本机数据一改（停 `delay` 秒没有新修改）就同步，另外每隔 `interval` 秒看一次其他设备有没有新内容。
+    /// 实际同步内容改变且停 `delay` 秒没有新修改才同步；自动轮询、文件通知也等待编辑停顿，手动 `sync()` 不受限。
     public func startAutomaticSync(delay: TimeInterval = 0.5, interval: TimeInterval = 30) {
         if folderAccess == nil {
-            let access = SyncFolderAccess(folder: folder) { [weak self] in
+            let access = SyncFolderAccess(folder: folder, ownDevice: deviceID) { [weak self] in
                 Task { @MainActor [weak self] in
                     guard let self, self.automatic != nil else { return }
                     self.retry(after: 0.5)
@@ -258,16 +260,25 @@ public final class FolderSync: ObservableObject {
             access.start()
             folderAccess = access
         }
-        automatic = store.objectWillChange
+        automatic = localChanges
             .debounce(for: .seconds(delay), scheduler: RunLoop.main)
-            .sink { [weak self] in self?.syncSoon() }
+            .sink { [weak self] in
+                Task { @MainActor [weak self] in
+                    // 同时到期的轮询 / 重试已经开始时，本轮会带上最新内容，不再排一轮相同的工作。
+                    guard let self, !self.isSyncing, self.store.syncContent != self.syncedContent else { return }
+                    await self.automaticSync()
+                }
+            }
         contentObservation = store.objectWillChange.sink { [weak self] in
             guard let self, !self.applyingRemoteContent, !self.contentCheckScheduled else { return }
             self.contentCheckScheduled = true
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.contentCheckScheduled = false
-                self.checkLocalChanges()
+                if self.checkLocalChanges() {
+                    self.localQuietUntil = ProcessInfo.processInfo.systemUptime + delay
+                    self.localChanges.send()
+                }
             }
         }
         checkLocalChanges()
@@ -280,6 +291,7 @@ public final class FolderSync: ObservableObject {
 
     public func stopAutomaticSync() {
         automatic = nil
+        localQuietUntil = 0
         contentObservation = nil
         folderAccess?.stop()
         folderAccess = nil
@@ -289,18 +301,29 @@ public final class FolderSync: ObservableObject {
         timer = nil
     }
 
-    private func checkLocalChanges() {
+    @discardableResult
+    private func checkLocalChanges() -> Bool {
         let content = store.syncContent
-        guard content != observedContent else { return }
+        guard content != observedContent else { return false }
         observedContent = content
         if !hasLocalChanges { hasLocalChanges = true }
+        return true
     }
 
-    /// 发起一次同步，不等结果；正在同步时，结束后再补一轮。
+    private func automaticSync() async {
+        let remaining = localQuietUntil - ProcessInfo.processInfo.systemUptime
+        if automatic != nil, remaining > 0 {
+            retry(after: remaining)
+            return
+        }
+        _ = try? await sync()
+    }
+
+    /// 请求自动同步，不等结果；遵守编辑停顿，正在同步时结束后再补一轮。
     public func syncSoon(after delay: TimeInterval = 0) {
         Task {
             if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
-            _ = try? await sync()
+            await automaticSync()
         }
     }
 
@@ -309,7 +332,7 @@ public final class FolderSync: ObservableObject {
         retryTask?.cancel()
         retryTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return }
-            _ = try? await self?.sync()
+            await self?.automaticSync()
         }
     }
 

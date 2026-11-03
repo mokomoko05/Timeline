@@ -56,6 +56,7 @@ enum TaskTimelineSection: Identifiable {
     case gap(Date?, Date?)
     case undated([ScheduledTask])
     case finished([Date], [ScheduledTask])
+    case history([Date], [ScheduledTask])
 
     var id: String {
         switch self {
@@ -63,6 +64,7 @@ enum TaskTimelineSection: Identifiable {
         case .gap(let before, let after): return "gap-\(before.map(JournalDates.key) ?? "past")-\(after.map(JournalDates.key) ?? "future")"
         case .undated: return "undated"
         case .finished(let dates, _): return "finished-" + JournalDates.key(dates[0])
+        case .history(let dates, _): return "history-" + JournalDates.key(dates[0])
         }
     }
     static func dayID(_ date: Date) -> String { "date-" + JournalDates.key(date) }
@@ -70,8 +72,10 @@ enum TaskTimelineSection: Identifiable {
         let day = JournalDates.calendar.startOfDay(for: date)
         if let section = sections.first(where: { $0.id == dayID(day) }) { return section.id }
         if let section = sections.first(where: {
-            if case .finished(let dates, _) = $0 { return day >= dates[0] && day <= dates[dates.count - 1] }
-            return false
+            switch $0 {
+            case .finished(let dates, _), .history(let dates, _): return day >= dates[0] && day <= dates[dates.count - 1]
+            default: return false
+            }
         }) { return section.id }
         return sections.first { section in
             guard case .gap(let before, let after) = section else { return false }
@@ -80,12 +84,13 @@ enum TaskTimelineSection: Identifiable {
     }
     var tasks: [ScheduledTask] {
         switch self {
-        case .day(_, let tasks), .undated(let tasks), .finished(_, let tasks): return tasks
+        case .day(_, let tasks), .undated(let tasks), .finished(_, let tasks), .history(_, let tasks): return tasks
         case .gap: return []
         }
     }
 
     func visibleTasks(expanded: Set<UUID>) -> [ScheduledTask] {
+        if case .history = self { return [] }
         if case .finished(_, let tasks) = self {
             return tasks.contains(where: { expanded.contains($0.id) }) ? tasks : []
         }
@@ -101,15 +106,16 @@ enum TaskTimelineSection: Identifiable {
         return ScheduledTask.listOrder(lhs, rhs)
     }
 
-    static func sections(for tasks: [ScheduledTask], today: Date = Date()) -> [Self] {
+    static func sections(for tasks: [ScheduledTask], today: Date = Date(), revealedDates: Set<Date> = []) -> [Self] {
         let calendar = JournalDates.calendar
         let today = calendar.startOfDay(for: today)
         let ordered = tasks.sorted(by: precedes)
         let dated = ordered.filter { $0.task.timelineDate != nil }
         let byDay = Dictionary(grouping: dated) { calendar.startOfDay(for: $0.task.timelineDate!) }
-        // 今天和明天是稳定的近期窗口；其余日期只由实际有任务的日期提供。
+        // 今天和明天是稳定的近期窗口；其余日期来自任务和用户主动展开的有限日期。
         let nearTerm = Set((0...1).compactMap { calendar.date(byAdding: .day, value: $0, to: today) })
         var days = nearTerm
+        days.formUnion(revealedDates)
         days.formUnion(byDay.keys)
         let sortedDays = days.sorted()
         guard let first = sortedDays.first, let last = sortedDays.last else {
@@ -127,6 +133,8 @@ enum TaskTimelineSection: Identifiable {
         result.append(.gap(last, nil))
         result.append(.undated(ordered.filter { $0.task.timelineDate == nil }))
         var compact: [Self] = []
+        var historyDates: [Date] = []
+        var historyTasks: [ScheduledTask] = []
         var finishedDates: [Date] = []
         var finishedTasks: [ScheduledTask] = []
         var pendingGap: Self?
@@ -136,20 +144,39 @@ enum TaskTimelineSection: Identifiable {
             if let pendingGap { compact.append(pendingGap) }
             pendingGap = nil
         }
+        func flushHistory() {
+            guard !historyDates.isEmpty else { return }
+            compact.append(.history(historyDates, historyTasks))
+            historyDates = []; historyTasks = []
+            if let pendingGap { compact.append(pendingGap) }
+            pendingGap = nil
+        }
         for section in result {
             switch section {
-            case .day(let date, let tasks) where !nearTerm.contains(date) && !tasks.isEmpty && tasks.allSatisfy(\.task.completed):
+            case .day(let date, let tasks) where date < today && !revealedDates.contains(date):
+                pendingGap = nil
+                historyDates.append(date); historyTasks.append(contentsOf: tasks)
+            case .gap where !historyDates.isEmpty:
+                pendingGap = section
+            case .day(let date, let tasks) where !nearTerm.contains(date) && !revealedDates.contains(date) && !tasks.isEmpty && tasks.allSatisfy(\.task.completed):
+                flushHistory()
                 // 中间只有空档时也合并，展开时再还原这些日期之间的虚线。
                 pendingGap = nil
                 finishedDates.append(date); finishedTasks.append(contentsOf: tasks)
             case .gap where !finishedDates.isEmpty:
                 pendingGap = section
             default:
-                flushFinished(); compact.append(section)
+                flushHistory(); flushFinished(); compact.append(section)
             }
         }
-        flushFinished()
+        flushHistory(); flushFinished()
         return compact
+    }
+
+    /// 日历浏览只补目标前后一天；远处的空档和其他历史仍保持收起。
+    static func datesNear(_ date: Date) -> Set<Date> {
+        let day = JournalDates.calendar.startOfDay(for: date)
+        return Set((-1...1).compactMap { JournalDates.calendar.date(byAdding: .day, value: $0, to: day) })
     }
 }
 
@@ -224,6 +251,7 @@ struct TimelineSlotRow: ViewModifier {
 /// 松手时落在哪个日期下面就改到哪天。横向拖出时间轴才换成拖到日历。
 struct TaskTimelineView: View {
     @ObservedObject var store: JournalStore
+    @Environment(\.typography) private var typography
     let tasks: [ScheduledTask]
     let today: Date
     let selectedDate: Date
@@ -232,13 +260,21 @@ struct TaskTimelineView: View {
     let navigate: (Date) -> Void
     var selectTask: () -> Void = {}
     var next: () -> Void = {}
+    var revealedDates: Binding<Set<Date>> = .constant([])
     /// 不订阅：拖动时只有让位的行重画，整条时间轴不重算。
     @State private var reorder = TaskReorderModel()
     static let reorderSpace = "timeline-order"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(TaskTimelineSection.sections(for: tasks, today: today)) { section in
+            if revealedDates.wrappedValue.contains(where: { $0 < JournalDates.calendar.startOfDay(for: today) }) {
+                Button("收起历史") {
+                    revealedDates.wrappedValue = revealedDates.wrappedValue.filter { $0 >= JournalDates.calendar.startOfDay(for: today) }
+                }
+                .buttonStyle(.plain).font(.caption).foregroundStyle(Palette.muted)
+                .padding(.leading, TaskTimelineLayout.cardInset(typography)).padding(.vertical, 6)
+            }
+            ForEach(TaskTimelineSection.sections(for: tasks, today: today, revealedDates: revealedDates.wrappedValue)) { section in
                 switch section {
                 case .day(let date, let items):
                     TimelineDayView(store: store, date: date, tasks: items, selectedDate: selectedDate,
@@ -259,6 +295,26 @@ struct TaskTimelineView: View {
                         expanded: $expanded, requestedEdit: $requestedEdit, navigate: navigate,
                         selectTask: selectTask, next: next)
                         .id(section.id)
+                case .history(let dates, let items):
+                    Button {
+                        revealedDates.wrappedValue.formUnion(dates)
+                        expanded.formUnion(items.map(\.id))
+                    } label: {
+                        HStack(spacing: 7) {
+                            Text("历史")
+                            Text(JournalDates.key(dates[0]))
+                            if dates.count > 1 { Text("–"); Text(JournalDates.key(dates[dates.count - 1])) }
+                            Text("\(items.count) 项")
+                            Image(systemName: "chevron.right")
+                            Spacer(minLength: 0)
+                        }
+                        .font(.system(size: typography.pt(11))).foregroundStyle(Palette.muted)
+                        .padding(.leading, TaskTimelineLayout.cardInset(typography)).frame(minHeight: 36).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).help("展开这段历史时间轴")
+                    .background { TimelineAxisStroke(highlighted: false) }
+                    .modifier(TimelineSlotRow(key: section.id))
+                    .id(section.id)
                 }
             }
         }

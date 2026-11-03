@@ -2,7 +2,7 @@
 
 ## 手写的介绍
 
-*(Last updated 2026-10-30)*
+*(Last updated 2026-11-03)*
 
 Obsidian 的移动端很难用。各种笔记软件显示的具体时间戳都不够直观，我感觉它们没有时间的味道。我又很想自己尝试开发一个软件，看看现在的agent能做到什么程度。它们很强，这个就是它们的作品，我只是在许愿。
 
@@ -31,13 +31,17 @@ Ctrl + Option + (D/N/F/L/M/Tab) 可以唤起它们：
 
 ## AI generated README
 
-*(last updated 2026-10-30)*
+*(last updated 2026-11-03)*
 
 A native macOS + iPhone app for tasks, focus sessions, notes and a daily journal. The Mac app lives in the background and opens panels from global hotkeys or the menu bar. No account and no server: data lives in a local SQLite database, and devices sync through a folder in iCloud Drive.
 
 <img src="docs/screenshots/main.png" width="720" alt="Main window: task timeline and month calendar">
 
 ## News
+
+- **2026-11-03**
+  - Mac: task and board edits sync after five seconds of inactivity; notifications without content changes no longer start a sync.
+  - Mac: past dates in the task timeline start collapsed, and opening the main window returns to today. Selecting a calendar date reveals nearby dates and jumps to that day, including empty dates.
 
 - **2026-10-30**
   - Local data moved to incremental SQLite storage; saves now write only what changed.

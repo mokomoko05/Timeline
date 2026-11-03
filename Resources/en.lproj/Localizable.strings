@@ -1216,3 +1216,7 @@
 "删除这张图片" = "Delete This Image";
 "删除这张图片 · ⌘Z 撤销" = "Delete this image · ⌘Z to undo";
 "添加图片" = "Add Images";
+"历史" = "History";
+"收起历史" = "Collapse history";
+"展开这段历史时间轴" = "Expand this part of the timeline's history";
+"%lld 项" = "%lld tasks";

@@ -51,6 +51,16 @@ final class FolderSyncTests: XCTestCase {
         XCTAssertFalse(NSFileCoordinator.filePresenters.contains { $0 === access })
     }
 
+    func testFolderNotificationsIgnoreOwnPublicationsButKeepPeerReceiptsAndImages() {
+        let access = SyncFolderAccess(folder: folder, ownDevice: "mac") {}
+        for path in ["streams/mac/batch.json", "receipts/mac-001.json", "devices/mac.json", "updates/mac.json"] {
+            XCTAssertTrue(access.isOwnPublication(folder.appendingPathComponent(path)), path)
+        }
+        for path in ["streams/phone/batch.json", "receipts/phone-001.json", "images/photo.png", "streams/mac2/batch.json"] {
+            XCTAssertFalse(access.isOwnPublication(folder.appendingPathComponent(path)), path)
+        }
+    }
+
     func testTransportCheckRequiresMatchingReplyAndKeepsJournalUntouched() async throws {
         let phone = makeDevice("Phone")
         let content = phone.store.syncContent
@@ -91,6 +101,53 @@ final class FolderSyncTests: XCTestCase {
         try await sync(phone)
         XCTAssertEqual(try FolderSync.coordinatedDirectoryContents(folder.appendingPathComponent("streams/" + phone.deviceID)), files)
         XCTAssertEqual(phone.lastWrittenBytes, 0)
+    }
+
+    func testAutomaticSyncIgnoresViewNotificationsAndCoalescesTaskAndBoardEdits() async throws {
+        let mac = makeDevice("Mac"), phone = makeDevice("Phone")
+        let task = try XCTUnwrap(mac.store.addParsedTodo("Task", on: clock))
+        let board = try XCTUnwrap(mac.store.ensureBoard(for: .tag("Notes")))
+        try await sync(mac, phone)
+        var preparations = 0
+        mac.prepareForSync = { preparations += 1 }
+        mac.startAutomaticSync(delay: 0.4, interval: 3600)
+        defer { mac.stopAutomaticSync() }
+        try await Task.sleep(for: .seconds(2))
+        let baseline = preparations
+        for _ in 0..<3 {
+            mac.store.objectWillChange.send()
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        XCTAssertEqual(preparations, baseline, "UI-only notifications must not flush editors or start cloud work")
+        for index in 0..<3 {
+            mac.store.toggleTodo(task.id, on: task.date)
+            mac.store.setBoardMarkdown("Revision \(index)", for: board.id)
+            try await Task.sleep(for: .milliseconds(150))
+            mac.syncSoon() // A poll or activation must respect the same editing quiet period.
+            await Task.yield()
+            XCTAssertEqual(preparations, baseline)
+        }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline, preparations == baseline || mac.isSyncing {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(preparations, baseline + 1, "The entire editing burst must export in one round")
+        mac.stopAutomaticSync()
+        try await sync(phone)
+        XCTAssertEqual(phone.store.board(id: board.id)?.markdown, "Revision 2")
+        XCTAssertEqual(phone.store.locate(task.id)?.task.completed, true)
+    }
+
+    func testManualSyncDoesNotWaitForAutomaticEditingDelay() async throws {
+        let mac = makeDevice("Mac"), phone = makeDevice("Phone")
+        try await sync(mac, phone)
+        mac.startAutomaticSync(delay: 60, interval: 3600)
+        defer { mac.stopAutomaticSync() }
+        _ = try mac.store.quickLog("Manual export", on: clock)
+        await Task.yield()
+        await mac.syncUntilExported(timeout: 3)
+        try await sync(phone)
+        XCTAssertTrue(phone.store.allLogs().contains { $0.log.text == "Manual export" })
     }
 
     /// 每次同步前把时钟拨快一秒，后做的修改时间戳一定更晚。

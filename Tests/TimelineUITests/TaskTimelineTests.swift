@@ -93,6 +93,8 @@ final class TaskTimelineTests: XCTestCase {
         window.orderFront(nil)
         defer { window.contentView = nil; window.close() }
         try await Task.sleep(for: .milliseconds(300))
+        NotificationCenter.default.post(name: .timelineNavigate, object: today)
+        try await Task.sleep(for: .milliseconds(100))
         host.layoutSubtreeIfNeeded()
         func handles(_ view: NSView) -> [TaskHandleView] {
             (view as? TaskHandleView).map { [$0] } ?? view.subviews.flatMap(handles)
@@ -201,7 +203,7 @@ final class TaskTimelineTests: XCTestCase {
         let tasks = [scheduled("late", offset: 20), scheduled("early", offset: -5),
                      scheduled("next day", offset: 21), scheduled("no date", offset: nil)]
         let sections = TaskTimelineSection.sections(for: tasks, today: today)
-        XCTAssertEqual(dates(sections), [-5, 0, 1, 20, 21].map(day))
+        XCTAssertEqual(dates(sections), [0, 1, 20, 21].map(day))
         XCTAssertEqual(sections.compactMap { section -> [Int]? in
             if case .gap(let a?, let b?) = section { return [calendar.dateComponents([.day], from: today, to: a).day!, calendar.dateComponents([.day], from: today, to: b).day!] }
             return nil
@@ -253,12 +255,15 @@ final class TaskTimelineTests: XCTestCase {
         let finished = offsets.map { scheduled("Finished", offset: $0, completed: true) }
         let overdue = scheduled("Still open", offset: -12)
         let sections = TaskTimelineSection.sections(for: finished + [overdue], today: today)
-        XCTAssertEqual(dates(sections), [-12, 0, 1].map(day))
+        XCTAssertEqual(dates(sections), [0, 1].map(day))
+        let history = sections.first { if case .history = $0 { return true }; return false }
+        XCTAssertEqual(history?.tasks.count, 5)
+        XCTAssertTrue(history?.visibleTasks(expanded: Set((finished + [overdue]).map(\.id))).isEmpty == true)
         XCTAssertEqual(sections.flatMap(\.tasks).count, finished.count + 1)
         XCTAssertEqual(Set(sections.flatMap(\.tasks).map(\.id)), Set((finished + [overdue]).map(\.id)))
     }
 
-    func testFinishedOnlyDatesMergeAcrossGapsButStopAtOpenTasksAndNearTermDates() {
+    func testHistoryFoldsOpenAndFinishedTasksWhileFutureFinishedDatesStillMerge() {
         let finished = [-30, -20, -8, -3, 0, 1, 10, 18].map { scheduled("Finished", offset: $0, completed: true) }
         let open = scheduled("Unfinished", offset: -12)
         let undated = scheduled("Undated", offset: nil, completed: true)
@@ -266,16 +271,88 @@ final class TaskTimelineTests: XCTestCase {
         let runs = sections.compactMap { section -> [Date]? in
             if case .finished(let dates, _) = section { return dates }; return nil
         }
-        XCTAssertEqual(runs, [[-30, -20], [-8, -3], [10, 18]].map { $0.map(day) })
-        XCTAssertEqual(dates(sections), [-12, 0, 1].map(day))
+        XCTAssertEqual(runs, [[10, 18]].map { $0.map(day) })
+        XCTAssertEqual(dates(sections), [0, 1].map(day))
         XCTAssertEqual(sections.flatMap(\.tasks).count, finished.count + 2)
         XCTAssertEqual(Set(sections.map(\.id)).count, sections.count)
         let group = sections.first { if case .finished = $0 { return true }; return false }!
         XCTAssertTrue(group.visibleTasks(expanded: []).isEmpty)
-        XCTAssertEqual(group.visibleTasks(expanded: [finished[1].id]).map(\.id), [finished[0].id, finished[1].id])
-        XCTAssertEqual(TaskTimelineSection.navigationID(for: day(-25), in: sections), group.id)
+        XCTAssertEqual(group.visibleTasks(expanded: [finished[6].id]).map(\.id), [finished[6].id, finished[7].id])
+        XCTAssertEqual(TaskTimelineSection.navigationID(for: day(-25), in: sections), "history-" + JournalDates.key(day(-30)))
         guard case .undated(let tail) = sections.last else { return XCTFail("No Due must remain separate") }
         XCTAssertEqual(tail.map(\.id), [undated.id])
+    }
+
+    func testCalendarNavigationRevealsNearbyHistoryAndEmptyDatesWithoutExpandingEverything() {
+        let tasks = [-1000, -30, -21, -20, -19, -3, 10].map { scheduled("Task", offset: $0, completed: true) }
+        let nearby = TaskTimelineSection.datesNear(day(-20).addingTimeInterval(3600))
+        XCTAssertEqual(nearby, Set([-21, -20, -19].map(day)))
+        let sections = TaskTimelineSection.sections(for: tasks, today: today, revealedDates: nearby)
+        XCTAssertEqual(dates(sections), [-21, -20, -19, 0, 1].map(day))
+        XCTAssertEqual(TaskTimelineSection.navigationID(for: day(-20), in: sections), TaskTimelineSection.dayID(day(-20)))
+        let visible = sections.flatMap { $0.visibleTasks(expanded: Set(tasks[2...4].map(\.id))) }
+        XCTAssertEqual(visible.map(\.id), Array(tasks[2...4]).map(\.id))
+        XCTAssertEqual(Set(sections.flatMap(\.tasks).map(\.id)), Set(tasks.map(\.id)))
+        let empty = TaskTimelineSection.sections(for: tasks, today: today, revealedDates: TaskTimelineSection.datesNear(day(-500)))
+        XCTAssertEqual(TaskTimelineSection.navigationID(for: day(-500), in: empty), TaskTimelineSection.dayID(day(-500)))
+        XCTAssertLessThan(empty.count, 20, "Browsing a distant date must keep the timeline finite")
+    }
+
+    func testMainWindowOpensAtTodayAndNavigatesIntoCollapsedHistory() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "tasksPaneExpanded")
+        defaults.set(true, forKey: "tasksPaneExpanded")
+        defer {
+            if let previous { defaults.set(previous, forKey: "tasksPaneExpanded") }
+            else { defaults.removeObject(forKey: "tasksPaneExpanded") }
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let today = JournalDates.calendar.startOfDay(for: Date())
+        let oldDay = JournalDates.calendar.date(byAdding: .day, value: -20, to: today)!
+        let old = try XCTUnwrap(store.addParsedTodo("Historical task", on: today))
+        store.setDeadline(old.id, to: oldDay)
+        store.toggleTodo(old.id, on: old.date)
+        let current = try XCTUnwrap(store.addParsedTodo("Today's task", on: today))
+        store.setDeadline(current.id, to: today)
+        for offset in 1...12 {
+            let item = try XCTUnwrap(store.addParsedTodo("Future \(offset)", on: today))
+            store.setDeadline(item.id, to: JournalDates.calendar.date(byAdding: .day, value: offset, to: today)!)
+        }
+        let host = NSHostingView(rootView: ContentView(store: store, loginItem: LoginItem())
+            .environmentObject(ReminderScheduler(store: store))
+            .environmentObject(WorkspaceInteraction())
+            .environmentObject(CommandCenter()).environmentObject(ToastCenter()))
+        let window = QuietWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.contentView = nil; window.close() }
+        func handles(_ view: NSView) -> [TaskHandleView] {
+            (view as? TaskHandleView).map { [$0] } ?? view.subviews.flatMap(handles)
+        }
+        func assertVisible(_ id: UUID, file: StaticString = #filePath, line: UInt = #line) throws {
+            let handle = try XCTUnwrap(handles(host).first { $0.taskID == id }, file: file, line: line)
+            XCTAssertFalse(handle.visibleRect.isEmpty, "The target must be inside the scroll viewport", file: file, line: line)
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(handles(host).contains { $0.taskID == old.id })
+        try assertVisible(current.id)
+        NotificationCenter.default.post(name: .timelineNavigate, object: oldDay)
+        try await Task.sleep(for: .milliseconds(200))
+        host.layoutSubtreeIfNeeded()
+        try assertVisible(old.id)
+        NotificationCenter.default.post(name: .timelineNavigate, object: oldDay)
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
+        try assertVisible(old.id)
+        NotificationCenter.default.post(name: .timelineShowMain, object: nil)
+        try await Task.sleep(for: .milliseconds(200))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(handles(host).contains { $0.taskID == old.id })
+        try assertVisible(current.id)
     }
 
     func testMergedFinishedDatesExpandWithoutMovingTheirToggleAndCollapseToOneRow() throws {

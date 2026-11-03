@@ -32,6 +32,7 @@ func AppErrorDescription(_ error: Error) -> String {
 }
 
 extension Notification.Name {
+    static let timelineShowMain = Notification.Name("TimelineShowMain")
     static let appLanguageDidChange = Notification.Name("TimelineLanguageDidChange")
 }
 

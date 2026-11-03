@@ -380,6 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func switchPage(notes: Bool) {
         if pages.page != (notes ? .notes : .main) { NotificationCenter.default.post(name: .timelineCommitEditing, object: nil) }
         pages.show(notes: notes)
+        if !notes { NotificationCenter.default.post(name: .timelineShowMain, object: nil) }
         window.title = AppLocalized(pages.showsNotes ? "笔记 / 日记" : "Timeline")
     }
 

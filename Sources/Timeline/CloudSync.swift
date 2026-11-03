@@ -55,7 +55,7 @@ final class CloudSyncController: ObservableObject {
         forward = sync.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         self.sync = sync
         toolbar = SyncToolbarPresentation(sync: sync)
-        sync.startAutomaticSync()
+        sync.startAutomaticSync(delay: 5, interval: 60)
     }
 
     private func stop() {
