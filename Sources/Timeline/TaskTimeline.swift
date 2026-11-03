@@ -409,9 +409,11 @@ struct TimelineDayView: View, Equatable {
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         // 日期刻度使用自己的 date；月历选中别的日子不改变这些任务行。
-        lhs.store === rhs.store && lhs.date == rhs.date && lhs.tasks == rhs.tasks
-            && lhs.expandedTasks == rhs.expandedTasks && lhs.editingTask == rhs.editingTask
-            && lhs.showsFinishedTasks == rhs.showsFinishedTasks
+        MainActor.assumeIsolated {
+            lhs.store === rhs.store && lhs.date == rhs.date && lhs.tasks == rhs.tasks
+                && lhs.expandedTasks == rhs.expandedTasks && lhs.editingTask == rhs.editingTask
+                && lhs.showsFinishedTasks == rhs.showsFinishedTasks
+        }
     }
     /// 今天有定了时刻的事项时，「现在」画在第一个还没到点的未完成事项前面；都已过点时画在最后。
     private var nowMarkerTarget: UUID? {

@@ -94,11 +94,13 @@ struct DeadlineDayCell: View, Equatable {
 
     /// 只比较影响显示的数据；动作闭包每次都是新的，但行为由同一份状态决定。
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        let calendar = JournalDates.calendar
-        let sameSelection = calendar.isDate(lhs.date, inSameDayAs: lhs.selectedDate) == calendar.isDate(rhs.date, inSameDayAs: rhs.selectedDate)
-        return lhs.date == rhs.date && sameSelection && lhs.displayedMonth == rhs.displayedMonth
-            && lhs.height == rhs.height && lhs.items == rhs.items && lhs.dueToday == rhs.dueToday
-            && lhs.logCount == rhs.logCount && lhs.focusSeconds == rhs.focusSeconds && lhs.readOnly == rhs.readOnly && lhs.today == rhs.today && lhs.store === rhs.store
+        MainActor.assumeIsolated {
+            let calendar = JournalDates.calendar
+            let sameSelection = calendar.isDate(lhs.date, inSameDayAs: lhs.selectedDate) == calendar.isDate(rhs.date, inSameDayAs: rhs.selectedDate)
+            return lhs.date == rhs.date && sameSelection && lhs.displayedMonth == rhs.displayedMonth
+                && lhs.height == rhs.height && lhs.items == rhs.items && lhs.dueToday == rhs.dueToday
+                && lhs.logCount == rhs.logCount && lhs.focusSeconds == rhs.focusSeconds && lhs.readOnly == rhs.readOnly && lhs.today == rhs.today && lhs.store === rhs.store
+        }
     }
 
     /// 格子里放得下几行事项；放不下时最后一行换成「还有 N 项」。
