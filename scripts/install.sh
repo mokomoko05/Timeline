@@ -47,6 +47,15 @@ for NAME in timeline sched scheduler; do
         esac
     fi
 done
+# 命令行 tl：链接到 ~/.local/bin；同名的其他程序不覆盖。
+TL_LINK="$HOME/.local/bin/tl"
+mkdir -p "$HOME/.local/bin"
+if [ ! -e "$TL_LINK" ] && [ ! -L "$TL_LINK" ] || [ "$(readlink "$TL_LINK" 2>/dev/null)" = "$TARGET/Contents/MacOS/tl" ]; then
+    ln -sfn "$TARGET/Contents/MacOS/tl" "$TL_LINK"
+    echo "命令行工具：$TL_LINK"
+else
+    echo "已存在另一个 $TL_LINK，未覆盖；可直接使用 $TARGET/Contents/MacOS/tl"
+fi
 if open "$TARGET"; then
     echo "已安装并请求打开 Timeline；登录启动状态可在应用右上角菜单查看。"
 else

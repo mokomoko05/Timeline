@@ -1,6 +1,7 @@
 import AppKit
 import SwiftTerm
 import SwiftUI
+import TimelineControl
 
 /// 窗口的柔和淡入淡出，主窗口和内置终端窗口共用。
 @MainActor
@@ -36,6 +37,19 @@ enum WindowFade {
 final class PaneTerminalView: LocalProcessTerminalView {
     /// 回滚行数：默认 500 行对长时间的 agent 对话太少。
     static let scrollbackLines = 10_000
+    /// 命令行（tl）用的窗格编号，如 p3；同一次运行里不重复。
+    var paneID = ""
+
+    /// 窗格里的文字：默认是当前屏幕；`lines` 取最后几行（可以跨进回滚区），`scrollback` 取全部。去掉末尾空行。
+    func transcript(lines: Int? = nil, scrollback: Bool = false) -> String {
+        let terminal = getTerminal()
+        var rows = String(decoding: terminal.getBufferAsData(), as: UTF8.self).components(separatedBy: "\n")
+        if rows.last == "" { rows.removeLast() }
+        if !scrollback, lines == nil { rows = Array(rows.suffix(terminal.rows)) }
+        while rows.last?.isEmpty == true { rows.removeLast() }
+        if let lines { rows = Array(rows.suffix(lines)) }
+        return rows.joined(separator: "\n")
+    }
 
     /// 底色、前景、光标、选区和 16 色 ANSI 都取自应用配色，随深浅外观切换。
     func applyTheme() {
@@ -159,6 +173,8 @@ enum TerminalLayout: String {
 /// 终端窗口：一个窗口（或原生标签页）包含一个或三个窗格，每个窗格是独立的 zsh。
 class TerminalWindow: QuietWindow {
     var terminalIsPresented = true
+    /// 命令行（tl）用的窗口编号，如 w2；嵌在主窗口里的终端页每次重建都换新编号。
+    var windowID = ""
 
     override func sendEvent(_ event: NSEvent) {
         if terminalIsPresented, event.type == .keyDown, firstResponder is PaneTerminalView {
@@ -382,11 +398,18 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
     var arguments = ["-l"]
     /// 测试里可固定布局；平时跟随设置。
     var layoutOverride: TerminalLayout?
+    /// 命令行控制服务在监听时的 socket 路径，注入到每个窗格的环境里。
+    var controlSocketPath: String?
+    private var nextPaneNumber = 1
+    private var nextWindowNumber = 1
     var layout: TerminalLayout {
         layoutOverride ?? TerminalLayout(rawValue: UserDefaults.standard.string(forKey: Prefs.terminalLayout) ?? "") ?? .threePanes
     }
-    static func shellEnvironment(base environment: [String: String] = ProcessInfo.processInfo.environment) -> [String] {
+    static func shellEnvironment(base environment: [String: String] = ProcessInfo.processInfo.environment,
+                                 paneID: String? = nil, socketPath: String? = nil) -> [String] {
         var result = Terminal.getEnvironmentVariables(termName: "xterm-256color") + ["SHELL=/bin/zsh", "TERM_PROGRAM=Timeline"]
+        if let paneID { result.append("\(ControlProtocol.paneEnvironmentKey)=\(paneID)") }
+        if let socketPath { result.append("\(ControlProtocol.socketEnvironmentKey)=\(socketPath)") }
         result.append("PATH=" + (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"))
         if let directory = environment["ZDOTDIR"], !directory.isEmpty {
             result.append("ZDOTDIR=\(directory)")
@@ -477,9 +500,9 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
 
     /// 新开一个独立窗口（`⌘N`），起始目录继承当前终端。
     @discardableResult
-    func newWindow() -> TerminalWindow {
+    func newWindow(directory: String? = nil) -> TerminalWindow {
         let anchor = keyTerminal
-        let window = makeWindow(directory: anchor.flatMap(currentDirectory(of:)), size: anchor?.frame.size)
+        let window = makeWindow(directory: directory ?? anchor.flatMap(currentDirectory(of:)), size: anchor?.frame.size)
         if let anchor, anchor.isVisible, window !== workspaceWindow {
             let origin = anchor.cascadeTopLeft(from: NSPoint(x: anchor.frame.minX, y: anchor.frame.maxY))
             window.setFrameTopLeftPoint(origin)
@@ -490,9 +513,9 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
 
     /// 在当前窗口里新开一页（`⌘T`），起始目录继承当前页。
     @discardableResult
-    func newTab() -> TerminalWindow {
-        guard let anchor = keyTerminal, anchor.isVisible else { return newWindow() }
-        let window = makeWindow(directory: currentDirectory(of: anchor), size: anchor.frame.size)
+    func newTab(beside anchorWindow: TerminalWindow? = nil, directory: String? = nil) -> TerminalWindow {
+        guard let anchor = anchorWindow ?? keyTerminal, anchor.isVisible else { return newWindow(directory: directory) }
+        let window = makeWindow(directory: directory ?? currentDirectory(of: anchor), size: anchor.frame.size)
         window.setFrame(anchor.frame, display: false)
         anchor.addTabbedWindow(window, ordered: .above)
         present(window)
@@ -518,19 +541,17 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
 
     /// `⌘D` / `⇧⌘D`：把当前窗格向右 / 向下分成两个，新窗格从当前窗格所在的目录开始并获得焦点。
     @discardableResult
-    func splitPane(sideBySide: Bool) -> PaneTerminalView? {
-        guard let window = keyTerminal, let current = window.terminal as? PaneTerminalView,
+    func splitPane(sideBySide: Bool, from source: PaneTerminalView? = nil, directory: String? = nil) -> PaneTerminalView? {
+        guard let current = source ?? keyTerminal?.terminal as? PaneTerminalView, let window = self.window(for: current),
               let anchor = current.superview as? PaneFrameView else { return nil }
         // 连按几次分栏时上一次的布局可能还没算完，先布局再量尺寸。
         window.contentView?.layoutSubtreeIfNeeded()
         // 太小就不再分，免得出现几乎看不见的窗格。
         guard (sideBySide ? anchor.frame.width : anchor.frame.height) >= (sideBySide ? 260 : 160) else { NSSound.beep(); return nil }
         let pane = makePane()
-        let directory = current.process.flatMap { ShellProcessInfo.currentDirectory(of: $0.shellPid) } ?? NSHomeDirectory()
+        let directory = directory ?? current.process.flatMap { ShellProcessInfo.currentDirectory(of: $0.shellPid) } ?? NSHomeDirectory()
         window.insertPane(pane, beside: current, sideBySide: sideBySide)
-        pane.startProcess(executable: executable, args: arguments,
-                          environment: ShellWindowController.shellEnvironment(),
-                          execName: nil, currentDirectory: directory)
+        start(pane, directory: directory)
         window.makeFirstResponder(pane)
         return pane
     }
@@ -548,7 +569,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
     }
 
     /// 某个窗格结束（输入 exit 或被关闭）后的善后。
-    private func finish(_ pane: PaneTerminalView, in window: TerminalWindow) {
+    func finish(_ pane: PaneTerminalView, in window: TerminalWindow) {
         guard window.panes.contains(where: { $0 === pane }) else { return }
         window.removePane(pane)
         if let next = window.focusedPane ?? window.panes.first {
@@ -567,7 +588,15 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
         keyTerminal?.terminal?.send(txt: "\u{0c}")
     }
 
-    private func present(_ window: TerminalWindow) {
+    /// 显示窗格所在的窗口（标签页），并把焦点放到这个窗格。
+    func focus(_ pane: PaneTerminalView) {
+        guard let window = self.window(for: pane) else { return }
+        PreviousApp.remember()
+        present(window)
+        window.makeFirstResponder(pane)
+    }
+
+    func present(_ window: TerminalWindow) {
         if window === workspaceWindow { presentWorkspace() }
         NSApplication.shared.unhide(nil)
         window.makeKeyAndOrderFront(nil)
@@ -577,6 +606,8 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
 
     private func makePane() -> PaneTerminalView {
         let pane = PaneTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        pane.paneID = "p\(nextPaneNumber)"
+        nextPaneNumber += 1
         pane.processDelegate = self
         pane.getTerminal().changeScrollback(PaneTerminalView.scrollbackLines)
         pane.font = .monospacedSystemFont(ofSize: UIScale.pt(13), weight: .regular)
@@ -592,6 +623,8 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
         let embedded = workspaceWindow.map { host in !windows.contains(where: { $0 === host }) } == true
         let window = embedded ? workspaceWindow! : TerminalWindow(contentRect: frame, styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.ended = false
+        window.windowID = "w\(nextWindowNumber)"
+        nextWindowNumber += 1
         window.panes = panes
         window.title = "zsh"
         window.titlebarAppearsTransparent = true
@@ -671,12 +704,13 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
         }
         windows.append(window)
         window.setFocused(panes[0])
-        let environment = ShellWindowController.shellEnvironment()
-        for pane in panes {
-            pane.startProcess(executable: executable, args: arguments, environment: environment,
-                              execName: nil, currentDirectory: directory ?? NSHomeDirectory())
-        }
+        for pane in panes { start(pane, directory: directory ?? NSHomeDirectory()) }
         return window
+    }
+
+    private func start(_ pane: PaneTerminalView, directory: String) {
+        let environment = ShellWindowController.shellEnvironment(paneID: pane.paneID, socketPath: controlSocketPath)
+        pane.startProcess(executable: executable, args: arguments, environment: environment, execName: nil, currentDirectory: directory)
     }
 
     private func moveToMouseScreenIfNeeded(_ window: NSWindow) {
@@ -732,7 +766,7 @@ final class ShellWindowController: NSObject, NSWindowDelegate, LocalProcessTermi
 
     // MARK: - LocalProcessTerminalViewDelegate
 
-    private func window(for source: AnyObject) -> TerminalWindow? {
+    func window(for source: AnyObject) -> TerminalWindow? {
         windows.first { $0.panes.contains { $0 === source } }
     }
 

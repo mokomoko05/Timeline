@@ -5,6 +5,7 @@ swift build --disable-sandbox -c release
 APP="$(pwd)/dist/Timeline.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" .build/AppIcon.iconset
 cp .build/release/TimelineApp "$APP/Contents/MacOS/Timeline"
+cp .build/release/tl "$APP/Contents/MacOS/tl"
 ditto .build/release/Timeline_Timeline.bundle "$APP/Contents/Resources/Timeline_Timeline.bundle"
 rm -rf "$APP/Contents/Resources/Timeline_TimelineMath.bundle"
 ditto .build/release/Timeline_TimelineMath.bundle "$APP/Contents/Resources/Timeline_TimelineMath.bundle"

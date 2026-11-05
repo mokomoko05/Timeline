@@ -75,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private let boardHotKey = GlobalHotKey(action: .board)
     private let searchHotKey = GlobalHotKey(action: .search)
     private let shell = ShellWindowController()
+    private var terminalControl: TerminalControlService?
     private let interaction = WorkspaceInteraction()
     private let commands = CommandCenter()
     private let toast = ToastCenter()
@@ -137,6 +138,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             [self?.window, ImageViewerController.shared.window, self?.settings.window]
         }, extraHide: { [weak self] in self?.shell.hideForAppDeactivation() })
         shell.handoffWindow = { [unowned self] in otherWindowForHandoff(excluding: nil) }
+        // 在任何终端开出来之前启动，窗格的环境里才有 TIMELINE_SOCKET。
+        if !snapshotRun { terminalControl = TerminalControlService(shell: shell) }
         _ = ThemeStore.shared   // 读取已保存的配色和外观并应用
         _ = LanguageStore.shared
         languageObserver = NotificationCenter.default.addObserver(forName: .appLanguageDidChange, object: nil, queue: .main) { [weak self] _ in
@@ -565,6 +568,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// 真正退出时才关 socket：退出被取消（有终端在运行、保存失败）时命令行服务要继续可用。
     func applicationWillTerminate(_ notification: Notification) {
+        terminalControl?.stop()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

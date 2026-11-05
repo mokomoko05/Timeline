@@ -13,6 +13,7 @@ struct SettingsView: View {
     @AppStorage(Prefs.weekStartsSunday) private var weekStartsSunday = false
     @AppStorage(Prefs.globalHotKey) private var globalHotKey = true
     @AppStorage(Prefs.terminalLayout) private var terminalLayout = TerminalLayout.threePanes.rawValue
+    @AppStorage(Prefs.terminalControl) private var terminalControl = true
     @AppStorage(Prefs.focusPanelStyle) private var focusPanelStyle = FocusPanelStyle.card.rawValue
     @AppStorage(Prefs.focusCompanion) private var focusCompanion = true
     @AppStorage(Prefs.focusPanelHidden) private var focusPanelHidden = false
@@ -74,6 +75,9 @@ struct SettingsView: View {
                     Text("三窗格：左边上下两格，右边一栏").tag(TerminalLayout.threePanes.rawValue)
                     Text("单窗格").tag(TerminalLayout.single.rawValue)
                 }
+                Toggle("允许命令行（tl）控制终端", isOn: $terminalControl)
+                Text("用 tl 命令列出、新建、分栏、关闭窗格，或向窗格输入、读取文字；只有当前用户能连接。")
+                    .font(.caption).foregroundStyle(Palette.muted)
                 Toggle("启用全局快捷键", isOn: $globalHotKey)
                 if globalHotKey {
                     ForEach(HotKeyAction.allCases) { HotKeyRecorder(action: $0) }

@@ -44,6 +44,8 @@
 "切到别的应用时自动收起窗口" = "Hide windows when switching apps";
 "启用全局快捷键" = "Enable global shortcuts";
 "新建终端的布局" = "New terminal layout";
+"允许命令行（tl）控制终端" = "Allow command-line control of terminals (tl)";
+"用 tl 命令列出、新建、分栏、关闭窗格，或向窗格输入、读取文字；只有当前用户能连接。" = "Use the tl command to list, create, split, and close panes, or to type into and read from them. Only your user account can connect.";
 "单窗格" = "Single pane";
 "撤销" = "Undo";
 "重做" = "Redo";

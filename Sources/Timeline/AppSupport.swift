@@ -51,6 +51,8 @@ enum Prefs {
     static let globalHotKey = "globalHotKeyEnabled"
     /// 新建终端的布局：threePanes（左上下两格、右一栏）或 single。
     static let terminalLayout = "terminalLayout"
+    /// 允许命令行 `tl` 通过本机 socket 管理内置终端（默认开）。
+    static let terminalControl = "terminalControlEnabled"
     /// 最低专注分钟数；未达标且无目标或反馈时不留日志，有内容则以红叉保留（0 表示都记）。
     static let focusMinLogMinutes = "focusMinLogMinutes"
     static let defaultFocusMinLogMinutes = 5
