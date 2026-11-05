@@ -49,9 +49,17 @@ public struct ControlRequest: Codable, Equatable, Sendable {
     public var scrollback: Bool?
     /// close：前台有程序在运行也关闭。
     public var force: Bool?
+    /// attach：外部终端的尺寸。
+    public var cols: Int?
+    public var rows: Int?
+    /// attach：只看不输入，也不接管尺寸。
+    public var readOnly: Bool?
+    /// attach：先输出回滚区里的最后几行。
+    public var history: Int?
 
     public init(command: String, pane: String? = nil, text: String? = nil, enter: Bool? = nil, direction: String? = nil,
-                kind: String? = nil, cwd: String? = nil, run: String? = nil, lines: Int? = nil, scrollback: Bool? = nil, force: Bool? = nil) {
+                kind: String? = nil, cwd: String? = nil, run: String? = nil, lines: Int? = nil, scrollback: Bool? = nil, force: Bool? = nil,
+                cols: Int? = nil, rows: Int? = nil, readOnly: Bool? = nil, history: Int? = nil) {
         self.command = command
         self.pane = pane
         self.text = text
@@ -63,6 +71,10 @@ public struct ControlRequest: Codable, Equatable, Sendable {
         self.lines = lines
         self.scrollback = scrollback
         self.force = force
+        self.cols = cols
+        self.rows = rows
+        self.readOnly = readOnly
+        self.history = history
     }
 }
 
@@ -76,8 +88,10 @@ public struct PaneInfo: Codable, Equatable, Sendable {
     public var focused: Bool
     public var cols: Int
     public var rows: Int
+    /// 正在 attach 的外部终端数。
+    public var attached: Int?
 
-    public init(id: String, pid: Int32, cwd: String?, busy: Bool, focused: Bool, cols: Int, rows: Int) {
+    public init(id: String, pid: Int32, cwd: String?, busy: Bool, focused: Bool, cols: Int, rows: Int, attached: Int? = nil) {
         self.id = id
         self.pid = pid
         self.cwd = cwd
@@ -85,6 +99,7 @@ public struct PaneInfo: Codable, Equatable, Sendable {
         self.focused = focused
         self.cols = cols
         self.rows = rows
+        self.attached = attached
     }
 }
 

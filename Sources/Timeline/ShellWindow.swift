@@ -71,10 +71,85 @@ final class PaneTerminalView: LocalProcessTerminalView {
         applyTheme()
     }
 
+    // MARK: tl attach
+
+    /// 外部终端的连接。从第一批输出开始就跟踪终端模式，中途 attach 时才能补发。
+    lazy var attach = AttachHub(pane: self)
+    /// SwiftTerm 正在替程序应答查询（光标位置、设备属性等）：这不是用户输入，不能抢走尺寸。
+    private var answeringQuery = false
+
+    override func dataReceived(slice: ArraySlice<UInt8>) {
+        attach.received(slice)
+        super.dataReceived(slice: slice)
+    }
+
+    override func send(source: Terminal, data: ArraySlice<UInt8>) {
+        answeringQuery = true
+        defer { answeringQuery = false }
+        super.send(source: source, data: data)
+    }
+
+    override func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        if !answeringQuery { attach.localInput() }
+        super.send(source: source, data: data)
+    }
+
+    override func processTerminated(_ source: LocalProcess, exitCode: Int32?) {
+        // SwiftTerm 给的是 waitpid 的原始状态：正常退出取退出码，被信号结束按 shell 的习惯记成 128 + 信号。
+        let code = exitCode.map { status in status & 0x7f == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f) }
+        attach.paneEnded(exitCode: code)
+        super.processTerminated(source, exitCode: exitCode)
+    }
+
+    /// 按 cols×rows 排版需要的视图尺寸。SwiftTerm 的格子尺寸和滚动条宽度没有公开，从当前的最佳尺寸反推。
+    func viewSize(cols: Int, rows: Int) -> NSSize? {
+        let terminal = getTerminal()
+        guard terminal.cols > 0, terminal.rows > 0 else { return nil }
+        let optimal = getOptimalFrameSize().size
+        let scroller = subviews.lazy.compactMap { $0 as? NSScroller }.first
+        let reserved = scroller.map { $0.isHidden ? 0 : NSScroller.scrollerWidth(for: .regular, scrollerStyle: $0.scrollerStyle) } ?? 0
+        let cellWidth = (optimal.width - reserved) / CGFloat(terminal.cols)
+        let cellHeight = optimal.height / CGFloat(terminal.rows)
+        guard cellWidth > 0, cellHeight > 0 else { return nil }
+        // 多给半个像素，免得浮点误差让 SwiftTerm 少算一列。
+        return NSSize(width: cellWidth * CGFloat(cols) + reserved + 0.5, height: cellHeight * CGFloat(rows) + 0.5)
+    }
+
+    /// 尺寸跟随外部终端（nil 表示跟随窗格本身）。视图按外部尺寸排版，多出的部分由外框裁掉。
+    func followSize(_ size: (cols: Int, rows: Int)?) {
+        guard let frame = superview as? PaneFrameView else { return }
+        let target = size.flatMap { viewSize(cols: $0.cols, rows: $0.rows) }
+        frame.setFixedTerminalSize(target)
+        frame.layoutSubtreeIfNeeded()
+        // 第一次换算有偏差时按实际结果再修正一次。
+        if let size, let target {
+            let terminal = getTerminal()
+            if terminal.cols != size.cols || terminal.rows != size.rows {
+                let adjusted = NSSize(width: target.width + CGFloat(size.cols - terminal.cols) * (target.width / CGFloat(max(terminal.cols, 1))),
+                                      height: target.height + CGFloat(size.rows - terminal.rows) * (target.height / CGFloat(max(terminal.rows, 1))))
+                frame.setFixedTerminalSize(adjusted)
+                frame.layoutSubtreeIfNeeded()
+            }
+        }
+    }
+
+    /// attach 数量或尺寸主人变了：更新窗格角标。
+    func attachStateChanged() {
+        guard let frame = superview as? PaneFrameView else { return }
+        let count = attach.count
+        guard count > 0 else { frame.setBadge(nil); return }
+        if let owner = attach.owner {
+            frame.setBadge(AppLocalizedFormat("外部终端 ×%lld · 尺寸 %lld×%lld", count, owner.cols, owner.rows))
+        } else {
+            frame.setBadge(AppLocalizedFormat("外部终端 ×%lld", count))
+        }
+    }
+
     /// 结束 shell 并回收子进程。SwiftTerm 的 terminate() 发出 SIGTERM 后就取消了退出监听，
     /// 不会 waitpid，每关一个窗格就留下一个僵尸进程，直到应用退出。
     func end() {
         let pid = process?.shellPid ?? 0
+        attach.paneEnded(exitCode: nil)
         terminate()
         guard pid > 0 else { return }
         ShellReaper.reap(pid)
@@ -139,6 +214,11 @@ final class PaneFrameView: NSView {
         updateBorder()
     }
 
+    /// 平时终端填满窗格；外部终端决定尺寸时改成固定大小，从左上角开始，超出部分裁掉。
+    private var fillConstraints: [NSLayoutConstraint] = []
+    private var fixedConstraints: [NSLayoutConstraint] = []
+    private let badge = NSTextField(labelWithString: "")
+
     init(terminal: PaneTerminalView) {
         self.terminal = terminal
         super.init(frame: .zero)
@@ -146,14 +226,55 @@ final class PaneFrameView: NSView {
         layer?.borderWidth = 1.5
         layer?.cornerRadius = 3
         layer?.borderColor = NSColor.clear.cgColor
+        layer?.masksToBounds = true
         terminal.translatesAutoresizingMaskIntoConstraints = false
         addSubview(terminal)
+        fillConstraints = [
+            terminal.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            terminal.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
+        ]
         NSLayoutConstraint.activate([
             terminal.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            terminal.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
             terminal.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
-            terminal.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
+        ] + fillConstraints)
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        badge.font = .systemFont(ofSize: 10, weight: .medium)
+        badge.textColor = .white
+        badge.wantsLayer = true
+        badge.layer?.cornerRadius = 4
+        badge.drawsBackground = true
+        badge.backgroundColor = NSColor.black.withAlphaComponent(0.55)
+        badge.isHidden = true
+        addSubview(badge)
+        NSLayoutConstraint.activate([
+            badge.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            badge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
         ])
+    }
+
+    var fixedTerminalSize: NSSize? { fixedConstraints.isEmpty ? nil : NSSize(width: fixedConstraints[0].constant, height: fixedConstraints[1].constant) }
+
+    func setFixedTerminalSize(_ size: NSSize?) {
+        NSLayoutConstraint.deactivate(fixedConstraints)
+        fixedConstraints = []
+        if let size {
+            NSLayoutConstraint.deactivate(fillConstraints)
+            fixedConstraints = [
+                terminal.widthAnchor.constraint(equalToConstant: size.width),
+                terminal.heightAnchor.constraint(equalToConstant: size.height),
+            ]
+            NSLayoutConstraint.activate(fixedConstraints)
+        } else {
+            NSLayoutConstraint.activate(fillConstraints)
+        }
+        needsLayout = true
+    }
+
+    var badgeText: String? { badge.isHidden ? nil : badge.stringValue }
+
+    func setBadge(_ text: String?) {
+        badge.stringValue = text.map { " \($0) " } ?? ""
+        badge.isHidden = text == nil
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }

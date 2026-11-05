@@ -3,6 +3,17 @@ import Darwin
 import Foundation
 import TimelineControl
 
+/// 一条请求的处理结果。`takeover` 不为空时，应答写完后连接不关闭，交给它继续使用（attach）。
+struct ControlReply {
+    var response: ControlResponse
+    var takeover: (@Sendable (Int32, [UInt8]) -> Void)?
+
+    init(_ response: ControlResponse, takeover: (@Sendable (Int32, [UInt8]) -> Void)? = nil) {
+        self.response = response
+        self.takeover = takeover
+    }
+}
+
 enum ControlServerError: Error, Equatable {
     /// 另一个 Timeline 已经在这个路径上监听：不抢。
     case inUse
@@ -13,14 +24,18 @@ enum ControlServerError: Error, Equatable {
 /// 只接受同一用户的连接（socket 权限 0600，并用 getpeereid 核对）。
 final class ControlServer: @unchecked Sendable {
     let path: String
-    private let handler: @MainActor (ControlRequest) -> ControlResponse
+    private let handler: @MainActor (ControlRequest) -> ControlReply
     private let acceptQueue = DispatchQueue(label: "Timeline.ControlServer")
     private let connectionQueue = DispatchQueue(label: "Timeline.ControlServer.connection", qos: .userInitiated, attributes: .concurrent)
     private var source: DispatchSourceRead?
 
-    init(path: String, handler: @escaping @MainActor (ControlRequest) -> ControlResponse) {
+    init(path: String, reply: @escaping @MainActor (ControlRequest) -> ControlReply) {
         self.path = path
-        self.handler = handler
+        self.handler = reply
+    }
+
+    convenience init(path: String, handler: @escaping @MainActor (ControlRequest) -> ControlResponse) {
+        self.init(path: path, reply: { ControlReply(handler($0)) })
     }
 
     var isRunning: Bool { source != nil }
@@ -79,23 +94,35 @@ final class ControlServer: @unchecked Sendable {
     }
 
     private func serve(_ client: Int32) {
-        defer { close(client) }
+        var handedOver = false
+        defer { if !handedOver { close(client) } }
         var uid: uid_t = 0
         var gid: gid_t = 0
         guard getpeereid(client, &uid, &gid) == 0, uid == getuid() else { return }
-        let response: ControlResponse
+        let reply: ControlReply
+        let rest: [UInt8]
         do {
-            let line = try ControlSocket.readLine(client)
+            let (line, leftover) = try ControlSocket.readLineWithRest(client)
+            rest = leftover
             if let request = try? JSONDecoder().decode(ControlRequest.self, from: line) {
                 let handler = handler
-                response = DispatchQueue.main.sync { MainActor.assumeIsolated { handler(request) } }
+                reply = DispatchQueue.main.sync { MainActor.assumeIsolated { handler(request) } }
             } else {
-                response = .failure("无法解析的请求", code: "usage")
+                reply = ControlReply(.failure("无法解析的请求", code: "usage"))
             }
         } catch {
             return
         }
-        try? ControlSocket.writeAll(client, (try? ControlSocket.encodeLine(response)) ?? Data())
+        guard (try? ControlSocket.writeAll(client, (try? ControlSocket.encodeLine(reply.response)) ?? Data())) != nil else {
+            // 客户端已经走了：仍然把连接交出去，让对方的收尾逻辑（比如移除 attach）照常运行。
+            if let takeover = reply.takeover { handedOver = true; takeover(client, []) }
+            return
+        }
+        if let takeover = reply.takeover {
+            ControlSocket.setTimeout(client, seconds: 0)
+            handedOver = true
+            takeover(client, rest)
+        }
     }
 }
 
@@ -194,7 +221,10 @@ extension ShellWindowController {
             return ControlResponse()
         case "send":
             guard let text = request.text, !text.isEmpty else { throw ControlFailure("send 需要文本", code: "usage") }
-            try target().send(txt: request.enter == false ? text : text + "\r")
+            // 直接写进 PTY：不算 Timeline 窗口里的输入，不改变 attach 的尺寸主人。
+            let pane = try target()
+            guard let process = pane.process, process.running else { throw ControlFailure("窗格 \(pane.paneID) 已结束", code: "failed") }
+            process.send(data: Array((request.enter == false ? text : text + "\r").utf8)[...])
             return ControlResponse()
         case "read":
             return ControlResponse(text: try target().transcript(lines: request.lines, scrollback: request.scrollback == true))
@@ -211,7 +241,8 @@ extension ShellWindowController {
             let pid = process?.shellPid ?? 0
             return PaneInfo(id: pane.paneID, pid: pid, cwd: ShellProcessInfo.currentDirectory(of: pid),
                             busy: process.map { ShellProcessInfo.hasForegroundProgram(fd: $0.childfd, shellPid: pid) } ?? false,
-                            focused: pane === window.terminal, cols: terminal.cols, rows: terminal.rows)
+                            focused: pane === window.terminal, cols: terminal.cols, rows: terminal.rows,
+                            attached: pane.attach.count)
         }
         return WindowInfo(id: window.windowID, title: window.title, visible: window.isVisible && window.terminalIsPresented,
                           workspace: window === workspaceWindow, tabGroup: group, panes: panes)
@@ -245,9 +276,10 @@ final class TerminalControlService {
     func update() {
         let enabled = defaults.bool(forKey: Prefs.terminalControl)
         if enabled, server == nil {
-            let server = ControlServer(path: path) { [weak shell] request in
-                shell?.handleControl(request) ?? .failure("终端不可用", code: "failed")
-            }
+            let server = ControlServer(path: path, reply: { [weak shell] request in
+                guard let shell else { return ControlReply(.failure("终端不可用", code: "failed")) }
+                return request.command == "attach" ? shell.handleAttach(request) : ControlReply(shell.handleControl(request))
+            })
             do {
                 try server.start()
                 self.server = server

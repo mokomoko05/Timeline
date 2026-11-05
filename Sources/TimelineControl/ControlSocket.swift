@@ -72,6 +72,11 @@ public enum ControlSocket {
 
     /// 读到换行或对方关闭为止（不含换行）。
     public static func readLine(_ fd: Int32, limit: Int = ControlProtocol.maxMessageBytes) throws -> Data {
+        try readLineWithRest(fd, limit: limit).line
+    }
+
+    /// 同上，另外交回换行之后已经读到的字节（attach 握手后紧跟着的帧）。
+    public static func readLineWithRest(_ fd: Int32, limit: Int = ControlProtocol.maxMessageBytes) throws -> (line: Data, rest: [UInt8]) {
         var result = Data()
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
@@ -82,11 +87,11 @@ public enum ControlSocket {
             }
             if count == 0 {
                 guard !result.isEmpty else { throw ControlSocketError.closed }
-                return result
+                return (result, [])
             }
             if let newline = buffer[0..<count].firstIndex(of: 10) {
                 result.append(contentsOf: buffer[0..<newline])
-                return result
+                return (result, Array(buffer[(newline + 1)..<count]))
             }
             result.append(contentsOf: buffer[0..<count])
             if result.count > limit { throw ControlSocketError.tooLarge }
@@ -112,6 +117,21 @@ public enum ControlSocket {
         var data = try JSONEncoder().encode(value)
         data.append(10)
         return data
+    }
+
+    /// attach：发请求、读应答，连接保持打开（不再有超时）。返回连接和应答之后已经到达的字节。
+    public static func open(_ request: ControlRequest, path: String, timeout: TimeInterval = 15) throws -> (fd: Int32, response: ControlResponse, rest: [UInt8]) {
+        let fd = try connect(path: path, timeout: timeout)
+        do {
+            try writeAll(fd, try encodeLine(request))
+            let (line, rest) = try readLineWithRest(fd)
+            guard let response = try? JSONDecoder().decode(ControlResponse.self, from: line) else { throw ControlSocketError.malformed }
+            setTimeout(fd, seconds: 0)
+            return (fd, response, rest)
+        } catch {
+            close(fd)
+            throw error
+        }
     }
 
     /// 发一条请求、等一条应答。会阻塞调用线程，不要在应用主线程上调用。

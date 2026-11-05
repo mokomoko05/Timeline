@@ -14,11 +14,11 @@ public enum ControlInvocation: Equatable {
 
 /// `tl` 的参数解析和输出格式。放在共享模块里，单元测试可以直接测。
 public enum ControlCommandLine {
-    private static let commands: Set<String> = ["ls", "new", "split", "focus", "close", "send", "read", "show", "hide", "ping"]
+    private static let commands: Set<String> = ["ls", "new", "split", "focus", "close", "send", "read", "attach", "show", "hide", "ping"]
     /// 这些命令作用在某个窗格上：没写 -t 时用自己所在的窗格。
     private static let paneCommands: Set<String> = ["new", "split", "focus", "close", "send", "read"]
     /// 允许直接写窗格编号作为位置参数的命令。
-    private static let positionalPane: Set<String> = ["focus", "close", "read"]
+    private static let positionalPane: Set<String> = ["focus", "close", "read", "attach"]
 
     public static func parse(_ arguments: [String], environment: [String: String], currentDirectory: String,
                              readStandardInput: () -> String? = { nil }) throws -> ControlInvocation {
@@ -51,12 +51,17 @@ public enum ControlCommandLine {
             case "-t", "--pane", "--target": request.pane = try value(argument)
             case "--tab": request.kind = "tab"
             case "--window": request.kind = "window"
+            case "-r" where command == "attach", "--read-only": request.readOnly = true
             case "-r", "--right": request.direction = "right"
             case "-d", "--down": request.direction = "down"
             case "--cwd": request.cwd = resolve(try value(argument), currentDirectory: currentDirectory, environment: environment)
             case "-f", "--force": request.force = true
             case "-n", "--no-enter": request.enter = false
             case "-s", "--scrollback": request.scrollback = true
+            case "--history":
+                let raw = try value(argument)
+                guard let lines = Int(raw), lines >= 0 else { throw ControlUsageError("--history 需要非负整数：\(raw)  --history needs a non-negative integer: \(raw)") }
+                request.history = lines
             case "-l", "--lines":
                 let raw = try value(argument)
                 guard let lines = Int(raw), lines > 0 else { throw ControlUsageError("--lines 需要正整数：\(raw)  --lines needs a positive integer: \(raw)") }
@@ -84,6 +89,13 @@ public enum ControlCommandLine {
         }
         let ownPane = environment[ControlProtocol.paneEnvironmentKey].flatMap { $0.isEmpty ? nil : $0 }
         if paneCommands.contains(command), request.pane == nil { request.pane = ownPane }
+        if command == "attach", let ownPane {
+            // 在 Timeline 的终端里 attach 自己所在的窗格，输出会无限回环。
+            guard let target = request.pane else {
+                throw ControlUsageError("在 Timeline 终端里请用 -t 指定要 attach 的窗格  Inside a Timeline terminal, choose a pane with -t")
+            }
+            if target == ownPane { throw ControlUsageError("不能 attach 到 tl 自己所在的窗格 \(ownPane)  Cannot attach to the pane tl runs in (\(ownPane))") }
+        }
         // 关闭自己所在的窗格：前台程序就是 tl 自己，不算「有程序在运行」。
         if command == "close", let ownPane, request.pane == ownPane { request.force = true }
         return .run(request, json: json)
@@ -114,7 +126,8 @@ public enum ControlCommandLine {
                     let cwd = pane.cwd.map { $0 == home ? "~" : ($0.hasPrefix(home + "/") ? "~" + $0.dropFirst(home.count) : $0) } ?? "?"
                     let marker = pane.focused ? "*" : " "
                     let state = pane.busy ? "运行中" : "空闲"
-                    output += "  \(marker) \(pane.id.padding(toLength: 4, withPad: " ", startingAt: 0))  \(state)  \(pane.cols)x\(pane.rows)  pid \(pane.pid)  \(cwd)\n"
+                    let attached = (pane.attached ?? 0) > 0 ? "  attach ×\(pane.attached ?? 0)" : ""
+                    output += "  \(marker) \(pane.id.padding(toLength: 4, withPad: " ", startingAt: 0))  \(state)  \(pane.cols)x\(pane.rows)  pid \(pane.pid)  \(cwd)\(attached)\n"
                 }
             }
             return output
