@@ -19,13 +19,14 @@ do {
             return String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
         })
 } catch {
-    fail("\(error)\n\n" + ControlCommandLine.usage, code: 2)
+    fail("\(error)\n" + ControlHelp.hint, code: 2)
 }
 
-guard case .run(let request, let json) = invocation else {
-    print(ControlCommandLine.usage, terminator: "")
+if case .help(let topic) = invocation {
+    print(topic.flatMap(ControlHelp.help(for:)) ?? ControlHelp.overview, terminator: "")
     exit(0)
 }
+guard case .run(let request, let json) = invocation else { exit(0) }
 
 let path = ControlProtocol.clientSocketPath(environment: environment)
 

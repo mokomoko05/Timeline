@@ -51,8 +51,32 @@ final class TerminalControlCommandLineTests: XCTestCase {
         XCTAssertThrowsError(try parse(["ls", "--bogus"]))
         XCTAssertThrowsError(try parse(["read", "--lines", "0"]))
         XCTAssertThrowsError(try parse(["split", "-t"]))
-        XCTAssertEqual(try ControlCommandLine.parse([], environment: [:], currentDirectory: "/"), .help)
-        XCTAssertEqual(try ControlCommandLine.parse(["--help"], environment: [:], currentDirectory: "/"), .help)
+    }
+
+    func testHelpCoversEveryCommandInBothLanguages() throws {
+        func invocation(_ arguments: [String]) throws -> ControlInvocation {
+            try ControlCommandLine.parse(arguments, environment: [:], currentDirectory: "/")
+        }
+        XCTAssertEqual(try invocation([]), .help(nil))
+        XCTAssertEqual(try invocation(["help"]), .help(nil))
+        XCTAssertEqual(try invocation(["--help"]), .help(nil))
+        XCTAssertEqual(try invocation(["help", "split"]), .help("split"))
+        XCTAssertEqual(try invocation(["split", "--help"]), .help("split"))
+        XCTAssertEqual(try invocation(["send", "-t", "p1", "-h"]), .help("send"))
+        XCTAssertEqual(try invocation(["send", "--", "-h"]), .run(ControlRequest(command: "send", text: "-h"), json: false), "-- 之后的 -h 是要输入的文字")
+        XCTAssertThrowsError(try invocation(["help", "nope"]))
+
+        let overview = ControlHelp.overview
+        XCTAssertTrue(overview.contains("用法 Usage"))
+        XCTAssertTrue(overview.contains("Exit codes"))
+        for command in ["ls", "new", "split", "focus", "close", "send", "read", "show", "hide", "help"] {
+            XCTAssertTrue(overview.contains("  \(command) "), "总览列出 \(command)")
+            let detail = try XCTUnwrap(ControlHelp.help(for: command), command)
+            XCTAssertTrue(detail.contains("tl \(command)"), detail)
+            XCTAssertNotNil(detail.range(of: "\\p{Han}", options: .regularExpression), "\(command) 有中文说明")
+            XCTAssertNotNil(detail.range(of: "[A-Z][a-z]+ ", options: .regularExpression), "\(command) 有英文说明")
+        }
+        XCTAssertNil(ControlHelp.help(for: "ping"), "内部命令不出现在说明里")
     }
 
     func testListingIsReadableAndAbbreviatesHome() {

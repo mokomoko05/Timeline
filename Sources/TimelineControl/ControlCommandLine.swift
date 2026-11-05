@@ -7,34 +7,13 @@ public struct ControlUsageError: Error, Equatable, CustomStringConvertible {
 }
 
 public enum ControlInvocation: Equatable {
-    case help
+    /// nil 是总览；否则是某个命令的说明。
+    case help(String?)
     case run(ControlRequest, json: Bool)
 }
 
 /// `tl` 的参数解析和输出格式。放在共享模块里，单元测试可以直接测。
 public enum ControlCommandLine {
-    public static let usage = """
-    用法：tl <命令> [选项]
-
-    命令：
-      ls                                   列出终端窗口和窗格
-      new [--tab|--window] [--cwd 目录] [-- 命令…]
-                                           新建窗口（默认）或标签页，输出新窗格编号
-      split [--right|--down] [--cwd 目录] [-- 命令…]
-                                           把目标窗格向右（默认）或向下分栏，输出新窗格编号
-      focus [窗格]                         显示并选中窗格
-      close [窗格] [--force]               关闭窗格；前台有程序在运行时需要 --force
-      send [--no-enter] [文本…]            向窗格输入文本并回车；没给文本时读标准输入
-      read [窗格] [--lines N] [--scrollback]
-                                           输出窗格当前屏幕（或最后 N 行 / 全部回滚）的文本
-      show | hide                          显示 / 收起全部终端
-
-    通用选项：
-      -t, --pane 窗格     目标窗格（如 p3）；默认是 tl 所在的窗格，不在 Timeline 终端里时是当前窗格
-      --json              输出原始 JSON 应答
-
-    """
-
     private static let commands: Set<String> = ["ls", "new", "split", "focus", "close", "send", "read", "show", "hide", "ping"]
     /// 这些命令作用在某个窗格上：没写 -t 时用自己所在的窗格。
     private static let paneCommands: Set<String> = ["new", "split", "focus", "close", "send", "read"]
@@ -43,9 +22,17 @@ public enum ControlCommandLine {
 
     public static func parse(_ arguments: [String], environment: [String: String], currentDirectory: String,
                              readStandardInput: () -> String? = { nil }) throws -> ControlInvocation {
-        guard let command = arguments.first else { return .help }
-        if ["help", "-h", "--help"].contains(command) { return .help }
-        guard commands.contains(command) else { throw ControlUsageError("未知命令：\(command)") }
+        guard let command = arguments.first else { return .help(nil) }
+        if ["help", "-h", "--help"].contains(command) {
+            guard let topic = arguments.dropFirst().first else { return .help(nil) }
+            guard ControlHelp.command(named: topic) != nil else { throw ControlUsageError("没有这个命令：\(topic)  Unknown command: \(topic)") }
+            return .help(topic)
+        }
+        guard commands.contains(command) else { throw ControlUsageError("未知命令：\(command)  Unknown command: \(command)") }
+        // tl <命令> --help：在解析其余参数之前处理（send 会把未知的 - 开头参数当作文字）。
+        if arguments.dropFirst().contains(where: { $0 == "--help" || $0 == "-h" }), !arguments.contains("--"), ControlHelp.command(named: command) != nil {
+            return .help(command)
+        }
         var request = ControlRequest(command: command)
         var json = false
         var positionals: [String] = []
@@ -53,7 +40,7 @@ public enum ControlCommandLine {
         var index = 1
         func value(_ option: String) throws -> String {
             index += 1
-            guard index < arguments.count else { throw ControlUsageError("\(option) 需要一个值") }
+            guard index < arguments.count else { throw ControlUsageError("\(option) 需要一个值  \(option) needs a value") }
             return arguments[index]
         }
         while index < arguments.count {
@@ -72,10 +59,10 @@ public enum ControlCommandLine {
             case "-s", "--scrollback": request.scrollback = true
             case "-l", "--lines":
                 let raw = try value(argument)
-                guard let lines = Int(raw), lines > 0 else { throw ControlUsageError("--lines 需要正整数：\(raw)") }
+                guard let lines = Int(raw), lines > 0 else { throw ControlUsageError("--lines 需要正整数：\(raw)  --lines needs a positive integer: \(raw)") }
                 request.lines = lines
             default:
-                if argument.hasPrefix("-"), argument.count > 1, command != "send" { throw ControlUsageError("未知选项：\(argument)") }
+                if argument.hasPrefix("-"), argument.count > 1, command != "send" { throw ControlUsageError("未知选项：\(argument)  Unknown option: \(argument)") }
                 positionals.append(argument)
             }
             index += 1
@@ -83,16 +70,16 @@ public enum ControlCommandLine {
         switch command {
         case "send":
             let text = positionals.isEmpty && trailing == nil ? readStandardInput() : (positionals + (trailing ?? [])).joined(separator: " ")
-            guard let text, !text.isEmpty else { throw ControlUsageError("send 需要文本（参数或标准输入）") }
+            guard let text, !text.isEmpty else { throw ControlUsageError("send 需要文本（参数或标准输入）  send needs text (arguments or standard input)") }
             request.text = text
         case "new", "split":
-            guard positionals.isEmpty else { throw ControlUsageError("多余的参数：\(positionals.joined(separator: " "))；要执行的命令请写在 -- 之后") }
+            guard positionals.isEmpty else { throw ControlUsageError("多余的参数：\(positionals.joined(separator: " "))；要执行的命令请写在 -- 之后  Unexpected arguments; put the command after --") }
             if let trailing, !trailing.isEmpty { request.run = trailing.joined(separator: " ") }
         default:
             if positionalPane.contains(command), positionals.count == 1, request.pane == nil {
                 request.pane = positionals[0]
             } else if !positionals.isEmpty || trailing != nil {
-                throw ControlUsageError("多余的参数：\((positionals + (trailing ?? [])).joined(separator: " "))")
+                throw ControlUsageError("多余的参数：\((positionals + (trailing ?? [])).joined(separator: " "))  Unexpected arguments")
             }
         }
         let ownPane = environment[ControlProtocol.paneEnvironmentKey].flatMap { $0.isEmpty ? nil : $0 }
