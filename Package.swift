@@ -15,7 +15,8 @@ let package = Package(
     ],
     dependencies: [
         // 内置终端与 Markdown 语法解析；正文使用 AppKit 原生排版。
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.9.0"),
+        // 内置副本，修了终端变窄重排时的堆越界（见 Vendor/SwiftTerm/PATCHES.md）。
+        .package(path: "Vendor/SwiftTerm"),
         .package(url: "https://github.com/swiftlang/swift-markdown.git", .upToNextMinor(from: "0.5.0")),
     ],
     targets: [
