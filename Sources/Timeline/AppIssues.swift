@@ -29,6 +29,9 @@ final class AppIssues: ObservableObject {
             store.$errorMessage.map { _ in () }.eraseToAnyPublisher(),
             store.$isReadOnly.map { _ in () }.eraseToAnyPublisher(),
             cloudSync?.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
+            cloudSync?.$toolbar.map { toolbar in
+                toolbar?.$visible.map { _ in () }.eraseToAnyPublisher() ?? Just(()).eraseToAnyPublisher()
+            }.switchToLatest().eraseToAnyPublisher(),
         ].compactMap { $0 }
         Publishers.MergeMany(changes).receive(on: RunLoop.main)
             .sink { [weak self] in self?.refresh() }.store(in: &cancellables)
@@ -39,7 +42,7 @@ final class AppIssues: ObservableObject {
         let next: Kind?
         if let store, let error = store.errorMessage {
             next = store.isReadOnly ? .readOnly(error) : .saveFailed(error)
-        } else if let error = cloudSync?.sync?.persistentError {
+        } else if cloudSync?.toolbar?.visible == true, let error = cloudSync?.sync?.persistentError {
             next = .syncFailed(error)
         } else {
             next = nil

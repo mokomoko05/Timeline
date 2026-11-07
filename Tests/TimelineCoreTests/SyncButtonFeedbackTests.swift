@@ -46,20 +46,74 @@ final class SyncButtonFeedbackTests: XCTestCase {
         withExtendedLifetime(observation) { }
     }
 
-    func testLocalEditShowsAutomaticallyThenCompletionHidesButton() async throws {
+    func testLocalEditAndAutomaticCompletionStayQuiet() async throws {
         let feedback = SyncButtonFeedback(sync: sync, completionDuration: 0.05)
+        var visibleStates: [Bool] = []
+        let observation = feedback.$shouldShow.sink { visibleStates.append($0) }
         sync.startAutomaticSync(delay: 0.15, interval: 3600)
         try await sync.sync()
         XCTAssertFalse(feedback.shouldShow)
         _ = try sync.store.quickLog("Local edit", on: Date())
         try await Task.sleep(nanoseconds: 20_000_000)
         XCTAssertTrue(sync.hasLocalChanges)
-        XCTAssertTrue(feedback.shouldShow)
+        XCTAssertFalse(feedback.shouldShow)
         let deadline = Date().addingTimeInterval(3)
-        while Date() < deadline, feedback.phase != .completed { try await Task.sleep(nanoseconds: 10_000_000) }
-        XCTAssertEqual(feedback.phase, .completed)
+        while Date() < deadline, sync.hasLocalChanges || sync.isSyncing { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertFalse(sync.hasLocalChanges)
+        XCTAssertEqual(feedback.phase, .idle)
         try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertFalse(feedback.shouldShow)
+        XCTAssertEqual(visibleStates, [false])
+        withExtendedLifetime(observation) { }
+    }
+
+    func testBoardEditingDefersPendingFeedbackAndHidesItOnNextEdit() async throws {
+        let board = try XCTUnwrap(sync.store.ensureBoard(for: .tag("Editing")))
+        try await sync.sync()
+        let feedback = SyncButtonFeedback(sync: sync, quietPeriod: 0.15)
+        sync.uploadPending = { _ in true }
+        for index in 0..<5 {
+            sync.store.setBoardMarkdown("Revision \(index)", for: board.id)
+            try await sync.sync()
+            try await Task.sleep(for: .milliseconds(50))
+            XCTAssertFalse(feedback.shouldShow)
+        }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(feedback.shouldShow)
+        XCTAssertEqual(feedback.phase, .waitingForUpload)
+        sync.store.setBoardMarkdown("Typing again", for: board.id)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertFalse(feedback.shouldShow)
+        sync.uploadPending = { _ in false }
+        try await sync.sync()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertFalse(feedback.shouldShow)
+        XCTAssertEqual(feedback.phase, .idle)
+    }
+
+    func testAutomaticFileErrorsWaitUntilQuietAndRecoveryStaysQuiet() async throws {
+        try await sync.sync()
+        let peer = FolderSync(store: JournalStore(directory: root.appendingPathComponent("peer")), folder: sync.folder, deviceName: "Peer")
+        _ = try peer.store.quickLog("Peer change", on: Date())
+        try await peer.sync()
+        let stream = sync.folder.appendingPathComponent("streams/" + peer.deviceID)
+        let file = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: stream, includingPropertiesForKeys: nil).first)
+        let valid = try Data(contentsOf: file)
+        try Data("broken".utf8).write(to: file)
+        let feedback = SyncButtonFeedback(sync: sync, quietPeriod: 0.15)
+        try await sync.sync()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertFalse(sync.fileErrors.isEmpty)
+        XCTAssertFalse(feedback.shouldShow)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(feedback.shouldShow)
+        XCTAssertEqual(feedback.phase, .failed)
+        try valid.write(to: file)
+        try await sync.sync()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertTrue(sync.fileErrors.isEmpty)
+        XCTAssertFalse(feedback.shouldShow)
+        XCTAssertEqual(feedback.phase, .idle)
     }
 
     func testImportedRemoteContentDoesNotLookLikeLocalEdit() async throws {
@@ -106,7 +160,7 @@ final class SyncButtonFeedbackTests: XCTestCase {
     func testAutomaticFailureStaysQuietUntilItPersistsButNeverShowsCompleted() async throws {
         try await sync.sync()
         sync.persistentErrorDelay = 0.1
-        let feedback = SyncButtonFeedback(sync: sync, completionDuration: 0.05)
+        let feedback = SyncButtonFeedback(sync: sync, completionDuration: 0.05, quietPeriod: 0.1)
         sync.uploadPending = { _ in throw NSError(domain: "Test.Upload", code: 1) }
         _ = try sync.store.quickLog("Edit", on: Date())
         do { try await sync.sync() } catch {}
@@ -118,6 +172,24 @@ final class SyncButtonFeedbackTests: XCTestCase {
         do { try await sync.sync() } catch {}
         try await Task.sleep(nanoseconds: 20_000_000)
         XCTAssertEqual(feedback.phase, .failed, "持续失败才报")
+        _ = try sync.store.quickLog("Continue editing", on: Date())
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertFalse(feedback.shouldShow)
+        XCTAssertEqual(feedback.phase, .idle)
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertTrue(feedback.shouldShow)
+        XCTAssertEqual(feedback.phase, .failed)
+    }
+
+    func testBackgroundSaveFailureIsReportedImmediatelyDuringQuietPeriod() async throws {
+        let feedback = SyncButtonFeedback(sync: sync)
+        try sync.store.setDatabaseWriteFailure(true)
+        _ = try sync.store.quickLog("Unsaved edit", on: Date())
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertNotNil(sync.store.errorMessage)
+        XCTAssertTrue(feedback.shouldShow)
+        XCTAssertEqual(feedback.phase, .failed)
+        try sync.store.setDatabaseWriteFailure(false)
     }
 
     func testLocalSaveFailureNeverShowsSyncCompletedAndRetryCanRecover() async throws {

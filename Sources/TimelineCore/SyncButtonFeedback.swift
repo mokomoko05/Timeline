@@ -34,7 +34,6 @@ public enum SyncPhase: String, Equatable, Sendable {
     public var isRunning: Bool { [.preparing, .reading, .merging, .saving, .publishing].contains(self) }
 }
 
-/// 本机内容变更及手动重试才显示；自动轮询和单纯接收远端内容保持安静。
 @MainActor
 public final class SyncButtonFeedback: ObservableObject {
     @Published public private(set) var phase: SyncPhase = .idle
@@ -42,30 +41,44 @@ public final class SyncButtonFeedback: ObservableObject {
     @Published public private(set) var shouldShow = false
     private let sync: FolderSync
     private let completionDuration: TimeInterval
+    private let quietPeriod: TimeInterval
+    private var lastChange = ProcessInfo.processInfo.systemUptime
+    private var fileErrorsSince: TimeInterval?
+    private var observedContent: SyncContent
+    private var checkContent = false
     private var awaitingCompletion = false
     private var completed = false
     /// 用户自己点的同步失败了要马上说；自动同步的失败和底部提示条一样，持续一阵才算（见 `FolderSync.persistentError`）。
     private var manualFailure = false
     private var refreshScheduled = false
-    private var observation: AnyCancellable?
+    private var observations: [AnyCancellable] = []
     private var hideTask: Task<Void, Never>?
+    private var quietTask: Task<Void, Never>?
 
-    public init(sync: FolderSync, completionDuration: TimeInterval = 2) {
+    public init(sync: FolderSync, completionDuration: TimeInterval = 2, quietPeriod: TimeInterval = 30) {
         self.sync = sync
         self.completionDuration = completionDuration
-        observation = Publishers.Merge(sync.objectWillChange.map { _ in () }, sync.store.$errorMessage.dropFirst().map { _ in () }).sink { [weak self] in
-            guard let self, !self.refreshScheduled else { return }
-            self.refreshScheduled = true
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.refreshScheduled = false
-                self.refresh()
-            }
-        }
+        self.quietPeriod = quietPeriod
+        observedContent = sync.store.syncContent
+        observations.append(sync.objectWillChange.sink { [weak self] in self?.scheduleRefresh() })
+        observations.append(sync.store.objectWillChange.sink { [weak self] in
+            self?.checkContent = true
+            self?.scheduleRefresh()
+        })
         refresh()
     }
 
-    deinit { hideTask?.cancel() }
+    deinit { hideTask?.cancel(); quietTask?.cancel() }
+
+    private func scheduleRefresh() {
+        guard !refreshScheduled else { return }
+        refreshScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.refreshScheduled = false
+            self.refresh()
+        }
+    }
 
     public func run(_ operation: () async -> Void) async {
         guard !isWorking else { return }
@@ -78,29 +91,46 @@ public final class SyncButtonFeedback: ObservableObject {
         await operation()
         isWorking = false
         if Task.isCancelled { awaitingCompletion = false; refresh(); return }
-        manualFailure = sync.lastError != nil
-        if sync.lastError != nil, sync.lastErrorCode != "Timeline.SyncTimeout" { awaitingCompletion = false }
+        manualFailure = sync.lastError != nil && sync.lastErrorCode != "Timeline.SyncTimeout"
+        awaitingCompletion = !manualFailure && sync.store.errorMessage == nil
         refresh()
     }
 
     private func refresh() {
+        let uptime = ProcessInfo.processInfo.systemUptime
+        if checkContent {
+            checkContent = false
+            let content = sync.store.syncContent
+            if content != observedContent {
+                observedContent = content
+                lastChange = uptime
+                completed = false
+                hideTask?.cancel()
+            }
+        }
+        if sync.fileErrors.isEmpty { fileErrorsSince = nil }
+        else if fileErrorsSince == nil { fileErrorsSince = uptime }
         if sync.lastError == nil { manualFailure = false }
         let failed = manualFailure || sync.persistentError != nil
-        if sync.hasLocalChanges {
-            awaitingCompletion = true
-            completed = false
-            hideTask?.cancel()
-        }
         if sync.store.errorMessage != nil {
             awaitingCompletion = false; completed = false
             hideTask?.cancel()
             setVisible(true); setPhase(.failed)
             return
         }
-        // 接收远端内容所需的回执也可能等待上传，但不是本机编辑反馈。
-        if !isWorking, !awaitingCompletion, !completed, !sync.hasLocalChanges, !failed, sync.fileErrors.isEmpty {
-            setVisible(false)
-            setPhase(.idle)
+        if !isWorking, !awaitingCompletion, !completed, !manualFailure {
+            let remaining = max(lastChange + quietPeriod, (fileErrorsSince ?? lastChange) + quietPeriod) - uptime
+            let needsAttention = failed || !sync.fileErrors.isEmpty || sync.hasLocalChanges
+            if remaining > 0, needsAttention, quietTask == nil {
+                quietTask = Task { @MainActor [weak self] in
+                    do { try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) } catch { return }
+                    self?.quietTask = nil
+                    self?.refresh()
+                }
+            }
+            let visible = needsAttention && remaining <= 0
+            setVisible(visible)
+            setPhase(visible ? (failed || !sync.fileErrors.isEmpty ? .failed : .waitingForUpload) : .idle)
             return
         }
         if isWorking {

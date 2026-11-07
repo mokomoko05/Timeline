@@ -2,12 +2,50 @@ import AppKit
 import Carbon.HIToolbox
 import SwiftUI
 import XCTest
-import TimelineCore
+@testable import TimelineCore
 @testable import Timeline
 
 @MainActor
 final class WorkspaceTopBarTests: XCTestCase {
-    func testSyncButtonAppearsForLocalEditAndCollapsesAfterAutomaticCompletion() async throws {
+    func testPersistentSyncErrorBannerRespectsQuietFeedbackAndManualRetry() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let folder = directory.appendingPathComponent("cloud")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let defaults = InMemoryDefaults()
+        defaults.set(true, forKey: CloudSyncController.enabledKey)
+        let store = JournalStore(directory: directory.appendingPathComponent("data"))
+        let controller = CloudSyncController(store: store, defaults: defaults, syncFolder: folder)
+        let issues = AppIssues()
+        issues.attach(store: store, cloudSync: controller)
+        defer { controller.setEnabled(false); try? FileManager.default.removeItem(at: directory) }
+        let sync = try XCTUnwrap(controller.sync)
+        sync.stopAutomaticSync()
+        await sync.syncUntilExported()
+        sync.persistentErrorDelay = 0.05
+        try FileManager.default.removeItem(at: folder)
+        try Data().write(to: folder)
+        do { try await sync.sync(); XCTFail("Sync should fail") } catch {}
+        try await Task.sleep(for: .milliseconds(80))
+        do { try await sync.sync(); XCTFail("Sync should fail") } catch {}
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertNotNil(sync.persistentError)
+        XCTAssertNil(issues.current)
+        await controller.syncWithFeedback()
+        try await Task.sleep(for: .milliseconds(20))
+        guard case .syncFailed = issues.current else { return XCTFail("Manual retry must reveal the persistent error") }
+        controller.setEnabled(false)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertNil(issues.current)
+        controller.setEnabled(true)
+        let restarted = try XCTUnwrap(controller.sync)
+        restarted.stopAutomaticSync()
+        restarted.persistentErrorDelay = 0
+        await controller.syncWithFeedback()
+        try await Task.sleep(for: .milliseconds(20))
+        guard case .syncFailed = issues.current else { return XCTFail("Banner must observe the replacement toolbar") }
+    }
+
+    func testBoardEditsAndAutomaticCompletionNeverExpandTheToolbar() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let folder = directory.appendingPathComponent("cloud")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -23,14 +61,18 @@ final class WorkspaceTopBarTests: XCTestCase {
         defer { AppRouter.cloudSync = previous; controller.setEnabled(false); try? FileManager.default.removeItem(at: directory) }
         let host = NSHostingView(rootView: WorkspaceSyncButton())
         let idleWidth = host.fittingSize.width
+        let board = try XCTUnwrap(store.ensureBoard(for: .tag("BoardSync")))
         sync.startAutomaticSync(delay: 0.2, interval: 3600)
-        _ = try store.quickLog("Toolbar visibility check", on: Date())
-        try await Task.sleep(for: .milliseconds(100))
-        XCTAssertGreaterThan(host.fittingSize.width, idleWidth + 10)
+        for index in 0..<5 {
+            store.setBoardMarkdown("Revision \(index)", for: board.id)
+            try await Task.sleep(for: .milliseconds(50))
+            XCTAssertEqual(host.fittingSize.width, idleWidth, accuracy: 0.5)
+        }
         let deadline = Date().addingTimeInterval(4)
         while Date() < deadline, sync.hasLocalChanges || sync.isSyncing { try await Task.sleep(for: .milliseconds(20)) }
-        try await Task.sleep(for: .milliseconds(2400))
-        XCTAssertEqual(host.fittingSize.width, idleWidth, accuracy: 0.5, "The entire button must collapse so the adjacent panels can move left")
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(sync.hasLocalChanges)
+        XCTAssertEqual(host.fittingSize.width, idleWidth, accuracy: 0.5, "Automatic board sync must not shift adjacent panel buttons")
     }
 
     func testTooltipsFollowEachConfiguredShortcutAndResetImmediately() {
