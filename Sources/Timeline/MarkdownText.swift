@@ -431,7 +431,6 @@ enum MarkdownText {
             let content = inline(heading, font: headingFont)
             content.addAttribute(.foregroundColor, value: MarkdownText.headingColor(heading.level), range: content.fullRange)
             if let fold {
-                // 收起 / 展开按钮画在标题行的最右边（`InteractiveTaskText` 负责画和点），标题文字在右边给它让出位置。
                 paragraphStyle.tailIndent = -(MarkdownText.foldButtonSide(fontSize: size) + 6)
                 content.addAttribute(MarkdownText.headingFoldKey, value: fold.key, range: content.fullRange)
                 content.addAttribute(MarkdownText.headingFoldedKey, value: fold.folded, range: content.fullRange)

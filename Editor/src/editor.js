@@ -634,18 +634,22 @@ class HeadingFoldWidget extends WidgetType {
   constructor(key, folded) { super(); this.key = key; this.folded = folded; }
   eq(other) { return this.key === other.key && this.folded === other.folded; }
   toDOM() {
+    const anchor = document.createElement("span");
+    anchor.className = "board-heading-fold-anchor";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "board-heading-fold";
     button.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>';
-    this.updateDOM(button);
+    anchor.appendChild(button);
+    this.updateDOM(anchor);
     button.addEventListener("mousedown", event => event.preventDefault());
     // 按按钮上现在的状态翻转：按钮在两次点击之间被重画也不会按旧状态再设一遍。
     button.addEventListener("click", () => setFold(button.dataset.key, button.dataset.folded !== "true", lineStart(button)));
-    return button;
+    return anchor;
   }
   // 状态变了也沿用同一个按钮：快速连点时按下和松开落在同一个元素上，点击不会丢。
-  updateDOM(button) {
+  updateDOM(anchor) {
+    const button = anchor.querySelector("button");
     button.dataset.key = this.key;
     button.dataset.folded = String(this.folded);
     button.setAttribute("aria-expanded", String(!this.folded));
@@ -853,7 +857,8 @@ function structure(state, blocks, states, headings, flash) {
       if (hidden.some(range => heading.from >= range[0] && heading.from <= range[1])) continue;
       const folded = folds.get(heading.key) === true;
       ranges.push(Decoration.line({class: "cm-foldable" + (folded ? " cm-folded" : "")}).range(heading.from));
-      ranges.push(Decoration.widget({widget: new HeadingFoldWidget(heading.key, folded), side: -1}).range(heading.from));
+      const touch = document.documentElement.classList.contains("touch");
+      ranges.push(Decoration.widget({widget: new HeadingFoldWidget(heading.key, folded), side: touch ? -1 : 1}).range(touch ? heading.from : heading.lineTo));
       if (folded) {
         ranges.push(Decoration.widget({widget: new FoldedMoreWidget(heading.key), side: 1}).range(heading.lineTo));
         replace(heading.lineTo, heading.end, undefined);

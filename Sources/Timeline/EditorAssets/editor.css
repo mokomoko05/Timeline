@@ -93,12 +93,14 @@ html.inline .board-details .arrow { height: var(--m-line); }
 #editor .cm-code-header-concealed .board-copy-code[data-copied="true"]::after { content: attr(data-label); }
 #editor .cm-code-header-concealed .board-copy-code:hover { color: var(--accent); border-color: var(--line); }
 #editor .cm-line.cm-code-first { padding-right: 40px; }
-/* 标题折叠：和 iPhone 一样，标题行最右边一个圆角小方块里的箭头，一直显示；展开时朝下，收起后朝右。 */
 #editor .cm-line.cm-foldable { position: relative; padding-right: calc(var(--font-size) * 1.9 + 8px); }
 .board-heading-fold { position: absolute; right: 0; top: 50%; width: calc(var(--font-size) * 1.9); height: calc(var(--font-size) * 1.9); transform: translateY(-50%); display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: calc(var(--font-size) * 0.55); background: color-mix(in srgb, var(--muted) 12%, transparent); color: var(--muted); cursor: pointer; transition: background-color .12s ease, color .12s ease; }
 .board-heading-fold svg { width: calc(var(--font-size) * 0.95); height: calc(var(--font-size) * 0.95); fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transform: rotate(90deg); transition: transform .15s ease-out; }
 .board-heading-fold[data-folded="true"] svg { transform: rotate(0deg); }
 .board-heading-fold:hover, .board-heading-fold:focus-visible { background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--ink); }
+.board-heading-fold-anchor { display: contents; }
+html:not(.touch) .board-heading-fold-anchor { position: relative; display: inline-block; width: 0; height: 0; vertical-align: middle; }
+html:not(.touch) .board-heading-fold { right: auto; left: 6px; }
 .board-fold-more { display: none; }
 /* 搜索跳转：命中的那一行淡淡铺一层强调色，命中的文字高亮，两秒多后淡去。 */
 #editor .cm-line.cm-search-line { background: color-mix(in srgb, var(--accent) 12%, transparent); animation: board-search-fade 2.4s ease-out forwards; }

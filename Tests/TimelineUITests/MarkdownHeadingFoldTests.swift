@@ -51,7 +51,7 @@ final class MarkdownHeadingFoldTests: XCTestCase {
         XCTAssertNotNil(first)
         if let first {
             XCTAssertGreaterThan(first.rect.width, 18, "按钮够大")
-            XCTAssertGreaterThan(first.rect.minX, 300, "按钮在标题行的最右边")
+            XCTAssertLessThan(first.rect.minX, 60, "按钮紧贴标题文字")
             XCTAssertEqual(view.headingKey(at: NSPoint(x: first.rect.midX, y: first.rect.midY)), "h1:A#0")
             XCTAssertNil(view.headingKey(at: NSPoint(x: 20, y: first.rect.midY)), "点标题文字不收起，留给选择和编辑")
         }
@@ -70,6 +70,35 @@ final class MarkdownHeadingFoldTests: XCTestCase {
         XCTAssertTrue(HeadingFolds.folded(in: "log.2").isEmpty, "按笔记分别记住")
         view.onToggleHeading?("h1:A#0")
         XCTAssertNil(defaults.object(forKey: HeadingFolds.key("log.1")), "展开后不再记录")
+    }
+
+    func testHeadingButtonsFollowWrappedTitlesAndStayNextToTextAfterResizing() throws {
+        let view = InteractiveTaskText(frame: NSRect(x: 0, y: 0, width: 240, height: 600))
+        view.markdown = true
+        view.onToggleHeading = { _ in }
+        let source = "# 简短标题\n\nbody\n\n## " + String(repeating: "较长的中文标题", count: 8) + "\n\nbody"
+        view.textStorage?.setAttributedString(MarkdownText.render(source, color: .labelColor, fontSize: 13, folds: []))
+        for width: CGFloat in [240, 520] {
+            view.setFrameSize(NSSize(width: width, height: 600))
+            let manager = try XCTUnwrap(view.layoutManager)
+            let storage = try XCTUnwrap(view.textStorage)
+            let container = try XCTUnwrap(view.textContainer)
+            manager.ensureLayout(for: container)
+            let regions = view.headingRegions()
+            XCTAssertEqual(regions.count, 2)
+            for region in regions {
+                var lastLine = NSRect.zero
+                storage.enumerateAttribute(MarkdownText.headingFoldKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+                    guard value as? String == region.key else { return }
+                    manager.enumerateLineFragments(forGlyphRange: manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)) { _, used, _, _, _ in
+                        lastLine = used
+                    }
+                }
+                XCTAssertEqual(region.rect.minX, view.textContainerOrigin.x + lastLine.maxX + 6, accuracy: 1)
+                XCTAssertEqual(region.rect.midY, view.textContainerOrigin.y + lastLine.midY, accuracy: 1)
+                XCTAssertLessThanOrEqual(region.rect.maxX, width)
+            }
+        }
     }
 
     /// 工作板正文的折叠范围和键与编辑器一致：到下一个同级或更高级标题为止，不越过折叠块，末尾空行不算。

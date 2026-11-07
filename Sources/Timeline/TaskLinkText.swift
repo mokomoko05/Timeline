@@ -660,7 +660,6 @@ final class InteractiveTaskText: NSTextView {
 
     private var hoveredCopy: NSRect?
 
-    /// 可折叠标题右边的收起 / 展开按钮（标题第一行的最右边；标题文字本身留给选择和编辑）。
     func headingRegions() -> [(key: String, rect: NSRect, folded: Bool, hit: NSRect)] {
         guard onToggleHeading != nil, let storage = textStorage, let manager = layoutManager, let container = textContainer else { return [] }
         let key = regionLayoutKey(storage: storage, manager: manager, container: container)
@@ -675,9 +674,10 @@ final class InteractiveTaskText: NSTextView {
             let side = max(16, -tail - 6)
             let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             var first: NSRect?
-            manager.enumerateLineFragments(forGlyphRange: glyphs) { _, used, _, _, stop in
-                first = used
-                stop.pointee = true
+            var last: NSRect?
+            manager.enumerateLineFragments(forGlyphRange: glyphs) { _, used, _, _, _ in
+                if first == nil { first = used }
+                last = used
             }
             guard let line = first else { return }
             // 折叠块：箭头在标题左边，点整行都算（和编辑器里一样）。
@@ -687,9 +687,10 @@ final class InteractiveTaskText: NSTextView {
                 if rect.intersects(self.bounds) { regions.append((key, rect, folded, hit)) }
                 return
             }
-            // 引用框里的标题：按钮留在框内，不贴着框的右边。
+            guard let last else { return }
             let right = self.textContainerOrigin.x + container.size.width - container.lineFragmentPadding - (style?.textBlocks.isEmpty == false ? 6 : 0)
-            let rect = NSRect(x: right - side, y: self.textContainerOrigin.y + line.midY - side / 2, width: side, height: side)
+            let rect = NSRect(x: min(self.textContainerOrigin.x + last.maxX + 6, right - side),
+                              y: self.textContainerOrigin.y + last.midY - side / 2, width: side, height: side)
             if rect.intersects(self.bounds) { regions.append((key, rect, folded, rect)) }
         }
         cachedHeadings = (regionLayoutKey(storage: storage, manager: manager, container: container), regions)

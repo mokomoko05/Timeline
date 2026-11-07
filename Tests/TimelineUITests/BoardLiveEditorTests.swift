@@ -36,7 +36,55 @@ func waitForBoardEditor(_ current: @autoclosure () -> WKWebView) async throws {
 }
 
 @MainActor
+func assertHeadingFoldButtonsFollowText(in webView: WKWebView, file: StaticString = #filePath, line: UInt = #line) async throws {
+    let geometry = try await webView.evaluateJavaScript("""
+    [...document.querySelectorAll('.board-heading-fold')].map(button => {
+      const heading = button.closest('.cm-line');
+      const walker = document.createTreeWalker(heading, NodeFilter.SHOW_TEXT);
+      let node, last;
+      while (node = walker.nextNode()) {
+        if (node.parentElement.closest('button,.cm-widgetBuffer') || !node.textContent.trim()) continue;
+        const range = document.createRange(); range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) if (rect.width > 0 && rect.height > 0) last = rect;
+      }
+      const rect = button.getBoundingClientRect();
+      return {gap: last ? rect.left - last.right : -999,
+              aligned: !!last && rect.top < last.bottom && rect.bottom > last.top,
+              inside: rect.right <= heading.getBoundingClientRect().right + 1,
+              clickable: document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)?.closest('.board-heading-fold') === button};
+    })
+    """) as? [[String: Any]] ?? []
+    XCTAssertFalse(geometry.isEmpty, file: file, line: line)
+    for button in geometry {
+        let gap = try XCTUnwrap(button["gap"] as? Double, file: file, line: line)
+        XCTAssertEqual(gap, 6, accuracy: 2, file: file, line: line)
+        XCTAssertEqual(button["aligned"] as? Bool, true, file: file, line: line)
+        XCTAssertEqual(button["inside"] as? Bool, true, file: file, line: line)
+        XCTAssertEqual(button["clickable"] as? Bool, true, file: file, line: line)
+    }
+}
+
+@MainActor
 final class BoardLiveEditorTests: XCTestCase {
+    func testHeadingFoldButtonsFollowTitlesAfterWrappingResizingAndToggling() async throws {
+        let source = "# 简短标题\n\nbody\n\n## **加粗**与`代码` " + String(repeating: "长标题", count: 18) + "\n\nbody\n\n> ## 引用标题\n> body"
+        let fixture = try LiveFixture(source: source)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        for width: CGFloat in [410, 260, 600] {
+            fixture.window.setContentSize(NSSize(width: width, height: 480))
+            try await Task.sleep(for: .milliseconds(100))
+            try await assertHeadingFoldButtonsFollowText(in: fixture.webView)
+        }
+        for _ in 0..<4 {
+            _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-heading-fold').click()")
+            try await Task.sleep(for: .milliseconds(30))
+            try await assertHeadingFoldButtonsFollowText(in: fixture.webView)
+        }
+        let snapshot = try await fixture.snapshot()
+        XCTAssertEqual(snapshot["source"] as? String, source)
+    }
+
     /// 光标不在表格里时画成表格（列数、对齐、行内格式都对），光标进去露出源码；代码块、列表里的不算表格。
     func testTablesRenderUntilTheCaretEntersThem() async throws {
         let table = "| **甲** | 乙 |\n| --- | --: |\n| `1` | a\\|b |"

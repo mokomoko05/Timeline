@@ -421,8 +421,10 @@ final class InlineMarkdownEditorTests: XCTestCase {
         defer { InlineMarkdownEditor.shared.finish(); window.contentView = nil; window.close() }
         _ = try await webView.evaluateJavaScript("(()=>{const e=window.boardEditor;e.focus();e.select(6);})()")
         try await Task.sleep(for: .milliseconds(100))
+        try await assertHeadingFoldButtonsFollowText(in: webView)
         _ = try await webView.evaluateJavaScript("document.querySelector('.board-heading-fold').click();0")
         try await Task.sleep(for: .milliseconds(100))
+        try await assertHeadingFoldButtonsFollowText(in: webView)
         let head = try await webView.evaluateJavaScript("window.boardEditor.view().state.selection.main.head") as? Int
         XCTAssertEqual(head, 3, "标题行末尾")
         _ = try await webView.evaluateJavaScript("window.boardEditor.view().dispatch(window.boardEditor.view().state.replaceSelection('字'));0")
