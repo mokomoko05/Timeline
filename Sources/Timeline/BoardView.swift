@@ -38,6 +38,11 @@ final class BoardNavigation: ObservableObject {
         didSet { defaults.set(rawSource, forKey: "board.rawSource") }
     }
 
+    /// 只读浏览：只能看、展开收起标题、复制（复制出来的是带 Markdown 语法的原文），不露出源码。记住上次的选择。
+    @Published var browseOnly: Bool {
+        didSet { defaults.set(browseOnly, forKey: "board.browseOnly") }
+    }
+
     func select(_ id: UUID) {
         guard selection != id else { return }
         // The editor already debounces and flushes every change. Switching boards should
@@ -59,6 +64,7 @@ final class BoardNavigation: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         rawSource = defaults.bool(forKey: "board.rawSource")
+        browseOnly = defaults.bool(forKey: "board.browseOnly")
         selection = defaults.string(forKey: "board.selection").flatMap(UUID.init(uuidString:))
         var seen = Set<UUID>()
         favoriteBoardIDs = (defaults.stringArray(forKey: "board.favorites") ?? [])
@@ -319,6 +325,16 @@ struct BoardContentView: View {
         navigation.editorSession(for: board, store: store).setSourceMode(value)
     }
 
+    private func setBrowseOnly(_ value: Bool) {
+        let session = navigation.editorSession(for: board, store: store)
+        guard value else { navigation.browseOnly = false; return }
+        // 还没交出去的修改先存下，再切到只读。
+        session.commit { navigation.browseOnly = true }
+    }
+
+    /// 只能浏览：数据本身只读，或用户打开了只读浏览。
+    private var browsing: Bool { store.isReadOnly || navigation.browseOnly }
+
     private func insertTemplate(_ template: BoardMarkdownTemplate) {
         let liveEditor = navigation.editorSession(for: board, store: store)
         if liveEditor.error == nil { liveEditor.insertTemplate(template); return }
@@ -354,6 +370,12 @@ struct BoardContentView: View {
     /// 一行标题栏：左边是当前工作板（点它切换），右边是一组同样大小的图标按钮。
     private var header: some View {
         HStack(spacing: 2) {
+            if !store.isReadOnly {
+                headerButton(navigation.browseOnly ? "lock.fill" : "lock.open",
+                             navigation.browseOnly ? "退出只读，恢复编辑" : "只读浏览（只能查看、展开标题和复制）",
+                             active: navigation.browseOnly) { setBrowseOnly(!navigation.browseOnly) }
+                    .font(.system(size: 12))
+            }
             WorkspaceSyncButton()
             Button(action: choose) {
                 HStack(spacing: 7) {
@@ -376,7 +398,7 @@ struct BoardContentView: View {
             .layoutPriority(1)
             Spacer(minLength: 6)
             Group {
-                if !store.isReadOnly {
+                if !browsing {
                     // 折叠块最常用，单独一个按钮一下就能插入；整页模板收在 + 里。
                     headerButton("chevron.down.square", "插入折叠内容（details / summary）") { insertTemplate(.disclosure) }
                     Menu {
@@ -418,7 +440,7 @@ struct BoardContentView: View {
     }
 
     private var subtitle: String {
-        if store.isReadOnly { return AppLocalized("只读") }
+        if store.isReadOnly || navigation.browseOnly { return AppLocalized("只读") }
         if store.isBoardArchived(board) { return AppLocalized("已归档 · 内容保留") }
         switch board.owner {
         case .task(let id):
@@ -496,13 +518,14 @@ private struct BoardEditorArea: View {
     var body: some View {
         VStack(spacing: 0) {
             if liveEditor.error != nil {
-                if store.isReadOnly {
+                if store.isReadOnly || navigation.browseOnly {
                     ScrollView { BoardMarkdownPreview(store: store, board: board).padding(12) }
                 } else {
                     BoardMarkdownEditor(text: markdown, preview: {}).padding(10)
                 }
             } else {
-                BoardLiveEditor(session: liveEditor, raw: navigation.rawSource)
+                BoardLiveEditor(session: liveEditor, raw: navigation.rawSource && !navigation.browseOnly,
+                                browseOnly: navigation.browseOnly)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }

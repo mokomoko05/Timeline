@@ -9,7 +9,7 @@ struct BoardCodeBlock: View {
 
     var body: some View {
         ScrollView(.horizontal) {
-            Text(code.content.hasSuffix("\n") ? String(code.content.dropLast()) : code.content)
+            Text(codeText)
                 .font(.system(size: 13, design: .monospaced)).foregroundStyle(Palette.ink)
                 .textSelection(.enabled).fixedSize(horizontal: true, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -44,9 +44,14 @@ struct BoardCodeBlock: View {
         .onDisappear { feedback?.cancel() }
     }
 
+    /// 代码正文：结束围栏前的换行不算，显示和复制的都是看到的那几行。
+    private var codeText: String {
+        code.content.hasSuffix("\n") ? String(code.content.dropLast()) : code.content
+    }
+
     private func copy() {
         NSPasteboard.general.clearContents()
-        copied = NSPasteboard.general.setString(code.content, forType: .string)
+        copied = NSPasteboard.general.setString(codeText, forType: .string)
         feedback?.cancel()
         feedback = Task { @MainActor in
             do { try await Task.sleep(for: .milliseconds(1600)) } catch { return }

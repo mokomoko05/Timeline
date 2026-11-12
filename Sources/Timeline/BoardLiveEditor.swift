@@ -19,6 +19,8 @@ struct BoardLiveEditor: NSViewRepresentable {
     @ObservedObject var session: BoardLiveEditorSession
     /// 显示完整源码；否则所见即所得，只有光标所在的元素露出 Markdown 标记。
     var raw = false
+    /// 只读浏览：编辑器不可编辑，只能查看、展开收起标题和复制。
+    var browseOnly = false
     @Environment(\.typography) private var typography
     @Environment(\.colorScheme) private var colorScheme
 
@@ -32,7 +34,7 @@ struct BoardLiveEditor: NSViewRepresentable {
     func updateNSView(_ container: BoardEditorContainer, context: Context) {
         // 只有这块工作板还拥有编辑器时才放回来（编辑器被重建过）；不从别的工作板手里抢。
         if let webView = session.webView, webView.superview !== container { container.attach(webView) }
-        session.configure(fontSize: typography.pt(13), dark: colorScheme == .dark, sourceMode: raw)
+        session.configure(fontSize: typography.pt(13), dark: colorScheme == .dark, sourceMode: raw, browseOnly: browseOnly)
     }
 
     static func dismantleNSView(_ view: BoardEditorContainer, coordinator: BoardLiveEditorSession) { coordinator.flush() }
@@ -285,9 +287,10 @@ final class BoardLiveEditorSession: NSObject, ObservableObject, WKScriptMessageH
         if shared?.view === view, owner == nil { shared = nil }
     }
 
-    func configure(fontSize: CGFloat, dark: Bool, sourceMode: Bool = false) {
-        settings = ["fontSize": fontSize, "readOnly": store.isReadOnly, "colors": Self.colors(dark: dark),
-                    "sourceMode": sourceMode, "folds": BoardFolds.load(boardID, defaults: defaults), "key": boardID.uuidString]
+    func configure(fontSize: CGFloat, dark: Bool, sourceMode: Bool = false, browseOnly: Bool = false) {
+        if browseOnly, settings["readOnly"] as? Bool == false { flush() }
+        settings = ["fontSize": fontSize, "readOnly": store.isReadOnly || browseOnly, "colors": Self.colors(dark: dark),
+                    "sourceMode": sourceMode && !browseOnly, "folds": BoardFolds.load(boardID, defaults: defaults), "key": boardID.uuidString]
         settings["labels"] = Self.labels
         let current = store.board(id: boardID)?.markdown ?? storedSource
         if current != storedSource {

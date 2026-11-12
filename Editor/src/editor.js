@@ -466,7 +466,31 @@ function codeBody(position) {
   const line = state.doc.lineAt(code.from);
   const firstBody = line.number < state.doc.lines ? state.doc.line(line.number + 1).from : code.to;
   const end = code.closing != null ? state.doc.lineAt(code.closing).from : code.to;
-  return state.doc.sliceString(firstBody, Math.max(firstBody, end));
+  // 结束围栏前的换行不属于代码：复制出来的内容和看到的一样，最后一行后面不多一个换行。
+  return state.doc.sliceString(firstBody, Math.max(firstBody, end)).replace(/\r?\n$/, "");
+}
+
+// 只读时复制：系统原生选区换回源码里的位置，复制带 Markdown 语法的原文。
+// 选区从一行看得见的第一个字开始（前面只剩隐藏的标题井号、列表符号、加粗记号等）时带上这些标记；
+// 结尾同理带上收尾的记号（加粗、行内代码、链接地址等）。
+const hiddenLinePrefix = /^[ \t]*(?:(?:>[ \t]?)*(?:#{1,6}[ \t]+|[-*+][ \t]+(?:\[[ xX]\][ \t]+)?|\d+[.)][ \t]+(?:\[[ xX]\][ \t]+)?)?)?(?:\*\*|__|\*|_|~~|`|\[|==)*$/;
+const hiddenLineSuffix = /^(?:\*\*|__|\*|_|~~|`|==|\]\([^)]*\)|\][ \t]*\[[^\]]*\])*[ \t]*$/;
+function selectionSource(view) {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
+  const range = selection.getRangeAt(0);
+  if (!view.contentDOM.contains(range.commonAncestorContainer) && range.commonAncestorContainer !== view.contentDOM) return null;
+  let from, to;
+  try {
+    from = view.posAtDOM(range.startContainer, range.startOffset);
+    to = view.posAtDOM(range.endContainer, range.endOffset);
+  } catch { return null; }
+  if (from > to) [from, to] = [to, from];
+  const doc = view.state.doc;
+  const first = doc.lineAt(from), last = doc.lineAt(to);
+  if (hiddenLinePrefix.test(doc.sliceString(first.from, from))) from = first.from;
+  if (to > from && hiddenLineSuffix.test(doc.sliceString(to, last.to))) to = last.to;
+  return to > from ? doc.sliceString(from, to) : null;
 }
 
 // 就地编辑时代码块开头一行的语言名（和渲染好的正文一样；没写语言时显示「代码」）。
@@ -1300,10 +1324,10 @@ function editorExtensions(config) {
               return true;
             },
             drop(event) { return takeImages(event, event.dataTransfer); },
-            // 只读的工作板：复制系统原生选区里看到的文字（CodeMirror 自己的选区在只读时不跟随拖选）。
+            // 只读的工作板：按系统原生选区复制对应的 Markdown 源码（CodeMirror 自己的选区在只读时不跟随拖选）。
             copy(event, view) {
               if (!view.state.readOnly) return false;
-              const text = window.getSelection()?.toString() ?? "";
+              const text = selectionSource(view) ?? window.getSelection()?.toString() ?? "";
               if (!text) return false;
               event.clipboardData?.setData("text/plain", text);
               event.preventDefault();

@@ -342,7 +342,7 @@ final class BoardLiveEditorTests: XCTestCase {
         let before = try await fixture.snapshot()
         _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-copy-code').click()")
         try await Task.sleep(for: .milliseconds(60))
-        XCTAssertEqual(fixture.pasteboard.string(forType: .string), "  let value = 42\n\n  print(value)\n")
+        XCTAssertEqual(fixture.pasteboard.string(forType: .string), "  let value = 42\n\n  print(value)", "最后一行后面不多一个换行")
         let feedback = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-copy-code').dataset.copied") as? String
         XCTAssertEqual(feedback, "true")
         let style = try await fixture.webView.evaluateJavaScript("""
@@ -366,7 +366,7 @@ final class BoardLiveEditorTests: XCTestCase {
         XCTAssertEqual(fixture.pasteboard.string(forType: .string), "")
         _ = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.board-copy-code')[2].click()")
         try await Task.sleep(for: .milliseconds(60))
-        XCTAssertEqual(fixture.pasteboard.string(forType: .string), "unclosed\n")
+        XCTAssertEqual(fixture.pasteboard.string(forType: .string), "unclosed")
         fixture.session.undo()
         try await Task.sleep(for: .milliseconds(60))
         let undone = try await fixture.snapshot()
@@ -375,6 +375,73 @@ final class BoardLiveEditorTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(30))
         let rawButtons = try await fixture.webView.evaluateJavaScript("document.querySelectorAll('.board-copy-code').length") as? Int
         XCTAssertEqual(rawButtons, 0)
+    }
+
+    /// 只读浏览：不可编辑、不露出源码；标题照样能收起；复制系统选区得到带 Markdown 语法的原文。
+    func testBrowseOnlyCopiesMarkdownSourceAndStillFoldsHeadings() async throws {
+        let source = "# Title\n\nfirst **bold** and [link](https://example.com) end.\n\n- [ ] task item\n\n```bash\necho hi\n```\n\n## Sub\n\ninside"
+        let fixture = try LiveFixture(source: source)
+        defer { fixture.close() }
+        try await waitForBoardEditor(fixture.webView)
+        fixture.session.configure(fontSize: 13, dark: true, sourceMode: true, browseOnly: true)
+        try await Task.sleep(for: .milliseconds(40))
+        let state = try await fixture.webView.evaluateJavaScript("""
+        (()=>{const c=document.querySelector('.cm-content');return {text:c.textContent,editable:c.isContentEditable};})()
+        """) as? [String: Any]
+        XCTAssertEqual(state?["editable"] as? Bool, false)
+        let text = try XCTUnwrap(state?["text"] as? String)
+        for marker in ["# Title", "**bold**", "](https", "- [ ]", "```"] { XCTAssertFalse(text.contains(marker), marker) }
+
+        func copy(from start: String, to end: String, startOffset: Int? = nil, endOffset: Int? = nil) async throws -> String? {
+            let args = String(decoding: try JSONSerialization.data(withJSONObject: [start, end, startOffset ?? -1, endOffset ?? -1]), as: UTF8.self)
+            return try await fixture.webView.evaluateJavaScript("""
+            (([a,b,so,eo])=>{
+              const texts=[];const w=document.createTreeWalker(document.querySelector('.cm-content'),NodeFilter.SHOW_TEXT);
+              let n;while((n=w.nextNode()))if(!n.parentElement.closest('button'))texts.push(n);
+              const s=texts.find(t=>t.data.includes(a)), e=[...texts].reverse().find(t=>t.data.includes(b));
+              const r=document.createRange();
+              r.setStart(s,so>=0?s.data.indexOf(a)+so:s.data.indexOf(a));
+              r.setEnd(e,eo>=0?e.data.indexOf(b)+eo:e.data.indexOf(b)+b.length);
+              const sel=window.getSelection();sel.removeAllRanges();sel.addRange(r);
+              const event=new ClipboardEvent('copy',{bubbles:true,cancelable:true,clipboardData:new DataTransfer()});
+              document.querySelector('.cm-content').dispatchEvent(event);
+              return event.clipboardData.getData('text/plain');
+            })(\(args))
+            """) as? String
+        }
+        let heading = try await copy(from: "Title", to: "Title")
+        XCTAssertEqual(heading, "# Title")
+        let paragraph = try await copy(from: "first", to: "end.")
+        XCTAssertEqual(paragraph, "first **bold** and [link](https://example.com) end.")
+        let word = try await copy(from: "bold", to: "bold")
+        XCTAssertEqual(word, "bold", "只选中间的字不带上两边的标记")
+        let link = try await copy(from: "link", to: "link")
+        XCTAssertEqual(link, "link")
+        let span = try await copy(from: "Title", to: "task item")
+        XCTAssertEqual(span, "# Title\n\nfirst **bold** and [link](https://example.com) end.\n\n- [ ] task item")
+        let code = try await copy(from: "echo hi", to: "echo hi")
+        XCTAssertEqual(code, "echo hi")
+
+        // 勾选框点不动，标题能收起。
+        _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-check')?.click()")
+        _ = try await fixture.webView.evaluateJavaScript("[...document.querySelectorAll('.board-heading-fold')].at(-1).click()")
+        try await Task.sleep(for: .milliseconds(40))
+        let folded = try await visibleText(fixture.webView)
+        XCTAssertFalse(folded.contains("inside"), "只读时也能收起标题")
+        XCTAssertEqual(fixture.store.boards.first?.markdown, source)
+
+        fixture.session.configure(fontSize: 13, dark: true, browseOnly: false)
+        try await Task.sleep(for: .milliseconds(40))
+        let editable = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').isContentEditable") as? Bool
+        XCTAssertEqual(editable, true, "退出只读后恢复编辑")
+    }
+
+    func testBrowseOnlyIsRememberedPerUser() {
+        let defaults = InMemoryDefaults()
+        let navigation = BoardNavigation(defaults: defaults)
+        XCTAssertFalse(navigation.browseOnly)
+        navigation.browseOnly = true
+        XCTAssertTrue(BoardNavigation(defaults: defaults).browseOnly)
     }
 
     func testLivePreviewHeadingsBlankLinesTaskCompletionAndNativePersistence() async throws {
@@ -452,7 +519,7 @@ final class BoardLiveEditorTests: XCTestCase {
         XCTAssertTrue((checked["source"] as? String)?.contains("- [x] Action") == true)
         _ = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-copy-code').click()")
         try await Task.sleep(for: .milliseconds(40))
-        XCTAssertEqual(fixture.pasteboard.string(forType: .string), "let value = 42\n")
+        XCTAssertEqual(fixture.pasteboard.string(forType: .string), "let value = 42")
         fixture.session.setSourceMode(true)
         try await Task.sleep(for: .milliseconds(40))
         let raw = try await fixture.webView.evaluateJavaScript("document.querySelector('.cm-content').textContent") as? String
@@ -961,7 +1028,7 @@ final class BoardLiveEditorTests: XCTestCase {
         let copied = try await fixture.webView.evaluateJavaScript("document.querySelector('.board-copy-code').click()")
         _ = copied
         try await Task.sleep(for: .milliseconds(60))
-        XCTAssertEqual(fixture.pasteboard.string(forType: .string), "code x\n", "复制按钮按现在的位置取正文")
+        XCTAssertEqual(fixture.pasteboard.string(forType: .string), "code x", "复制按钮按现在的位置取正文")
     }
 
     func testArrowKeysMoveThroughFormattedAndCompletedTextCharacterByCharacter() async throws {
