@@ -315,29 +315,34 @@ public final class JournalStore: ObservableObject {
     /// 每个任务的笔记条数：每一行的菜单都要显示，逐行扫描全部日志太慢。
     private var cachedNoteCounts: [UUID: Int]?
     /// 每天的有效专注秒数（按结束记录累加），月历每格都要用。
-    private var cachedFocusByDay: [String: TimeInterval]?
+    private var cachedFocusByDay: (timeZone: TimeZone?, totals: [String: TimeInterval])?
     /// 按时间排好的全部日志（含专注记录）。笔记、标签、日志面板每次重绘都要用，日志变了才重建。
-    private var cachedChronology: [LoggedLog]?
+    private var cachedChronology: (timeZone: TimeZone, logs: [LoggedLog])?
+    private var cachedJournalLogs: (timeZone: TimeZone, days: [String: [LoggedLog]])?
     private var cachedTaskSummaries: (key: String, value: [LogTaskSummary])?
 
     /// 输入草稿不影响汇总；只有日志或待办真的改变时才重新扫描历史。
     private func invalidateNotebookIndex(logsChanged: Bool, tasksChanged: Bool) {
         if logsChanged || tasksChanged { cachedNoteTopics = nil; cachedTagSummaries = nil; cachedTaskSummaries = nil }
-        if logsChanged { cachedChronology = nil }
+        if logsChanged { cachedChronology = nil; cachedJournalLogs = nil }
         if logsChanged { cachedTimelineSegments = nil; cachedNoteCounts = nil; cachedFocusByDay = nil }
     }
 
     /// 这一天记录到的有效专注时长（结束记录里的用时之和）。
     public func focusSeconds(on date: Date) -> TimeInterval {
-        if cachedFocusByDay == nil {
+        let timeZone = JournalDates.fixedTimeZone
+        if cachedFocusByDay == nil || cachedFocusByDay?.timeZone != timeZone {
             var totals: [String: TimeInterval] = [:]
             for (key, day) in days {
-                let seconds = day.logs.filter { $0.focusMarker == "END" }.compactMap(\.focusElapsedSeconds).reduce(0, +)
-                if seconds > 0 { totals[key] = seconds }
+                for log in day.logs where log.focusMarker == "END" {
+                    if let seconds = log.focusElapsedSeconds, seconds > 0 {
+                        totals[journalDayKey(for: log, storedKey: key), default: 0] += seconds
+                    }
+                }
             }
-            cachedFocusByDay = totals
+            cachedFocusByDay = (timeZone, totals)
         }
-        return cachedFocusByDay?[JournalDates.key(date)] ?? 0
+        return cachedFocusByDay?.totals[JournalDates.key(date)] ?? 0
     }
 
     /// 等同 `notes(for:).count`，但只在日志变化后扫描一次。
@@ -806,10 +811,12 @@ public final class JournalStore: ObservableObject {
         }
         let key = JournalDates.key(date)
         var day = updated[key] ?? DayEntry()
-        day.logs.append(DailyLogEntry(createdAt: now, kind: kind, text: text, taskID: linked?.id, taskTitle: title,
-                                     taskNumber: linked.flatMap { taskNumber($0.id, on: $0.date) },
-                                     taskTags: linked?.task.tags ?? [], tags: entry.logDraftTags, images: images,
-                                     focusEvent: !focusPaused && linked?.id != nil && linked?.id == focusTaskID ? .note : nil))
+        var log = DailyLogEntry(createdAt: now, kind: kind, text: text, taskID: linked?.id, taskTitle: title,
+                                taskNumber: linked.flatMap { taskNumber($0.id, on: $0.date) },
+                                taskTags: linked?.task.tags ?? [], tags: entry.logDraftTags, images: images,
+                                focusEvent: !focusPaused && linked?.id != nil && linked?.id == focusTaskID ? .note : nil)
+        log.usesAssignedDay = key != JournalDates.key(now)
+        day.logs.append(log)
         day.logDraft = ""
         day.logTaskID = nil
         day.logDraftImages = []
@@ -886,7 +893,16 @@ public final class JournalStore: ObservableObject {
     }
 
     private func dayOfLog(_ id: UUID) -> Date? {
-        days.first { $0.value.logs.contains { $0.id == id } }.flatMap { JournalDates.date(for: $0.key) }
+        storedLog(id)?.date
+    }
+
+    private func storedLog(_ id: UUID) -> LoggedLog? {
+        for (key, day) in days {
+            if let log = day.logs.first(where: { $0.id == id }), let date = JournalDates.date(for: key) {
+                return LoggedLog(key: key, date: date, log: log)
+            }
+        }
+        return nil
     }
 
     public func setDeadlineDraft(_ text: String, on date: Date) {
@@ -1074,12 +1090,13 @@ public final class JournalStore: ObservableObject {
         }
         guard !body.isEmpty || !images.isEmpty else { throw LogInputError.empty }
         let linked = taskID.flatMap(locate) ?? inline ?? (linkDefault ? defaultLinkTask : nil)
-        let created = DailyLogEntry(createdAt: now, kind: kind, text: body,
+        var created = DailyLogEntry(createdAt: now, kind: kind, text: body,
                                     taskID: linked?.id, taskTitle: linked.map { String(TaskText.rendered($0.task.title).characters) },
                                     taskNumber: linked?.task.number, taskTags: linked?.task.tags ?? [],
                                     tags: TagText.merge([], tags.compactMap(TagText.normalize)), images: images,
                                     focusEvent: focusEvent ?? (!focusPaused && linked?.id != nil && linked?.id == focusTaskID ? .note : nil),
                                     focusGoal: focusGoal, focusPlannedSeconds: focusPlannedSeconds)
+        created.usesAssignedDay = !JournalDates.calendar.isDate(date, inSameDayAs: now)
         change(date, action: "添加日志") { $0.logs.append(created) }
         return (command, created)
     }
@@ -1217,6 +1234,40 @@ public final class JournalStore: ObservableObject {
         return day.logs.filter { includeFocus || !$0.focus }.sorted { $0.createdAt < $1.createdAt }.map { LoggedLog(key: key, date: date, log: $0) }
     }
 
+    /// 固定时区时用记录时间算展示日期；值内保留原归档日期，供编辑和删除使用。
+    public func journalDayKey(for log: DailyLogEntry, storedKey: String) -> String {
+        guard JournalDates.fixedTimeZone != nil, !log.usesAssignedDay else { return storedKey }
+        return JournalDates.key(log.createdAt)
+    }
+
+    public func journalDate(forLog id: UUID) -> Date? {
+        guard let item = storedLog(id) else { return nil }
+        return JournalDates.date(for: journalDayKey(for: item.log, storedKey: item.key)) ?? item.date
+    }
+
+    public func journalLogs(on key: String) -> [LoggedLog] {
+        guard let timeZone = JournalDates.fixedTimeZone else { return logs(on: key) }
+        return journalLogsByDay(in: timeZone)[key] ?? []
+    }
+
+    public func journalLogCount(on key: String) -> Int {
+        guard let timeZone = JournalDates.fixedTimeZone else { return days[key]?.logs.count ?? 0 }
+        return journalLogsByDay(in: timeZone)[key]?.count ?? 0
+    }
+
+    public var journalDaysWithLogs: Set<String> {
+        guard let timeZone = JournalDates.fixedTimeZone else { return Set(days.keys.filter { days[$0]?.logs.isEmpty == false }) }
+        return Set(journalLogsByDay(in: timeZone).keys)
+    }
+
+    private func journalLogsByDay(in timeZone: TimeZone) -> [String: [LoggedLog]] {
+        if let cachedJournalLogs, cachedJournalLogs.timeZone == timeZone { return cachedJournalLogs.days }
+        let grouped = Dictionary(grouping: chronology()) { journalDayKey(for: $0.log, storedKey: $0.key) }
+            .mapValues { $0.sorted { $0.log.createdAt < $1.log.createdAt } }
+        cachedJournalLogs = (timeZone, grouped)
+        return grouped
+    }
+
     /// 全部日志（跨日期），按时间从早到晚；`includeFocus` 为 false 时不含专注计时的开始、结束记录。
     public func allLogs(includeFocus: Bool = false) -> [LoggedLog] {
         let all = chronology()
@@ -1225,12 +1276,13 @@ public final class JournalStore: ObservableObject {
 
     /// 按日期、同一天内按时间排好的全部日志；只在日志变化后重建一次。
     private func chronology() -> [LoggedLog] {
-        if let cachedChronology { return cachedChronology }
+        let timeZone = JournalDates.calendar.timeZone
+        if let cachedChronology, cachedChronology.timeZone == timeZone { return cachedChronology.logs }
         let result = days.keys.sorted().flatMap { key -> [LoggedLog] in
             guard let date = JournalDates.date(for: key), let day = days[key] else { return [] }
             return day.logs.sorted { $0.createdAt < $1.createdAt }.map { LoggedLog(key: key, date: date, log: $0) }
         }
-        cachedChronology = result
+        cachedChronology = (timeZone, result)
         return result
     }
 

@@ -880,10 +880,11 @@ final class FocusNoteDraft: ObservableObject {
         guard (!body.isEmpty || !images.isEmpty), let active = session.active else { return false }
         do {
             let text = reflection ? "/note " + body : body
+            let now = Date()
             let result = try store.quickLogEntry(text, images: images,
                                                 taskID: reflection ? active.taskID : (session.isPaused ? nil : (link ?? active.taskID)),
                                                 linkDefault: false, tags: session.isPaused ? [] : tags,
-                                                allowInlineTaskReference: !reflection && !session.isPaused, on: Date(),
+                                                allowInlineTaskReference: !reflection && !session.isPaused, on: now, now: now,
                                                 focusEvent: reflection ? .review : nil,
                                                 focusGoal: reflection ? active.goal : nil,
                                                 focusPlannedSeconds: reflection ? active.plannedSeconds : nil)

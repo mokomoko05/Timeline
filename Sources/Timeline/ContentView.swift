@@ -564,7 +564,7 @@ struct ContentView: View {
                                             displayedMonth: displayedMonth, height: metrics.weekHeights[index / 7],
                                             items: previews[index],
                                             dueToday: dueByDay[JournalDates.key(date)] ?? [],
-                                            logCount: store.entry(for: date).logs.count,
+                                            logCount: store.journalLogCount(on: JournalDates.key(date)),
                                             focusSeconds: store.focusSeconds(on: date),
                                             readOnly: store.isReadOnly,
                                             today: JournalDates.key(date) == currentDayKey,

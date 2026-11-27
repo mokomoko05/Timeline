@@ -47,6 +47,7 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
     let nav: NotesNavigation
     /// 合并窗口与页面共用当前模式和日期。
     let workspace = NotesWorkspaceNavigation()
+    private weak var store: JournalStore?
     var journalDate: Date { workspace.date }
 
     init(nav: NotesNavigation? = nil) {
@@ -77,13 +78,14 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
     func showJournal(store: JournalStore, date: Date, log: UUID? = nil,
                      reveal: @escaping (UUID) -> Void = { _ in }, openDay: @escaping (Date) -> Void = { _ in }) {
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
-        workspace.open(.journal, date: date, log: log)
+        workspace.open(.journal, date: log.flatMap(store.journalDate(forLog:)) ?? date, log: log)
         install(store: store, reveal: reveal, openDay: openDay)
         bringToFront()
     }
 
     /// 不再给视图换新的 id：保持同一个视图，里面的草稿、编辑状态和滚动位置都留着。
     private func install(store: JournalStore, reveal: @escaping (UUID) -> Void, openDay: @escaping (Date) -> Void) {
+        self.store = store
         let view = UnifiedNotesView(store: store, workspace: workspace, nav: nav,
                                     close: { [weak self] in self?.close() },
                                     reveal: reveal, openDay: openDay)
@@ -136,7 +138,7 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
     /// 在同一个页面里切到日记的这一天，停在 `log` 那一条（从笔记的日期点过来）。
     func openJournal(date: Date, log: UUID?) {
         NotificationCenter.default.post(name: .timelineCommitEditing, object: nil)
-        workspace.open(.journal, date: date, log: log)
+        workspace.open(.journal, date: log.flatMap { store?.journalDate(forLog: $0) } ?? date, log: log)
     }
 
     /// 在同一个页面里切到这个任务的笔记，滚到 `log` 那一条（从日记里点了日志关联的任务）。
@@ -344,11 +346,12 @@ struct UnifiedJournalView: View {
     @State private var editorStyle = EditorStyle()
 
     private var entry: DayEntry { store.entry(for: date) }
+    private var dayLogs: [JournalStore.LoggedLog] { store.journalLogs(on: JournalDates.key(date)) }
     private var allDates: [Date] {
-        var result = store.days.keys.compactMap(JournalDates.date(for:))
-            .filter { let entry = store.entry(for: $0); return !entry.logs.isEmpty || !entry.summary.isEmpty }
-        if !result.contains(where: { JournalDates.calendar.isDate($0, inSameDayAs: date) }) { result.append(date) }
-        return result.sorted(by: >)
+        var keys = store.journalDaysWithLogs
+        keys.formUnion(store.days.compactMap { $0.value.summary.isEmpty ? nil : $0.key })
+        keys.insert(JournalDates.key(date))
+        return keys.sorted(by: >).compactMap(JournalDates.date(for:))
     }
 
     private var dates: [Date] {
@@ -361,7 +364,9 @@ struct UnifiedJournalView: View {
             return dateText.localizedStandardContains(query)
                 || weekday.localizedStandardContains(query)
                 || entry.summary.localizedStandardContains(query)
-                || entry.logs.contains { $0.searchableText.localizedStandardContains(query) || $0.tags.contains { $0.localizedStandardContains(query) } }
+                || store.journalLogs(on: JournalDates.key(item)).contains {
+                    $0.log.searchableText.localizedStandardContains(query) || $0.log.tags.contains { $0.localizedStandardContains(query) }
+                }
         }
     }
 
@@ -425,7 +430,7 @@ struct UnifiedJournalView: View {
 
     private func dateRow(_ item: Date) -> some View {
         let selected = JournalDates.calendar.isDate(item, inSameDayAs: date)
-        let logs = store.entry(for: item).logs
+        let count = store.journalLogCount(on: JournalDates.key(item))
         return Button { filter = []; date = item } label: {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
@@ -436,7 +441,7 @@ struct UnifiedJournalView: View {
                 }
                 HStack(spacing: 8) {
                     Text(JournalDates.calendar.isDateInToday(item) ? AppLocalized("今天") : item.timelineFormatted(.dateTime.weekday(.abbreviated).locale(locale)))
-                    Text("\(logs.count) 条日志").monospacedDigit()
+                    Text("\(count) 条日志").monospacedDigit()
                     Spacer(minLength: 4)
                 }
                 .font(.system(size: 11)).foregroundStyle(Palette.muted)
@@ -447,7 +452,7 @@ struct UnifiedJournalView: View {
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(AppLocalizedFormat("%@，%lld 条日志", item.timelineFormatted(.dateTime.year().month().day()), logs.count))
+        .accessibilityLabel(AppLocalizedFormat("%@，%lld 条日志", item.timelineFormatted(.dateTime.year().month().day()), count))
     }
 
     private var detail: some View {
@@ -478,16 +483,18 @@ struct UnifiedJournalView: View {
 
     @ViewBuilder
     private func dayList(_ proxy: ScrollViewProxy) -> some View {
-        let all = entry.logsInTimeOrder
+        let items = dayLogs
+        let all = items.map(\.log)
         let runs = FocusRun.runs(in: all)
         // 折叠的一轮专注只留结束那一条和它的小结，中间的开始、笔记、反馈都收起来。
         let hidden = Set(runs.filter { foldedRuns.contains($0.id) }.flatMap { [$0.start.id] + $0.inner.map(\.id) })
-        let logs = all.filter { !hidden.contains($0.id) }
+        let visible = items.filter { !hidden.contains($0.id) }
+        let logs = visible.map(\.log)
         ScrollView {
             // 一天的日志不多时整列排好，滚动条按真实高度算（长日志也不会让它跳）。
-            NotesStack(lazy: Self.usesLazyLayout(entry.logs), spacing: 0) {
+            NotesStack(lazy: Self.usesLazyLayout(all), spacing: 0) {
                 Color.clear.frame(height: 1).id("journal-top")
-                if entry.logsInTimeOrder.isEmpty {
+                if all.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "book.pages").font(.system(size: 30, weight: .light)).foregroundStyle(Palette.muted.opacity(0.6))
                         Text("这一天还没有日志").font(.system(size: 14, weight: .medium))
@@ -496,12 +503,13 @@ struct UnifiedJournalView: View {
                 } else {
                     let summaries = Dictionary(uniqueKeysWithValues: runs.map { ($0.end.id, $0) })
                     let segments = store.timelineSegments()
-                    ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
+                    ForEach(Array(visible.enumerated()), id: \.element.id) { index, item in
+                        let log = item.log
                         VStack(alignment: .leading, spacing: 0) {
                             if index > 0, let gap = NoteThread.gapLabel(from: logs[index - 1].createdAt, to: log.createdAt) {
                                 NoteThreadGap(label: gap)
                             }
-                            journalRow(log, on: date, hasPrevious: index > 0, hasNext: true, segment: segments[log.id])
+                            journalRow(log, on: item.date, hasPrevious: index > 0, hasNext: true, segment: segments[log.id])
                                 .id(log.id)
                                 .recordsScrollPosition(log.id, in: tracker)
                             if let run = summaries[log.id] {
@@ -534,10 +542,10 @@ struct UnifiedJournalView: View {
         // 今天从最新一条开始（接着写），往日从当天第一条开始读。
         .onAppear {
             registerKeyboardPage()
-            if let id = revealLog { revealID = id; revealLog = nil }
+            if let id = revealLog { reveal(id) }
             else if openedDay != JournalDates.key(date) { openDay(proxy) }
         }
-        .onChange(of: revealLog) { id in if let id { revealID = id; revealLog = nil } }
+        .onChange(of: revealLog) { id in if let id { reveal(id) } }
         .scrollsToKeyboardSelection(proxy)
         // 带着要定位的那一条换日期时，不再按「打开这一天」滚到开头 / 末尾，免得把定位冲掉。
         .onChange(of: date) { _ in
@@ -559,6 +567,15 @@ struct UnifiedJournalView: View {
             try? await Task.sleep(for: .seconds(1.2))
             withAnimation(.easeOut(duration: 0.4)) { highlightedID = nil }
         }
+    }
+
+    private func reveal(_ id: UUID) {
+        let runs = FocusRun.runs(in: dayLogs.map(\.log))
+        if let run = runs.first(where: { $0.start.id == id || $0.inner.contains(where: { $0.id == id }) }) {
+            foldedRuns.remove(run.id)
+        }
+        revealID = id
+        revealLog = nil
     }
 
     private var filterBar: some View {
@@ -591,7 +608,7 @@ struct UnifiedJournalView: View {
     /// 筛选时跨日期按天分组显示；点日期回到那一天。
     private func filteredList(_ proxy: ScrollViewProxy) -> some View {
         let items = store.logs(linkedTo: filter)
-        let groups = Dictionary(grouping: items, by: \.key).sorted { $0.key < $1.key }
+        let groups = filteredGroups(items)
         let segments = store.timelineSegments()
         return ScrollView {
             NotesStack(lazy: Self.usesLazyLayout(items.map(\.log)), spacing: 0) {
@@ -600,7 +617,7 @@ struct UnifiedJournalView: View {
                         .frame(maxWidth: .infinity).padding(.vertical, 60)
                 }
                 ForEach(groups, id: \.key) { group in
-                    let day = group.value[0].date
+                    let day = JournalDates.date(for: group.key) ?? group.value[0].date
                     NoteDayKnot(date: day, key: group.key, count: group.value.count) { filter = []; date = day }
                     ForEach(Array(group.value.enumerated()), id: \.element.id) { index, item in
                         journalRow(item.log, on: item.date, hasPrevious: index > 0, hasNext: index < group.value.count - 1, segment: segments[item.id])
@@ -611,6 +628,12 @@ struct UnifiedJournalView: View {
             .padding(20)
         }
         .scrollsToKeyboardSelection(proxy)
+    }
+
+    private func filteredGroups(_ items: [JournalStore.LoggedLog]) -> [(key: String, value: [JournalStore.LoggedLog])] {
+        Dictionary(grouping: items) { store.journalDayKey(for: $0.log, storedKey: $0.key) }
+            .mapValues { $0.sorted { $0.log.createdAt < $1.log.createdAt } }
+            .sorted { $0.key < $1.key }
     }
 
     private var header: some View {
@@ -631,7 +654,7 @@ struct UnifiedJournalView: View {
                 }
                 HStack(spacing: 10) {
                     Text(date.timelineFormatted(.dateTime.weekday(.wide).locale(locale))).foregroundStyle(Palette.muted)
-                    Text("\(entry.logs.count) 条日志").foregroundStyle(Palette.muted)
+                    Text("\(store.journalLogCount(on: JournalDates.key(date))) 条日志").foregroundStyle(Palette.muted)
                 }.font(.system(size: 12))
             }
             Spacer()
@@ -699,9 +722,9 @@ struct UnifiedJournalView: View {
 
     private func openDay(_ proxy: ScrollViewProxy) {
         openedDay = JournalDates.key(date)
-        guard let first = entry.logsInTimeOrder.first else { return }
+        guard !dayLogs.isEmpty else { return }
         if JournalDates.calendar.isDateInToday(date) { proxy.scrollTo("journal-bottom", anchor: .bottom) }
-        else { proxy.scrollTo(first.id, anchor: .top) }
+        else { proxy.scrollTo("journal-top", anchor: .top) }
     }
 
     private func dayStep(_ symbol: String, _ help: String, _ amount: Int) -> some View {
@@ -769,22 +792,23 @@ struct UnifiedJournalView: View {
 
     /// 键盘选中用的顺序：页面上从上到下（折叠的一轮专注里收起的那些不算；筛选时是筛出来的那些）。
     private func registerKeyboardPage() {
-        func filtered(_ id: UUID) -> JournalStore.LoggedLog? { store.logs(linkedTo: filter).first { $0.id == id } }
+        func item(_ id: UUID) -> JournalStore.LoggedLog? {
+            (filter.isEmpty ? dayLogs : store.logs(linkedTo: filter)).first { $0.id == id }
+        }
         LogKeyboardSelection.shared.register(.journal, .init(order: {
             if !filter.isEmpty {
-                return Dictionary(grouping: store.logs(linkedTo: filter), by: \.key).sorted { $0.key < $1.key }.flatMap(\.value).map(\.id)
+                return filteredGroups(store.logs(linkedTo: filter)).flatMap(\.value).map(\.id)
             }
-            let all = entry.logsInTimeOrder
+            let all = dayLogs.map(\.log)
             let hidden = Set(FocusRun.runs(in: all).filter { foldedRuns.contains($0.id) }.flatMap { [$0.start.id] + $0.inner.map(\.id) })
             return all.filter { !hidden.contains($0.id) }.map(\.id)
         }, edit: { id in
             guard !store.isReadOnly else { return }
-            if let item = filtered(id) { beginEdit(item.log, on: item.date, at: nil) }
-            else if let log = entry.logs.first(where: { $0.id == id }) { beginEdit(log, on: date, at: nil) }
+            if let found = item(id) { beginEdit(found.log, on: found.date, at: nil) }
         }, delete: { id in
             guard !store.isReadOnly else { return }
             if InlineMarkdownEditor.shared.isEditing(id) { InlineMarkdownEditor.shared.finish() }
-            store.deleteLog(id, on: filtered(id)?.date ?? date)
+            if let found = item(id) { store.deleteLog(id, on: found.date) }
         }))
     }
 

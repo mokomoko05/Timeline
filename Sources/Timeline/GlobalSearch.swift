@@ -203,7 +203,7 @@ enum GlobalSearch {
 
     /// `inImage`：文字只在图片里，标题换成图片中命中的那一行，并带上那张图。
     private static func logHit(_ log: DailyLogEntry, key: String, store: JournalStore, terms: [String], inImage: Bool) -> GlobalSearchHit {
-        let date = JournalDates.date(for: key) ?? log.createdAt
+        let date = JournalDates.date(for: store.journalDayKey(for: log, storedKey: key)) ?? log.createdAt
         var detail = date.relativeLabel + " " + NoteThread.shortTime(log.createdAt)
         if let title = log.taskTitle { detail += " · " + title }
         let target = GlobalSearchHit.Target.log(date: date, id: log.id, taskID: log.taskID.flatMap { store.locate($0) == nil ? nil : $0 })

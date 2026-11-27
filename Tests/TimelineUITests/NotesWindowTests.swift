@@ -150,6 +150,54 @@ final class NotesWindowTests: XCTestCase {
         XCTAssertTrue(renderedSources(try XCTUnwrap(window.contentView)).contains("Journal marker SECOND"))
     }
 
+    func testJournalShowsLegacyCrossMidnightLogsOnTheirShanghaiDate() async throws {
+        let original = JournalDates.fixedTimeZone
+        defer { JournalDates.fixedTimeZone = original }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JournalStore(directory: directory)
+        let recorded = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-26T17:30:00Z"))
+        JournalDates.fixedTimeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let old = try XCTUnwrap(store.quickLogEntry("Cross midnight", on: recorded, now: recorded).entry)
+        store.setSummary("Old day summary", on: recorded)
+        JournalDates.fixedTimeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Shanghai"))
+        let oldDay = try XCTUnwrap(JournalDates.date(for: "2026-11-26"))
+        let newDay = try XCTUnwrap(JournalDates.date(for: "2026-11-27"))
+        store.setLogDraft("Explicit backfill", on: oldDay)
+        try store.commitLog(on: oldDay, now: recorded)
+        let backfill = try XCTUnwrap(store.entry(for: oldDay).logs.last)
+        let new = try XCTUnwrap(store.quickLogEntry("Same day", on: newDay, now: recorded + 60).entry)
+        XCTAssertEqual(store.journalLogCount(on: "2026-11-26"), 1)
+        XCTAssertEqual(store.journalLogCount(on: "2026-11-27"), 2)
+
+        let controller = NotesWindowController(nav: NotesNavigation(defaults: InMemoryDefaults()))
+        defer { controller.close() }
+        controller.showJournal(store: store, date: oldDay, log: old.id)
+        let host = try XCTUnwrap(controller.window?.contentView)
+        XCTAssertEqual(controller.journalDate, newDay)
+        func markers(_ view: NSView) -> Set<UUID> {
+            let ids = view.subviews.flatMap { markers($0) }
+            if let row = view as? RowMarkerView, let id = row.id { return Set(ids + [id]) }
+            return Set(ids)
+        }
+        for _ in 0..<10 {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(markers(host), [old.id, new.id])
+        let item = try XCTUnwrap(store.journalLogs(on: "2026-11-27").first)
+        XCTAssertEqual(item.date, oldDay)
+        store.deleteLog(old.id, on: item.date)
+        XCTAssertEqual(store.journalLogs(on: "2026-11-27").map(\.id), [new.id])
+        store.undo()
+        store.save()
+        let reopened = JournalStore(directory: directory)
+        XCTAssertEqual(reopened.journalLogs(on: "2026-11-27").map(\.id), [old.id, new.id])
+        XCTAssertEqual(Set(reopened.logs(on: "2026-11-26").map(\.id)), [old.id, backfill.id])
+        XCTAssertEqual(reopened.journalLogs(on: "2026-11-26").map(\.id), [backfill.id])
+        XCTAssertEqual(reopened.entry(for: oldDay).summary, "Old day summary")
+    }
+
     func testNotesIsAnIndependentResizableWindowThatHidingTheMainWindowDoesNotTouch() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }

@@ -1000,7 +1000,9 @@ struct NotesView: View {
         let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !draft.images.isEmpty else { return }
         do {
-            let result = try store.quickLogEntry(text, images: draft.images, taskID: draft.link, linkDefault: !draft.unlinked, tags: TagText.merge([tag], draft.tags), on: Date())
+            let now = Date()
+            let result = try store.quickLogEntry(text, images: draft.images, taskID: draft.link, linkDefault: !draft.unlinked,
+                                                 tags: TagText.merge([tag], draft.tags), on: now, now: now)
             guard case .entry = result.command else { error = AppLocalizedFormat("这里只能写笔记，不支持 %@ 这类命令。", text); return }
             nav.clearDraft(key)
             error = nil
@@ -1084,7 +1086,8 @@ struct NotesView: View {
         let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !draft.images.isEmpty else { return }
         do {
-            let result = try store.quickLogEntry(text, images: draft.images, taskID: topic.id, tags: draft.tags, on: Date())
+            let now = Date()
+            let result = try store.quickLogEntry(text, images: draft.images, taskID: topic.id, tags: draft.tags, on: now, now: now)
             guard case .entry = result.command else { error = AppLocalizedFormat("这里只能写笔记，不支持 %@ 这类命令。", text); return }
             nav.clearDraft(key)
             error = nil

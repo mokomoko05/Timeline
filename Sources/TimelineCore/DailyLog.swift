@@ -33,6 +33,8 @@ extension DayEntry {
 public struct DailyLogEntry: Codable, Equatable, Identifiable {
     public var id: UUID
     public var createdAt: Date
+    /// 补记时明确选择了归档日期，日记按该日期显示。
+    public var usesAssignedDay = false
     public var kind: DailyLogKind
     public var text: String
     public var taskID: UUID?
@@ -81,13 +83,14 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, createdAt, kind, text, taskID, taskTitle, taskNumber, taskTags, tags, images, imageText, focus, focusEvent, focusGoal, focusPlannedSeconds, focusElapsedSeconds, focusEndReason, focusMinimumSeconds
+        case id, createdAt, usesAssignedDay, kind, text, taskID, taskTitle, taskNumber, taskTags, tags, images, imageText, focus, focusEvent, focusGoal, focusPlannedSeconds, focusElapsedSeconds, focusEndReason, focusMinimumSeconds
     }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(UUID.self, forKey: .id)
         createdAt = try values.decode(Date.self, forKey: .createdAt)
+        usesAssignedDay = try values.decodeIfPresent(Bool.self, forKey: .usesAssignedDay) ?? false
         kind = try values.decode(DailyLogKind.self, forKey: .kind)
         text = try values.decode(String.self, forKey: .text)
         taskID = try values.decodeIfPresent(UUID.self, forKey: .taskID)
@@ -111,6 +114,7 @@ public struct DailyLogEntry: Codable, Equatable, Identifiable {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(id, forKey: .id)
         try values.encode(createdAt, forKey: .createdAt)
+        if usesAssignedDay { try values.encode(true, forKey: .usesAssignedDay) }
         try values.encode(kind, forKey: .kind)
         try values.encode(text, forKey: .text)
         try values.encodeIfPresent(taskID, forKey: .taskID)
