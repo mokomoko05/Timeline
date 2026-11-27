@@ -295,7 +295,7 @@ struct DayPage: View {
     var reveal: UUID?
 
     var body: some View {
-        let logs = store.logs(on: key)
+        let logs = store.journalLogs(on: key)
         let date = JournalDates.date(for: key)
         let summary = store.days[key]?.summary.nilIfEmpty
         ScrollViewReader { proxy in
@@ -498,14 +498,16 @@ struct SearchResults {
         hits = Array(hits.prefix(Self.limit))
     }
 
-    private static func detail(_ item: JournalStore.LoggedLog) -> String {
-        var detail = (DayText.relative(item.date) ?? DayText.short(item.date)) + " " + DayText.time(item.log.createdAt)
+    @MainActor private static func detail(_ item: JournalStore.LoggedLog, store: JournalStore) -> String {
+        let date = JournalDates.date(for: store.journalDayKey(for: item.log, storedKey: item.key)) ?? item.date
+        var detail = (DayText.relative(date) ?? DayText.short(date)) + " " + DayText.time(item.log.createdAt)
         if let title = item.log.taskTitle { detail += " · " + title }
         return detail
     }
 
     @MainActor private static func target(_ item: JournalStore.LoggedLog, store: JournalStore) -> SearchHit.Target {
-        .log(key: item.key, id: item.log.id, taskID: item.log.taskID.flatMap { store.locate($0) == nil ? nil : $0 })
+        .log(key: store.journalDayKey(for: item.log, storedKey: item.key), id: item.log.id,
+             taskID: item.log.taskID.flatMap { item.log.isNotebookEntry && store.locate($0) != nil ? $0 : nil })
     }
 
     /// 多行正文只显示命中的那一行（没有就第一行非空的），去掉 Markdown 记号。
@@ -514,7 +516,7 @@ struct SearchResults {
         let line = bestLine(lines, terms: terms) ?? lines.first ?? ""
         let title = String(TaskText.rendered(readable(line)).characters)
         return SearchHit(id: "log-\(item.log.id)", kind: .log, title: title.isEmpty ? (item.log.focusGoal ?? L("图片")) : title,
-                         detail: detail(item), target: target(item, store: store), image: item.log.images.first)
+                         detail: detail(item, store: store), target: target(item, store: store), image: item.log.images.first)
     }
 
     /// 文字只在图片里：标题换成图片里命中的那一行，带上那张图。
@@ -524,7 +526,7 @@ struct SearchResults {
             ?? log.images.first { name in terms.contains { log.imageText[name]?.localizedStandardContains($0) == true } }
         let line = image.flatMap { log.imageText[$0] }.flatMap { bestLine($0.components(separatedBy: .newlines), terms: terms) } ?? ""
         return SearchHit(id: "image-\(log.id)", kind: .image, title: line.trimmingCharacters(in: .whitespaces),
-                         detail: LF("图片中的文字 · %@", detail(item)), target: target(item, store: store), image: image)
+                         detail: LF("图片中的文字 · %@", detail(item, store: store)), target: target(item, store: store), image: image)
     }
 
     /// 命中的那一行：所有词都在的行优先，其次是有任意一个词的行。

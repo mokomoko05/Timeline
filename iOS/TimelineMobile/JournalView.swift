@@ -99,9 +99,9 @@ struct JournalView: View {
                     query = ""
                     selection = key
                 } else if let id = Navigator.shared.take({ if case .log(let id) = $0 { id } else { nil } }),
-                          let key = store.days.first(where: { $0.value.logs.contains { $0.id == id } })?.key {
+                          let date = store.journalDate(forLog: id) {
                     query = ""
-                    selection = key
+                    selection = JournalDates.key(date)
                     // 换天后滚动视图是新建的，等它出现再滚过去。
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { jump = id }
                 }
@@ -174,7 +174,7 @@ struct JournalView: View {
 
     /// 从日历跳过去：先在后台把那天的正文解析好（打开日历时多半已经预读过），再换天，换的那一下不在主线程上解析。
     private func jump(to key: String, keys: [String], byDay: [String: [JournalStore.LoggedLog]]) {
-        let logs = (byDay[key] ?? store.logs(on: key)).map(\.log)
+        let logs = (byDay[key] ?? store.journalLogs(on: key)).map(\.log)
         Task {
             await Task.detached(priority: .userInitiated) {
                 for log in logs { let body = LogStyle.body(log); if !body.isEmpty { MarkdownBlock.warm(body) } }
@@ -195,7 +195,7 @@ struct JournalView: View {
 
     /// 正文的整理（去前缀、拼用时）也放到后台。
     private func prewarm(keys: [String], byDay: [String: [JournalStore.LoggedLog]]) {
-        let logs = keys.flatMap { byDay[$0] ?? store.logs(on: $0) }.map(\.log)
+        let logs = keys.flatMap { byDay[$0] ?? store.journalLogs(on: $0) }.map(\.log)
         guard !logs.isEmpty else { return }
         Task.detached(priority: .utility) {
             for log in logs { let body = LogStyle.body(log); if !body.isEmpty { MarkdownBlock.warm(body) } }
@@ -208,18 +208,35 @@ struct JournalView: View {
 private final class DayIndex {
     private var days: [String: DayEntry] = [:]
     private var cache: [String: [JournalStore.LoggedLog]] = [:]
+    private var recordedKeys: [String] = []
+    private var timeZone: TimeZone?
+
     func update(_ store: JournalStore, selection: String) -> ([String: [JournalStore.LoggedLog]], [String]) {
-        let keys = Set(store.days.compactMap { $0.value.logs.isEmpty && $0.value.summary.isEmpty ? nil : $0.key }).union([JournalDates.key(Date())]).sorted()
+        let zone = JournalDates.calendar.timeZone
+        if timeZone != zone || days != store.days {
+            recordedKeys = store.journalDaysWithLogs
+                .union(store.days.compactMap { $0.value.summary.isEmpty ? nil : $0.key }).sorted()
+            if timeZone != zone || JournalDates.fixedTimeZone != nil {
+                cache.removeAll()
+            } else {
+                cache = cache.filter { days[$0.key]?.logs == store.days[$0.key]?.logs }
+            }
+            timeZone = zone
+            days = store.days
+        }
+        let today = JournalDates.key(Date())
+        var keys = recordedKeys
+        let todayIndex = keys.firstIndex { $0 >= today } ?? keys.endIndex
+        if todayIndex == keys.endIndex || keys[todayIndex] != today { keys.insert(today, at: todayIndex) }
         var wanted = Set([selection])
         if let index = keys.firstIndex(of: selection) {
             if index > 0 { wanted.insert(keys[index - 1]) }
             if index + 1 < keys.count { wanted.insert(keys[index + 1]) }
         }
         cache = cache.filter { wanted.contains($0.key) }
-        for key in wanted where cache[key] == nil || days[key]?.logs != store.days[key]?.logs {
-            cache[key] = store.logs(on: key)
+        for key in wanted where cache[key] == nil {
+            cache[key] = store.journalLogs(on: key)
         }
-        days = store.days
         return (cache, keys)
     }
 }
@@ -740,9 +757,10 @@ struct ComposeSheet: View {
             defer { draft.saving = false }
             do {
                 if draft.pendingEntryID == nil {
+                    let now = Date()
                     let result = try store.quickLogEntry(parsed.title, images: images, taskID: linked, linkDefault: false,
                                                         tags: TagText.merge(TagText.merge(tags, pickedTags), parsed.tags),
-                                                        allowInlineTaskReference: linked == nil, on: Date())
+                                                        allowInlineTaskReference: linked == nil, on: now, now: now)
                     draft.pendingEntryID = result.entry?.id
                 }
                 if PerfProbe.enabled { print("[perf] COMPOSE_SAVE mutationMS=\((CACurrentMediaTime() - started) * 1000)") }

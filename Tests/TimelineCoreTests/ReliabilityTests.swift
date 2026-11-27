@@ -137,7 +137,9 @@ final class ReliabilityTests: XCTestCase {
     func testReminderSnoozeLifecycleIncludesAlreadyFiredTasks() {
         let id = UUID(), name = "timeline-snooze." + id.uuidString
         var task = Todo(id: id, title: "Expired reminder")
-        task.dueDate = Date().addingTimeInterval(-3600); task.reminderMinutes = 0
+        task.dueDate = Date().addingTimeInterval(-3600)
+        task.dueHasTime = true
+        task.reminderMinutes = 0
         var day = DayEntry(); day.todos = [task]
         let before = ReminderLifecycleSnapshot(days: ["2026-10-30": day])
         day.todos[0].completed = true

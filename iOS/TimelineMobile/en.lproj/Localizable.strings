@@ -170,6 +170,9 @@
 "语言" = "Language";
 "界面语言" = "Language";
 "跟随系统 / System" = "System";
+"Timeline 时区" = "Timeline time zone";
+"搜索时区" = "Search time zones";
+"重新打开 Timeline 后生效。" = "Takes effect when you reopen Timeline.";
 "iCloud 同步" = "iCloud Sync";
 "同步文件夹" = "Sync Folder";
 "更换文件夹" = "Change Folder";

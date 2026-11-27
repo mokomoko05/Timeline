@@ -3,12 +3,15 @@ import TimelineCore
 
 /// 设置：界面语言；同步（选 iCloud 云盘里的「Timeline」文件夹，看同步状态）；本机数据。
 struct SyncSettingsView: View {
+    static let timeZoneKey = "appTimeZone"
     @ObservedObject var store: JournalStore
     @ObservedObject var sync: SyncModel
     @EnvironmentObject private var languages: LanguageStore
     @EnvironmentObject private var reminders: ReminderScheduler
     @State private var choosing = false
     @State private var openingBackup = false
+    @State private var openingTimeZones = false
+    @AppStorage(Self.timeZoneKey, store: PerfProbe.defaults) private var timeZone = ""
     /// 作为弹出的页面显示（iOS 18 起设置不在标签栏里）：右上角有「完成」。
     var presented = false
     @Environment(\.dismiss) private var dismiss
@@ -19,6 +22,16 @@ struct SyncSettingsView: View {
                 Section("语言") {
                     Picker("界面语言", selection: Binding(get: { languages.language }, set: { languages.set($0) })) {
                         ForEach(AppLanguage.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
+                    }
+                }
+                Section {
+                    Button { openingTimeZones = true } label: {
+                        LabeledContent("Timeline 时区", value: timeZone.isEmpty ? L("跟随系统 / System") : timeZone)
+                            .foregroundStyle(.primary)
+                    }
+                } footer: {
+                    if timeZone != (JournalDates.fixedTimeZone?.identifier ?? "") {
+                        Text("重新打开 Timeline 后生效。")
                     }
                 }
                 Section {
@@ -76,9 +89,11 @@ struct SyncSettingsView: View {
             }
             .navigationDestination(for: String.self) { _ in BackupRestoreView(store: store) }
             .navigationDestination(isPresented: $openingBackup) { BackupRestoreView(store: store) }
+            .navigationDestination(isPresented: $openingTimeZones) { TimeZoneList(selection: $timeZone) }
             .navigationTitle("设置")
             .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
                 if note.object as? String == "openBackup" { openingBackup = true }
+                if note.object as? String == "openTimeZones" { openingTimeZones = true }
             }
             .toolbar {
                 if presented { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
@@ -87,6 +102,49 @@ struct SyncSettingsView: View {
                 if case .success(let url) = result { sync.choose(url) }
             }
         }
+    }
+}
+
+private struct TimeZoneList: View {
+    @Binding var selection: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    private static let shanghai = "Asia/Shanghai"
+    private static let zones = TimeZone.knownTimeZoneIdentifiers.filter { $0 != shanghai }.sorted()
+
+    var body: some View {
+        List {
+            if query.isEmpty {
+                option("", title: L("跟随系统 / System"))
+            }
+            if query.isEmpty || Self.shanghai.localizedStandardContains(query) {
+                option(Self.shanghai, title: Self.shanghai)
+            }
+            ForEach(query.isEmpty ? Self.zones : Self.zones.filter { $0.localizedStandardContains(query) }, id: \.self) { zone in
+                option(zone, title: zone)
+            }
+        }
+        .navigationTitle("Timeline 时区")
+        .searchable(text: $query, prompt: "搜索时区")
+        .onReceive(NotificationCenter.default.publisher(for: PerfProbe.action)) { note in
+            if note.object as? String == "selectShanghaiTimeZone" { select(Self.shanghai) }
+        }
+    }
+
+    private func option(_ zone: String, title: String) -> some View {
+        Button { select(zone) } label: {
+            HStack {
+                Text(verbatim: title).foregroundStyle(.primary)
+                Spacer()
+                if selection == zone { Image(systemName: "checkmark") }
+            }
+        }
+        .accessibilityAddTraits(selection == zone ? [.isSelected] : [])
+    }
+
+    private func select(_ zone: String) {
+        selection = zone
+        dismiss()
     }
 }
 

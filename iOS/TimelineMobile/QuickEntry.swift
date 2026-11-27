@@ -88,7 +88,8 @@ struct AddLogIntent: AppIntent {
         let body = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty || !names.isEmpty else { throw $text.needsValueError(IntentDialog(stringLiteral: L("要记什么？"))) }
         let parsed = TagText.extract(from: body)
-        try store.quickLog(parsed.title, images: names, tags: parsed.tags, on: Date())
+        let now = Date()
+        try store.quickLog(parsed.title, images: names, tags: parsed.tags, on: now, now: now)
         store.save()
         await AppServices.shared.sync.syncNow()
         return .result(dialog: IntentDialog(stringLiteral: L("已记下")))

@@ -99,17 +99,24 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
         content.sound = .default
         content.categoryIdentifier = category
         content.userInfo = ["day": plan.dayKey, "task": plan.taskID.uuidString]
-        let components = JournalDates.calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: plan.fireDate)
+        let components = triggerComponents(for: plan.fireDate)
         return UNNotificationRequest(identifier: plan.id, content: content,
                                      trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false))
     }
 
     static func matches(_ request: UNNotificationRequest, plan: ReminderPlan) -> Bool {
         guard let trigger = request.trigger as? UNCalendarNotificationTrigger, !trigger.repeats else { return false }
-        let components = JournalDates.calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: plan.fireDate)
-        return trigger.dateComponents == components && request.content.body == plan.title
+        return trigger.dateComponents == triggerComponents(for: plan.fireDate) && request.content.body == plan.title
             && request.content.categoryIdentifier == category
             && request.content.userInfo["task"] as? String == plan.taskID.uuidString
+    }
+
+    private static func triggerComponents(for date: Date) -> DateComponents {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        var components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+        components.timeZone = calendar.timeZone
+        return components
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,

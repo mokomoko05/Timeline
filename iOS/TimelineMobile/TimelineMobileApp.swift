@@ -32,6 +32,8 @@ struct TimelineMobileApp: App {
                 .environmentObject(languages)
                 // 换语言：整个界面按新语言重建（拼出来的字符串也要重新算）。
                 .environment(\.locale, languages.language.locale)
+                .environment(\.calendar, JournalDates.calendar)
+                .environment(\.timeZone, JournalDates.calendar.timeZone)
                 .id(languages.language)
         }
         .onChange(of: scenePhase) { _, phase in
@@ -72,6 +74,7 @@ final class AppServices {
     let spotlight: SpotlightIndexer
 
     private init() {
+        JournalDates.fixedTimeZone = PerfProbe.defaults.string(forKey: SyncSettingsView.timeZoneKey).flatMap(TimeZone.init(identifier:))
         let directory = PerfProbe.isolated ? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(UserDefaults.standard.string(forKey: "perfDataset") == "large" ? "Timeline-Performance-large" : "Timeline-Performance", isDirectory: true) : nil
         PerfProbe.seedLargeLibrary(at: directory)
         let store = JournalStore(directory: directory)
@@ -187,7 +190,7 @@ extension RootView {
     func prewarmJournal() {
         let calendar = JournalDates.calendar
         let keys = [Date(), calendar.date(byAdding: .day, value: -1, to: Date()) ?? Date()].map(JournalDates.key)
-        let sources = store.allLogs(includeFocus: true).suffix(200).filter { keys.contains($0.key) }.map { LogStyle.body($0.log) }
+        let sources = keys.reversed().flatMap(store.journalLogs(on:)).suffix(200).map { LogStyle.body($0.log) }
         MarkdownBlock.prewarm(sources.filter { !$0.isEmpty })
     }
 }

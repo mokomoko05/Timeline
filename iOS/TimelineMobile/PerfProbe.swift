@@ -243,6 +243,17 @@ enum PerfProbe {
             ("新建待办", { send("addTask") }),
             ("关掉新建待办", { send("closeSheet") }),
             ("切到日记", { switchTab(.journal) }),
+            ("检查跨日记录", {
+                let keys = store.journalDaysWithLogs
+                let projected = keys.flatMap { store.journalLogs(on: $0).map(\.id) }
+                let stored = store.days.values.flatMap { $0.logs.map(\.id) }
+                let shifted = keys.reduce(0) { sum, key in sum + store.journalLogs(on: key).filter { $0.key != key }.count }
+                let today = JournalDates.key(Date())
+                let todayIDs = Set(store.journalLogs(on: today).map(\.id))
+                let valid = projected.count == stored.count && Set(projected) == Set(stored)
+                print("[perf] JOURNAL_ZONE valid=\(valid) zone=\(JournalDates.calendar.timeZone.identifier) shifted=\(shifted) today=\(todayIDs.count) renderedToday=\(journalProjectionIDs == todayIDs)")
+            }),
+            ("日记前一天", { NotificationCenter.default.post(name: previousDay, object: nil) }),
             ("建立专注笔记", {
                 switchTab(.journal)
                 if store.focusTaskID == nil, let task = firstOpen() {
@@ -309,6 +320,8 @@ enum PerfProbe {
             ("编辑工作板并保存", { send("boardEditAndSave") }),
             ("返回工作板列表", { send("boardBack") }),
             ("打开同步设置", { switchTab(.settings) }),
+            ("打开时区列表", { send("openTimeZones") }),
+            ("设置上海时区", { send("selectShanghaiTimeZone") }),
             ("打开备份与恢复", { send("openBackup") }),
             ("校验完整备份", { send("backupValidation") }),
             ("恢复完整备份", { send("backupRestoreRoundTrip") }),

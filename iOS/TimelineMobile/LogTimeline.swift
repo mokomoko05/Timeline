@@ -46,11 +46,13 @@ struct LogTimeline: View {
     /// `newestFirst` 时日期和一天里的时刻都是新的在上；一轮专注整体倒过来，摘要卡仍在这一轮最上面。
     private var rows: [Row] {
         var rows: [Row] = []
-        let days = Dictionary(grouping: logs, by: \.key)
+        let days = Dictionary(grouping: logs) { store.journalDayKey(for: $0.log, storedKey: $0.key) }
         let keys = days.keys.sorted(by: newestFirst ? (>) : (<))
         for key in keys {
             let dayLogs = days[key]!.sorted { $0.log.createdAt < $1.log.createdAt }
-            if groupByDay, let first = dayLogs.first { rows.append(.day(key, first.date, dayLogs.count)) }
+            if groupByDay, let first = dayLogs.first {
+                rows.append(.day(key, JournalDates.date(for: key) ?? first.date, dayLogs.count))
+            }
             // 一段是一条单独的日志，或者一轮专注（摘要卡 + 这一轮的记录）。
             var segments: [[Row]] = []
             var round: FocusRound?

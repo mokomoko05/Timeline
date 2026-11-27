@@ -10,7 +10,7 @@ struct SyncDevicesView: View {
             ForEach(state.devices) { device in
                 VStack(alignment: .leading, spacing: 6) {
                     Text(device.name)
-                    Text(device.exportedAt.formatted()).font(.caption).foregroundStyle(.secondary)
+                    Text(device.exportedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
                     if device.isRetired { Text("已停用").font(.caption).foregroundStyle(.secondary) }
                     else if device.supportsRetirement { Button("停用此设备", role: .destructive) { selection = device } }
                     else { Text("升级此设备后可停用").font(.caption).foregroundStyle(.secondary) }

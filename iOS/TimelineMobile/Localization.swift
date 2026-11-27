@@ -1,4 +1,5 @@
 import SwiftUI
+import TimelineCore
 
 /// 界面语言：默认跟随系统，也可以在设置里固定成中文或英文（和 Mac 版同一套做法）。
 /// 中文原文就是查表的键，`en.lproj/Localizable.strings` 里是英文；查不到时显示中文原文。
@@ -75,12 +76,17 @@ final class LanguageStore: ObservableObject {
 extension Date {
     /// 日期格式跟着应用里选的语言走，而不是系统语言。
     func formatted(_ style: Date.FormatStyle) -> String {
-        style.locale(AppLanguage.current.locale).format(self)
+        JournalDates.formatStyle(style.locale(AppLanguage.current.locale)).format(self)
     }
 
     func formatted(_ style: Date.RelativeFormatStyle) -> String {
         var style = style
         style.locale = AppLanguage.current.locale
+        style.calendar = JournalDates.calendar
         return style.format(self)
+    }
+
+    func formatted(date: Date.FormatStyle.DateStyle, time: Date.FormatStyle.TimeStyle) -> String {
+        formatted(Date.FormatStyle(date: date, time: time))
     }
 }
