@@ -189,7 +189,7 @@ struct AgendaView: View {
         case .task(let item):
             HStack(alignment: .top, spacing: 16) {
                 Button { navigate(item.task.dueDate, item.id); dismiss() } label: {
-                    Text(item.task.dueDate.map { $0.formatted(.dateTime.month().day().locale(AppLanguage.current.locale)) } ?? AppLocalized("未设日期")).font(.caption).frame(width: 70)
+                    Text(item.task.dueDate.map { $0.timelineFormatted(.dateTime.month().day().locale(AppLanguage.current.locale)) } ?? AppLocalized("未设日期")).font(.caption).frame(width: 70)
                 }.buttonStyle(HitAreaButtonStyle()).foregroundStyle(Palette.accent)
                 ManagedTaskRow(store: store, date: item.date, task: item.task, requestedEdit: $requestedEdit)
             }
@@ -390,7 +390,7 @@ struct BackupRestoreView: View {
                     HStack {
                         VStack(alignment: .leading) {
                             Text(backup.url.lastPathComponent).lineLimit(1)
-                            Text(backup.date, format: .dateTime.year().month().day().hour().minute()).font(.caption).foregroundStyle(Palette.muted)
+                            Text(backup.date.timelineFormatted(.dateTime.year().month().day().hour().minute())).font(.caption).foregroundStyle(Palette.muted)
                         }
                         Spacer()
                         if selected == backup.url { Image(systemName: "checkmark") }

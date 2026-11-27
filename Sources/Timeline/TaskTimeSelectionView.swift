@@ -25,7 +25,7 @@ struct TaskTimeSelectionView: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(LocalizedStringKey(item.title)).font(.system(size: 11))
-                                Text(timing.date(for: item), format: .dateTime.month(.twoDigits).day(.twoDigits).hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
+                                Text(timing.date(for: item).timelineFormatted(.dateTime.month(.twoDigits).day(.twoDigits).hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)))
                                     .font(.system(size: 12, weight: .medium)).monospacedDigit()
                             }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
                                 .background(endpoint == item ? Palette.accent.opacity(0.12) : Palette.soft, in: RoundedRectangle(cornerRadius: 6))

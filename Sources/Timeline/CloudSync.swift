@@ -223,7 +223,7 @@ struct CloudSyncSettings: View {
                             else if device.supportsRetirement { Button("停用此设备") { retiring = device } }
                             else { Text("升级此设备后可停用").foregroundStyle(Palette.muted) }
                             Spacer()
-                            Text(device.exportedAt.formatted(date: .abbreviated, time: .standard))
+                            Text(device.exportedAt.timelineFormatted(date: .abbreviated, time: .standard))
                             Text("对方最近导出的数据").foregroundStyle(Palette.muted)
                             if let received = device.hasReceivedLocalChanges {
                                 Text(AppLocalized(received ? "已接收本机最新修改" : "尚未确认接收本机最新修改"))
@@ -245,7 +245,7 @@ struct CloudSyncSettings: View {
         HStack {
             Text(AppLocalized(title))
             Spacer()
-            Text(date.formatted(date: .abbreviated, time: .standard)).foregroundStyle(Palette.muted)
+            Text(date.timelineFormatted(date: .abbreviated, time: .standard)).foregroundStyle(Palette.muted)
         }
     }
 

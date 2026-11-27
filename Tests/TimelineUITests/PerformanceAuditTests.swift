@@ -217,7 +217,10 @@ final class PerformanceAuditTests: XCTestCase {
         content.body = plan.title
         content.categoryIdentifier = ReminderScheduler.category
         content.userInfo = ["day": plan.dayKey, "task": plan.taskID.uuidString]
-        let components = JournalDates.calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: plan.fireDate)
+        let components = ReminderScheduler.triggerComponents(for: plan.fireDate)
+        XCTAssertEqual(components.timeZone?.secondsFromGMT(), 0)
+        XCTAssertEqual(Calendar(identifier: .gregorian).date(from: components),
+                       Date(timeIntervalSince1970: floor(plan.fireDate.timeIntervalSince1970)))
         let request = UNNotificationRequest(identifier: plan.id, content: content,
             trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false))
         XCTAssertTrue(ReminderScheduler.matches(request, plan: plan))

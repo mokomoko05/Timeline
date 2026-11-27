@@ -422,7 +422,7 @@ enum NotesRhythm {
         return notes.enumerated().map { index, logged in
             RailMark(id: logged.id, position: notes.count == 1 ? 0 : CGFloat(index) / last, color: LogEventStyle.color(logged.log),
                      emphasized: logged.log.isFocusMarker,
-                     label: logged.date.formatted(.dateTime.month(.defaultDigits).day()) + " " + NoteThread.shortTime(logged.log.createdAt),
+                     label: logged.date.timelineFormatted(.dateTime.month(.defaultDigits).day()) + " " + NoteThread.shortTime(logged.log.createdAt),
                      preview: RailMark.preview(logged.log))
         }
     }

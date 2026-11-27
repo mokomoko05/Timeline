@@ -135,12 +135,12 @@ final class QuickCaptureModel: ObservableObject {
     func presented() { presentation += 1 }
 
     @MainActor
-    func recordLog(in store: JournalStore, on date: Date = Date()) throws -> (command: LogCommand, entry: DailyLogEntry?) {
+    func recordLog(in store: JournalStore, now: Date = Date()) throws -> (command: LogCommand, entry: DailyLogEntry?) {
         try imageImports.requireReady()
         let paused = store.focusPaused
         return try store.quickLogEntry(text, images: images, taskID: paused ? nil : link,
                                        linkDefault: false, tags: paused ? [] : tags,
-                                       allowInlineTaskReference: !paused, on: date)
+                                       allowInlineTaskReference: !paused, on: now, now: now)
     }
 
     var hasDraft: Bool {
@@ -641,7 +641,7 @@ struct QuickCaptureView: View {
                     + (paused ? AppLocalized(" · 专注暂停，未关联任务或标签") : (tags.isEmpty ? "" : AppLocalized("，标签 ") + tags.map { "#" + $0 }.joined(separator: " ")))
                 images = []
                 model.resetLogAssociations()
-                if let entry = result.entry { destination = .log(Date(), entry.id) }
+                if let entry = result.entry { destination = .log(entry.createdAt, entry.id) }
                 ImageIndexer.run(store: store)
             } catch { failure = AppErrorDescription(error); return }
         }

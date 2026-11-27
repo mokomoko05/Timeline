@@ -86,7 +86,7 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
                     content.sound = .default
                     content.categoryIdentifier = Self.category
                     content.userInfo = ["day": plan.dayKey, "task": plan.taskID.uuidString]
-                    let components = JournalDates.calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: plan.fireDate)
+                    let components = Self.triggerComponents(for: plan.fireDate)
                     let request = UNNotificationRequest(identifier: plan.id, content: content,
                                                         trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false))
                     try await center.add(request)
@@ -98,11 +98,19 @@ final class ReminderScheduler: NSObject, ObservableObject, UNUserNotificationCen
 
     static func matches(_ request: UNNotificationRequest, plan: ReminderPlan) -> Bool {
         guard let trigger = request.trigger as? UNCalendarNotificationTrigger, !trigger.repeats else { return false }
-        let components = JournalDates.calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: plan.fireDate)
-        return trigger.dateComponents == components && request.content.body == plan.title
+        return trigger.dateComponents == triggerComponents(for: plan.fireDate) && request.content.body == plan.title
             && request.content.categoryIdentifier == category
             && request.content.userInfo["day"] as? String == plan.dayKey
             && request.content.userInfo["task"] as? String == plan.taskID.uuidString
+    }
+
+    static func triggerComponents(for date: Date) -> DateComponents {
+        // 提醒对应一个确定的瞬间；显式使用 UTC，系统改时区或遇到重复的夏令时时刻也不会错开。
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        var components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+        components.timeZone = calendar.timeZone
+        return components
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,

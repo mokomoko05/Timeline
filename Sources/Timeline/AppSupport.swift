@@ -42,6 +42,7 @@ enum Prefs {
     static let lastWorkspacePage = "lastWorkspacePage"
     static let mainWindowCentered = "mainWindowCentered"
     static let language = "appLanguage"
+    static let timeZone = "appTimeZone"
     static let hideCompleted = "hideCompleted"
     static let clickExpands = "clickExpandsTasks"
     static let weekStartsSunday = "weekStartsSunday"
@@ -134,8 +135,11 @@ struct LocalizedRoot<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
+        let calendar = JournalDates.calendar
         content()
             .environment(\.locale, languages.locale)
+            .environment(\.calendar, calendar)
+            .environment(\.timeZone, calendar.timeZone)
             .environment(\.typography, AppTypography(scale: scale, lineSpacing: spacing))
     }
 }
@@ -335,12 +339,13 @@ enum DateFormatters {
 
     /// `template` 走本地化模板；否则 `format` 是固定格式。
     static func formatter(locale: Locale, template: String? = nil, format: String? = nil) -> DateFormatter {
-        let zone = TimeZone.current
+        let calendar = JournalDates.calendar
+        let zone = calendar.timeZone
         let key = "\(locale.identifier)|\(template ?? "")|\(format ?? "")"
         if let cached = cache[key], cached.timeZone == zone { return cached }
         let formatter = DateFormatter()
         formatter.locale = locale
-        formatter.calendar = JournalDates.calendar
+        formatter.calendar = calendar
         formatter.timeZone = zone
         if let template { formatter.setLocalizedDateFormatFromTemplate(template) }
         if let format { formatter.dateFormat = format }
@@ -350,6 +355,14 @@ enum DateFormatters {
 }
 
 extension Date {
+    func timelineFormatted(_ style: Date.FormatStyle) -> String {
+        formatted(JournalDates.formatStyle(style))
+    }
+
+    func timelineFormatted(date: Date.FormatStyle.DateStyle, time: Date.FormatStyle.TimeStyle) -> String {
+        timelineFormatted(Date.FormatStyle(date: date, time: time))
+    }
+
     /// 「今天 / 明天 / 10月8日」之类的短标签。
     var relativeLabel: String {
         let calendar = JournalDates.calendar

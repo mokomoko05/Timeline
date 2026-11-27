@@ -356,8 +356,8 @@ struct UnifiedJournalView: View {
         guard !query.isEmpty else { return sorted }
         return sorted.filter { item in
             let entry = store.entry(for: item)
-            let dateText = item.formatted(.dateTime.year().month(.wide).day().locale(locale))
-            let weekday = item.formatted(.dateTime.weekday(.wide).locale(locale))
+            let dateText = item.timelineFormatted(.dateTime.year().month(.wide).day().locale(locale))
+            let weekday = item.timelineFormatted(.dateTime.weekday(.wide).locale(locale))
             return dateText.localizedStandardContains(query)
                 || weekday.localizedStandardContains(query)
                 || entry.summary.localizedStandardContains(query)
@@ -430,12 +430,12 @@ struct UnifiedJournalView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
                     Image(systemName: "calendar").font(.system(size: 11)).foregroundStyle(selected ? Palette.accent : Palette.muted)
-                    Text(item.formatted(.dateTime.year().month(.wide).day().locale(locale)))
+                    Text(item.timelineFormatted(.dateTime.year().month(.wide).day().locale(locale)))
                         .font(.system(size: 13, weight: selected ? .semibold : .regular))
                         .lineLimit(1)
                 }
                 HStack(spacing: 8) {
-                    Text(JournalDates.calendar.isDateInToday(item) ? AppLocalized("今天") : item.formatted(.dateTime.weekday(.abbreviated).locale(locale)))
+                    Text(JournalDates.calendar.isDateInToday(item) ? AppLocalized("今天") : item.timelineFormatted(.dateTime.weekday(.abbreviated).locale(locale)))
                     Text("\(logs.count) 条日志").monospacedDigit()
                     Spacer(minLength: 4)
                 }
@@ -447,7 +447,7 @@ struct UnifiedJournalView: View {
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(AppLocalizedFormat("%@，%lld 条日志", item.formatted(.dateTime.year().month().day()), logs.count))
+        .accessibilityLabel(AppLocalizedFormat("%@，%lld 条日志", item.timelineFormatted(.dateTime.year().month().day()), logs.count))
     }
 
     private var detail: some View {
@@ -617,7 +617,7 @@ struct UnifiedJournalView: View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
-                    Text(date.formatted(.dateTime.year().month(.wide).day().locale(locale)))
+                    Text(date.timelineFormatted(.dateTime.year().month(.wide).day().locale(locale)))
                         .font(.system(size: 18, weight: .semibold))
                     dayStep("chevron.left", "前一天 · ⌘⌥←", -1)
                     dayStep("chevron.right", "后一天 · ⌘⌥→", 1)
@@ -630,7 +630,7 @@ struct UnifiedJournalView: View {
                     }
                 }
                 HStack(spacing: 10) {
-                    Text(date.formatted(.dateTime.weekday(.wide).locale(locale))).foregroundStyle(Palette.muted)
+                    Text(date.timelineFormatted(.dateTime.weekday(.wide).locale(locale))).foregroundStyle(Palette.muted)
                     Text("\(entry.logs.count) 条日志").foregroundStyle(Palette.muted)
                 }.font(.system(size: 12))
             }

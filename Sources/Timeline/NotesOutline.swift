@@ -167,7 +167,7 @@ struct NotesTimelineList: View {
                     .background(Circle().fill(Palette.background))
                     .frame(width: 9, height: 9)
                     .frame(width: Self.lineX * 2 - 6)
-                Text(month.date, format: .dateTime.year().month(.wide))
+                Text(month.date.timelineFormatted(.dateTime.year().month(.wide)))
                     .font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.ink)
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(Palette.muted)
                     .rotationEffect(.degrees(isFolded ? -90 : 0))
@@ -180,7 +180,7 @@ struct NotesTimelineList: View {
         }
         .buttonStyle(.plain)
         .help(isFolded ? "展开这个月" : "收起这个月")
-        .accessibilityLabel(AppLocalizedFormat("%@，%lld 条笔记", month.date.formatted(.dateTime.year().month(.wide)), month.count))
+        .accessibilityLabel(AppLocalizedFormat("%@，%lld 条笔记", month.date.timelineFormatted(.dateTime.year().month(.wide)), month.count))
         .accessibilityValue(isFolded ? Text("已收起") : Text("已展开"))
     }
 
@@ -194,7 +194,7 @@ struct NotesTimelineList: View {
                 }
                 .frame(width: Self.lineX * 2 - 6)
                 Text(day.date.relativeLabel).font(.system(size: 12)).foregroundStyle(today ? Palette.accent : Palette.ink)
-                Text(day.date, format: .dateTime.weekday(.abbreviated)).font(.system(size: 10)).foregroundStyle(Palette.muted)
+                Text(day.date.timelineFormatted(.dateTime.weekday(.abbreviated))).font(.system(size: 10)).foregroundStyle(Palette.muted)
                 Spacer(minLength: 2)
                 Text("\(day.count)").font(.system(size: 10)).monospacedDigit().foregroundStyle(Palette.muted)
             }

@@ -221,7 +221,9 @@ public struct SyncMerge {
     static func conflictMarker(for stamp: SyncStamp, device: String) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        formatter.calendar = JournalDates.calendar
+        formatter.timeZone = formatter.calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd HH:mm XXXXX"
         return "——— 同步冲突：以下是 \(device) 在 \(formatter.string(from: Date(timeIntervalSince1970: stamp.time))) 的版本 ———"
     }
 }

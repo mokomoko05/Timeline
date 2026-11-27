@@ -29,6 +29,46 @@ final class DailyLogTests: XCTestCase {
     }
 
     @MainActor
+    func testFixedShanghaiTimeZoneWritesAcrossMidnightAndPreservesExistingDays() throws {
+        let original = JournalDates.fixedTimeZone
+        defer { JournalDates.fixedTimeZone = original }
+        let directory = try directory()
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-26T17:30:00Z"))
+        JournalDates.fixedTimeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let oldStore = JournalStore(directory: directory)
+        let previous = try XCTUnwrap(oldStore.quickLogEntry("Existing record", on: now, now: now).entry)
+        let task = try XCTUnwrap(oldStore.addParsedTodo("Task", on: now))
+        XCTAssertEqual(JournalDates.key(now), "2026-11-26")
+        oldStore.save()
+
+        JournalDates.fixedTimeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Shanghai"))
+        let store = JournalStore(directory: directory)
+        XCTAssertEqual(JournalDates.key(now), "2026-11-27")
+        XCTAssertEqual(JournalDates.calendar.component(.hour, from: now), 1)
+        let clock = Date.FormatStyle().hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).locale(Locale(identifier: "en_GB"))
+        XCTAssertEqual(now.formatted(JournalDates.formatStyle(clock)), "01:30")
+        XCTAssertEqual(store.logs(on: "2026-11-26").map(\.log), [previous])
+        XCTAssertEqual(store.locate(task.id).map { JournalDates.key($0.date) }, "2026-11-26")
+
+        let quick = try XCTUnwrap(store.quickLogEntry("Quick capture", on: now, now: now).entry)
+        let focus = try XCTUnwrap(store.addFocusLog("Focus", taskID: task.id, now: now, event: .start))
+        store.setLogDraft("Journal entry", on: now)
+        try store.commitLog(on: now, now: now)
+        let scheduled = try XCTUnwrap(store.addParsedTodo("今天 09:15 Task", on: now, now: now))
+        let deadline = try XCTUnwrap(scheduled.task.dueDate)
+        XCTAssertEqual(deadline, ISO8601DateFormatter().date(from: "2026-11-27T01:15:00Z"))
+        XCTAssertTrue(store.calendarDeadlines["2026-11-27"]?.contains(where: { $0.id == scheduled.id }) == true)
+        store.save()
+        let reopened = JournalStore(directory: directory)
+        let logs = reopened.logs(on: "2026-11-27").map(\.log)
+        XCTAssertEqual(Set(logs.map(\.text)), ["Quick capture", "Focus", "Journal entry"])
+        XCTAssertEqual(Set(logs.map(\.createdAt)), [now])
+        XCTAssertTrue(logs.contains { $0.id == quick.id })
+        XCTAssertTrue(logs.contains { $0.id == focus })
+        XCTAssertEqual(reopened.logs(on: "2026-11-26").map(\.log), [previous])
+    }
+
+    @MainActor
     func testOldSummaryRemainsIntactWhenAddingLogsAndReloading() async throws {
         let directory = try directory()
         let old = "{\"version\":4,\"days\":{\"2026-10-07\":{\"todos\":[],\"summary\":\"原有总结\\n第二行\"}}}"

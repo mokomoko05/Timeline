@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TimelineCore
 
 struct SettingsView: View {
     @ObservedObject var loginItem: LoginItem
@@ -11,6 +12,7 @@ struct SettingsView: View {
     @AppStorage(Prefs.hideCompleted) private var hideCompleted = false
     @AppStorage(Prefs.clickExpands) private var clickExpands = true
     @AppStorage(Prefs.weekStartsSunday) private var weekStartsSunday = false
+    @AppStorage(Prefs.timeZone) private var timeZone = ""
     @AppStorage(Prefs.globalHotKey) private var globalHotKey = true
     @AppStorage(Prefs.terminalLayout) private var terminalLayout = TerminalLayout.threePanes.rawValue
     @AppStorage(Prefs.terminalControl) private var terminalControl = true
@@ -28,6 +30,27 @@ struct SettingsView: View {
                 }.pickerStyle(.segmented)
                 Toggle("单击日期时自动展开待办清单", isOn: $clickExpands)
                 Toggle("隐藏已完成事项", isOn: $hideCompleted)
+                LabeledContent("Timeline 时区") {
+                    Menu {
+                        timeZoneOption("", title: AppLocalized("跟随系统"))
+                        timeZoneOption("Asia/Shanghai", title: "Asia/Shanghai")
+                        timeZoneOption("GMT", title: "UTC")
+                        Divider()
+                        ForEach(Self.timeZoneRegions, id: \.name) { region in
+                            Menu(region.name) {
+                                ForEach(region.identifiers, id: \.self) { identifier in
+                                    timeZoneOption(identifier, title: identifier)
+                                }
+                            }
+                        }
+                    } label: {
+                        Text(timeZoneTitle)
+                    }
+                    .fixedSize()
+                }
+                if timeZone != (JournalDates.fixedTimeZone?.identifier ?? "") {
+                    Text("重新打开 Timeline 后生效。").font(.caption).foregroundStyle(Palette.muted)
+                }
             }
             Section("外观") {
                 ThemePicker(themes: themes)
@@ -96,6 +119,27 @@ struct SettingsView: View {
         .background(Palette.background)
         .tint(Palette.accent)
         .frame(width: 520, height: 830)
+    }
+
+    private static let timeZoneRegions: [(name: String, identifiers: [String])] = {
+        Dictionary(grouping: TimeZone.knownTimeZoneIdentifiers.filter { $0 != "Asia/Shanghai" && $0 != "GMT" }) {
+            $0.split(separator: "/", maxSplits: 1).first.map(String.init) ?? $0
+        }.map { (name: $0.key, identifiers: $0.value.sorted()) }.sorted { $0.name < $1.name }
+    }()
+
+    private var timeZoneTitle: String {
+        if timeZone.isEmpty { return AppLocalized("跟随系统") }
+        if timeZone == "GMT" { return "UTC" }
+        return timeZone
+    }
+
+    private func timeZoneOption(_ identifier: String, title: String) -> some View {
+        Button {
+            timeZone = identifier
+        } label: {
+            if timeZone == identifier { Label(title, systemImage: "checkmark") }
+            else { Text(title) }
+        }
     }
 }
 

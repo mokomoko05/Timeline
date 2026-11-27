@@ -99,9 +99,9 @@ struct TaskDeadlineButton: View {
     private var quietUndated: Bool { compact && task.dueDate == nil }
     private var timeHelp: String {
         if let range = task.timeRange {
-            return range.start.formatted(date: .complete, time: .shortened) + " – " + range.end.formatted(date: .complete, time: .shortened)
+            return range.start.timelineFormatted(date: .complete, time: .shortened) + " – " + range.end.timelineFormatted(date: .complete, time: .shortened)
         }
-        return task.dueDate?.formatted(date: .complete, time: task.dueHasTime ? .shortened : .omitted) ?? AppLocalized("设置截止日期与时间")
+        return task.dueDate?.timelineFormatted(date: .complete, time: task.dueHasTime ? .shortened : .omitted) ?? AppLocalized("设置截止日期与时间")
     }
 
     var body: some View {

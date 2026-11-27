@@ -132,7 +132,7 @@ struct DeadlineSelectionView: View {
                 Button { shiftMonth(-1) } label: { Image(systemName: "chevron.left").frame(width: 24, height: 24) }
                     .accessibilityLabel("上个月")
                 Spacer(minLength: 0)
-                Text(month, format: .dateTime.year().month(.wide)).font(.system(size: 12, weight: .semibold))
+                Text(month.timelineFormatted(.dateTime.year().month(.wide))).font(.system(size: 12, weight: .semibold))
                 Spacer(minLength: 0)
                 Button { shiftMonth(1) } label: { Image(systemName: "chevron.right").frame(width: 24, height: 24) }
                     .accessibilityLabel("下个月")
@@ -208,7 +208,7 @@ private struct DayGrid: View {
                                 if inside { hovered = cell.date } else if hovered == cell.date { hovered = nil }
                             }
                             .accessibilityElement()
-                            .accessibilityLabel(cell.date.formatted(date: .complete, time: .omitted))
+                            .accessibilityLabel(cell.date.timelineFormatted(date: .complete, time: .omitted))
                             .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
                             .accessibilityAction { pick(cell.date) }
                     }

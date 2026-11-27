@@ -24,6 +24,8 @@
 "设置" = "Settings";
 "通用" = "General";
 "日历与清单" = "Calendar & Tasks";
+"Timeline 时区" = "Timeline time zone";
+"重新打开 Timeline 后生效。" = "Takes effect when you reopen Timeline.";
 "配色" = "Colors";
 "字号" = "Text Size";
 "专注计时" = "Focus Timer";

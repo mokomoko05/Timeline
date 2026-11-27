@@ -87,7 +87,7 @@ struct NoteThreadRow<Meta: View, Content: View, Actions: View>: View {
                 .foregroundStyle(Palette.muted)
                 .lineLimit(1).minimumScaleFactor(0.85)
                 .frame(width: NoteThread.timeWidth, height: typography.pt(16), alignment: .trailing)
-                .help(log.createdAt.formatted(.dateTime.year().month().day()) + " " + LogEventStyle.time(log.createdAt))
+                .help(log.createdAt.timelineFormatted(.dateTime.year().month().day()) + " " + LogEventStyle.time(log.createdAt))
                 .padding(.leading, 8).padding(.top, 4)
         }
         .overlay(alignment: .topTrailing) {

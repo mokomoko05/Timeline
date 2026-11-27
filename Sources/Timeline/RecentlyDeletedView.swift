@@ -71,7 +71,8 @@ private struct RecentlyDeletedRow: View {
                 Text(detail).font(.caption).foregroundStyle(Palette.muted).lineLimit(1)
             }
             Spacer()
-            Text(item.deletedAt, format: .relative(presentation: .named)).font(.caption).foregroundStyle(Palette.muted)
+            Text(item.deletedAt, format: Date.RelativeFormatStyle(presentation: .named, calendar: JournalDates.calendar))
+                .font(.caption).foregroundStyle(Palette.muted)
         }
         .padding(.vertical, 2)
     }
@@ -86,8 +87,8 @@ private struct RecentlyDeletedRow: View {
 
     private var detail: String {
         switch item.content {
-        case .log: return AppLocalizedFormat("日志 · %@", item.day.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "")
-        case .task: return AppLocalizedFormat("待办 · %@", item.day.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "")
+        case .log: return AppLocalizedFormat("日志 · %@", item.day.map { $0.timelineFormatted(date: .abbreviated, time: .omitted) } ?? "")
+        case .task: return AppLocalizedFormat("待办 · %@", item.day.map { $0.timelineFormatted(date: .abbreviated, time: .omitted) } ?? "")
         case .board: return AppLocalized("工作板")
         }
     }
@@ -116,7 +117,7 @@ struct BoardHistoryView: View {
                 HSplitView {
                     List(versions, selection: $selected) { version in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(version.savedAt, format: .dateTime.month().day().hour().minute())
+                            Text(version.savedAt.timelineFormatted(.dateTime.month().day().hour().minute()))
                             Text(AppLocalizedFormat("%lld 字", version.markdown.count)).font(.caption).foregroundStyle(Palette.muted)
                         }
                         .tag(version.id)

@@ -51,7 +51,8 @@ extension JournalStore {
     /// 当前数据里该进 Spotlight 的全部内容。草稿、归档的工作板、空日志不进。
     public func spotlightItems() -> [SpotlightItem] {
         var items: [SpotlightItem] = []
-        let format = Date.FormatStyle(date: .abbreviated, time: .shortened)
+        let format = JournalDates.formatStyle(.init(date: .abbreviated, time: .shortened))
+        let dateOnly = JournalDates.formatStyle(.init(date: .abbreviated, time: .omitted))
         for day in days.values {
             for log in day.logs {
                 let body = log.searchableText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -68,7 +69,7 @@ extension JournalStore {
                 let title = String(TaskText.rendered(todo.title).characters)
                 var detail = todo.number.map { "#\($0)" } ?? ""
                 if let due = todo.dueDate {
-                    detail += (detail.isEmpty ? "" : " · ") + due.formatted(Date.FormatStyle(date: .abbreviated, time: todo.dueHasTime ? .shortened : .omitted))
+                    detail += (detail.isEmpty ? "" : " · ") + due.formatted(todo.dueHasTime ? format : dateOnly)
                 }
                 if !todo.tags.isEmpty { detail += (detail.isEmpty ? "" : " · ") + todo.tags.map { "#" + $0 }.joined(separator: " ") }
                 items.append(SpotlightItem(kind: .task, id: todo.id, title: title, detail: detail, text: title,

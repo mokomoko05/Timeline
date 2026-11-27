@@ -38,15 +38,8 @@ struct DeadlineDayCell: View, Equatable {
             .filter { !hideCompleted || !$0.task.completed }
     }
     private static let space = "dayCell"
-    /// 创建 DateFormatter 很贵，而 42 个格子每次重绘都要用：只建一次。
-    private static let accessibilityFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "M月d日 EEEE"
-        return formatter
-    }()
     private var accessibilityDescription: String {
-        let formatter = Self.accessibilityFormatter
+        let formatter = DateFormatters.formatter(locale: Locale(identifier: "zh_CN"), format: "M月d日 EEEE")
         let due = dueToday
         let summary = due.isEmpty ? AppLocalized("没有截止事项") : AppLocalizedFormat("%lld 项截止，已完成 %lld 项", due.count, due.filter(\.task.isDone).count)
         return formatter.string(from: date) + AppLocalized("，") + summary + (today ? AppLocalized("，今天") : "")

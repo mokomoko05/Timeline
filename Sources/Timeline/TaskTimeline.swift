@@ -601,10 +601,10 @@ struct FinishedTimelineDatesView: View {
                 else { expanded.formUnion(tasks.map(\.id)) }
             } label: {
                 HStack(spacing: 7) {
-                    Text(dates[0].formatted(.dateTime.month(.twoDigits).day(.twoDigits)))
+                    Text(dates[0].timelineFormatted(.dateTime.month(.twoDigits).day(.twoDigits)))
                     if dates.count > 1 {
                         Text("–")
-                        Text(dates[dates.count - 1].formatted(.dateTime.month(.twoDigits).day(.twoDigits)))
+                        Text(dates[dates.count - 1].timelineFormatted(.dateTime.month(.twoDigits).day(.twoDigits)))
                     }
                     let completed = tasks.filter(\.task.isDone).count
                     let dropped = tasks.filter(\.task.isDropped).count
@@ -686,7 +686,7 @@ struct TimelineDateMarker: View {
                 Button {
                     showingDate = true
                 } label: {
-                    Text(date.map { $0.formatted(.dateTime.month(.twoDigits).day(.twoDigits).locale(AppLanguage.current.locale)) } ?? "···")
+                    Text(date.map { $0.timelineFormatted(.dateTime.month(.twoDigits).day(.twoDigits).locale(AppLanguage.current.locale)) } ?? "···")
                         .font(.system(size: typography.pt(11), weight: .semibold)).monospacedDigit()
                         .foregroundStyle(date.map { JournalDates.calendar.isDateInToday($0) } == true ? Palette.accent : Palette.muted)
                         .frame(width: TaskTimelineLayout.timeWidth(typography), alignment: .trailing)

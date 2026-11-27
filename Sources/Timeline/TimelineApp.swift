@@ -33,6 +33,7 @@ enum TimelineApp {
             if !loginItem.enabled || loginItem.errorMessage != nil { exit(1) }
             return
         }
+        JournalDates.fixedTimeZone = UserDefaults.standard.string(forKey: Prefs.timeZone).flatMap(TimeZone.init(identifier:))
         let application = NSApplication.shared
         let delegate = AppDelegate()
         application.delegate = delegate

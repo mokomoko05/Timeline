@@ -152,13 +152,29 @@ public struct DayEntry: Codable, Equatable {
 
 public enum JournalDates {
     private static let cacheLock = NSLock()
+    private static var configuredTimeZone: TimeZone?
     private static var cachedCalendar: Calendar?
 
-    /// 日期计算在日历格子、排序里大量调用：缓存一份，系统时区变了才重建。
+    /// 应用启动时设置。nil 保留系统时区；日期键仍是日历日期，已经保存的键不需要重写。
+    public static var fixedTimeZone: TimeZone? {
+        get {
+            cacheLock.lock()
+            defer { cacheLock.unlock() }
+            return configuredTimeZone
+        }
+        set {
+            cacheLock.lock()
+            defer { cacheLock.unlock() }
+            configuredTimeZone = newValue
+            cachedCalendar = nil
+        }
+    }
+
+    /// 日期计算在日历格子、排序里大量调用：时区变了才重建。
     public static var calendar: Calendar {
-        let zone = TimeZone.current
         cacheLock.lock()
         defer { cacheLock.unlock() }
+        let zone = configuredTimeZone ?? TimeZone.current
         if let cachedCalendar, cachedCalendar.timeZone == zone { return cachedCalendar }
         var calendar = Calendar(identifier: .gregorian)
         calendar.firstWeekday = 2
@@ -168,8 +184,20 @@ public enum JournalDates {
     }
 
     public static func key(_ date: Date) -> String {
+        key(date, calendar: calendar)
+    }
+
+    private static func key(_ date: Date, calendar: Calendar) -> String {
         let components = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", components.year!, components.month!, components.day!)
+    }
+
+    public static func formatStyle(_ style: Date.FormatStyle) -> Date.FormatStyle {
+        let calendar = self.calendar
+        var result = style
+        result.calendar = calendar
+        result.timeZone = calendar.timeZone
+        return result
     }
 
     public static func monthStart(_ date: Date) -> Date {
@@ -177,11 +205,12 @@ public enum JournalDates {
     }
 
     public static func date(for key: String) -> Date? {
+        let calendar = self.calendar
         let parts = key.split(separator: "-")
         guard parts.count == 3, key.count == 10,
               let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]),
               let date = calendar.date(from: DateComponents(year: year, month: month, day: day)),
-              self.key(date) == key else { return nil }
+              self.key(date, calendar: calendar) == key else { return nil }
         return date
     }
 
